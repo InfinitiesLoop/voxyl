@@ -20,12 +20,12 @@ config/main_scene="res://scenes/Main.tscn"
 
 VoxelWorld="*res://scripts/core/VoxelWorld.gd"
 
+[configuration]
+
+config_version=5
+
 [display]
 
 window/size/viewport_width=1280
 window/size/viewport_height=800
 window/size/mode=2
-
-[configuration]
-
-config_version=5

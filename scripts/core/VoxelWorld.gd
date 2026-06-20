@@ -8,6 +8,7 @@ signal palette_stack_changed()
 signal block_changed(pos: Vector3i, semantic_name: String)
 signal selection_changed(semantic_name: String)
 signal tool_changed(tool: Tool)
+signal slice_view_requested(axis: int, pos: int)
 
 var workspace: VoxelWorkspace
 var active_project: VoxelProject
@@ -101,6 +102,9 @@ func select_semantic(semantic_name: String) -> void:
 func set_active_tool(tool: Tool) -> void:
 	active_tool = tool
 	tool_changed.emit(tool)
+
+func request_slice_view(axis: int, pos: int) -> void:
+	slice_view_requested.emit(axis, pos)
 
 func _populate_defaults() -> void:
 	_add_default_block_types()

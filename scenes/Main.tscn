@@ -1,9 +1,8 @@
-[gd_scene load_steps=6 format=3]
+[gd_scene load_steps=5 format=3]
 
 [ext_resource type="Script" path="res://scripts/ui/Main.gd" id="1"]
 [ext_resource type="PackedScene" path="res://scenes/ui/HomeScreen.tscn" id="2"]
 [ext_resource type="PackedScene" path="res://scenes/ui/ToolsPanel.tscn" id="3"]
-[ext_resource type="PackedScene" path="res://scenes/views/View2DGrid.tscn" id="4"]
 [ext_resource type="PackedScene" path="res://scenes/views/View3D.tscn" id="5"]
 [ext_resource type="PackedScene" path="res://scenes/ui/PalettePanel.tscn" id="6"]
 
@@ -60,11 +59,6 @@ layout_mode = 2
 [node name="TabContainer" type="TabContainer" parent="Editor/VBoxContainer/ContentArea"]
 layout_mode = 2
 size_flags_horizontal = 3
-
-[node name="View2DGrid" parent="Editor/VBoxContainer/ContentArea/TabContainer" instance=ExtResource("4")]
-layout_mode = 2
-size_flags_horizontal = 3
-size_flags_vertical = 3
 
 [node name="View3D" parent="Editor/VBoxContainer/ContentArea/TabContainer" instance=ExtResource("5")]
 layout_mode = 2
