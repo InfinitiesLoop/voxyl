@@ -21,6 +21,34 @@ The user should be able to build an entire scene without ever choosing a specifi
 
 ---
 
+## Development Workflow
+
+**Godot version:** 4.6 — binary at `/Applications/Godot.app/Contents/MacOS/Godot`
+
+**Before committing any code change, always run both:**
+```bash
+bash tools/validate-scripts.sh   # validates all GDScript, shows errors/warnings with file+line
+bash tests/run_tests.sh          # functional smoke tests against the real autoload
+```
+
+**Project structure:**
+```
+scripts/core/       — data model (VoxelData, VoxelProject, VoxelWorkspace, VoxelWorld autoload)
+scripts/views/      — view implementations (View2DGrid, future 3D view, etc.)
+scripts/ui/         — UI components (HomeScreen, PalettePanel, LibraryList, Main)
+scenes/             — Godot scene files
+tests/              — SmokeTest.gd + run_tests.sh
+tools/              — validate-scripts.sh
+```
+
+**Key architectural patterns:**
+- `VoxelWorld` is the autoload singleton — all views and UI talk to it, never to each other
+- Adding a new view: extend a Control, connect to `VoxelWorld.project_opened`, `block_changed`, `palette_stack_changed` signals, read from `VoxelWorld.active_project`
+- All palette mutations go through `VoxelWorld` methods (add/remove/move_palette_in_stack) so signals fire correctly
+- UI is built programmatically in GDScript — minimize `.tscn` complexity
+
+---
+
 ## Claude's Role
 
 Challenge direction when it risks compromising the principles above. This isn't about second-guessing every task — routine work (bug fixes, commits, refactors) doesn't need interrogation. But when a proposed feature, shortcut, or architectural decision would undermine the separation of concerns, the view-agnostic model, or the voxel-agnostic identity of the project, push back before implementing.
