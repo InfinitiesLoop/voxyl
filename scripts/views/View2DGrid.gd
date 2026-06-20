@@ -7,6 +7,8 @@ const PADDING := 8
 var current_layer := 0
 var _is_placing := false
 var _is_erasing := false
+var _drag_start := Vector2i(-1, -1)
+var _preview_cells: Array[Vector2i] = []
 
 @onready var _layer_label: Label = $LayerBar/LayerLabel
 @onready var _grid_area: Control = $GridArea
@@ -20,6 +22,8 @@ func _ready() -> void:
 
 func _reset() -> void:
 	current_layer = 0
+	_preview_cells.clear()
+	_drag_start = Vector2i(-1, -1)
 	_update_layer_label()
 	_grid_area.queue_redraw()
 
@@ -43,32 +47,140 @@ func _draw_grid() -> void:
 			_grid_area.draw_rect(rect, fill)
 			_grid_area.draw_rect(rect, Color(0.22, 0.22, 0.22), false)
 
+	if not _preview_cells.is_empty():
+		var preview_color := VoxelWorld.get_color_for_semantic(VoxelWorld.selected_semantic)
+		preview_color.a = 0.65
+		for cell in _preview_cells:
+			var rect := Rect2(
+				PADDING + cell.x * CELL_SIZE,
+				PADDING + cell.y * CELL_SIZE,
+				CELL_SIZE - 1, CELL_SIZE - 1
+			)
+			_grid_area.draw_rect(rect, preview_color)
+
+func _mouse_to_cell(mouse_pos: Vector2) -> Vector2i:
+	return Vector2i(
+		int((mouse_pos.x - PADDING) / CELL_SIZE),
+		int((mouse_pos.y - PADDING) / CELL_SIZE)
+	)
+
 func _on_grid_input(event: InputEvent) -> void:
+	var tool := VoxelWorld.active_tool
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_LEFT:
-			_is_placing = mb.pressed
-			_is_erasing = false
+			if mb.pressed:
+				var cell := _mouse_to_cell(mb.position)
+				match tool:
+					VoxelWorld.Tool.PAINT:
+						_is_placing = true
+						_paint_cell(cell)
+					VoxelWorld.Tool.ERASE:
+						_is_erasing = true
+						_paint_cell(cell)
+					VoxelWorld.Tool.FILL:
+						_do_fill(cell)
+					VoxelWorld.Tool.LINE, VoxelWorld.Tool.RECT:
+						_drag_start = cell
+						_preview_cells = [cell]
+						_grid_area.queue_redraw()
+			else:
+				if _drag_start != Vector2i(-1, -1):
+					_commit_preview()
+				_is_placing = false
+				_is_erasing = false
 		elif mb.button_index == MOUSE_BUTTON_RIGHT:
 			_is_erasing = mb.pressed
 			_is_placing = false
-		if mb.pressed:
-			_paint_at(mb.position)
-	elif event is InputEventMouseMotion and (_is_placing or _is_erasing):
-		_paint_at(event.position)
+			if mb.pressed:
+				_paint_cell(_mouse_to_cell(mb.position))
+	elif event is InputEventMouseMotion:
+		if _is_placing or _is_erasing:
+			_paint_cell(_mouse_to_cell(event.position))
+		elif _drag_start != Vector2i(-1, -1):
+			var cell := _mouse_to_cell(event.position)
+			match tool:
+				VoxelWorld.Tool.LINE:
+					_preview_cells = _compute_line(_drag_start, cell)
+				VoxelWorld.Tool.RECT:
+					_preview_cells = _compute_rect(_drag_start, cell)
+			_grid_area.queue_redraw()
 
-func _paint_at(mouse_pos: Vector2) -> void:
+func _paint_cell(cell: Vector2i) -> void:
 	if not VoxelWorld.active_project:
 		return
-	var gx := int((mouse_pos.x - PADDING) / CELL_SIZE)
-	var gz := int((mouse_pos.y - PADDING) / CELL_SIZE)
-	var pos := Vector3i(gx, current_layer, gz)
+	var pos := Vector3i(cell.x, current_layer, cell.y)
 	if not VoxelWorld.active_project.data.is_in_bounds(pos):
 		return
 	if _is_erasing:
 		VoxelWorld.clear_block(pos)
 	elif _is_placing and not VoxelWorld.selected_semantic.is_empty():
 		VoxelWorld.set_block(pos, VoxelWorld.selected_semantic)
+
+func _commit_preview() -> void:
+	if not VoxelWorld.active_project:
+		return
+	for cell in _preview_cells:
+		var pos := Vector3i(cell.x, current_layer, cell.y)
+		if not VoxelWorld.active_project.data.is_in_bounds(pos):
+			continue
+		if VoxelWorld.selected_semantic.is_empty():
+			VoxelWorld.clear_block(pos)
+		else:
+			VoxelWorld.set_block(pos, VoxelWorld.selected_semantic)
+	_preview_cells = []
+	_drag_start = Vector2i(-1, -1)
+
+func _compute_line(a: Vector2i, b: Vector2i) -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	var dx := b.x - a.x
+	var dy := b.y - a.y
+	var steps: int = max(abs(dx), abs(dy))
+	if steps == 0:
+		return [a]
+	for i in steps + 1:
+		var t := float(i) / float(steps)
+		cells.append(Vector2i(roundi(a.x + dx * t), roundi(a.y + dy * t)))
+	return cells
+
+func _compute_rect(a: Vector2i, b: Vector2i) -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	for x in range(min(a.x, b.x), max(a.x, b.x) + 1):
+		for y in range(min(a.y, b.y), max(a.y, b.y) + 1):
+			cells.append(Vector2i(x, y))
+	return cells
+
+func _do_fill(start: Vector2i) -> void:
+	if not VoxelWorld.active_project:
+		return
+	var data := VoxelWorld.active_project.data
+	var start_pos := Vector3i(start.x, current_layer, start.y)
+	if not data.is_in_bounds(start_pos):
+		return
+	var target_semantic := data.get_block(start_pos)
+	var fill_semantic := VoxelWorld.selected_semantic
+	if target_semantic == fill_semantic:
+		return
+	var queue: Array[Vector2i] = [start]
+	var visited: Dictionary = {}
+	while not queue.is_empty():
+		var cell: Vector2i = queue.pop_front()
+		if visited.has(cell):
+			continue
+		var pos := Vector3i(cell.x, current_layer, cell.y)
+		if not data.is_in_bounds(pos):
+			continue
+		if data.get_block(pos) != target_semantic:
+			continue
+		visited[cell] = true
+		if fill_semantic.is_empty():
+			VoxelWorld.clear_block(pos)
+		else:
+			VoxelWorld.set_block(pos, fill_semantic)
+		queue.append(Vector2i(cell.x + 1, cell.y))
+		queue.append(Vector2i(cell.x - 1, cell.y))
+		queue.append(Vector2i(cell.x, cell.y + 1))
+		queue.append(Vector2i(cell.x, cell.y - 1))
 
 func set_layer(value: int) -> void:
 	if not VoxelWorld.active_project:

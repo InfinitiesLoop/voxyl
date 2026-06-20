@@ -1,14 +1,18 @@
 extends Node
 
+enum Tool { PAINT, ERASE, LINE, RECT, FILL }
+
 signal workspace_changed()
 signal project_opened(project: VoxelProject)
 signal palette_stack_changed()
 signal block_changed(pos: Vector3i, semantic_name: String)
 signal selection_changed(semantic_name: String)
+signal tool_changed(tool: Tool)
 
 var workspace: VoxelWorkspace
 var active_project: VoxelProject
 var selected_semantic: String = ""
+var active_tool: Tool = Tool.PAINT
 
 func _ready() -> void:
 	workspace = VoxelWorkspace.new()
@@ -93,6 +97,10 @@ func move_palette_in_stack(project: VoxelProject, from_idx: int, to_idx: int) ->
 func select_semantic(semantic_name: String) -> void:
 	selected_semantic = semantic_name
 	selection_changed.emit(semantic_name)
+
+func set_active_tool(tool: Tool) -> void:
+	active_tool = tool
+	tool_changed.emit(tool)
 
 func _populate_defaults() -> void:
 	_add_default_block_types()
