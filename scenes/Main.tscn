@@ -1,45 +1,60 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene format=3 uid="uid://bj6vjahwk7v5m"]
 
-[ext_resource type="Script" path="res://scripts/ui/Main.gd" id="1"]
+[ext_resource type="Script" uid="uid://ccpj6ly4l4skr" path="res://scripts/ui/Main.gd" id="1"]
 [ext_resource type="PackedScene" path="res://scenes/ui/HomeScreen.tscn" id="2"]
 [ext_resource type="PackedScene" path="res://scenes/views/View2DGrid.tscn" id="3"]
 [ext_resource type="PackedScene" path="res://scenes/ui/PalettePanel.tscn" id="4"]
 
-[node name="Main" type="Control"]
+[node name="Main" type="Control" unique_id=1793802554]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 script = ExtResource("1")
 
-[node name="HomeScreen" parent="." instance=ExtResource("2")]
+[node name="HomeScreen" parent="." unique_id=1881732644 instance=ExtResource("2")]
+layout_mode = 1
+grow_horizontal = 2
+grow_vertical = 2
 
-[node name="Editor" type="Control" parent="."]
-layout_mode = 3
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-
-[node name="VBoxContainer" type="VBoxContainer" parent="Editor"]
+[node name="Editor" type="Control" parent="." unique_id=1322292177]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 
-[node name="EditorBar" type="HBoxContainer" parent="Editor/VBoxContainer"]
+[node name="VBoxContainer" type="VBoxContainer" parent="Editor" unique_id=1454421286]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="EditorBar" type="HBoxContainer" parent="Editor/VBoxContainer" unique_id=21183795]
 custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
 
-[node name="BackBtn" type="Button" parent="Editor/VBoxContainer/EditorBar"]
+[node name="BackBtn" type="Button" parent="Editor/VBoxContainer/EditorBar" unique_id=1476073063]
+layout_mode = 2
 text = "← Home"
 
-[node name="LayoutLabel" type="Label" parent="Editor/VBoxContainer/EditorBar"]
+[node name="LayoutLabel" type="Label" parent="Editor/VBoxContainer/EditorBar" unique_id=1263127183]
+layout_mode = 2
 size_flags_horizontal = 3
 vertical_alignment = 1
 
-[node name="HSplitContainer" type="HSplitContainer" parent="Editor/VBoxContainer"]
+[node name="HSplitContainer" type="HSplitContainer" parent="Editor/VBoxContainer" unique_id=8298890]
+layout_mode = 2
 size_flags_vertical = 3
 
-[node name="View2DGrid" parent="Editor/VBoxContainer/HSplitContainer" instance=ExtResource("3")]
+[node name="View2DGrid" parent="Editor/VBoxContainer/HSplitContainer" unique_id=793143782 instance=ExtResource("3")]
+layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="PalettePanel" parent="Editor/VBoxContainer/HSplitContainer" instance=ExtResource("4")]
+[node name="PalettePanel" parent="Editor/VBoxContainer/HSplitContainer" unique_id=361386722 instance=ExtResource("4")]
+layout_mode = 2
