@@ -34,7 +34,7 @@ func _ready() -> void:
 	_name_input = LineEdit.new()
 	_name_input.size_flags_horizontal = SIZE_EXPAND_FILL
 	_name_input.placeholder_text = "Name..."
-	_name_input.return_pressed.connect(_on_add)
+	_name_input.text_submitted.connect(func(_t): _on_add())
 	add_bar.add_child(_name_input)
 
 	var add_btn := Button.new()
