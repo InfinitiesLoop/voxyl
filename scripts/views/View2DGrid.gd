@@ -14,9 +14,9 @@ var _is_erasing := false
 func _ready() -> void:
 	_grid_area.draw.connect(_draw_grid)
 	_grid_area.gui_input.connect(_on_grid_input)
-	VoxelWorld.block_changed.connect(func(_p, _t): _grid_area.queue_redraw())
-	VoxelWorld.palette_changed.connect(_grid_area.queue_redraw)
-	VoxelWorld.project_loaded.connect(func(_p): _reset())
+	VoxelWorld.block_changed.connect(func(_p, _s): _grid_area.queue_redraw())
+	VoxelWorld.palette_swapped.connect(func(_p): _grid_area.queue_redraw())
+	VoxelWorld.layout_opened.connect(func(_l, _p): _reset())
 
 func _reset() -> void:
 	current_layer = 0
@@ -24,7 +24,9 @@ func _reset() -> void:
 	_grid_area.queue_redraw()
 
 func _draw_grid() -> void:
-	var data := VoxelWorld.project.data
+	if not VoxelWorld.active_layout:
+		return
+	var data := VoxelWorld.active_layout.data
 	for x in data.size.x:
 		for z in data.size.z:
 			var rect := Rect2(
@@ -32,12 +34,12 @@ func _draw_grid() -> void:
 				PADDING + z * CELL_SIZE,
 				CELL_SIZE - 1, CELL_SIZE - 1
 			)
-			var type_id := data.get_block(Vector3i(x, current_layer, z))
+			var semantic := data.get_block(Vector3i(x, current_layer, z))
 			var fill: Color
-			if type_id.is_empty():
+			if semantic.is_empty():
 				fill = Color(0.12, 0.12, 0.12)
 			else:
-				fill = VoxelWorld.get_color_for_type(type_id)
+				fill = VoxelWorld.get_color_for_semantic(semantic)
 			_grid_area.draw_rect(rect, fill)
 			_grid_area.draw_rect(rect, Color(0.22, 0.22, 0.22), false)
 
@@ -56,18 +58,22 @@ func _on_grid_input(event: InputEvent) -> void:
 		_paint_at(event.position)
 
 func _paint_at(mouse_pos: Vector2) -> void:
+	if not VoxelWorld.active_layout:
+		return
 	var gx := int((mouse_pos.x - PADDING) / CELL_SIZE)
 	var gz := int((mouse_pos.y - PADDING) / CELL_SIZE)
 	var pos := Vector3i(gx, current_layer, gz)
-	if not VoxelWorld.project.data.is_in_bounds(pos):
+	if not VoxelWorld.active_layout.data.is_in_bounds(pos):
 		return
 	if _is_erasing:
 		VoxelWorld.clear_block(pos)
-	elif _is_placing and not VoxelWorld.selected_type_id.is_empty():
-		VoxelWorld.set_block(pos, VoxelWorld.selected_type_id)
+	elif _is_placing and not VoxelWorld.selected_semantic.is_empty():
+		VoxelWorld.set_block(pos, VoxelWorld.selected_semantic)
 
 func set_layer(value: int) -> void:
-	current_layer = clamp(value, 0, VoxelWorld.project.data.size.y - 1)
+	if not VoxelWorld.active_layout:
+		return
+	current_layer = clamp(value, 0, VoxelWorld.active_layout.data.size.y - 1)
 	_update_layer_label()
 	_grid_area.queue_redraw()
 

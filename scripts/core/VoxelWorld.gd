@@ -1,60 +1,97 @@
 extends Node
 
-signal block_changed(pos: Vector3i, type_id: String)
-signal palette_changed()
-signal block_types_changed()
-signal project_loaded(project: VoxelProject)
-signal selection_changed(type_id: String)
+signal workspace_changed()
+signal layout_opened(layout: VoxelLayout, palette: Palette)
+signal palette_swapped(palette: Palette)
+signal block_changed(pos: Vector3i, semantic_name: String)
+signal selection_changed(semantic_name: String)
 
-var project: VoxelProject
-var selected_type_id: String = ""
+var workspace: VoxelWorkspace
+var active_layout: VoxelLayout
+var active_palette: Palette
+var selected_semantic: String = ""
 
 func _ready() -> void:
-	load_default_project()
+	workspace = VoxelWorkspace.new()
+	_populate_defaults()
+	workspace_changed.emit()
 
-func load_default_project() -> void:
-	project = VoxelProject.new()
-	project.project_name = "New Project"
-	project.data.size = Vector3i(16, 16, 16)
-	_add_default_block_types()
-	selected_type_id = project.block_types[0].id if not project.block_types.is_empty() else ""
-	project_loaded.emit(project)
+func open(layout: VoxelLayout, palette: Palette) -> void:
+	active_layout = layout
+	active_palette = palette
+	selected_semantic = palette.entries[0].semantic_name if not palette.entries.is_empty() else ""
+	layout_opened.emit(layout, palette)
 
-# Semantic block types ship with sensible default colors so you can build
-# without choosing a palette first. The palette can be changed at any time
-# without touching the voxel data.
-func _add_default_block_types() -> void:
-	var defaults: Array = [
-		["base",      "Base",      Color(0.58, 0.50, 0.42)],
-		["accent",    "Accent",    Color(0.80, 0.70, 0.30)],
-		["highlight", "Highlight", Color(0.85, 0.30, 0.30)],
-		["detail",    "Detail",    Color(0.35, 0.55, 0.80)],
-		["trim",      "Trim",      Color(0.45, 0.65, 0.45)],
-	]
-	for d in defaults:
-		project.add_block_type(d[0], d[1], d[2])
-		var pe := PaletteEntry.new()
-		pe.block_type_id = d[0]
-		pe.block_name = d[1]
-		pe.color = d[2]
-		project.palette.entries.append(pe)
+func swap_palette(palette: Palette) -> void:
+	active_palette = palette
+	if selected_semantic.is_empty() and not palette.entries.is_empty():
+		selected_semantic = palette.entries[0].semantic_name
+	palette_swapped.emit(palette)
 
-func set_block(pos: Vector3i, type_id: String) -> void:
-	if not project.data.is_in_bounds(pos):
+func set_block(pos: Vector3i, semantic_name: String) -> void:
+	if not active_layout or not active_layout.data.is_in_bounds(pos):
 		return
-	project.data.set_block(pos, type_id)
-	block_changed.emit(pos, type_id)
+	active_layout.data.set_block(pos, semantic_name)
+	block_changed.emit(pos, semantic_name)
 
 func clear_block(pos: Vector3i) -> void:
-	project.data.clear_block(pos)
+	if not active_layout:
+		return
+	active_layout.data.clear_block(pos)
 	block_changed.emit(pos, "")
 
 func get_block(pos: Vector3i) -> String:
-	return project.data.get_block(pos)
+	return active_layout.data.get_block(pos) if active_layout else ""
 
-func get_color_for_type(type_id: String) -> Color:
-	return project.palette.get_color(type_id)
+func get_color_for_semantic(semantic_name: String) -> Color:
+	return active_palette.get_color(semantic_name) if active_palette else Color.GRAY
 
-func select_type(type_id: String) -> void:
-	selected_type_id = type_id
-	selection_changed.emit(type_id)
+func select_semantic(semantic_name: String) -> void:
+	selected_semantic = semantic_name
+	selection_changed.emit(semantic_name)
+
+func _populate_defaults() -> void:
+	_add_default_block_types()
+	_add_default_palette()
+	workspace.add_layout("My First Build")
+
+func _add_default_block_types() -> void:
+	var names := [
+		"Stone", "Cobblestone", "Stone Bricks", "Mossy Stone Bricks", "Cracked Stone Bricks",
+		"Gravel", "Sand", "Sandstone", "Dirt", "Grass Block", "Clay", "Mud",
+		"Oak Log", "Oak Planks", "Spruce Log", "Spruce Planks",
+		"Birch Log", "Birch Planks", "Dark Oak Log", "Dark Oak Planks",
+		"Acacia Log", "Acacia Planks", "Jungle Log", "Jungle Planks",
+		"Mangrove Log", "Mangrove Planks",
+		"Brick", "Nether Brick", "Quartz Block", "Smooth Quartz",
+		"Prismarine", "Dark Prismarine", "Sea Lantern",
+		"Iron Block", "Gold Block", "Copper Block", "Cut Copper",
+		"Glass", "Glass Pane", "Iron Bars",
+		"Obsidian", "Deepslate", "Tuff", "Calcite",
+		"Glowstone", "Shroomlight", "Lantern",
+		"White Concrete", "Gray Concrete", "Black Concrete",
+		"White Terracotta", "Orange Terracotta", "Brown Terracotta",
+		"White Wool", "Red Wool", "Blue Wool", "Green Wool", "Yellow Wool",
+		"Leaves", "Vines", "Bamboo", "Cactus",
+		"Water", "Lava",
+	]
+	for n in names:
+		workspace.add_block_type(n)
+
+func _add_default_palette() -> void:
+	var p := workspace.add_palette("Default")
+	var slots := [
+		["Base",      "Stone",       Color(0.55, 0.55, 0.55)],
+		["Accent",    "Oak Planks",  Color(0.75, 0.60, 0.35)],
+		["Highlight", "Brick",       Color(0.72, 0.38, 0.28)],
+		["Detail",    "Glass",       Color(0.55, 0.78, 0.92)],
+		["Trim",      "Cobblestone", Color(0.42, 0.42, 0.40)],
+		["Floor",     "Dirt",        Color(0.48, 0.35, 0.22)],
+		["Roof",      "Spruce Planks", Color(0.38, 0.28, 0.18)],
+	]
+	for s in slots:
+		var e := PaletteEntry.new()
+		e.semantic_name = s[0]
+		e.block_type_name = s[1]
+		e.color = s[2]
+		p.entries.append(e)

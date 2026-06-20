@@ -1,31 +1,48 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene load_steps=5 format=3]
 
-[ext_resource type="PackedScene" path="res://scenes/views/View2DGrid.tscn" id="1"]
-[ext_resource type="PackedScene" path="res://scenes/ui/PalettePanel.tscn" id="2"]
+[ext_resource type="Script" path="res://scripts/ui/Main.gd" id="1"]
+[ext_resource type="PackedScene" path="res://scenes/ui/HomeScreen.tscn" id="2"]
+[ext_resource type="PackedScene" path="res://scenes/views/View2DGrid.tscn" id="3"]
+[ext_resource type="PackedScene" path="res://scenes/ui/PalettePanel.tscn" id="4"]
 
 [node name="Main" type="Control"]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+script = ExtResource("1")
 
-[node name="VBoxContainer" type="VBoxContainer" parent="."]
+[node name="HomeScreen" parent="." instance=ExtResource("2")]
+
+[node name="Editor" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Editor"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 
-[node name="TopBar" type="HBoxContainer" parent="VBoxContainer"]
+[node name="EditorBar" type="HBoxContainer" parent="Editor/VBoxContainer"]
 custom_minimum_size = Vector2(0, 36)
 
-[node name="AppTitle" type="Label" parent="VBoxContainer/TopBar"]
-text = "voxyl"
+[node name="BackBtn" type="Button" parent="Editor/VBoxContainer/EditorBar"]
+text = "← Home"
+
+[node name="LayoutLabel" type="Label" parent="Editor/VBoxContainer/EditorBar"]
+size_flags_horizontal = 3
 vertical_alignment = 1
 
-[node name="HSplitContainer" type="HSplitContainer" parent="VBoxContainer"]
+[node name="PaletteLabel" type="Label" parent="Editor/VBoxContainer/EditorBar"]
+vertical_alignment = 1
+
+[node name="HSplitContainer" type="HSplitContainer" parent="Editor/VBoxContainer"]
 size_flags_vertical = 3
 
-[node name="View2DGrid" parent="VBoxContainer/HSplitContainer" instance=ExtResource("1")]
+[node name="View2DGrid" parent="Editor/VBoxContainer/HSplitContainer" instance=ExtResource("3")]
 size_flags_horizontal = 3
 
-[node name="PalettePanel" parent="VBoxContainer/HSplitContainer" instance=ExtResource("2")]
+[node name="PalettePanel" parent="Editor/VBoxContainer/HSplitContainer" instance=ExtResource("4")]

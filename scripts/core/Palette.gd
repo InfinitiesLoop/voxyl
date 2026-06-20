@@ -1,15 +1,25 @@
 class_name Palette
 extends Resource
 
-@export var name: String = "Default"
+@export var name: String = ""
 @export var entries: Array[PaletteEntry] = []
 
-func get_entry(type_id: String) -> PaletteEntry:
+func get_entry(semantic_name: String) -> PaletteEntry:
 	for e in entries:
-		if e.block_type_id == type_id:
+		if e.semantic_name == semantic_name:
 			return e
 	return null
 
-func get_color(type_id: String) -> Color:
-	var e := get_entry(type_id)
-	return e.color if e else Color.GRAY
+func get_color(semantic_name: String) -> Color:
+	var e := get_entry(semantic_name)
+	return e.color if e else Color(0.35, 0.35, 0.35)
+
+func get_block_type_name(semantic_name: String) -> String:
+	var e := get_entry(semantic_name)
+	return e.block_type_name if e else ""
+
+func semantic_names() -> Array[String]:
+	var names: Array[String] = []
+	for e in entries:
+		names.append(e.semantic_name)
+	return names
