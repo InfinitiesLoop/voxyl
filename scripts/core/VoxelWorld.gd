@@ -1,13 +1,13 @@
 extends Node
 
 signal workspace_changed()
-signal layout_opened(layout: VoxelLayout)
+signal project_opened(project: VoxelProject)
 signal palette_stack_changed()
 signal block_changed(pos: Vector3i, semantic_name: String)
 signal selection_changed(semantic_name: String)
 
 var workspace: VoxelWorkspace
-var active_layout: VoxelLayout
+var active_project: VoxelProject
 var selected_semantic: String = ""
 
 func _ready() -> void:
@@ -15,34 +15,32 @@ func _ready() -> void:
 	_populate_defaults()
 	workspace_changed.emit()
 
-func open(layout: VoxelLayout) -> void:
-	active_layout = layout
+func open(project: VoxelProject) -> void:
+	active_project = project
 	var names := merged_semantic_names()
 	selected_semantic = names[0] if not names.is_empty() else ""
-	layout_opened.emit(layout)
+	project_opened.emit(project)
 
 func set_block(pos: Vector3i, semantic_name: String) -> void:
-	if not active_layout or not active_layout.data.is_in_bounds(pos):
+	if not active_project or not active_project.data.is_in_bounds(pos):
 		return
-	active_layout.data.set_block(pos, semantic_name)
+	active_project.data.set_block(pos, semantic_name)
 	block_changed.emit(pos, semantic_name)
 
 func clear_block(pos: Vector3i) -> void:
-	if not active_layout:
+	if not active_project:
 		return
-	active_layout.data.clear_block(pos)
+	active_project.data.clear_block(pos)
 	block_changed.emit(pos, "")
 
 func get_block(pos: Vector3i) -> String:
-	return active_layout.data.get_block(pos) if active_layout else ""
+	return active_project.data.get_block(pos) if active_project else ""
 
-# Returns the display color for a semantic name, applying last-wins across
-# the active layout's palette stack.
 func get_color_for_semantic(semantic_name: String) -> Color:
 	var result := Color(0.35, 0.35, 0.35)
-	if not active_layout:
+	if not active_project:
 		return result
-	for palette_name in active_layout.palette_names:
+	for palette_name in active_project.palette_names:
 		var palette := workspace.get_palette(palette_name)
 		if palette:
 			var entry := palette.get_entry(semantic_name)
@@ -50,12 +48,11 @@ func get_color_for_semantic(semantic_name: String) -> Color:
 				result = entry.color
 	return result
 
-# Returns the resolved block type name for a semantic name (last-wins).
 func get_block_type_for_semantic(semantic_name: String) -> String:
 	var result := ""
-	if not active_layout:
+	if not active_project:
 		return result
-	for palette_name in active_layout.palette_names:
+	for palette_name in active_project.palette_names:
 		var palette := workspace.get_palette(palette_name)
 		if palette:
 			var bt := palette.get_block_type_name(semantic_name)
@@ -63,14 +60,12 @@ func get_block_type_for_semantic(semantic_name: String) -> String:
 				result = bt
 	return result
 
-# Union of all semantic names across the palette stack.
-# Names keep their first-seen order; values are resolved last-wins.
 func merged_semantic_names() -> Array[String]:
 	var seen := {}
 	var result: Array[String] = []
-	if not active_layout:
+	if not active_project:
 		return result
-	for palette_name in active_layout.palette_names:
+	for palette_name in active_project.palette_names:
 		var palette := workspace.get_palette(palette_name)
 		if not palette:
 			continue
@@ -80,19 +75,19 @@ func merged_semantic_names() -> Array[String]:
 				result.append(entry.semantic_name)
 	return result
 
-func add_palette_to_stack(layout: VoxelLayout, palette_name: String) -> void:
-	layout.palette_names.append(palette_name)
-	if layout == active_layout:
+func add_palette_to_stack(project: VoxelProject, palette_name: String) -> void:
+	project.palette_names.append(palette_name)
+	if project == active_project:
 		palette_stack_changed.emit()
 
-func remove_palette_from_stack(layout: VoxelLayout, index: int) -> void:
-	layout.palette_names.remove_at(index)
-	if layout == active_layout:
+func remove_palette_from_stack(project: VoxelProject, index: int) -> void:
+	project.palette_names.remove_at(index)
+	if project == active_project:
 		palette_stack_changed.emit()
 
-func move_palette_in_stack(layout: VoxelLayout, from_idx: int, to_idx: int) -> void:
-	layout.palette_names.insert(to_idx, layout.palette_names.pop_at(from_idx))
-	if layout == active_layout:
+func move_palette_in_stack(project: VoxelProject, from_idx: int, to_idx: int) -> void:
+	project.palette_names.insert(to_idx, project.palette_names.pop_at(from_idx))
+	if project == active_project:
 		palette_stack_changed.emit()
 
 func select_semantic(semantic_name: String) -> void:
@@ -102,8 +97,8 @@ func select_semantic(semantic_name: String) -> void:
 func _populate_defaults() -> void:
 	_add_default_block_types()
 	_add_default_palette()
-	var layout := workspace.add_layout("My First Build")
-	layout.palette_names.append("Default")
+	var project := workspace.add_project("My First Build")
+	project.palette_names.append("Default")
 
 func _add_default_block_types() -> void:
 	var names := [

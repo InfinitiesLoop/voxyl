@@ -3,7 +3,7 @@ extends Resource
 
 @export var block_types: Array[BlockType] = []
 @export var palettes: Array[Palette] = []
-@export var layouts: Array[VoxelLayout] = []
+@export var projects: Array[VoxelProject] = []
 
 func add_block_type(block_name: String) -> BlockType:
 	var bt := BlockType.new()
@@ -41,20 +41,20 @@ func remove_palette(palette_name: String) -> void:
 			palettes.remove_at(i)
 			return
 
-func add_layout(layout_name: String) -> VoxelLayout:
-	var l := VoxelLayout.new()
-	l.name = layout_name
-	layouts.append(l)
-	return l
+func add_project(project_name: String) -> VoxelProject:
+	var p := VoxelProject.new()
+	p.name = project_name
+	projects.append(p)
+	return p
 
-func get_layout(layout_name: String) -> VoxelLayout:
-	for l in layouts:
-		if l.name == layout_name:
-			return l
+func get_project(project_name: String) -> VoxelProject:
+	for p in projects:
+		if p.name == project_name:
+			return p
 	return null
 
-func remove_layout(layout_name: String) -> void:
-	for i in layouts.size():
-		if layouts[i].name == layout_name:
-			layouts.remove_at(i)
+func remove_project(project_name: String) -> void:
+	for i in projects.size():
+		if projects[i].name == project_name:
+			projects.remove_at(i)
 			return

@@ -4,7 +4,7 @@ extends VBoxContainer
 var _buttons: Dictionary = {}  # semantic_name -> Button
 
 func _ready() -> void:
-	VoxelWorld.layout_opened.connect(func(_l): _rebuild())
+	VoxelWorld.project_opened.connect(func(_p): _rebuild())
 	VoxelWorld.palette_stack_changed.connect(_rebuild)
 	VoxelWorld.selection_changed.connect(_on_selection_changed)
 
@@ -15,7 +15,7 @@ func _rebuild(_arg = null) -> void:
 	_buttons.clear()
 	await get_tree().process_frame
 
-	if not VoxelWorld.active_layout:
+	if not VoxelWorld.active_project:
 		return
 
 	for semantic_name in VoxelWorld.merged_semantic_names():

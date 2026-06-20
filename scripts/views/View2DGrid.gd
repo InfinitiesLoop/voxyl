@@ -16,7 +16,7 @@ func _ready() -> void:
 	_grid_area.gui_input.connect(_on_grid_input)
 	VoxelWorld.block_changed.connect(func(_p, _s): _grid_area.queue_redraw())
 	VoxelWorld.palette_stack_changed.connect(_grid_area.queue_redraw)
-	VoxelWorld.layout_opened.connect(func(_l): _reset())
+	VoxelWorld.project_opened.connect(func(_p): _reset())
 
 func _reset() -> void:
 	current_layer = 0
@@ -24,9 +24,9 @@ func _reset() -> void:
 	_grid_area.queue_redraw()
 
 func _draw_grid() -> void:
-	if not VoxelWorld.active_layout:
+	if not VoxelWorld.active_project:
 		return
-	var data := VoxelWorld.active_layout.data
+	var data := VoxelWorld.active_project.data
 	for x in data.size.x:
 		for z in data.size.z:
 			var rect := Rect2(
@@ -58,12 +58,12 @@ func _on_grid_input(event: InputEvent) -> void:
 		_paint_at(event.position)
 
 func _paint_at(mouse_pos: Vector2) -> void:
-	if not VoxelWorld.active_layout:
+	if not VoxelWorld.active_project:
 		return
 	var gx := int((mouse_pos.x - PADDING) / CELL_SIZE)
 	var gz := int((mouse_pos.y - PADDING) / CELL_SIZE)
 	var pos := Vector3i(gx, current_layer, gz)
-	if not VoxelWorld.active_layout.data.is_in_bounds(pos):
+	if not VoxelWorld.active_project.data.is_in_bounds(pos):
 		return
 	if _is_erasing:
 		VoxelWorld.clear_block(pos)
@@ -71,9 +71,9 @@ func _paint_at(mouse_pos: Vector2) -> void:
 		VoxelWorld.set_block(pos, VoxelWorld.selected_semantic)
 
 func set_layer(value: int) -> void:
-	if not VoxelWorld.active_layout:
+	if not VoxelWorld.active_project:
 		return
-	current_layer = clamp(value, 0, VoxelWorld.active_layout.data.size.y - 1)
+	current_layer = clamp(value, 0, VoxelWorld.active_project.data.size.y - 1)
 	_update_layer_label()
 	_grid_area.queue_redraw()
 
