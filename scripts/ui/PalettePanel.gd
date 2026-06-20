@@ -4,8 +4,8 @@ extends VBoxContainer
 var _buttons: Dictionary = {}  # semantic_name -> Button
 
 func _ready() -> void:
-	VoxelWorld.layout_opened.connect(func(_l, _p): _rebuild())
-	VoxelWorld.palette_swapped.connect(func(_p): _rebuild())
+	VoxelWorld.layout_opened.connect(func(_l): _rebuild())
+	VoxelWorld.palette_stack_changed.connect(_rebuild)
 	VoxelWorld.selection_changed.connect(_on_selection_changed)
 
 func _rebuild(_arg = null) -> void:
@@ -15,21 +15,24 @@ func _rebuild(_arg = null) -> void:
 	_buttons.clear()
 	await get_tree().process_frame
 
-	if not VoxelWorld.active_palette:
+	if not VoxelWorld.active_layout:
 		return
 
-	for entry in VoxelWorld.active_palette.entries:
+	for semantic_name in VoxelWorld.merged_semantic_names():
+		var color := VoxelWorld.get_color_for_semantic(semantic_name)
+		var block_type := VoxelWorld.get_block_type_for_semantic(semantic_name)
+
 		var btn := Button.new()
-		btn.text = entry.semantic_name
-		btn.tooltip_text = entry.block_type_name
+		btn.text = semantic_name
+		btn.tooltip_text = block_type if not block_type.is_empty() else "(unmapped)"
 		btn.toggle_mode = true
-		btn.button_pressed = entry.semantic_name == VoxelWorld.selected_semantic
+		btn.button_pressed = semantic_name == VoxelWorld.selected_semantic
 		btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 
 		var normal := StyleBoxFlat.new()
-		normal.bg_color = entry.color.darkened(0.4)
+		normal.bg_color = color.darkened(0.4)
 		normal.border_width_left = 5
-		normal.border_color = entry.color
+		normal.border_color = color
 		normal.content_margin_left = 10
 		normal.content_margin_top = 6
 		normal.content_margin_bottom = 6
@@ -37,20 +40,13 @@ func _rebuild(_arg = null) -> void:
 		btn.add_theme_stylebox_override("hover", normal)
 
 		var pressed_style := normal.duplicate() as StyleBoxFlat
-		pressed_style.bg_color = entry.color.darkened(0.15)
+		pressed_style.bg_color = color.darkened(0.15)
 		btn.add_theme_stylebox_override("pressed", pressed_style)
 
-		var sub := Label.new()
-		sub.text = entry.block_type_name
-		sub.add_theme_color_override("font_color", entry.color.lightened(0.3))
-		sub.add_theme_font_size_override("font_size", 10)
-		sub.size_flags_horizontal = SIZE_EXPAND_FILL
-
-		var semantic := entry.semantic_name
-		btn.pressed.connect(func(): VoxelWorld.select_semantic(semantic))
-
+		var captured := semantic_name
+		btn.pressed.connect(func(): VoxelWorld.select_semantic(captured))
 		add_child(btn)
-		_buttons[semantic] = btn
+		_buttons[semantic_name] = btn
 
 func _on_selection_changed(semantic_name: String) -> void:
 	for s in _buttons:

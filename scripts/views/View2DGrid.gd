@@ -15,8 +15,8 @@ func _ready() -> void:
 	_grid_area.draw.connect(_draw_grid)
 	_grid_area.gui_input.connect(_on_grid_input)
 	VoxelWorld.block_changed.connect(func(_p, _s): _grid_area.queue_redraw())
-	VoxelWorld.palette_swapped.connect(func(_p): _grid_area.queue_redraw())
-	VoxelWorld.layout_opened.connect(func(_l, _p): _reset())
+	VoxelWorld.palette_stack_changed.connect(_grid_area.queue_redraw)
+	VoxelWorld.layout_opened.connect(func(_l): _reset())
 
 func _reset() -> void:
 	current_layer = 0

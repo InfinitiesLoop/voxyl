@@ -36,9 +36,6 @@ text = "← Home"
 size_flags_horizontal = 3
 vertical_alignment = 1
 
-[node name="PaletteLabel" type="Label" parent="Editor/VBoxContainer/EditorBar"]
-vertical_alignment = 1
-
 [node name="HSplitContainer" type="HSplitContainer" parent="Editor/VBoxContainer"]
 size_flags_vertical = 3
 

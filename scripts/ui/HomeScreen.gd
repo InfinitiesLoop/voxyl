@@ -1,12 +1,15 @@
 class_name HomeScreen
 extends Control
 
-signal open_layout_requested(layout: VoxelLayout, palette: Palette)
+signal open_layout_requested(layout: VoxelLayout)
 
 var _block_types_list: LibraryList
 var _palettes_list: LibraryList
 var _layouts_list: LibraryList
-var _palette_picker: OptionButton
+var _stack_section: VBoxContainer
+var _stack_list: VBoxContainer
+var _stack_title: Label
+var _add_to_stack_picker: OptionButton
 
 func _ready() -> void:
 	var margin := MarginContainer.new()
@@ -48,6 +51,7 @@ func _ready() -> void:
 	_palettes_list.delete_requested.connect(_on_delete_palette)
 	_layouts_list.add_requested.connect(_on_add_layout)
 	_layouts_list.delete_requested.connect(_on_delete_layout)
+	_layouts_list.item_selected.connect(_on_layout_selected)
 
 	VoxelWorld.workspace_changed.connect(_refresh)
 	_refresh()
@@ -55,28 +59,43 @@ func _ready() -> void:
 func _build_layouts_column() -> VBoxContainer:
 	var col := VBoxContainer.new()
 	col.size_flags_horizontal = SIZE_EXPAND_FILL
+	col.add_theme_constant_override("separation", 8)
 
 	_layouts_list = LibraryList.new()
 	_layouts_list.list_title = "Layouts"
 	_layouts_list.size_flags_vertical = SIZE_EXPAND_FILL
 	col.add_child(_layouts_list)
 
-	var open_bar := HBoxContainer.new()
-	col.add_child(open_bar)
+	# Palette stack panel — shown when a layout is selected
+	_stack_section = VBoxContainer.new()
+	_stack_section.add_theme_constant_override("separation", 4)
+	col.add_child(_stack_section)
 
-	var with_lbl := Label.new()
-	with_lbl.text = "Palette:"
-	open_bar.add_child(with_lbl)
+	_stack_title = Label.new()
+	_stack_title.text = "Palette Stack"
+	_stack_section.add_child(_stack_title)
 
-	_palette_picker = OptionButton.new()
-	_palette_picker.size_flags_horizontal = SIZE_EXPAND_FILL
-	open_bar.add_child(_palette_picker)
+	_stack_list = VBoxContainer.new()
+	_stack_section.add_child(_stack_list)
+
+	var add_bar := HBoxContainer.new()
+	_stack_section.add_child(add_bar)
+
+	_add_to_stack_picker = OptionButton.new()
+	_add_to_stack_picker.size_flags_horizontal = SIZE_EXPAND_FILL
+	add_bar.add_child(_add_to_stack_picker)
+
+	var add_btn := Button.new()
+	add_btn.text = "Add"
+	add_btn.pressed.connect(_on_add_palette_to_stack)
+	add_bar.add_child(add_btn)
 
 	var open_btn := Button.new()
 	open_btn.text = "Open →"
 	open_btn.pressed.connect(_on_open_layout)
-	open_bar.add_child(open_btn)
+	col.add_child(open_btn)
 
+	_stack_section.visible = false
 	return col
 
 func _refresh(_arg = null) -> void:
@@ -84,56 +103,121 @@ func _refresh(_arg = null) -> void:
 	_block_types_list.populate(ws.block_types.map(func(bt): return bt.name))
 	_palettes_list.populate(ws.palettes.map(func(p): return p.name))
 	_layouts_list.populate(ws.layouts.map(func(l): return l.name))
+	_refresh_palette_picker()
+	if not _layouts_list.selected.is_empty():
+		_rebuild_stack(_layouts_list.selected)
 
-	var prev := _palette_picker.get_item_text(_palette_picker.selected) if _palette_picker.selected >= 0 else ""
-	_palette_picker.clear()
-	var restore_idx := 0
-	for i in ws.palettes.size():
-		_palette_picker.add_item(ws.palettes[i].name)
-		if ws.palettes[i].name == prev:
-			restore_idx = i
-	if _palette_picker.item_count > 0:
-		_palette_picker.selected = restore_idx
+func _refresh_palette_picker() -> void:
+	var prev := _add_to_stack_picker.get_item_text(_add_to_stack_picker.selected) \
+		if _add_to_stack_picker.selected >= 0 else ""
+	_add_to_stack_picker.clear()
+	var restore := 0
+	for i in VoxelWorld.workspace.palettes.size():
+		var p := VoxelWorld.workspace.palettes[i]
+		_add_to_stack_picker.add_item(p.name)
+		if p.name == prev:
+			restore = i
+	if _add_to_stack_picker.item_count > 0:
+		_add_to_stack_picker.selected = restore
 
-func _on_add_block_type(block_name: String) -> void:
-	if VoxelWorld.workspace.get_block_type(block_name):
+func _on_layout_selected(layout_name: String) -> void:
+	_stack_section.visible = true
+	_stack_title.text = "Palette Stack — %s" % layout_name
+	_rebuild_stack(layout_name)
+
+func _rebuild_stack(layout_name: String) -> void:
+	for c in _stack_list.get_children():
+		c.queue_free()
+	var layout := VoxelWorld.workspace.get_layout(layout_name)
+	if not layout:
 		return
-	VoxelWorld.workspace.add_block_type(block_name)
-	VoxelWorld.workspace_changed.emit()
+	for i in layout.palette_names.size():
+		_stack_list.add_child(_make_stack_row(layout, i))
 
-func _on_delete_block_type(block_name: String) -> void:
-	VoxelWorld.workspace.remove_block_type(block_name)
-	VoxelWorld.workspace_changed.emit()
+func _make_stack_row(layout: VoxelLayout, index: int) -> HBoxContainer:
+	var row := HBoxContainer.new()
 
-func _on_add_palette(palette_name: String) -> void:
-	if VoxelWorld.workspace.get_palette(palette_name):
-		return
-	VoxelWorld.workspace.add_palette(palette_name)
-	VoxelWorld.workspace_changed.emit()
+	var lbl := Label.new()
+	lbl.text = layout.palette_names[index]
+	lbl.size_flags_horizontal = SIZE_EXPAND_FILL
+	row.add_child(lbl)
 
-func _on_delete_palette(palette_name: String) -> void:
-	VoxelWorld.workspace.remove_palette(palette_name)
-	VoxelWorld.workspace_changed.emit()
+	var up_btn := Button.new()
+	up_btn.text = "↑"
+	up_btn.flat = true
+	up_btn.disabled = index == 0
+	up_btn.pressed.connect(func():
+		layout.palette_names.insert(index - 1, layout.palette_names.pop_at(index))
+		_rebuild_stack(layout.name)
+	)
+	row.add_child(up_btn)
 
-func _on_add_layout(layout_name: String) -> void:
-	if VoxelWorld.workspace.get_layout(layout_name):
-		return
-	VoxelWorld.workspace.add_layout(layout_name)
-	VoxelWorld.workspace_changed.emit()
+	var dn_btn := Button.new()
+	dn_btn.text = "↓"
+	dn_btn.flat = true
+	dn_btn.disabled = index == layout.palette_names.size() - 1
+	dn_btn.pressed.connect(func():
+		layout.palette_names.insert(index + 1, layout.palette_names.pop_at(index))
+		_rebuild_stack(layout.name)
+	)
+	row.add_child(dn_btn)
 
-func _on_delete_layout(layout_name: String) -> void:
-	VoxelWorld.workspace.remove_layout(layout_name)
-	VoxelWorld.workspace_changed.emit()
+	var del_btn := Button.new()
+	del_btn.text = "✕"
+	del_btn.flat = true
+	del_btn.pressed.connect(func():
+		layout.palette_names.remove_at(index)
+		_rebuild_stack(layout.name)
+	)
+	row.add_child(del_btn)
 
-func _on_open_layout() -> void:
+	return row
+
+func _on_add_palette_to_stack() -> void:
 	var layout_name := _layouts_list.selected
 	if layout_name.is_empty():
 		return
 	var layout := VoxelWorld.workspace.get_layout(layout_name)
 	if not layout:
 		return
-	var pidx := _palette_picker.selected
+	var pidx := _add_to_stack_picker.selected
 	if pidx < 0 or pidx >= VoxelWorld.workspace.palettes.size():
 		return
-	var palette := VoxelWorld.workspace.palettes[pidx]
-	open_layout_requested.emit(layout, palette)
+	var palette_name := VoxelWorld.workspace.palettes[pidx].name
+	layout.palette_names.append(palette_name)
+	_rebuild_stack(layout_name)
+
+func _on_open_layout() -> void:
+	var layout_name := _layouts_list.selected
+	if layout_name.is_empty():
+		return
+	var layout := VoxelWorld.workspace.get_layout(layout_name)
+	if layout:
+		open_layout_requested.emit(layout)
+
+func _on_add_block_type(block_name: String) -> void:
+	if not VoxelWorld.workspace.get_block_type(block_name):
+		VoxelWorld.workspace.add_block_type(block_name)
+		VoxelWorld.workspace_changed.emit()
+
+func _on_delete_block_type(block_name: String) -> void:
+	VoxelWorld.workspace.remove_block_type(block_name)
+	VoxelWorld.workspace_changed.emit()
+
+func _on_add_palette(palette_name: String) -> void:
+	if not VoxelWorld.workspace.get_palette(palette_name):
+		VoxelWorld.workspace.add_palette(palette_name)
+		VoxelWorld.workspace_changed.emit()
+
+func _on_delete_palette(palette_name: String) -> void:
+	VoxelWorld.workspace.remove_palette(palette_name)
+	VoxelWorld.workspace_changed.emit()
+
+func _on_add_layout(layout_name: String) -> void:
+	if not VoxelWorld.workspace.get_layout(layout_name):
+		VoxelWorld.workspace.add_layout(layout_name)
+		VoxelWorld.workspace_changed.emit()
+
+func _on_delete_layout(layout_name: String) -> void:
+	VoxelWorld.workspace.remove_layout(layout_name)
+	VoxelWorld.workspace_changed.emit()

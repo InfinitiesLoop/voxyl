@@ -3,6 +3,9 @@ extends Resource
 
 @export var name: String = ""
 @export var data: VoxelData
+# Ordered list of palette names. Resolution is last-wins: if two palettes
+# both define the same semantic name, the one listed last takes priority.
+@export var palette_names: Array[String] = []
 
 func _init() -> void:
 	data = VoxelData.new()
