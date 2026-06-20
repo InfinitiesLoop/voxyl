@@ -14,7 +14,12 @@ var _fly_mode := false
 var _camera_pos := Vector3.ZERO
 var _yaw := 0.0
 var _pitch := 0.0
-var _rshift_held := false  # tracked manually; KEY_LOCATION_RIGHT on shift
+# Right-side modifier keys tracked manually via KEY_LOCATION_RIGHT:
+#   right-ctrl (Windows) and right-alt/option (Mac) = jump/up
+#   right-shift = sneak/down (same as left-shift, tracked for reset-on-exit)
+var _rctrl_held := false
+var _ralt_held := false
+var _rshift_held := false
 
 # --- Raycast result ---
 var _target_hit := false
@@ -122,12 +127,10 @@ func _process(delta: float) -> void:
 	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):  move -= flat_fwd
 	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):  move -= right
 	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT): move += right
-	# Up: Space (right-hand) or Right-Shift (left-hand)
-	if Input.is_key_pressed(KEY_SPACE) or _rshift_held: move.y += 1.0
-	# Down: Left-Shift (right-hand) or / (left-hand); KEY_SHIFT fires for both shifts so
-	# we use it only when right-shift is not what's held, to avoid double-triggering.
-	if Input.is_key_pressed(KEY_SLASH) or (Input.is_key_pressed(KEY_SHIFT) and not _rshift_held):
-		move.y -= 1.0
+	# Up: Space (right-hand) · Right-Ctrl/Windows or Right-Option/Mac (left-hand)
+	if Input.is_key_pressed(KEY_SPACE) or _rctrl_held or _ralt_held: move.y += 1.0
+	# Down: any Shift (right-hand sneak) · / (left-hand sneak)
+	if Input.is_key_pressed(KEY_SHIFT) or Input.is_key_pressed(KEY_SLASH): move.y -= 1.0
 	if move.length_squared() > 0.0:
 		_camera_pos += move.normalized() * 10.0 * delta
 		_update_camera()
@@ -142,9 +145,12 @@ func _input(event: InputEvent) -> void:
 		return
 	if event is InputEventKey:
 		var key := event as InputEventKey
-		# Track right-shift via location (KEY_LOCATION_RIGHT = 2)
-		if key.physical_keycode == KEY_SHIFT and key.location == KEY_LOCATION_RIGHT:
-			_rshift_held = key.pressed
+		# Track right-side modifier keys (KEY_LOCATION_RIGHT distinguishes left vs right)
+		if key.location == KEY_LOCATION_RIGHT:
+			match key.physical_keycode:
+				KEY_CTRL:  _rctrl_held  = key.pressed
+				KEY_ALT:   _ralt_held   = key.pressed
+				KEY_SHIFT: _rshift_held = key.pressed
 		if key.keycode == KEY_ESCAPE and key.pressed and _fly_mode:
 			_exit_fly_mode()
 			get_viewport().set_input_as_handled()
@@ -219,9 +225,24 @@ func _enter_fly_mode() -> void:
 	_update_crosshair_target()
 	_overlay.queue_redraw()
 
+func _sync_orbit_from_fly() -> void:
+	# Derive orbit yaw/pitch/distance from the current fly camera position so
+	# the orbit view picks up exactly where first-person left off.
+	var pivot := _get_world_center()
+	var offset := _camera_pos - pivot
+	_orbit_distance = offset.length()
+	if _orbit_distance < 0.01:
+		return
+	var norm := offset / _orbit_distance
+	_orbit_pitch = rad_to_deg(asin(clamp(norm.y, -1.0, 1.0)))
+	_orbit_yaw = rad_to_deg(atan2(norm.x, norm.z))
+
 func _exit_fly_mode() -> void:
+	_sync_orbit_from_fly()
 	_fly_mode = false
 	_orbit_pressing = false
+	_rctrl_held = false
+	_ralt_held = false
 	_rshift_held = false
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 	_overlay.visible = false
@@ -297,7 +318,8 @@ func _rebuild() -> void:
 		mesh.size = Vector3(0.94, 0.94, 0.94)
 		mi.mesh = mesh
 		mi.material_override = materials[semantic]
-		mi.position = Vector3(pos.x, pos.y, pos.z)
+		# +0.5 centres the BoxMesh within the DDA cell (x,y,z)→(x+1,y+1,z+1)
+		mi.position = Vector3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5)
 		_voxel_root.add_child(mi)
 
 # ---------------------------------------------------------------------------
@@ -314,7 +336,7 @@ func _update_crosshair_target() -> void:
 	if _target_hit:
 		_target_block = result.pos
 		_target_place = result.prev_pos
-		_highlight.position = Vector3(_target_block.x, _target_block.y, _target_block.z)
+		_highlight.position = Vector3(_target_block.x + 0.5, _target_block.y + 0.5, _target_block.z + 0.5)
 		_highlight.visible = true
 	else:
 		_highlight.visible = false
@@ -389,5 +411,5 @@ func _draw_overlay() -> void:
 	_overlay.draw_circle(center, 3.0, Color(0, 0, 0, 0.4))
 
 	var font := ThemeDB.fallback_font
-	var hint := "WASD / Arrow keys  ·  Space or RShift = up  ·  Shift or / = down  ·  LMB erase  ·  RMB place  ·  Esc exit"
+	var hint := "WASD / Arrows  ·  Space · RCtrl · ROpt = up  ·  Shift · / = down  ·  LMB erase  ·  RMB place  ·  Esc exit"
 	_overlay.draw_string(font, Vector2(10.0, _overlay.size.y - 12.0), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1, 1, 1, 0.55))
