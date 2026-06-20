@@ -80,6 +80,21 @@ func merged_semantic_names() -> Array[String]:
 				result.append(entry.semantic_name)
 	return result
 
+func add_palette_to_stack(layout: VoxelLayout, palette_name: String) -> void:
+	layout.palette_names.append(palette_name)
+	if layout == active_layout:
+		palette_stack_changed.emit()
+
+func remove_palette_from_stack(layout: VoxelLayout, index: int) -> void:
+	layout.palette_names.remove_at(index)
+	if layout == active_layout:
+		palette_stack_changed.emit()
+
+func move_palette_in_stack(layout: VoxelLayout, from_idx: int, to_idx: int) -> void:
+	layout.palette_names.insert(to_idx, layout.palette_names.pop_at(from_idx))
+	if layout == active_layout:
+		palette_stack_changed.emit()
+
 func select_semantic(semantic_name: String) -> void:
 	selected_semantic = semantic_name
 	selection_changed.emit(semantic_name)

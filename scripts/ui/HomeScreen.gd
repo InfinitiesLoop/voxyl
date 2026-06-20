@@ -147,7 +147,7 @@ func _make_stack_row(layout: VoxelLayout, index: int) -> HBoxContainer:
 	up_btn.flat = true
 	up_btn.disabled = index == 0
 	up_btn.pressed.connect(func():
-		layout.palette_names.insert(index - 1, layout.palette_names.pop_at(index))
+		VoxelWorld.move_palette_in_stack(layout, index, index - 1)
 		_rebuild_stack(layout.name)
 	)
 	row.add_child(up_btn)
@@ -157,7 +157,7 @@ func _make_stack_row(layout: VoxelLayout, index: int) -> HBoxContainer:
 	dn_btn.flat = true
 	dn_btn.disabled = index == layout.palette_names.size() - 1
 	dn_btn.pressed.connect(func():
-		layout.palette_names.insert(index + 1, layout.palette_names.pop_at(index))
+		VoxelWorld.move_palette_in_stack(layout, index, index + 1)
 		_rebuild_stack(layout.name)
 	)
 	row.add_child(dn_btn)
@@ -166,7 +166,7 @@ func _make_stack_row(layout: VoxelLayout, index: int) -> HBoxContainer:
 	del_btn.text = "✕"
 	del_btn.flat = true
 	del_btn.pressed.connect(func():
-		layout.palette_names.remove_at(index)
+		VoxelWorld.remove_palette_from_stack(layout, index)
 		_rebuild_stack(layout.name)
 	)
 	row.add_child(del_btn)
@@ -184,7 +184,7 @@ func _on_add_palette_to_stack() -> void:
 	if pidx < 0 or pidx >= VoxelWorld.workspace.palettes.size():
 		return
 	var palette_name := VoxelWorld.workspace.palettes[pidx].name
-	layout.palette_names.append(palette_name)
+	VoxelWorld.add_palette_to_stack(layout, palette_name)
 	_rebuild_stack(layout_name)
 
 func _on_open_layout() -> void:
