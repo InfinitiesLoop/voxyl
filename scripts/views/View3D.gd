@@ -14,6 +14,7 @@ var _fly_mode := false
 var _camera_pos := Vector3.ZERO
 var _yaw := 0.0
 var _pitch := 0.0
+var _rshift_held := false  # tracked manually; KEY_LOCATION_RIGHT on shift
 
 # --- Raycast result ---
 var _target_hit := false
@@ -117,12 +118,16 @@ func _process(delta: float) -> void:
 		flat_fwd = flat_fwd.normalized()
 	var right := flat_fwd.cross(Vector3.UP)
 	var move := Vector3.ZERO
-	if Input.is_key_pressed(KEY_W): move += flat_fwd
-	if Input.is_key_pressed(KEY_S): move -= flat_fwd
-	if Input.is_key_pressed(KEY_A): move -= right
-	if Input.is_key_pressed(KEY_D): move += right
-	if Input.is_key_pressed(KEY_SPACE): move.y += 1.0
-	if Input.is_key_pressed(KEY_SHIFT): move.y -= 1.0
+	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):    move += flat_fwd
+	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):  move -= flat_fwd
+	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):  move -= right
+	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT): move += right
+	# Up: Space (right-hand) or Right-Shift (left-hand)
+	if Input.is_key_pressed(KEY_SPACE) or _rshift_held: move.y += 1.0
+	# Down: Left-Shift (right-hand) or / (left-hand); KEY_SHIFT fires for both shifts so
+	# we use it only when right-shift is not what's held, to avoid double-triggering.
+	if Input.is_key_pressed(KEY_SLASH) or (Input.is_key_pressed(KEY_SHIFT) and not _rshift_held):
+		move.y -= 1.0
 	if move.length_squared() > 0.0:
 		_camera_pos += move.normalized() * 10.0 * delta
 		_update_camera()
@@ -135,9 +140,11 @@ func _process(delta: float) -> void:
 func _input(event: InputEvent) -> void:
 	if not is_visible_in_tree():
 		return
-	# Escape exits fly mode regardless
 	if event is InputEventKey:
 		var key := event as InputEventKey
+		# Track right-shift via location (KEY_LOCATION_RIGHT = 2)
+		if key.physical_keycode == KEY_SHIFT and key.location == KEY_LOCATION_RIGHT:
+			_rshift_held = key.pressed
 		if key.keycode == KEY_ESCAPE and key.pressed and _fly_mode:
 			_exit_fly_mode()
 			get_viewport().set_input_as_handled()
@@ -215,6 +222,7 @@ func _enter_fly_mode() -> void:
 func _exit_fly_mode() -> void:
 	_fly_mode = false
 	_orbit_pressing = false
+	_rshift_held = false
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 	_overlay.visible = false
 	_highlight.visible = false
@@ -361,11 +369,13 @@ func _place_targeted_block() -> void:
 		return
 	if not VoxelWorld.selected_semantic.is_empty():
 		VoxelWorld.set_block(_target_place, VoxelWorld.selected_semantic)
+		_update_crosshair_target()
 
 func _erase_targeted_block() -> void:
 	if not _target_hit or not VoxelWorld.active_project:
 		return
 	VoxelWorld.clear_block(_target_block)
+	_update_crosshair_target()
 
 # ---------------------------------------------------------------------------
 # 2D overlay: crosshair + hint text
@@ -379,5 +389,5 @@ func _draw_overlay() -> void:
 	_overlay.draw_circle(center, 3.0, Color(0, 0, 0, 0.4))
 
 	var font := ThemeDB.fallback_font
-	var hint := "WASD move  ·  Space / Shift up / down  ·  LMB erase  ·  RMB place  ·  Esc exit"
+	var hint := "WASD / Arrow keys  ·  Space or RShift = up  ·  Shift or / = down  ·  LMB erase  ·  RMB place  ·  Esc exit"
 	_overlay.draw_string(font, Vector2(10.0, _overlay.size.y - 12.0), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1, 1, 1, 0.55))
