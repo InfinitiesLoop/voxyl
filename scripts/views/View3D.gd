@@ -14,23 +14,27 @@ var _fly_mode := false
 var _camera_pos := Vector3.ZERO
 var _yaw := 0.0
 var _pitch := 0.0
-# Right-side modifier keys tracked manually via KEY_LOCATION_RIGHT:
-#   right-ctrl (Windows) and right-alt/option (Mac) = jump/up
-#   right-shift = sneak/down (same as left-shift, tracked for reset-on-exit)
+# Right-side modifier keys tracked via KEY_LOCATION_RIGHT:
+#   right-ctrl (Windows) / right-alt·option (Mac) = jump/up
+#   right-shift = sneak/down (same as left-shift)
 var _rctrl_held := false
 var _ralt_held := false
 var _rshift_held := false
 
-# --- Raycast result ---
-var _target_hit := false
+# --- Raycast state ---
+var _target_hit := false      # crosshair hits an existing block
 var _target_block := Vector3i.ZERO
 var _target_place := Vector3i.ZERO
+var _floor_hit := false       # crosshair hits the virtual floor plane
+var _floor_place := Vector3i.ZERO
+var _floor_y := 0             # Y level of the virtual floor (reference plane)
 
 # --- Nodes ---
 var _viewport: SubViewport
 var _camera: Camera3D
 var _voxel_root: Node3D
 var _highlight: MeshInstance3D
+var _highlight_mat: StandardMaterial3D
 var _overlay: Control
 
 # --- Dirty flag ---
@@ -41,7 +45,8 @@ func _ready() -> void:
 	_setup_overlay()
 	VoxelWorld.project_opened.connect(_on_project_opened)
 	VoxelWorld.block_changed.connect(func(_p, _s): _mark_dirty())
-	VoxelWorld.palette_stack_changed.connect(func(): _mark_dirty())
+	VoxelWorld.palette_stack_changed.connect(func(): _mark_dirty(); if _fly_mode: _overlay.queue_redraw())
+	VoxelWorld.selection_changed.connect(func(_s): if _fly_mode: _overlay.queue_redraw())
 	visibility_changed.connect(func(): if not visible and _fly_mode: _exit_fly_mode())
 	set_process(true)
 
@@ -86,17 +91,17 @@ func _setup_viewport() -> void:
 	_voxel_root = Node3D.new()
 	_viewport.add_child(_voxel_root)
 
-	# Highlight overlay for targeted block
+	_highlight_mat = StandardMaterial3D.new()
+	_highlight_mat.albedo_color = Color(1.0, 1.0, 1.0, 0.35)
+	_highlight_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_highlight_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_highlight_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+
 	_highlight = MeshInstance3D.new()
 	var hl_mesh := BoxMesh.new()
 	hl_mesh.size = Vector3(1.04, 1.04, 1.04)
 	_highlight.mesh = hl_mesh
-	var hl_mat := StandardMaterial3D.new()
-	hl_mat.albedo_color = Color(1.0, 1.0, 1.0, 0.35)
-	hl_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	hl_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	hl_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_highlight.material_override = hl_mat
+	_highlight.material_override = _highlight_mat
 	_highlight.visible = false
 	_viewport.add_child(_highlight)
 
@@ -129,7 +134,7 @@ func _process(delta: float) -> void:
 	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT): move += right
 	# Up: Space (right-hand) · Right-Ctrl/Windows or Right-Option/Mac (left-hand)
 	if Input.is_key_pressed(KEY_SPACE) or _rctrl_held or _ralt_held: move.y += 1.0
-	# Down: any Shift (right-hand sneak) · / (left-hand sneak)
+	# Down: any Shift · / (left-hand)
 	if Input.is_key_pressed(KEY_SHIFT) or Input.is_key_pressed(KEY_SLASH): move.y -= 1.0
 	if move.length_squared() > 0.0:
 		_camera_pos += move.normalized() * 10.0 * delta
@@ -143,9 +148,10 @@ func _process(delta: float) -> void:
 func _input(event: InputEvent) -> void:
 	if not is_visible_in_tree():
 		return
+
 	if event is InputEventKey:
 		var key := event as InputEventKey
-		# Track right-side modifier keys (KEY_LOCATION_RIGHT distinguishes left vs right)
+		# Track right-side modifier keys
 		if key.location == KEY_LOCATION_RIGHT:
 			match key.physical_keycode:
 				KEY_CTRL:  _rctrl_held  = key.pressed
@@ -155,8 +161,17 @@ func _input(event: InputEvent) -> void:
 			_exit_fly_mode()
 			get_viewport().set_input_as_handled()
 			return
+		# Number keys 1-9 for palette slot selection (fly mode only)
+		if _fly_mode and key.pressed:
+			var kc := key.keycode
+			if kc >= KEY_1 and kc <= KEY_9:
+				_select_palette_slot(kc - KEY_1)
+				get_viewport().set_input_as_handled()
+				return
+
 	if not _fly_mode:
 		return
+
 	if event is InputEventMouseMotion:
 		var motion := event as InputEventMouseMotion
 		_yaw -= motion.relative.x * 0.18
@@ -165,10 +180,11 @@ func _input(event: InputEvent) -> void:
 		_update_crosshair_target()
 	elif event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
 		var mb := event as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_LEFT:
-			_erase_targeted_block()
-		elif mb.button_index == MOUSE_BUTTON_RIGHT:
-			_place_targeted_block()
+		match mb.button_index:
+			MOUSE_BUTTON_LEFT:         _erase_targeted_block()
+			MOUSE_BUTTON_RIGHT:        _place_targeted_block()
+			MOUSE_BUTTON_WHEEL_UP:     _cycle_palette(-1)
+			MOUSE_BUTTON_WHEEL_DOWN:   _cycle_palette(1)
 
 # Orbit camera input (only active when NOT in fly mode)
 func _on_svc_input(event: InputEvent) -> void:
@@ -197,7 +213,7 @@ func _on_svc_input(event: InputEvent) -> void:
 		var delta: Vector2 = motion.position - _drag_last
 		_drag_last = motion.position
 		_orbit_yaw -= delta.x * 0.4
-		_orbit_pitch = clamp(_orbit_pitch - delta.y * 0.4, 2.0, 88.0)
+		_orbit_pitch = clamp(_orbit_pitch - delta.y * 0.4, 2.0, 85.0)
 		_update_camera()
 
 # ---------------------------------------------------------------------------
@@ -205,7 +221,6 @@ func _on_svc_input(event: InputEvent) -> void:
 # ---------------------------------------------------------------------------
 
 func _enter_fly_mode() -> void:
-	# Position fly camera at the current orbit camera position
 	var pivot := _get_world_center()
 	var yaw_rad := deg_to_rad(_orbit_yaw)
 	var pitch_rad := deg_to_rad(_orbit_pitch)
@@ -215,7 +230,6 @@ func _enter_fly_mode() -> void:
 		cos(yaw_rad) * cos(pitch_rad)
 	) * _orbit_distance
 	_camera_pos = pivot + offset
-	# Look direction is the inverse of the orbit offset
 	_yaw = _orbit_yaw + 180.0
 	_pitch = -_orbit_pitch
 	_fly_mode = true
@@ -226,15 +240,18 @@ func _enter_fly_mode() -> void:
 	_overlay.queue_redraw()
 
 func _sync_orbit_from_fly() -> void:
-	# Derive orbit yaw/pitch/distance from the current fly camera position so
-	# the orbit view picks up exactly where first-person left off.
+	# Convert fly camera world-position back into orbit yaw/pitch/distance so
+	# the orbit view resumes exactly where first-person left off.
 	var pivot := _get_world_center()
 	var offset := _camera_pos - pivot
-	_orbit_distance = offset.length()
-	if _orbit_distance < 0.01:
-		return
-	var norm := offset / _orbit_distance
-	_orbit_pitch = rad_to_deg(asin(clamp(norm.y, -1.0, 1.0)))
+	var dist := offset.length()
+	# Always set a sane distance even if camera wandered very close to pivot
+	_orbit_distance = clamp(dist, 2.0, 300.0)
+	if dist < 0.01:
+		return  # at world centre — keep existing yaw/pitch angles
+	var norm := offset / dist
+	# Clamp to ±85° to avoid gimbal lock when camera is directly above/below pivot
+	_orbit_pitch = clamp(rad_to_deg(asin(clamp(norm.y, -1.0, 1.0))), -85.0, 85.0)
 	_orbit_yaw = rad_to_deg(atan2(norm.x, norm.z))
 
 func _exit_fly_mode() -> void:
@@ -318,28 +335,44 @@ func _rebuild() -> void:
 		mesh.size = Vector3(0.94, 0.94, 0.94)
 		mi.mesh = mesh
 		mi.material_override = materials[semantic]
-		# +0.5 centres the BoxMesh within the DDA cell (x,y,z)→(x+1,y+1,z+1)
+		# +0.5 centres the BoxMesh inside DDA cell (x,y,z)→(x+1,y+1,z+1)
 		mi.position = Vector3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5)
 		_voxel_root.add_child(mi)
 
 # ---------------------------------------------------------------------------
-# Raycast (DDA grid traversal)
+# Raycast (DDA grid traversal + virtual floor plane)
 # ---------------------------------------------------------------------------
 
 func _update_crosshair_target() -> void:
+	_target_hit = false
+	_floor_hit = false
 	if not VoxelWorld.active_project:
-		_target_hit = false
 		_highlight.visible = false
+		_overlay.queue_redraw()
 		return
+
 	var result := _raycast_grid(_camera_pos, _get_look_dir(), 20.0)
 	_target_hit = result.get("hit", false)
+
 	if _target_hit:
 		_target_block = result.pos
 		_target_place = result.prev_pos
+		_highlight_mat.albedo_color = Color(1.0, 1.0, 1.0, 0.35)
 		_highlight.position = Vector3(_target_block.x + 0.5, _target_block.y + 0.5, _target_block.z + 0.5)
 		_highlight.visible = true
 	else:
-		_highlight.visible = false
+		# Fall back to virtual floor plane so you can place the first block
+		var floor_result := _raycast_floor_plane(_camera_pos, _get_look_dir())
+		_floor_hit = floor_result.get("hit", false)
+		if _floor_hit:
+			_floor_place = floor_result.pos
+			_highlight_mat.albedo_color = Color(0.4, 1.0, 0.5, 0.22)
+			_highlight.position = Vector3(_floor_place.x + 0.5, _floor_place.y + 0.5, _floor_place.z + 0.5)
+			_highlight.visible = true
+		else:
+			_highlight.visible = false
+
+	_overlay.queue_redraw()
 
 func _raycast_grid(origin: Vector3, direction: Vector3, max_dist: float) -> Dictionary:
 	if not VoxelWorld.active_project:
@@ -380,18 +413,44 @@ func _raycast_grid(origin: Vector3, direction: Vector3, max_dist: float) -> Dict
 
 	return {hit = false}
 
+func _raycast_floor_plane(origin: Vector3, direction: Vector3) -> Dictionary:
+	# Cast ray against horizontal plane at Y = _floor_y.
+	# This gives a reference surface for placing the first block in empty space.
+	if not VoxelWorld.active_project:
+		return {hit = false}
+	var dir := direction.normalized()
+	if abs(dir.y) < 0.001:
+		return {hit = false}
+	var t := (float(_floor_y) - origin.y) / dir.y
+	if t < 0.05 or t > 80.0:
+		return {hit = false}
+	var hit_world := origin + dir * t
+	var cell := Vector3i(int(floor(hit_world.x)), _floor_y, int(floor(hit_world.z)))
+	var data := VoxelWorld.active_project.data
+	if not data.is_in_bounds(cell):
+		return {hit = false}
+	if not data.get_block(cell).is_empty():
+		return {hit = false}
+	return {hit = true, pos = cell}
+
 # ---------------------------------------------------------------------------
 # Block editing (fly mode)
 # ---------------------------------------------------------------------------
 
 func _place_targeted_block() -> void:
-	if not _target_hit or not VoxelWorld.active_project:
+	if not VoxelWorld.active_project or VoxelWorld.selected_semantic.is_empty():
 		return
-	if not VoxelWorld.active_project.data.is_in_bounds(_target_place):
+	var place_pos: Vector3i
+	if _target_hit:
+		place_pos = _target_place
+	elif _floor_hit:
+		place_pos = _floor_place
+	else:
 		return
-	if not VoxelWorld.selected_semantic.is_empty():
-		VoxelWorld.set_block(_target_place, VoxelWorld.selected_semantic)
-		_update_crosshair_target()
+	if not VoxelWorld.active_project.data.is_in_bounds(place_pos):
+		return
+	VoxelWorld.set_block(place_pos, VoxelWorld.selected_semantic)
+	_update_crosshair_target()
 
 func _erase_targeted_block() -> void:
 	if not _target_hit or not VoxelWorld.active_project:
@@ -400,16 +459,88 @@ func _erase_targeted_block() -> void:
 	_update_crosshair_target()
 
 # ---------------------------------------------------------------------------
-# 2D overlay: crosshair + hint text
+# Palette cycling (scroll wheel / number keys)
+# ---------------------------------------------------------------------------
+
+func _cycle_palette(delta: int) -> void:
+	var names := VoxelWorld.merged_semantic_names()
+	if names.is_empty():
+		return
+	var idx := names.find(VoxelWorld.selected_semantic)
+	if idx < 0:
+		idx = 0
+	idx = (idx + delta) % names.size()
+	if idx < 0:
+		idx += names.size()
+	VoxelWorld.select_semantic(names[idx])
+
+func _select_palette_slot(slot: int) -> void:
+	var names := VoxelWorld.merged_semantic_names()
+	if slot < names.size():
+		VoxelWorld.select_semantic(names[slot])
+
+# ---------------------------------------------------------------------------
+# 2D overlay: crosshair · palette hotbar · hint bar
 # ---------------------------------------------------------------------------
 
 func _draw_overlay() -> void:
 	var center := _overlay.size / 2.0
-	var color := Color(1.0, 1.0, 1.0, 0.9)
-	_overlay.draw_line(center + Vector2(-14, 0), center + Vector2(14, 0), color, 1.5)
-	_overlay.draw_line(center + Vector2(0, -14), center + Vector2(0, 14), color, 1.5)
+
+	# Crosshair
+	_overlay.draw_line(center + Vector2(-14, 0), center + Vector2(14, 0), Color(1, 1, 1, 0.9), 1.5)
+	_overlay.draw_line(center + Vector2(0, -14), center + Vector2(0, 14), Color(1, 1, 1, 0.9), 1.5)
 	_overlay.draw_circle(center, 3.0, Color(0, 0, 0, 0.4))
 
+	_draw_hotbar()
+
 	var font := ThemeDB.fallback_font
-	var hint := "WASD / Arrows  ·  Space · RCtrl · ROpt = up  ·  Shift · / = down  ·  LMB erase  ·  RMB place  ·  Esc exit"
-	_overlay.draw_string(font, Vector2(10.0, _overlay.size.y - 12.0), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1, 1, 1, 0.55))
+	var hint := "WASD/Arrows  ·  Space·RCtrl·ROpt up  ·  Shift·/ down  ·  LMB erase  ·  RMB place  ·  1–9 / scroll palette  ·  Esc"
+	_overlay.draw_string(font, Vector2(10.0, _overlay.size.y - 10.0), hint,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.45))
+
+func _draw_hotbar() -> void:
+	var names := VoxelWorld.merged_semantic_names()
+	if names.is_empty():
+		return
+
+	const SLOT := 44.0
+	const GAP := 4.0
+	const BOTTOM_MARGIN := 30.0  # leave room for hint text
+
+	# If there are more than 9 entries, show a 9-slot window centred on selection
+	var total := names.size()
+	var sel_idx := maxi(0, names.find(VoxelWorld.selected_semantic))
+	var visible_count := mini(total, 9)
+	var start_idx := 0
+	if total > 9:
+		start_idx = clampi(sel_idx - 4, 0, total - 9)
+
+	var total_w := visible_count * SLOT + (visible_count - 1) * GAP
+	var sx := (_overlay.size.x - total_w) * 0.5
+	var sy := _overlay.size.y - BOTTOM_MARGIN - SLOT
+
+	# Background panel
+	_overlay.draw_rect(Rect2(sx - 6, sy - 6, total_w + 12, SLOT + 12), Color(0, 0, 0, 0.55))
+
+	var font := ThemeDB.fallback_font
+	for i in visible_count:
+		var idx := start_idx + i
+		var semantic := names[idx]
+		var color := VoxelWorld.get_color_for_semantic(semantic)
+		var rx := sx + i * (SLOT + GAP)
+		var slot_rect := Rect2(rx, sy, SLOT, SLOT)
+		var is_selected := semantic == VoxelWorld.selected_semantic
+
+		# Swatch
+		_overlay.draw_rect(slot_rect, color.darkened(0.35))
+		_overlay.draw_rect(slot_rect.grow(-4), color)
+
+		# Border: bright+thick for selected, dim for others
+		_overlay.draw_rect(slot_rect, Color(1, 1, 1, 0.9 if is_selected else 0.25),
+			false, 2.5 if is_selected else 1.0)
+
+		# Slot number (shows 1-9 for the first nine visible slots)
+		var num_label := str(i + 1) if i < 9 else ""
+		if not num_label.is_empty():
+			_overlay.draw_string(font, Vector2(rx + 3.0, sy + 13.0), num_label,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1, 1, 1, 0.7))
