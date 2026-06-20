@@ -1,0 +1,29 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/views/View2DGrid.gd" id="1"]
+
+[node name="View2DGrid" type="VBoxContainer"]
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("1")
+
+[node name="LayerBar" type="HBoxContainer" parent="."]
+custom_minimum_size = Vector2(0, 32)
+
+[node name="LayerDownBtn" type="Button" parent="LayerBar"]
+text = "▼"
+
+[node name="LayerLabel" type="Label" parent="LayerBar"]
+size_flags_horizontal = 3
+text = "Layer 0"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="LayerUpBtn" type="Button" parent="LayerBar"]
+text = "▲"
+
+[node name="GridArea" type="Control" parent="."]
+size_flags_vertical = 3
+
+[connection signal="pressed" from="LayerBar/LayerDownBtn" to="." method="_on_layer_down_pressed"]
+[connection signal="pressed" from="LayerBar/LayerUpBtn" to="." method="_on_layer_up_pressed"]

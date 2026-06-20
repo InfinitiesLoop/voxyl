@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <rect width="128" height="128" rx="16" fill="#1a1a2e"/>
+  <!-- Isometric voxel hint -->
+  <polygon points="64,28 96,46 96,82 64,100 32,82 32,46" fill="#2d4a7a" stroke="#4a7abf" stroke-width="2"/>
+  <polygon points="64,28 96,46 64,64 32,46" fill="#4a7abf"/>
+  <polygon points="32,46 64,64 64,100 32,82" fill="#2a5a8a"/>
+  <polygon points="96,46 64,64 64,100 96,82" fill="#1e3d6b"/>
+</svg>
