@@ -2,11 +2,13 @@ class_name View2DGrid
 extends VBoxContainer
 
 const CELL_SIZE := 32
-const PADDING := 8
 const VIEW_PADDING := 4
 # Minimum in-plane radius (in cells) drawn around the center, so a slice that
 # sits outside the build still presents a usable canvas.
 const CENTER_RADIUS := 10
+# Zoom limits, in pixels-per-cell.
+const MIN_CELL_PX := 8.0
+const MAX_CELL_PX := 96.0
 
 # Slice configuration
 # axis 0=X (slice is YZ plane), 1=Y (slice is XZ plane), 2=Z (slice is XY plane)
@@ -19,6 +21,13 @@ var _is_placing := false
 var _is_erasing := false
 var _drag_start := Vector2i(-1, -1)
 var _preview_cells: Array[Vector2i] = []
+
+# View transform (pan/zoom). The view auto-centers on _center; _user_pan is the
+# manual offset on top of that, and _cell_px is the zoom (pixels per cell).
+var _cell_px := float(CELL_SIZE)
+var _user_pan := Vector2.ZERO
+var _panning := false
+var _pan_last := Vector2.ZERO
 
 @onready var _layer_label: Label = $LayerBar/LayerLabel
 @onready var _grid_area: Control = $GridArea
@@ -113,13 +122,15 @@ func _center_hv() -> Vector2i:
 		2: return Vector2i(_center.x - mn.x, mx.y - _center.y)
 		_: return Vector2i(_center.x - mn.x, _center.z - mn.z)
 
-# Pixel offset that places the center cell in the middle of the GridArea.
-func _get_pan() -> Vector2:
+# Screen position of grid cell (0,0)'s top-left. The view auto-centers _center
+# and then applies the user's manual pan; both scale with the current zoom, so
+# the framing stays stable even as the build's bounds grow underneath it.
+func _auto_center_origin() -> Vector2:
 	var hv := _center_hv()
-	return _grid_area.size * 0.5 - Vector2(
-		PADDING + (hv.x + 0.5) * CELL_SIZE,
-		PADDING + (hv.y + 0.5) * CELL_SIZE
-	)
+	return _grid_area.size * 0.5 - (Vector2(hv) + Vector2(0.5, 0.5)) * _cell_px
+
+func _draw_origin() -> Vector2:
+	return _auto_center_origin() + _user_pan
 
 # ---------------------------------------------------------------------------
 # Reset / label
@@ -127,6 +138,9 @@ func _get_pan() -> Vector2:
 
 func _reset() -> void:
 	# slice_pos is intentionally not clamped — a slice may sit outside the build.
+	_cell_px = float(CELL_SIZE)
+	_user_pan = Vector2.ZERO
+	_panning = false
 	_preview_cells.clear()
 	_drag_start = Vector2i(-1, -1)
 	_update_slice_label()
@@ -144,14 +158,11 @@ func _draw_grid() -> void:
 	if not VoxelWorld.active_project:
 		return
 	var data := VoxelWorld.active_project.data
-	var pan := _get_pan()
+	var origin := _draw_origin()
+	var cell_dim := Vector2(_cell_px - 1.0, _cell_px - 1.0)
 	for h in _get_grid_w():
 		for v in _get_grid_h():
-			var rect := Rect2(
-				PADDING + pan.x + h * CELL_SIZE,
-				PADDING + pan.y + v * CELL_SIZE,
-				CELL_SIZE - 1, CELL_SIZE - 1
-			)
+			var rect := Rect2(origin + Vector2(h, v) * _cell_px, cell_dim)
 			var semantic := data.get_block(_grid_to_world(h, v))
 			var fill: Color
 			if semantic.is_empty():
@@ -165,11 +176,7 @@ func _draw_grid() -> void:
 		var preview_color := VoxelWorld.get_color_for_semantic(VoxelWorld.selected_semantic)
 		preview_color.a = 0.65
 		for cell in _preview_cells:
-			var rect := Rect2(
-				PADDING + pan.x + cell.x * CELL_SIZE,
-				PADDING + pan.y + cell.y * CELL_SIZE,
-				CELL_SIZE - 1, CELL_SIZE - 1
-			)
+			var rect := Rect2(origin + Vector2(cell) * _cell_px, cell_dim)
 			_grid_area.draw_rect(rect, preview_color)
 
 # ---------------------------------------------------------------------------
@@ -177,11 +184,21 @@ func _draw_grid() -> void:
 # ---------------------------------------------------------------------------
 
 func _mouse_to_cell(mouse_pos: Vector2) -> Vector2i:
-	var pan := _get_pan()
+	var origin := _draw_origin()
 	return Vector2i(
-		floori((mouse_pos.x - PADDING - pan.x) / CELL_SIZE),
-		floori((mouse_pos.y - PADDING - pan.y) / CELL_SIZE)
+		floori((mouse_pos.x - origin.x) / _cell_px),
+		floori((mouse_pos.y - origin.y) / _cell_px)
 	)
+
+# Zoom toward the cursor: the grid point under `anchor` stays under it.
+func _zoom_at(anchor: Vector2, factor: float) -> void:
+	var new_px := clampf(_cell_px * factor, MIN_CELL_PX, MAX_CELL_PX)
+	if is_equal_approx(new_px, _cell_px):
+		return
+	var grid_point := (anchor - _draw_origin()) / _cell_px
+	_cell_px = new_px
+	_user_pan += anchor - (_draw_origin() + grid_point * _cell_px)
+	_grid_area.queue_redraw()
 
 func _on_grid_input(event: InputEvent) -> void:
 	var tool := VoxelWorld.active_tool
@@ -213,8 +230,25 @@ func _on_grid_input(event: InputEvent) -> void:
 			_is_placing = false
 			if mb.pressed:
 				_paint_cell(_mouse_to_cell(mb.position))
+		elif mb.button_index == MOUSE_BUTTON_MIDDLE:
+			_panning = mb.pressed
+			_pan_last = mb.position
+		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP:
+			if mb.pressed:
+				_zoom_at(mb.position, 1.15)
+		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			if mb.pressed:
+				_zoom_at(mb.position, 1.0 / 1.15)
 	elif event is InputEventMouseMotion:
-		if _is_placing or _is_erasing:
+		if _panning:
+			# Self-heal if the release happened off-canvas (gui_input never saw it).
+			if Input.is_mouse_button_pressed(MOUSE_BUTTON_MIDDLE):
+				_user_pan += event.position - _pan_last
+				_pan_last = event.position
+				_grid_area.queue_redraw()
+			else:
+				_panning = false
+		elif _is_placing or _is_erasing:
 			_paint_cell(_mouse_to_cell(event.position))
 		elif _drag_start != Vector2i(-1, -1):
 			var cell := _mouse_to_cell(event.position)
