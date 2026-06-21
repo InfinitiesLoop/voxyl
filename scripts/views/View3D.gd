@@ -7,6 +7,18 @@ extends Control
 # Clicking captures cursor; Esc releases it. Position never jumps.
 # ---------------------------------------------------------------------------
 
+# Camera dolly distance per scroll notch in orbit mode (lower = less sensitive).
+# TODO: drive this from a user sensitivity setting.
+const DOLLY_STEP := 1.25
+
+# Keys the camera consumes while flying, so they don't also drive the UI
+# (e.g. arrow keys switching tabs or moving focus).
+const _MOVEMENT_KEYS := [
+	KEY_W, KEY_A, KEY_S, KEY_D,
+	KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT,
+	KEY_SPACE, KEY_SHIFT, KEY_SLASH,
+]
+
 # Camera transform
 var _camera_pos := Vector3(8, 12, 28)
 var _yaw := 180.0    # horizontal look angle (degrees)
@@ -462,6 +474,11 @@ func _input(event: InputEvent) -> void:
 					get_viewport().set_input_as_handled()
 					return
 
+		# Keep fly-mode movement keys (incl. arrows) from also reaching the UI.
+		if _fly_mode and key.keycode in _MOVEMENT_KEYS:
+			get_viewport().set_input_as_handled()
+			return
+
 	if not _fly_mode:
 		return
 
@@ -499,10 +516,10 @@ func _on_svc_input(event: InputEvent) -> void:
 				_drag_looking = false
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP:
 			# Dolly forward along look direction
-			_camera_pos += _get_look_dir() * 2.5
+			_camera_pos += _get_look_dir() * DOLLY_STEP
 			_update_camera()
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			_camera_pos -= _get_look_dir() * 2.5
+			_camera_pos -= _get_look_dir() * DOLLY_STEP
 			_update_camera()
 	elif event is InputEventMouseMotion and _drag_looking:
 		var motion := event as InputEventMouseMotion
