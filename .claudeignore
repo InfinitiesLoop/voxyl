@@ -1,0 +1,3 @@
+# Godot engine metadata and caches
+.godot/
+export_presets.cfg
