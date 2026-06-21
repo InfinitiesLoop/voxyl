@@ -37,8 +37,13 @@ func _test_block_ops() -> void:
 	_check("set block", VoxelWorld.get_block(Vector3i(0, 0, 0)) == "Base")
 	VoxelWorld.clear_block(Vector3i(0, 0, 0))
 	_check("clear block", VoxelWorld.get_block(Vector3i(0, 0, 0)) == "")
+	# Coordinates are unbounded by design: far-flung and negative positions are valid.
 	VoxelWorld.set_block(Vector3i(100, 100, 100), "Base")
-	_check("out-of-bounds rejected", VoxelWorld.get_block(Vector3i(100, 100, 100)) == "")
+	_check("far-flung coords stored", VoxelWorld.get_block(Vector3i(100, 100, 100)) == "Base")
+	VoxelWorld.set_block(Vector3i(-50, -50, -50), "Base")
+	_check("negative coords stored", VoxelWorld.get_block(Vector3i(-50, -50, -50)) == "Base")
+	VoxelWorld.clear_block(Vector3i(100, 100, 100))
+	VoxelWorld.clear_block(Vector3i(-50, -50, -50))
 
 func _test_palette_resolution() -> void:
 	print("-- palette resolution")
