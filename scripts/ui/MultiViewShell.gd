@@ -17,6 +17,8 @@ var focused_pane: ViewPane = null
 var _focus_overlay: Control
 var _last_overlay_rect := Rect2()
 var _drop_layer: PaneDropLayer
+var _last_guide: Dictionary = {}
+var _last_active_id := 0
 
 func _ready() -> void:
 	_focus_overlay = Control.new()
@@ -77,6 +79,8 @@ func _process(_delta: float) -> void:
 		if hr != _drop_layer.hover_rect:
 			_drop_layer.hover_rect = hr
 			_drop_layer.queue_redraw()
+
+	_broadcast_guide_if_changed()
 
 func _draw_focus_overlay() -> void:
 	_focus_overlay.draw_rect(Rect2(Vector2.ONE, _focus_overlay.size - Vector2(2, 2)),
@@ -287,6 +291,27 @@ func _update_active_views() -> void:
 	for v in _all_views():
 		if v.has_method("set_active"):
 			v.set_active(v == active_view)
+
+# The focused 2D view broadcasts its slice; every other view renders it as a
+# guide (3D as a plane, other 2D as an intersection line). Polled so scrubbing
+# the active slice updates the others live. Lives in the shell (UI chrome) —
+# never on the data layer. Tracks the active view's identity too, so swapping
+# focus between two same-valued slices still re-broadcasts.
+func _broadcast_guide_if_changed() -> void:
+	var active_view: Node = null
+	if is_instance_valid(focused_pane):
+		active_view = focused_pane.get_current_tab_control()
+	var active_id := active_view.get_instance_id() if active_view else 0
+	var guide: Dictionary = {}
+	if active_view and active_view.has_method("get_guide_descriptor"):
+		guide = active_view.get_guide_descriptor()
+	if guide == _last_guide and active_id == _last_active_id:
+		return
+	_last_guide = guide
+	_last_active_id = active_id
+	for v in _all_views():
+		if v.has_method("set_guide"):
+			v.set_guide({} if v == active_view else guide)
 
 # ---------------------------------------------------------------------------
 # Tab drag-and-drop (a tab dropped anywhere on a pane joins that pane)

@@ -73,6 +73,12 @@ func _run() -> void:
 	_check("the focused pane's current view is the active one",
 		panes[1].get_current_tab_control()._active)
 
+	# The focused 2D slice projects a guide into every other view.
+	_check("focused 2D slice projects a guide into the others",
+		not (panes[0].get_tab_control(0).get("_guide") as Dictionary).is_empty())
+	_check("the active view shows no guide of itself",
+		(panes[1].get_current_tab_control().get("_guide") as Dictionary).is_empty())
+
 	# Dropping a tab onto a pane body routes it to that pane; panes[1] has a
 	# single view, so emptying it should collapse it back to one pane.
 	shell.size = Vector2(900, 600)

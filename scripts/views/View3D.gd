@@ -93,6 +93,11 @@ var _slice_pulse := 0.0               # animates (breathes) the center marker
 var _slice_bounds_lo := Vector3.ZERO  # cached plane extent — avoids a per-frame AABB scan
 var _slice_bounds_hi := Vector3.ZERO
 
+# Guide plane: another view's active 2D slice, projected here as a reference.
+var _guide_plane: MeshInstance3D
+var _guide_plane_mat: ShaderMaterial
+var _guide: Dictionary = {}
+
 func _ready() -> void:
 	_setup_viewport()
 	_setup_overlay()
@@ -203,6 +208,17 @@ func _setup_viewport() -> void:
 	_plane_sheet.material_override = _plane_sheet_mat
 	_plane_sheet.visible = false
 	_viewport.add_child(_plane_sheet)
+
+	# Guide plane: the active 2D slice from another view, projected here (amber).
+	_guide_plane_mat = ShaderMaterial.new()
+	_guide_plane_mat.shader = _make_slice_plane_shader()
+	_guide_plane_mat.set_shader_parameter("fill_color", Color(1.0, 0.6, 0.2, 0.09))
+	_guide_plane_mat.set_shader_parameter("line_color", Color(1.0, 0.65, 0.25, 0.38))
+	_guide_plane = MeshInstance3D.new()
+	_guide_plane.mesh = ImmediateMesh.new()
+	_guide_plane.material_override = _guide_plane_mat
+	_guide_plane.visible = false
+	_viewport.add_child(_guide_plane)
 
 	# Slice-select: bright line work — plane border + center-cell wireframe.
 	_slice_marker_mat = StandardMaterial3D.new()
@@ -581,6 +597,42 @@ func set_active(active: bool) -> void:
 		if _slice_active:
 			_exit_slice_select()
 
+# Show another view's active 2D slice as a translucent reference plane (or hide
+# it when there's no guide / this view is the active one).
+func set_guide(desc: Dictionary) -> void:
+	_guide = desc
+	_refresh_guide()
+
+func _refresh_guide() -> void:
+	if not _guide_plane:
+		return
+	if _guide.is_empty() or not VoxelWorld.active_project:
+		_guide_plane.visible = false
+		return
+	var axis: int = _guide["axis"]
+	var offset: int = _guide["offset"]
+	_guide_plane_mat.set_shader_parameter("slice_axis", axis)
+	var b := _guide_bounds()
+	var c := _plane_corners(axis, b[0], b[1], float(offset) + 0.5)
+	var im := _guide_plane.mesh as ImmediateMesh
+	im.clear_surfaces()
+	im.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+	im.surface_add_vertex(c[0]); im.surface_add_vertex(c[1]); im.surface_add_vertex(c[2])
+	im.surface_add_vertex(c[0]); im.surface_add_vertex(c[2]); im.surface_add_vertex(c[3])
+	im.surface_end()
+	_guide_plane.visible = true
+
+func _guide_bounds() -> Array:
+	var lo := Vector3i(-8, -8, -8)
+	var hi := Vector3i(8, 8, 8)
+	var aabb := VoxelWorld.active_project.data.get_used_aabb()
+	if not aabb.is_empty():
+		lo = aabb[0]
+		hi = aabb[1]
+	lo -= Vector3i(2, 2, 2)
+	hi += Vector3i(2, 2, 2)
+	return [Vector3(lo), Vector3(hi) + Vector3.ONE]
+
 # ---------------------------------------------------------------------------
 # Camera  (same update path regardless of fly mode)
 # ---------------------------------------------------------------------------
@@ -657,6 +709,7 @@ func _rebuild() -> void:
 	# in another view, or a palette change).
 	if _slice_active:
 		_update_slice_visuals()
+	_refresh_guide()  # the guide plane spans the build, so resize it on rebuild
 
 # ---------------------------------------------------------------------------
 # Raycast
@@ -1018,7 +1071,7 @@ func _onplane_mat_for(semantic: String) -> StandardMaterial3D:
 func _update_plane_sheet() -> void:
 	_plane_sheet_mat.set_shader_parameter("slice_axis", _slice_axis)
 	var off := float(_slice_center[_slice_axis]) + 0.5
-	var c := _plane_corners(_slice_bounds_lo, _slice_bounds_hi, off)
+	var c := _plane_corners(_slice_axis, _slice_bounds_lo, _slice_bounds_hi, off)
 	var im := _plane_sheet.mesh as ImmediateMesh
 	im.clear_surfaces()
 	im.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -1031,7 +1084,7 @@ func _update_slice_marker() -> void:
 	im.clear_surfaces()
 	im.surface_begin(Mesh.PRIMITIVE_LINES)
 	var off := float(_slice_center[_slice_axis]) + 0.5
-	var c := _plane_corners(_slice_bounds_lo, _slice_bounds_hi, off)
+	var c := _plane_corners(_slice_axis, _slice_bounds_lo, _slice_bounds_hi, off)
 	var border := Color(0.25, 0.85, 1.0, 0.85)
 	for i in 4:
 		_marker_line(im, c[i], c[(i + 1) % 4], border)
@@ -1104,8 +1157,8 @@ func _slice_plane_bounds() -> Array:
 	hi += Vector3i(2, 2, 2)
 	return [Vector3(lo), Vector3(hi) + Vector3.ONE]
 
-func _plane_corners(mn: Vector3, mx: Vector3, off: float) -> Array:
-	match _slice_axis:
+func _plane_corners(axis: int, mn: Vector3, mx: Vector3, off: float) -> Array:
+	match axis:
 		0: return [Vector3(off, mn.y, mn.z), Vector3(off, mx.y, mn.z), Vector3(off, mx.y, mx.z), Vector3(off, mn.y, mx.z)]
 		2: return [Vector3(mn.x, mn.y, off), Vector3(mx.x, mn.y, off), Vector3(mx.x, mx.y, off), Vector3(mn.x, mx.y, off)]
 		_: return [Vector3(mn.x, off, mn.z), Vector3(mx.x, off, mn.z), Vector3(mx.x, off, mx.z), Vector3(mn.x, off, mx.z)]

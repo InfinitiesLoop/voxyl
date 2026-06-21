@@ -12,6 +12,10 @@ const CENTER_RADIUS := 10
 # Zoom limits, in pixels-per-cell.
 const MIN_CELL_PX := 8.0
 const MAX_CELL_PX := 96.0
+# Guideline showing where another view's active slice crosses this one (amber,
+# distinct from the cyan focus chrome).
+const GUIDE_FILL := Color(1.0, 0.6, 0.2, 0.12)
+const GUIDE_LINE := Color(1.0, 0.65, 0.25, 0.85)
 
 # Slice configuration
 # axis 0=X (slice is YZ plane), 1=Y (slice is XZ plane), 2=Z (slice is XY plane)
@@ -35,6 +39,9 @@ var _pan_last := Vector2.ZERO
 # Set by the shell (focus). The 2D view's input is per-control via gui_input, so
 # this is mostly for symmetry / future use rather than input gating.
 var _active := true
+
+# Another view's active slice, broadcast by the shell: {axis, offset} or {}.
+var _guide: Dictionary = {}
 
 @onready var _layer_label: Label = $LayerBar/LayerLabel
 @onready var _grid_area: Control = $GridArea
@@ -185,6 +192,18 @@ func _draw_grid() -> void:
 		for cell in _preview_cells:
 			var rect := Rect2(origin + Vector2(cell) * _cell_px, cell_dim)
 			_grid_area.draw_rect(rect, preview_color)
+
+	var gl := _guide_line()
+	if gl.has("col"):
+		var gx := origin.x + int(gl["col"]) * _cell_px
+		_grid_area.draw_rect(Rect2(gx, 0, _cell_px, _grid_area.size.y), GUIDE_FILL)
+		_grid_area.draw_line(Vector2(gx + _cell_px * 0.5, 0),
+			Vector2(gx + _cell_px * 0.5, _grid_area.size.y), GUIDE_LINE, 1.5)
+	elif gl.has("row"):
+		var gy := origin.y + int(gl["row"]) * _cell_px
+		_grid_area.draw_rect(Rect2(0, gy, _grid_area.size.x, _cell_px), GUIDE_FILL)
+		_grid_area.draw_line(Vector2(0, gy + _cell_px * 0.5),
+			Vector2(_grid_area.size.x, gy + _cell_px * 0.5), GUIDE_LINE, 1.5)
 
 	_draw_hint()
 
@@ -359,6 +378,37 @@ func _do_fill(start: Vector2i) -> void:
 
 func set_active(active: bool) -> void:
 	_active = active
+
+func set_guide(desc: Dictionary) -> void:
+	if desc == _guide:
+		return
+	_guide = desc
+	_grid_area.queue_redraw()
+
+func get_guide_descriptor() -> Dictionary:
+	return {"axis": axis, "offset": slice_pos}
+
+# Where a perpendicular active slice crosses this plane: a column (constant h)
+# or row (constant v) in our grid. Empty when parallel/coincident (no crossing).
+func _guide_line() -> Dictionary:
+	if _guide.is_empty():
+		return {}
+	var g_axis: int = _guide["axis"]
+	var g_off: int = _guide["offset"]
+	if g_axis == axis:
+		return {}
+	var mn := _get_view_min()
+	var mx := _get_view_max()
+	match axis:
+		0:
+			if g_axis == 2: return {"col": g_off - mn.z}
+			return {"row": mx.y - g_off}
+		2:
+			if g_axis == 0: return {"col": g_off - mn.x}
+			return {"row": mx.y - g_off}
+		_:
+			if g_axis == 0: return {"col": g_off - mn.x}
+			return {"row": g_off - mn.z}
 
 func set_slice(value: int) -> void:
 	if not VoxelWorld.active_project:
