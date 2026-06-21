@@ -10,9 +10,12 @@ var shell: MultiViewShell
 var hover_rect := Rect2()
 
 func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
-	return shell != null and shell.is_tab_drag(data)
+	var ok := shell != null and shell.is_tab_drag(data)
+	print("[drop] _can_drop_data → %s  (shell=%s)" % [str(ok), str(shell != null)])
+	return ok
 
 func _drop_data(_at_position: Vector2, data: Variant) -> void:
+	print("[drop] _drop_data called  mouse=%s" % [str(get_global_mouse_position())])
 	if shell:
 		shell.drop_tab(data, get_global_mouse_position())
 

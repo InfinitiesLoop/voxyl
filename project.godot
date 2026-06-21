@@ -24,6 +24,12 @@ VoxelWorld="*res://scripts/core/VoxelWorld.gd"
 
 config_version=5
 
+[debug]
+
+file_logging/enable_file_logging=true
+file_logging/enable_file_logging.pc=true
+file_logging/log_path="res://.logs/godot.log"
+
 [display]
 
 window/size/viewport_width=1280

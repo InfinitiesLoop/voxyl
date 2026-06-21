@@ -29,7 +29,7 @@ func _run() -> void:
 	add_child(shell)
 	await get_tree().process_frame
 
-	_check("starts with one pane", _panes(shell).size() == 1)
+	_check("starts with four panes (default 2×2)", _panes(shell).size() == 4)
 	_check("starts with one (3D) view", _views(shell).size() == 1)
 
 	var tb := (_panes(shell)[0] as ViewPane).get_tab_bar()

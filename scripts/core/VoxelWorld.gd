@@ -111,6 +111,23 @@ func _populate_defaults() -> void:
 	_add_default_palette()
 	var project := workspace.add_project("My First Build")
 	project.palette_names.append("Default")
+	_add_default_blocks(project)
+
+func _add_default_blocks(project: VoxelProject) -> void:
+	# 3D plus: three 2-cell-wide bars along each world axis, roughly 10×10×10.
+	# Each arm uses a different semantic so the palette is immediately visible.
+	for x in range(0, 10):  # X arm
+		for y in range(4, 6):
+			for z in range(4, 6):
+				project.data.set_block(Vector3i(x, y, z), "Base")
+	for x in range(4, 6):  # Y arm (overwrites center)
+		for y in range(0, 10):
+			for z in range(4, 6):
+				project.data.set_block(Vector3i(x, y, z), "Accent")
+	for x in range(4, 6):  # Z arm (overwrites center again)
+		for y in range(4, 6):
+			for z in range(0, 10):
+				project.data.set_block(Vector3i(x, y, z), "Highlight")
 
 func _add_default_block_types() -> void:
 	var names := [

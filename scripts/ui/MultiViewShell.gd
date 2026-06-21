@@ -44,6 +44,8 @@ func _ready() -> void:
 	VoxelWorld.slice_view_requested.connect(_on_slice_requested)
 	set_process(true)
 
+	apply_preset(Preset.GRID)
+
 func _notification(what: int) -> void:
 	# Fast cleanup on drag end. NOTIFICATION_DRAG_BEGIN is NOT used here because
 	# it only fires on the drag source, not on unrelated controls — so arming is
@@ -70,13 +72,15 @@ func _process(_delta: float) -> void:
 	elif _focus_overlay.visible:
 		_focus_overlay.visible = false
 
-	# Arm the drop layer while any drag is active. NOTIFICATION_DRAG_BEGIN only
-	# fires on the drag source, so we use gui_is_dragging() here instead.
+	# Arm the drop layer while any drag is active. MOUSE_FILTER_PASS lets it
+	# participate in drop detection without blocking the TabBar below it — if
+	# _can_drop_data returns false the event propagates to native handlers.
 	if is_inside_tree():
 		var dragging := get_viewport().gui_is_dragging()
 		if dragging != _drop_layer.visible:
+			print("[drag] gui_is_dragging changed → ", dragging)
 			_drop_layer.visible = dragging
-			_drop_layer.mouse_filter = Control.MOUSE_FILTER_STOP if dragging else Control.MOUSE_FILTER_IGNORE
+			_drop_layer.mouse_filter = Control.MOUSE_FILTER_PASS if dragging else Control.MOUSE_FILTER_IGNORE
 			if not dragging:
 				_drop_layer.hover_rect = Rect2()
 				_drop_layer.queue_redraw()
@@ -329,15 +333,20 @@ func _broadcast_guide_if_changed() -> void:
 
 func is_tab_drag(data: Variant) -> bool:
 	if not (data is Dictionary):
+		print("[drag] is_tab_drag: data is NOT a Dictionary (type=%d)" % typeof(data))
 		return false
 	var t: String = data.get("type", "")
-	return t == "tab_element" or t == "tabc_element"
+	var ok := t == "tab_element" or t == "tabc_element"
+	print("[drag] is_tab_drag: type='%s' keys=%s → %s" % [t, str(data.keys()), str(ok)])
+	return ok
 
 func drop_tab(data: Variant, global_pos: Vector2) -> void:
 	var pane := _pane_at(global_pos)
+	print("[drag] drop_tab: pane=%s pos=%s" % [str(pane), str(global_pos)])
 	if not pane:
 		return
 	var view := _view_from_drag(data)
+	print("[drag] drop_tab: view=%s view_parent=%s same_pane=%s" % [str(view), str(view.get_parent() if view else null), str(view.get_parent() == pane if view else "n/a")])
 	if not view or view.get_parent() == pane:
 		return
 	view.get_parent().remove_child(view)
@@ -345,14 +354,18 @@ func drop_tab(data: Variant, global_pos: Vector2) -> void:
 	_set_focus(pane)
 
 func _view_from_drag(data: Variant) -> Control:
-	var from_bar := get_node_or_null(data.get("from_path", NodePath()))
+	var path: NodePath = data.get("from_path", NodePath())
+	var from_bar := get_node_or_null(path)
+	print("[drag] _view_from_drag: from_path=%s from_bar=%s" % [str(path), str(from_bar)])
 	if from_bar == null:
 		return null
 	var src := from_bar.get_parent()
+	print("[drag] _view_from_drag: src=%s is_ViewPane=%s" % [str(src), str(src is ViewPane)])
 	if not (src is ViewPane):
 		return null
 	# TabBar drag uses "tab_element"; TabContainer drag uses "tabc_element".
 	var idx: int = data.get("tab_element", data.get("tabc_element", -1))
+	print("[drag] _view_from_drag: idx=%d tab_count=%d" % [idx, (src as ViewPane).get_tab_count()])
 	if idx < 0 or idx >= (src as ViewPane).get_tab_count():
 		return null
 	return (src as ViewPane).get_tab_control(idx)
