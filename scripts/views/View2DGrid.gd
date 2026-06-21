@@ -179,6 +179,18 @@ func _draw_grid() -> void:
 			var rect := Rect2(origin + Vector2(cell) * _cell_px, cell_dim)
 			_grid_area.draw_rect(rect, preview_color)
 
+	_draw_hint()
+
+func _draw_hint() -> void:
+	var font := ThemeDB.fallback_font
+	var hint := "LMB paint  ·  RMB erase  ·  Wheel zoom  ·  Middle-drag pan  ·  ▲ / ▼ layer"
+	var fs := 12
+	var tw := font.get_string_size(hint, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var y := _grid_area.size.y - 6.0
+	_grid_area.draw_rect(Rect2(4.0, y - 14.0, tw + 10.0, 18.0), Color(0, 0, 0, 0.45))
+	_grid_area.draw_string(font, Vector2(9.0, y), hint,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(1, 1, 1, 0.7))
+
 # ---------------------------------------------------------------------------
 # Input
 # ---------------------------------------------------------------------------
