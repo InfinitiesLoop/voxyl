@@ -336,7 +336,7 @@ func is_tab_drag(data: Variant) -> bool:
 		print("[drag] is_tab_drag: data is NOT a Dictionary (type=%d)" % typeof(data))
 		return false
 	var t: String = data.get("type", "")
-	var ok := t == "tab_element" or t == "tabc_element"
+	var ok := t == "tab" or t == "tab_element" or t == "tabc_element"
 	print("[drag] is_tab_drag: type='%s' keys=%s → %s" % [t, str(data.keys()), str(ok)])
 	return ok
 
@@ -355,20 +355,26 @@ func drop_tab(data: Variant, global_pos: Vector2) -> void:
 
 func _view_from_drag(data: Variant) -> Control:
 	var path: NodePath = data.get("from_path", NodePath())
-	var from_bar := get_node_or_null(path)
-	print("[drag] _view_from_drag: from_path=%s from_bar=%s" % [str(path), str(from_bar)])
-	if from_bar == null:
+	var from_node := get_node_or_null(path)
+	print("[drag] _view_from_drag: from_path=%s from_node=%s" % [str(path), str(from_node)])
+	if from_node == null:
 		return null
-	var src := from_bar.get_parent()
-	print("[drag] _view_from_drag: src=%s is_ViewPane=%s" % [str(src), str(src is ViewPane)])
-	if not (src is ViewPane):
+	# from_path may point to the TabBar (parent is ViewPane) or the ViewPane itself.
+	var src: ViewPane
+	if from_node is ViewPane:
+		src = from_node as ViewPane
+	elif from_node.get_parent() is ViewPane:
+		src = from_node.get_parent() as ViewPane
+	else:
+		print("[drag] _view_from_drag: could not resolve ViewPane from node=%s parent=%s" % [str(from_node), str(from_node.get_parent())])
 		return null
-	# TabBar drag uses "tab_element"; TabContainer drag uses "tabc_element".
-	var idx: int = data.get("tab_element", data.get("tabc_element", -1))
-	print("[drag] _view_from_drag: idx=%d tab_count=%d" % [idx, (src as ViewPane).get_tab_count()])
-	if idx < 0 or idx >= (src as ViewPane).get_tab_count():
+	print("[drag] _view_from_drag: src=%s" % [str(src)])
+	# Godot 4.6 uses "tab_index"; older API used "tab_element"/"tabc_element".
+	var idx: int = data.get("tab_index", data.get("tab_element", data.get("tabc_element", -1)))
+	print("[drag] _view_from_drag: idx=%d tab_count=%d" % [idx, src.get_tab_count()])
+	if idx < 0 or idx >= src.get_tab_count():
 		return null
-	return (src as ViewPane).get_tab_control(idx)
+	return src.get_tab_control(idx)
 
 func _pane_at(global_pos: Vector2) -> ViewPane:
 	for p in _all_panes():
