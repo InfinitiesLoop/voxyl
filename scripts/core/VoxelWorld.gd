@@ -8,7 +8,7 @@ signal palette_stack_changed()
 signal block_changed(pos: Vector3i, semantic_name: String)
 signal selection_changed(semantic_name: String)
 signal tool_changed(tool: Tool)
-signal slice_view_requested(axis: int, center: Vector3i)
+signal slice_view_requested(axis: int, center: Vector3i, flipped: bool)
 
 var workspace: VoxelWorkspace
 var active_project: VoxelProject
@@ -103,8 +103,8 @@ func set_active_tool(tool: Tool) -> void:
 	active_tool = tool
 	tool_changed.emit(tool)
 
-func request_slice_view(axis: int, center: Vector3i) -> void:
-	slice_view_requested.emit(axis, center)
+func request_slice_view(axis: int, center: Vector3i, flipped: bool = false) -> void:
+	slice_view_requested.emit(axis, center, flipped)
 
 func _populate_defaults() -> void:
 	_add_default_block_types()

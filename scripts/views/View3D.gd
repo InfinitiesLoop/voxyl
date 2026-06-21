@@ -925,8 +925,21 @@ func _exit_slice_select() -> void:
 func _confirm_slice() -> void:
 	var axis := _slice_axis
 	var center := _slice_center
+	# Derive horizontal-axis flip from camera right vector: if camera "right" points
+	# in the negative direction of the 2D view's horizontal world-axis, the view
+	# would be mirrored — flip it so left-in-2D == left-in-3D.
+	var look := _get_look_dir()
+	var flat := Vector3(look.x, 0.0, look.z)
+	if flat.length_squared() > 0.0:
+		flat = flat.normalized()
+	var right := flat.cross(Vector3.UP)
+	var flipped := false
+	match axis:
+		0: flipped = right.z < 0.0   # X-slice: horizontal world axis is Z
+		1: flipped = right.x < 0.0   # Y-slice: horizontal world axis is X
+		2: flipped = right.x < 0.0   # Z-slice: horizontal world axis is X
 	_exit_slice_select()
-	VoxelWorld.request_slice_view(axis, center)
+	VoxelWorld.request_slice_view(axis, center, flipped)
 
 func _cycle_slice_axis() -> void:
 	_slice_axis = (_slice_axis + 1) % 3

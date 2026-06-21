@@ -40,16 +40,21 @@ var _pan_last := Vector2.ZERO
 # this is mostly for symmetry / future use rather than input gating.
 var _active := true
 
+# When true the horizontal world-axis is reversed (mirrors h) so that "left in
+# 2D == left in 3D" for the camera angle the slice was made from. Toggled with F.
+var _flipped := false
+
 # Another view's active slice, broadcast by the shell: {axis, offset} or {}.
 var _guide: Dictionary = {}
 
 @onready var _layer_label: Label = $LayerBar/LayerLabel
 @onready var _grid_area: Control = $GridArea
 
-func configure(p_axis: int, p_center: Vector3i) -> void:
+func configure(p_axis: int, p_center: Vector3i, p_flipped: bool = false) -> void:
 	axis = p_axis
 	_center = p_center
 	slice_pos = p_center[axis]
+	_flipped = p_flipped
 	if is_inside_tree():
 		_reset()
 
@@ -100,6 +105,10 @@ func _get_view_max() -> Vector3i:
 func _grid_to_world(h: int, v: int) -> Vector3i:
 	var mn := _get_view_min()
 	var mx := _get_view_max()
+	if _flipped:
+		match axis:
+			0: h = mx.z - mn.z - h
+			_: h = mx.x - mn.x - h
 	match axis:
 		0: return Vector3i(slice_pos, mx.y - v, mn.z + h)
 		2: return Vector3i(mn.x + h, mx.y - v, slice_pos)
@@ -132,9 +141,18 @@ func _center_hv() -> Vector2i:
 	var mn := _get_view_min()
 	var mx := _get_view_max()
 	match axis:
-		0: return Vector2i(_center.z - mn.z, mx.y - _center.y)
-		2: return Vector2i(_center.x - mn.x, mx.y - _center.y)
-		_: return Vector2i(_center.x - mn.x, _center.z - mn.z)
+		0:
+			var ch := _center.z - mn.z
+			if _flipped: ch = mx.z - mn.z - ch
+			return Vector2i(ch, mx.y - _center.y)
+		2:
+			var ch := _center.x - mn.x
+			if _flipped: ch = mx.x - mn.x - ch
+			return Vector2i(ch, mx.y - _center.y)
+		_:
+			var ch := _center.x - mn.x
+			if _flipped: ch = mx.x - mn.x - ch
+			return Vector2i(ch, _center.z - mn.z)
 
 # Screen position of grid cell (0,0)'s top-left. The view auto-centers _center
 # and then applies the user's manual pan; both scale with the current zoom, so
@@ -209,7 +227,7 @@ func _draw_grid() -> void:
 
 func _draw_hint() -> void:
 	var font := ThemeDB.fallback_font
-	var hint := "LMB paint  ·  RMB erase  ·  Wheel zoom  ·  Middle-drag pan  ·  ▲ / ▼ layer"
+	var hint := "LMB paint  ·  RMB erase  ·  Wheel zoom  ·  Middle-drag pan  ·  ▲ / ▼ layer  ·  F flip"
 	var fs := 12
 	var tw := font.get_string_size(hint, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 	var y := _grid_area.size.y - 6.0
@@ -239,6 +257,11 @@ func _zoom_at(anchor: Vector2, factor: float) -> void:
 	_grid_area.queue_redraw()
 
 func _on_grid_input(event: InputEvent) -> void:
+	if event is InputEventKey and (event as InputEventKey).pressed:
+		if (event as InputEventKey).keycode == KEY_F:
+			_flipped = not _flipped
+			_grid_area.queue_redraw()
+			return
 	var tool := VoxelWorld.active_tool
 	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
 		focus_requested.emit()
@@ -401,13 +424,22 @@ func _guide_line() -> Dictionary:
 	var mx := _get_view_max()
 	match axis:
 		0:
-			if g_axis == 2: return {"col": g_off - mn.z}
+			if g_axis == 2:
+				var col := g_off - mn.z
+				if _flipped: col = mx.z - mn.z - col
+				return {"col": col}
 			return {"row": mx.y - g_off}
 		2:
-			if g_axis == 0: return {"col": g_off - mn.x}
+			if g_axis == 0:
+				var col := g_off - mn.x
+				if _flipped: col = mx.x - mn.x - col
+				return {"col": col}
 			return {"row": mx.y - g_off}
 		_:
-			if g_axis == 0: return {"col": g_off - mn.x}
+			if g_axis == 0:
+				var col := g_off - mn.x
+				if _flipped: col = mx.x - mn.x - col
+				return {"col": col}
 			return {"row": g_off - mn.z}
 
 func set_slice(value: int) -> void:

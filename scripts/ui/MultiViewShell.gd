@@ -45,11 +45,10 @@ func _ready() -> void:
 	set_process(true)
 
 func _notification(what: int) -> void:
-	# The drop layer is only a drop target while a tab is being dragged.
-	if what == NOTIFICATION_DRAG_BEGIN:
-		_drop_layer.mouse_filter = Control.MOUSE_FILTER_STOP
-		_drop_layer.visible = true
-	elif what == NOTIFICATION_DRAG_END:
+	# Fast cleanup on drag end. NOTIFICATION_DRAG_BEGIN is NOT used here because
+	# it only fires on the drag source, not on unrelated controls — so arming is
+	# done via gui_is_dragging() in _process instead.
+	if what == NOTIFICATION_DRAG_END:
 		_drop_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_drop_layer.visible = false
 		_drop_layer.hover_rect = Rect2()
@@ -70,6 +69,17 @@ func _process(_delta: float) -> void:
 			_focus_overlay.queue_redraw()
 	elif _focus_overlay.visible:
 		_focus_overlay.visible = false
+
+	# Arm the drop layer while any drag is active. NOTIFICATION_DRAG_BEGIN only
+	# fires on the drag source, so we use gui_is_dragging() here instead.
+	if is_inside_tree():
+		var dragging := get_viewport().gui_is_dragging()
+		if dragging != _drop_layer.visible:
+			_drop_layer.visible = dragging
+			_drop_layer.mouse_filter = Control.MOUSE_FILTER_STOP if dragging else Control.MOUSE_FILTER_IGNORE
+			if not dragging:
+				_drop_layer.hover_rect = Rect2()
+				_drop_layer.queue_redraw()
 
 	if _drop_layer.visible:
 		var p := _pane_at(get_global_mouse_position())
@@ -254,13 +264,13 @@ func _attach_view(pane: ViewPane, view: Control, make_current: bool = true) -> v
 	if make_current:
 		pane.current_tab = idx
 
-func _on_slice_requested(axis: int, center: Vector3i) -> void:
+func _on_slice_requested(axis: int, center: Vector3i, flipped: bool = false) -> void:
 	var pane := focused_pane if is_instance_valid(focused_pane) else _first_pane()
 	if not pane:
 		return
 	var view := _make_slice_view(axis, center)
 	_attach_view(pane, view)
-	view.configure(axis, center)  # now in-tree, so the 2D view centers itself
+	view.configure(axis, center, flipped)  # now in-tree, so the 2D view centers itself
 	_set_focus(pane)
 
 func _slice_title(axis: int, c: Vector3i) -> String:
@@ -318,7 +328,10 @@ func _broadcast_guide_if_changed() -> void:
 # ---------------------------------------------------------------------------
 
 func is_tab_drag(data: Variant) -> bool:
-	return data is Dictionary and data.get("type") == "tab_element"
+	if not (data is Dictionary):
+		return false
+	var t: String = data.get("type", "")
+	return t == "tab_element" or t == "tabc_element"
 
 func drop_tab(data: Variant, global_pos: Vector2) -> void:
 	var pane := _pane_at(global_pos)
@@ -338,7 +351,8 @@ func _view_from_drag(data: Variant) -> Control:
 	var src := from_bar.get_parent()
 	if not (src is ViewPane):
 		return null
-	var idx: int = data.get("tab_element", -1)
+	# TabBar drag uses "tab_element"; TabContainer drag uses "tabc_element".
+	var idx: int = data.get("tab_element", data.get("tabc_element", -1))
 	if idx < 0 or idx >= (src as ViewPane).get_tab_count():
 		return null
 	return (src as ViewPane).get_tab_control(idx)
