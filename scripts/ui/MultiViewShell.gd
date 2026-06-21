@@ -16,15 +16,23 @@ var focused_pane: ViewPane = null
 
 var _focus_overlay: Control
 var _last_overlay_rect := Rect2()
+var _drop_layer: PaneDropLayer
 
 func _ready() -> void:
 	_focus_overlay = Control.new()
 	_focus_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_focus_overlay.draw.connect(_draw_focus_overlay)
 
+	_drop_layer = PaneDropLayer.new()
+	_drop_layer.shell = self
+	_drop_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_drop_layer.visible = false
+
 	var pane := _make_pane()
 	add_child(pane)
-	add_child(_focus_overlay)  # kept last so the highlight draws on top
+	add_child(_focus_overlay)  # border highlight (always passthrough)
+	add_child(_drop_layer)     # topmost; only a drop target during a drag
+	_drop_layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_normalize_children()
 
 	var view := _make_3d_view()
@@ -33,6 +41,17 @@ func _ready() -> void:
 
 	VoxelWorld.slice_view_requested.connect(_on_slice_requested)
 	set_process(true)
+
+func _notification(what: int) -> void:
+	# The drop layer is only a drop target while a tab is being dragged.
+	if what == NOTIFICATION_DRAG_BEGIN:
+		_drop_layer.mouse_filter = Control.MOUSE_FILTER_STOP
+		_drop_layer.visible = true
+	elif what == NOTIFICATION_DRAG_END:
+		_drop_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_drop_layer.visible = false
+		_drop_layer.hover_rect = Rect2()
+		_drop_layer.queue_redraw()
 
 # ---------------------------------------------------------------------------
 # Focus highlight (a border tracking the focused pane, drawn over everything)
@@ -49,6 +68,15 @@ func _process(_delta: float) -> void:
 			_focus_overlay.queue_redraw()
 	elif _focus_overlay.visible:
 		_focus_overlay.visible = false
+
+	if _drop_layer.visible:
+		var p := _pane_at(get_global_mouse_position())
+		var hr := Rect2()
+		if p:
+			hr = Rect2(p.global_position - _drop_layer.global_position, p.size)
+		if hr != _drop_layer.hover_rect:
+			_drop_layer.hover_rect = hr
+			_drop_layer.queue_redraw()
 
 func _draw_focus_overlay() -> void:
 	_focus_overlay.draw_rect(Rect2(Vector2.ONE, _focus_overlay.size - Vector2(2, 2)),
@@ -82,7 +110,7 @@ func apply_preset(preset: Preset) -> void:
 	for v in views:
 		v.get_parent().remove_child(v)
 	for c in get_children():
-		if c != _focus_overlay:
+		if c != _focus_overlay and c != _drop_layer:
 			remove_child(c)
 			c.queue_free()
 	var panes := _build_preset(preset)
@@ -169,8 +197,10 @@ func _build_preset(preset: Preset) -> Array:
 func _normalize_children() -> void:
 	if is_instance_valid(_focus_overlay) and _focus_overlay.get_parent() == self:
 		move_child(_focus_overlay, get_child_count() - 1)
+	if is_instance_valid(_drop_layer) and _drop_layer.get_parent() == self:
+		move_child(_drop_layer, get_child_count() - 1)
 	for c in get_children():
-		if c != _focus_overlay:
+		if c != _focus_overlay and c != _drop_layer:
 			(c as Control).set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 			break
 
@@ -257,6 +287,42 @@ func _update_active_views() -> void:
 	for v in _all_views():
 		if v.has_method("set_active"):
 			v.set_active(v == active_view)
+
+# ---------------------------------------------------------------------------
+# Tab drag-and-drop (a tab dropped anywhere on a pane joins that pane)
+# ---------------------------------------------------------------------------
+
+func is_tab_drag(data: Variant) -> bool:
+	return data is Dictionary and data.get("type") == "tab_element"
+
+func drop_tab(data: Variant, global_pos: Vector2) -> void:
+	var pane := _pane_at(global_pos)
+	if not pane:
+		return
+	var view := _view_from_drag(data)
+	if not view or view.get_parent() == pane:
+		return
+	view.get_parent().remove_child(view)
+	_attach_view(pane, view)
+	_set_focus(pane)
+
+func _view_from_drag(data: Variant) -> Control:
+	var from_bar := get_node_or_null(data.get("from_path", NodePath()))
+	if from_bar == null:
+		return null
+	var src := from_bar.get_parent()
+	if not (src is ViewPane):
+		return null
+	var idx: int = data.get("tab_element", -1)
+	if idx < 0 or idx >= (src as ViewPane).get_tab_count():
+		return null
+	return (src as ViewPane).get_tab_control(idx)
+
+func _pane_at(global_pos: Vector2) -> ViewPane:
+	for p in _all_panes():
+		if p.is_inside_tree() and Rect2(p.global_position, p.size).has_point(global_pos):
+			return p
+	return null
 
 # ---------------------------------------------------------------------------
 # Tree traversal helpers

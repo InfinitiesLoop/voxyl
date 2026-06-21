@@ -73,6 +73,25 @@ func _run() -> void:
 	_check("the focused pane's current view is the active one",
 		panes[1].get_current_tab_control()._active)
 
+	# Dropping a tab onto a pane body routes it to that pane; panes[1] has a
+	# single view, so emptying it should collapse it back to one pane.
+	shell.size = Vector2(900, 600)
+	await get_tree().process_frame
+	var src: ViewPane = panes[1]
+	var dst: ViewPane = panes[0]
+	var moved := src.get_tab_control(0)
+	var drag := {
+		"type": "tab_element",
+		"from_path": src.get_tab_bar().get_path(),
+		"tab_element": 0,
+	}
+	shell.drop_tab(drag, dst.global_position + dst.size * 0.5)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	_check("dropped tab joins the target pane", moved.get_parent() == dst)
+	_check("emptied source pane collapses after drop", _panes(shell).size() == 1)
+	_check("no views lost in the move", _views(shell).size() == 3)
+
 	shell.queue_free()
 
 func _count_active(shell: MultiViewShell) -> int:
