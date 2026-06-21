@@ -4,11 +4,16 @@ extends VBoxContainer
 const CELL_SIZE := 32
 const PADDING := 8
 const VIEW_PADDING := 4
+# Minimum in-plane radius (in cells) drawn around the center, so a slice that
+# sits outside the build still presents a usable canvas.
+const CENTER_RADIUS := 10
 
 # Slice configuration
 # axis 0=X (slice is YZ plane), 1=Y (slice is XZ plane), 2=Z (slice is XY plane)
 var axis := 1
 var slice_pos := 0
+# World cell this view is centered on (kept centered in the GridArea).
+var _center := Vector3i.ZERO
 
 var _is_placing := false
 var _is_erasing := false
@@ -18,13 +23,15 @@ var _preview_cells: Array[Vector2i] = []
 @onready var _layer_label: Label = $LayerBar/LayerLabel
 @onready var _grid_area: Control = $GridArea
 
-func configure(p_axis: int, p_pos: int) -> void:
+func configure(p_axis: int, p_center: Vector3i) -> void:
 	axis = p_axis
-	slice_pos = p_pos
+	_center = p_center
+	slice_pos = p_center[axis]
 	if is_inside_tree():
 		_reset()
 
 func _ready() -> void:
+	_grid_area.clip_contents = true
 	_grid_area.draw.connect(_draw_grid)
 	_grid_area.gui_input.connect(_on_grid_input)
 	VoxelWorld.block_changed.connect(func(_p, _s): _grid_area.queue_redraw())
@@ -38,33 +45,41 @@ func _ready() -> void:
 
 # Map 2D grid coordinates (h = horizontal, v = vertical) to world Vector3i.
 # Each axis choice fixes one world coordinate (slice_pos) and maps the other two.
+# v=0 is the TOP row on screen, so for the vertical (elevation) slices v is
+# inverted against world Y — that keeps +Y pointing up on screen, consistent
+# with the 3D view no matter which way the camera faced when the slice was made.
 #   Y-axis slice (top-down): h→X, v→Z
-#   X-axis slice (side):     h→Z, v→Y
-#   Z-axis slice (front):    h→X, v→Y
+#   X-axis slice (side):     h→Z, v→Y (up)
+#   Z-axis slice (front):    h→X, v→Y (up)
 
 # Bounding box of placed blocks, padded for room to build.
 # Returns sensible defaults when the project is empty.
 func _get_view_min() -> Vector3i:
+	var lo := _center - Vector3i(CENTER_RADIUS, CENTER_RADIUS, CENTER_RADIUS)
 	if not VoxelWorld.active_project:
-		return Vector3i(-VIEW_PADDING, -VIEW_PADDING, -VIEW_PADDING)
+		return lo
 	var aabb := VoxelWorld.active_project.data.get_used_aabb()
 	if aabb.is_empty():
-		return Vector3i(0, 0, 0) - Vector3i(VIEW_PADDING, VIEW_PADDING, VIEW_PADDING)
-	return (aabb[0] as Vector3i) - Vector3i(VIEW_PADDING, VIEW_PADDING, VIEW_PADDING)
+		return lo
+	var amin := (aabb[0] as Vector3i) - Vector3i(VIEW_PADDING, VIEW_PADDING, VIEW_PADDING)
+	return Vector3i(mini(lo.x, amin.x), mini(lo.y, amin.y), mini(lo.z, amin.z))
 
 func _get_view_max() -> Vector3i:
+	var hi := _center + Vector3i(CENTER_RADIUS, CENTER_RADIUS, CENTER_RADIUS)
 	if not VoxelWorld.active_project:
-		return Vector3i(15 + VIEW_PADDING, 15 + VIEW_PADDING, 15 + VIEW_PADDING)
+		return hi
 	var aabb := VoxelWorld.active_project.data.get_used_aabb()
 	if aabb.is_empty():
-		return Vector3i(15, 15, 15) + Vector3i(VIEW_PADDING, VIEW_PADDING, VIEW_PADDING)
-	return (aabb[1] as Vector3i) + Vector3i(VIEW_PADDING, VIEW_PADDING, VIEW_PADDING)
+		return hi
+	var amax := (aabb[1] as Vector3i) + Vector3i(VIEW_PADDING, VIEW_PADDING, VIEW_PADDING)
+	return Vector3i(maxi(hi.x, amax.x), maxi(hi.y, amax.y), maxi(hi.z, amax.z))
 
 func _grid_to_world(h: int, v: int) -> Vector3i:
 	var mn := _get_view_min()
+	var mx := _get_view_max()
 	match axis:
-		0: return Vector3i(slice_pos, mn.y + v, mn.z + h)
-		2: return Vector3i(mn.x + h, mn.y + v, slice_pos)
+		0: return Vector3i(slice_pos, mx.y - v, mn.z + h)
+		2: return Vector3i(mn.x + h, mx.y - v, slice_pos)
 		_: return Vector3i(mn.x + h, slice_pos, mn.z + v)
 
 func _get_grid_w() -> int:
@@ -89,12 +104,29 @@ func _get_max_slice() -> int:
 		2: return mx.z
 		_: return mx.y
 
+# In-plane (h, v) grid coordinates of the center cell.
+func _center_hv() -> Vector2i:
+	var mn := _get_view_min()
+	var mx := _get_view_max()
+	match axis:
+		0: return Vector2i(_center.z - mn.z, mx.y - _center.y)
+		2: return Vector2i(_center.x - mn.x, mx.y - _center.y)
+		_: return Vector2i(_center.x - mn.x, _center.z - mn.z)
+
+# Pixel offset that places the center cell in the middle of the GridArea.
+func _get_pan() -> Vector2:
+	var hv := _center_hv()
+	return _grid_area.size * 0.5 - Vector2(
+		PADDING + (hv.x + 0.5) * CELL_SIZE,
+		PADDING + (hv.y + 0.5) * CELL_SIZE
+	)
+
 # ---------------------------------------------------------------------------
 # Reset / label
 # ---------------------------------------------------------------------------
 
 func _reset() -> void:
-	slice_pos = clamp(slice_pos, _get_min_slice(), _get_max_slice())
+	# slice_pos is intentionally not clamped — a slice may sit outside the build.
 	_preview_cells.clear()
 	_drag_start = Vector2i(-1, -1)
 	_update_slice_label()
@@ -112,11 +144,12 @@ func _draw_grid() -> void:
 	if not VoxelWorld.active_project:
 		return
 	var data := VoxelWorld.active_project.data
+	var pan := _get_pan()
 	for h in _get_grid_w():
 		for v in _get_grid_h():
 			var rect := Rect2(
-				PADDING + h * CELL_SIZE,
-				PADDING + v * CELL_SIZE,
+				PADDING + pan.x + h * CELL_SIZE,
+				PADDING + pan.y + v * CELL_SIZE,
 				CELL_SIZE - 1, CELL_SIZE - 1
 			)
 			var semantic := data.get_block(_grid_to_world(h, v))
@@ -133,8 +166,8 @@ func _draw_grid() -> void:
 		preview_color.a = 0.65
 		for cell in _preview_cells:
 			var rect := Rect2(
-				PADDING + cell.x * CELL_SIZE,
-				PADDING + cell.y * CELL_SIZE,
+				PADDING + pan.x + cell.x * CELL_SIZE,
+				PADDING + pan.y + cell.y * CELL_SIZE,
 				CELL_SIZE - 1, CELL_SIZE - 1
 			)
 			_grid_area.draw_rect(rect, preview_color)
@@ -144,9 +177,10 @@ func _draw_grid() -> void:
 # ---------------------------------------------------------------------------
 
 func _mouse_to_cell(mouse_pos: Vector2) -> Vector2i:
+	var pan := _get_pan()
 	return Vector2i(
-		int((mouse_pos.x - PADDING) / CELL_SIZE),
-		int((mouse_pos.y - PADDING) / CELL_SIZE)
+		floori((mouse_pos.x - PADDING - pan.x) / CELL_SIZE),
+		floori((mouse_pos.y - PADDING - pan.y) / CELL_SIZE)
 	)
 
 func _on_grid_input(event: InputEvent) -> void:
@@ -271,7 +305,8 @@ func _do_fill(start: Vector2i) -> void:
 func set_slice(value: int) -> void:
 	if not VoxelWorld.active_project:
 		return
-	slice_pos = clamp(value, _get_min_slice(), _get_max_slice())
+	# Unclamped: the up/down buttons may move the slice beyond the build.
+	slice_pos = value
 	_update_slice_label()
 	_grid_area.queue_redraw()
 

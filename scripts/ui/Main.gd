@@ -28,16 +28,24 @@ func _open_editor(project: VoxelProject) -> void:
 	_home.visible = false
 	_editor.visible = true
 
-func _add_slice_view(p_axis: int, p_pos: int) -> void:
+func _add_slice_view(p_axis: int, p_center: Vector3i) -> void:
 	var view := SliceScene.instantiate() as View2DGrid
 	view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	view.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_tabs.add_child(view)
-	view.configure(p_axis, p_pos)
+	view.configure(p_axis, p_center)
 	var tab_idx := _tabs.get_tab_count() - 1
 	var axis_label: String = (["X", "Y", "Z"] as Array)[p_axis]
-	_tabs.set_tab_title(tab_idx, "%s=%d" % [axis_label, p_pos])
+	# Title carries the in-plane center so duplicate slices stay distinguishable.
+	var hv := _slice_title_hv(p_axis, p_center)
+	_tabs.set_tab_title(tab_idx, "%s=%d (%d,%d)" % [axis_label, p_center[p_axis], hv.x, hv.y])
 	_tabs.current_tab = tab_idx
+
+func _slice_title_hv(p_axis: int, c: Vector3i) -> Vector2i:
+	match p_axis:
+		0: return Vector2i(c.z, c.y)
+		2: return Vector2i(c.x, c.y)
+		_: return Vector2i(c.x, c.z)
 
 func _on_tab_close_pressed(tab_idx: int) -> void:
 	var child := _tabs.get_tab_control(tab_idx)

@@ -53,6 +53,23 @@ var _sky_label_timer: float = 0.0
 # --- Dirty flag ---
 var _dirty := false
 
+# --- Slice-select mode ---
+# A transient modal state for choosing a 2D slice. All of this is view-local:
+# the chosen axis/center are handed to a fresh View2DGrid instance on confirm.
+var _slice_active := false
+var _slice_axis := 1
+var _slice_center := Vector3i.ZERO
+var _orbit_dist := 16.0       # camera distance to the pivot while orbiting
+var _drag_moved := false      # distinguishes an orbit-drag from a confirm-click
+var _cell_nodes := {}         # Vector3i -> MeshInstance3D (filled in _rebuild)
+var _normal_mats := {}        # semantic -> StandardMaterial3D (base appearance)
+var _faded_mats := {}         # semantic -> StandardMaterial3D (off-plane fade)
+var _onplane_mats := {}       # semantic -> StandardMaterial3D (on-plane pop)
+var _plane_sheet: MeshInstance3D
+var _plane_sheet_mat: StandardMaterial3D
+var _slice_marker: MeshInstance3D
+var _slice_marker_mat: StandardMaterial3D
+
 func _ready() -> void:
 	_setup_viewport()
 	_setup_overlay()
@@ -60,8 +77,16 @@ func _ready() -> void:
 	VoxelWorld.block_changed.connect(func(_p, _s): _mark_dirty())
 	VoxelWorld.palette_stack_changed.connect(func(): _mark_dirty(); if _fly_mode: _overlay.queue_redraw())
 	VoxelWorld.selection_changed.connect(func(_s): if _fly_mode: _overlay.queue_redraw())
-	visibility_changed.connect(func(): if not visible and _fly_mode: _release_cursor())
+	visibility_changed.connect(_on_visibility_changed)
 	set_process(true)
+
+func _on_visibility_changed() -> void:
+	if visible:
+		return
+	if _fly_mode:
+		_release_cursor()
+	if _slice_active:
+		_exit_slice_select()
 
 func _on_project_opened(_p: VoxelProject) -> void:
 	_mark_dirty()
@@ -144,6 +169,29 @@ func _setup_viewport() -> void:
 	_highlight.material_override = _highlight_mat
 	_highlight.visible = false
 	_viewport.add_child(_highlight)
+
+	# Slice-select: translucent sheet that cuts through the build at the slice.
+	_plane_sheet_mat = StandardMaterial3D.new()
+	_plane_sheet_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_plane_sheet_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_plane_sheet_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_plane_sheet_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_plane_sheet_mat.albedo_color = Color(0.12, 0.8, 1.0, 0.16)
+	_plane_sheet = MeshInstance3D.new()
+	_plane_sheet.mesh = ImmediateMesh.new()
+	_plane_sheet.material_override = _plane_sheet_mat
+	_plane_sheet.visible = false
+	_viewport.add_child(_plane_sheet)
+
+	# Slice-select: bright line work — plane border + center-cell wireframe.
+	_slice_marker_mat = StandardMaterial3D.new()
+	_slice_marker_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_slice_marker_mat.vertex_color_use_as_albedo = true
+	_slice_marker = MeshInstance3D.new()
+	_slice_marker.mesh = ImmediateMesh.new()
+	_slice_marker.material_override = _slice_marker_mat
+	_slice_marker.visible = false
+	_viewport.add_child(_slice_marker)
 
 	_update_camera()
 
@@ -311,7 +359,7 @@ func _process(delta: float) -> void:
 		_sky_label_timer -= delta
 		if _sky_label_timer <= 0.0:
 			_overlay.queue_redraw()
-	if not _fly_mode or not is_visible_in_tree():
+	if not _fly_mode or not is_visible_in_tree() or _slice_active:
 		return
 	var forward := _get_look_dir()
 	var flat_fwd := Vector3(forward.x, 0.0, forward.z)
@@ -338,6 +386,12 @@ func _input(event: InputEvent) -> void:
 	if not is_visible_in_tree():
 		return
 
+	# Slice-select is modal — it consumes keyboard input until confirmed/cancelled.
+	# (Mouse is handled in _on_svc_input so orbit/confirm work in the viewport.)
+	if _slice_active:
+		_handle_slice_key(event)
+		return
+
 	if event is InputEventKey:
 		var key := event as InputEventKey
 		# Track right-side modifiers
@@ -348,16 +402,16 @@ func _input(event: InputEvent) -> void:
 				KEY_SHIFT: _rshift_held = key.pressed
 
 		if key.pressed:
+			if key.keycode == KEY_TAB:
+				_enter_slice_select()
+				get_viewport().set_input_as_handled()
+				return
 			if key.keycode == KEY_ESCAPE and _fly_mode:
 				_release_cursor()
 				get_viewport().set_input_as_handled()
 				return
-			# X / Y / Z — open a 2D slice through the targeted position
-			match key.keycode:
-				KEY_X: _request_slice(0)
-				KEY_Y: _request_slice(1)
-				KEY_Z: _request_slice(2)
-				KEY_B: _cycle_sky()
+			if key.keycode == KEY_B:
+				_cycle_sky()
 			# 1–9 palette slots (captured mode only)
 			if _fly_mode:
 				var kc := key.keycode
@@ -386,6 +440,9 @@ func _input(event: InputEvent) -> void:
 
 # Non-captured mouse: drag-to-look + scroll-to-dolly
 func _on_svc_input(event: InputEvent) -> void:
+	if _slice_active:
+		_handle_slice_mouse(event)
+		return
 	if _fly_mode:
 		return
 	if event is InputEventMouseButton:
@@ -484,25 +541,34 @@ func _rebuild() -> void:
 	for child in _voxel_root.get_children():
 		_voxel_root.remove_child(child)
 		child.free()
+	_cell_nodes.clear()
+	_normal_mats.clear()
+	_faded_mats.clear()
+	_onplane_mats.clear()
 	if not VoxelWorld.active_project:
 		return
 	var data := VoxelWorld.active_project.data
-	var materials: Dictionary = {}
 	for pos: Vector3i in data.cells.keys():
 		var semantic: String = data.cells[pos]
 		if semantic.is_empty():
 			continue
-		if not materials.has(semantic):
+		if not _normal_mats.has(semantic):
 			var mat := StandardMaterial3D.new()
 			mat.albedo_color = VoxelWorld.get_color_for_semantic(semantic)
-			materials[semantic] = mat
+			_normal_mats[semantic] = mat
 		var mi := MeshInstance3D.new()
 		var mesh := BoxMesh.new()
 		mesh.size = Vector3(0.94, 0.94, 0.94)
 		mi.mesh = mesh
-		mi.material_override = materials[semantic]
+		mi.material_override = _normal_mats[semantic]
 		mi.position = Vector3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5)
+		mi.set_meta("semantic", semantic)
 		_voxel_root.add_child(mi)
+		_cell_nodes[pos] = mi
+	# Re-apply emphasis if a rebuild happened while choosing a slice (e.g. an edit
+	# in another view, or a palette change).
+	if _slice_active:
+		_update_slice_visuals()
 
 # ---------------------------------------------------------------------------
 # Raycast
@@ -659,27 +725,303 @@ func _erase_targeted_block() -> void:
 	_update_crosshair_target()
 
 # ---------------------------------------------------------------------------
-# Slice view requests (X / Y / Z keys)
+# Slice-select mode
+#
+# Tab enters an interactive mode for choosing a 2D slice. The axis + center
+# block are auto-derived from where the camera is looking, then nudged with the
+# keyboard, before spawning a centered 2D view (Enter/LMB) or cancelling (Esc/RMB).
 # ---------------------------------------------------------------------------
 
-func _request_slice(p_axis: int) -> void:
-	# Determine the slice position from what the crosshair is pointing at
-	var pos_3d: Vector3i
-	if _target_hit:
-		pos_3d = _target_block
-	elif _floor_hit:
-		pos_3d = _floor_place
+func _enter_slice_select() -> void:
+	if not VoxelWorld.active_project:
+		return
+	var look := _get_look_dir()
+	var result := _raycast_grid(_camera_pos, look, 20.0)
+	if result.get("hit", false):
+		# Looking at a block face → slice through that block, parallel to the face.
+		_slice_center = result.pos
+		var normal: Vector3i = (result.prev_pos as Vector3i) - (result.pos as Vector3i)
+		_slice_axis = _dominant_axis(Vector3(normal))
 	else:
-		var c := _get_world_center()
-		pos_3d = Vector3i(int(c.x), int(c.y), int(c.z))
+		# Empty look → dominant camera axis; the ground plane when looking up/down.
+		_slice_axis = _dominant_axis(look)
+		if _slice_axis == 1:
+			var fr := _raycast_floor_plane(_camera_pos, look)
+			if fr.get("hit", false):
+				_slice_center = fr.pos
+			else:
+				_slice_center = _floor_vec3i(_camera_pos + look * 8.0)
+		else:
+			_slice_center = _floor_vec3i(_camera_pos + look * 8.0)
 
-	var slice_p: int
-	match p_axis:
-		0: slice_p = pos_3d.x
-		1: slice_p = pos_3d.y
-		2: slice_p = pos_3d.z
+	_orbit_dist = _camera_pos.distance_to(_slice_center_world())
+	if _orbit_dist < 2.0:
+		_orbit_dist = 16.0
+	if _fly_mode:
+		_release_cursor()  # visible cursor for orbit-drag + click-to-confirm
+	_slice_active = true
+	_highlight.visible = false
+	_overlay.visible = true
+	_plane_sheet.visible = true
+	_slice_marker.visible = true
+	_update_slice_visuals()
 
-	VoxelWorld.request_slice_view(p_axis, slice_p)
+func _exit_slice_select() -> void:
+	if not _slice_active:
+		return
+	_slice_active = false
+	for pos: Vector3i in _cell_nodes:
+		var mi: MeshInstance3D = _cell_nodes[pos]
+		var semantic: String = mi.get_meta("semantic", "")
+		if _normal_mats.has(semantic):
+			mi.material_override = _normal_mats[semantic]
+	_plane_sheet.visible = false
+	_slice_marker.visible = false
+	_overlay.visible = _fly_mode
+	_overlay.queue_redraw()
+
+func _confirm_slice() -> void:
+	var axis := _slice_axis
+	var center := _slice_center
+	_exit_slice_select()
+	VoxelWorld.request_slice_view(axis, center)
+
+func _cycle_slice_axis() -> void:
+	_slice_axis = (_slice_axis + 1) % 3
+	_update_slice_visuals()
+
+# Move the plane along its axis. key_sign = +1 forward (W/Up), -1 back (S/Down).
+# "Forward" always pushes the plane away from the camera, deeper into the scene.
+func _move_plane(key_sign: int) -> void:
+	var dir := 1 if _get_look_dir()[_slice_axis] >= 0.0 else -1
+	_slice_center = _add_axis(_slice_center, _slice_axis, dir * key_sign)
+	_update_slice_visuals()
+
+# Move the center cell within the plane. (dx, dy) is screen intent: +x right, +y up.
+func _move_center(dx: int, dy: int) -> void:
+	var fwd := _get_look_dir()
+	var flat := Vector3(fwd.x, 0.0, fwd.z)
+	if flat.length_squared() > 0.0:
+		flat = flat.normalized()
+	var right := flat.cross(Vector3.UP)
+	var delta := Vector3i.ZERO
+	if _slice_axis == 1:
+		# Horizontal plane: forward picks an X/Z axis; right takes the other one
+		# (forced perpendicular so no in-plane direction is ever unreachable).
+		var f := _snap_horizontal(flat)
+		delta += f * dy
+		if f.x != 0:
+			delta += Vector3i(0, 0, 1 if right.z >= 0.0 else -1) * dx
+		else:
+			delta += Vector3i(1 if right.x >= 0.0 else -1, 0, 0) * dx
+	else:
+		# Vertical plane: screen up → world Y; screen right → in-plane horizontal axis.
+		delta += Vector3i(0, dy, 0)
+		var horiz_axis := 2 if _slice_axis == 0 else 0
+		var s := 1 if right[horiz_axis] >= 0.0 else -1
+		delta += Vector3i(s * dx, 0, 0) if horiz_axis == 0 else Vector3i(0, 0, s * dx)
+	_slice_center += delta
+	_update_slice_visuals()
+
+# --- Slice input ----------------------------------------------------------
+
+func _handle_slice_key(event: InputEvent) -> void:
+	if not (event is InputEventKey):
+		return
+	var key := event as InputEventKey
+	if not key.pressed:
+		return
+	var shift := key.shift_pressed
+	match key.keycode:
+		KEY_TAB:
+			_cycle_slice_axis()
+		KEY_ESCAPE:
+			_exit_slice_select()
+		KEY_ENTER, KEY_KP_ENTER:
+			_confirm_slice()
+		KEY_W, KEY_UP:
+			if shift: _move_center(0, 1)
+			else: _move_plane(1)
+		KEY_S, KEY_DOWN:
+			if shift: _move_center(0, -1)
+			else: _move_plane(-1)
+		KEY_A, KEY_LEFT:
+			if shift: _move_center(-1, 0)
+		KEY_D, KEY_RIGHT:
+			if shift: _move_center(1, 0)
+	get_viewport().set_input_as_handled()
+
+func _handle_slice_mouse(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		match mb.button_index:
+			MOUSE_BUTTON_LEFT:
+				if mb.pressed:
+					_drag_looking = true
+					_drag_last = mb.position
+					_drag_moved = false
+				else:
+					if not _drag_moved:
+						_confirm_slice()
+					_drag_looking = false
+			MOUSE_BUTTON_RIGHT:
+				if mb.pressed:
+					_exit_slice_select()
+			MOUSE_BUTTON_WHEEL_UP:
+				if mb.pressed: _move_plane(1)
+			MOUSE_BUTTON_WHEEL_DOWN:
+				if mb.pressed: _move_plane(-1)
+	elif event is InputEventMouseMotion and _drag_looking:
+		var motion := event as InputEventMouseMotion
+		var d: Vector2 = motion.position - _drag_last
+		_drag_last = motion.position
+		if d.length() > 2.0:
+			_drag_moved = true
+		_yaw -= d.x * 0.4
+		_pitch = clamp(_pitch - d.y * 0.4, -89.0, 89.0)
+		_orbit_camera()
+
+func _orbit_camera() -> void:
+	_camera_pos = _slice_center_world() - _get_look_dir() * _orbit_dist
+	_update_camera()
+
+# --- Slice visuals --------------------------------------------------------
+
+func _update_slice_visuals() -> void:
+	var offset: int = _slice_center[_slice_axis]
+	for pos: Vector3i in _cell_nodes:
+		var mi: MeshInstance3D = _cell_nodes[pos]
+		var semantic: String = mi.get_meta("semantic", "")
+		if pos[_slice_axis] == offset:
+			mi.material_override = _onplane_mat_for(semantic)
+		else:
+			mi.material_override = _faded_mat_for(semantic)
+	_update_plane_sheet()
+	_update_slice_marker()
+	_overlay.queue_redraw()
+
+# Off-plane appearance: dithered (order-independent) coverage + a brightness
+# knockdown. An operation on the rendered block, not an assumption about its color.
+func _faded_mat_for(semantic: String) -> StandardMaterial3D:
+	if not _faded_mats.has(semantic):
+		var base: Color = VoxelWorld.get_color_for_semantic(semantic)
+		var m := StandardMaterial3D.new()
+		m.albedo_color = Color(base.r * 0.7, base.g * 0.7, base.b * 0.7, 0.4)
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_HASH
+		_faded_mats[semantic] = m
+	return _faded_mats[semantic]
+
+# On-plane appearance: full opacity + a gentle emissive lift so the working plane pops.
+func _onplane_mat_for(semantic: String) -> StandardMaterial3D:
+	if not _onplane_mats.has(semantic):
+		var base: Color = VoxelWorld.get_color_for_semantic(semantic)
+		var m := StandardMaterial3D.new()
+		m.albedo_color = base
+		m.emission_enabled = true
+		m.emission = base
+		m.emission_energy_multiplier = 0.35
+		_onplane_mats[semantic] = m
+	return _onplane_mats[semantic]
+
+func _update_plane_sheet() -> void:
+	var b := _slice_plane_bounds()
+	var off := float(_slice_center[_slice_axis]) + 0.5
+	var c := _plane_corners(b[0], b[1], off)
+	var im := _plane_sheet.mesh as ImmediateMesh
+	im.clear_surfaces()
+	im.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+	im.surface_add_vertex(c[0]); im.surface_add_vertex(c[1]); im.surface_add_vertex(c[2])
+	im.surface_add_vertex(c[0]); im.surface_add_vertex(c[2]); im.surface_add_vertex(c[3])
+	im.surface_end()
+
+func _update_slice_marker() -> void:
+	var im := _slice_marker.mesh as ImmediateMesh
+	im.clear_surfaces()
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	var b := _slice_plane_bounds()
+	var off := float(_slice_center[_slice_axis]) + 0.5
+	var c := _plane_corners(b[0], b[1], off)
+	var border := Color(0.25, 0.85, 1.0, 0.85)
+	for i in 4:
+		_marker_line(im, c[i], c[(i + 1) % 4], border)
+	# Center cell: a distinct bright wireframe — chrome we own, not the block's color.
+	_draw_cell_wire(im, _slice_center, Color(1.0, 0.95, 0.4, 1.0))
+	im.surface_end()
+
+func _marker_line(im: ImmediateMesh, a: Vector3, b: Vector3, col: Color) -> void:
+	im.surface_set_color(col); im.surface_add_vertex(a)
+	im.surface_set_color(col); im.surface_add_vertex(b)
+
+func _draw_cell_wire(im: ImmediateMesh, cell: Vector3i, col: Color) -> void:
+	var s := 1.06
+	var o := Vector3(cell) - Vector3(0.03, 0.03, 0.03)
+	var p := [
+		o + Vector3(0, 0, 0), o + Vector3(s, 0, 0), o + Vector3(s, 0, s), o + Vector3(0, 0, s),
+		o + Vector3(0, s, 0), o + Vector3(s, s, 0), o + Vector3(s, s, s), o + Vector3(0, s, s),
+	]
+	var edges := [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]]
+	for e in edges:
+		_marker_line(im, p[e[0]], p[e[1]], col)
+
+func _draw_slice_hud() -> void:
+	var font := ThemeDB.fallback_font
+	var axis_label: String = (["X", "Y", "Z"] as Array)[_slice_axis]
+	var title := "Slice  %s = %d    center (%d, %d, %d)" % [
+		axis_label, _slice_center[_slice_axis], _slice_center.x, _slice_center.y, _slice_center.z]
+	_overlay.draw_string(font, Vector2(14.0, 30.0), title,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color(0.85, 0.95, 1.0, 0.95))
+	var hint := "W/S move plane  ·  Shift+WASD move center  ·  Tab cycle axis  ·  Wheel scrub  ·  Drag orbit  ·  Enter/LMB open  ·  Esc/RMB cancel"
+	_overlay.draw_string(font, Vector2(10.0, _overlay.size.y - 10.0), hint,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.6))
+
+# --- Slice math helpers ---------------------------------------------------
+
+func _dominant_axis(v: Vector3) -> int:
+	var ax := absf(v.x); var ay := absf(v.y); var az := absf(v.z)
+	if ax >= ay and ax >= az:
+		return 0
+	return 1 if ay >= az else 2
+
+func _add_axis(v: Vector3i, axis: int, d: int) -> Vector3i:
+	match axis:
+		0: return v + Vector3i(d, 0, 0)
+		1: return v + Vector3i(0, d, 0)
+		_: return v + Vector3i(0, 0, d)
+
+func _snap_horizontal(v: Vector3) -> Vector3i:
+	if absf(v.x) >= absf(v.z):
+		return Vector3i(1 if v.x >= 0.0 else -1, 0, 0)
+	return Vector3i(0, 0, 1 if v.z >= 0.0 else -1)
+
+func _floor_vec3i(v: Vector3) -> Vector3i:
+	return Vector3i(floori(v.x), floori(v.y), floori(v.z))
+
+func _slice_center_world() -> Vector3:
+	return Vector3(_slice_center) + Vector3(0.5, 0.5, 0.5)
+
+# World-space (min, max) corners covering the build ∪ center, with a small margin.
+func _slice_plane_bounds() -> Array:
+	var lo := _slice_center
+	var hi := _slice_center
+	var aabb := VoxelWorld.active_project.data.get_used_aabb()
+	if not aabb.is_empty():
+		lo = _vec_min(lo, aabb[0])
+		hi = _vec_max(hi, aabb[1])
+	lo -= Vector3i(2, 2, 2)
+	hi += Vector3i(2, 2, 2)
+	return [Vector3(lo), Vector3(hi) + Vector3.ONE]
+
+func _plane_corners(mn: Vector3, mx: Vector3, off: float) -> Array:
+	match _slice_axis:
+		0: return [Vector3(off, mn.y, mn.z), Vector3(off, mx.y, mn.z), Vector3(off, mx.y, mx.z), Vector3(off, mn.y, mx.z)]
+		2: return [Vector3(mn.x, mn.y, off), Vector3(mx.x, mn.y, off), Vector3(mx.x, mx.y, off), Vector3(mn.x, mx.y, off)]
+		_: return [Vector3(mn.x, off, mn.z), Vector3(mx.x, off, mn.z), Vector3(mx.x, off, mx.z), Vector3(mn.x, off, mx.z)]
+
+func _vec_min(a: Vector3i, b: Vector3i) -> Vector3i:
+	return Vector3i(mini(a.x, b.x), mini(a.y, b.y), mini(a.z, b.z))
+
+func _vec_max(a: Vector3i, b: Vector3i) -> Vector3i:
+	return Vector3i(maxi(a.x, b.x), maxi(a.y, b.y), maxi(a.z, b.z))
 
 # ---------------------------------------------------------------------------
 # Palette cycling
@@ -705,6 +1047,9 @@ func _select_palette_slot(slot: int) -> void:
 # ---------------------------------------------------------------------------
 
 func _draw_overlay() -> void:
+	if _slice_active:
+		_draw_slice_hud()
+		return
 	var center := _overlay.size / 2.0
 	_overlay.draw_line(center + Vector2(-14, 0),  center + Vector2(14, 0),  Color(1,1,1,0.9), 1.5)
 	_overlay.draw_line(center + Vector2(0,  -14), center + Vector2(0,  14), Color(1,1,1,0.9), 1.5)
@@ -715,7 +1060,7 @@ func _draw_overlay() -> void:
 		var sky_name: String = _skyboxes[_current_sky]["name"]
 		_overlay.draw_string(font, Vector2(_overlay.size.x * 0.5, 32.0),
 			"Sky: " + sky_name, HORIZONTAL_ALIGNMENT_CENTER, -1, 16, Color(1,1,1,0.85))
-	var hint := "WASD/Arrows move  ·  Space/RCtrl/ROpt up  ·  Shift// down  ·  LMB erase  ·  RMB place  ·  X/Y/Z slice  ·  1–9 palette  ·  Esc"
+	var hint := "WASD/Arrows move  ·  Space/RCtrl/ROpt up  ·  Shift// down  ·  LMB erase  ·  RMB place  ·  Tab slice  ·  1–9 palette  ·  Esc"
 	_overlay.draw_string(font, Vector2(10.0, _overlay.size.y - 10.0),
 		hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1,1,1,0.45))
 
