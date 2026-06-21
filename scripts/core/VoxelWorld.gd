@@ -27,7 +27,7 @@ func open(project: VoxelProject) -> void:
 	project_opened.emit(project)
 
 func set_block(pos: Vector3i, semantic_name: String) -> void:
-	if not active_project or not active_project.data.is_in_bounds(pos):
+	if not active_project:
 		return
 	active_project.data.set_block(pos, semantic_name)
 	block_changed.emit(pos, semantic_name)

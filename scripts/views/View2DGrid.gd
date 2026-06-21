@@ -3,6 +3,7 @@ extends VBoxContainer
 
 const CELL_SIZE := 32
 const PADDING := 8
+const VIEW_PADDING := 4
 
 # Slice configuration
 # axis 0=X (slice is YZ plane), 1=Y (slice is XZ plane), 2=Z (slice is XY plane)
@@ -40,39 +41,60 @@ func _ready() -> void:
 #   Y-axis slice (top-down): h→X, v→Z
 #   X-axis slice (side):     h→Z, v→Y
 #   Z-axis slice (front):    h→X, v→Y
+
+# Bounding box of placed blocks, padded for room to build.
+# Returns sensible defaults when the project is empty.
+func _get_view_min() -> Vector3i:
+	if not VoxelWorld.active_project:
+		return Vector3i(-VIEW_PADDING, -VIEW_PADDING, -VIEW_PADDING)
+	var aabb := VoxelWorld.active_project.data.get_used_aabb()
+	if aabb.is_empty():
+		return Vector3i(0, 0, 0) - Vector3i(VIEW_PADDING, VIEW_PADDING, VIEW_PADDING)
+	return (aabb[0] as Vector3i) - Vector3i(VIEW_PADDING, VIEW_PADDING, VIEW_PADDING)
+
+func _get_view_max() -> Vector3i:
+	if not VoxelWorld.active_project:
+		return Vector3i(15 + VIEW_PADDING, 15 + VIEW_PADDING, 15 + VIEW_PADDING)
+	var aabb := VoxelWorld.active_project.data.get_used_aabb()
+	if aabb.is_empty():
+		return Vector3i(15, 15, 15) + Vector3i(VIEW_PADDING, VIEW_PADDING, VIEW_PADDING)
+	return (aabb[1] as Vector3i) + Vector3i(VIEW_PADDING, VIEW_PADDING, VIEW_PADDING)
+
 func _grid_to_world(h: int, v: int) -> Vector3i:
+	var mn := _get_view_min()
 	match axis:
-		0: return Vector3i(slice_pos, v, h)   # X slice: h=Z, v=Y
-		2: return Vector3i(h, v, slice_pos)   # Z slice: h=X, v=Y
-		_: return Vector3i(h, slice_pos, v)   # Y slice: h=X, v=Z  (default)
+		0: return Vector3i(slice_pos, mn.y + v, mn.z + h)
+		2: return Vector3i(mn.x + h, mn.y + v, slice_pos)
+		_: return Vector3i(mn.x + h, slice_pos, mn.z + v)
 
 func _get_grid_w() -> int:
-	if not VoxelWorld.active_project:
-		return 16
-	var s := VoxelWorld.active_project.data.size
-	return s.z if axis == 0 else s.x  # h=Z for X-axis slice, h=X otherwise
+	var mn := _get_view_min(); var mx := _get_view_max()
+	return (mx.z - mn.z + 1) if axis == 0 else (mx.x - mn.x + 1)
 
 func _get_grid_h() -> int:
-	if not VoxelWorld.active_project:
-		return 16
-	var s := VoxelWorld.active_project.data.size
-	return s.z if axis == 1 else s.y  # v=Z for Y-axis slice, v=Y otherwise
+	var mn := _get_view_min(); var mx := _get_view_max()
+	return (mx.z - mn.z + 1) if axis == 1 else (mx.y - mn.y + 1)
+
+func _get_min_slice() -> int:
+	var mn := _get_view_min()
+	match axis:
+		0: return mn.x
+		2: return mn.z
+		_: return mn.y
 
 func _get_max_slice() -> int:
-	if not VoxelWorld.active_project:
-		return 15
-	var s := VoxelWorld.active_project.data.size
+	var mx := _get_view_max()
 	match axis:
-		0: return s.x - 1
-		2: return s.z - 1
-		_: return s.y - 1
+		0: return mx.x
+		2: return mx.z
+		_: return mx.y
 
 # ---------------------------------------------------------------------------
 # Reset / label
 # ---------------------------------------------------------------------------
 
 func _reset() -> void:
-	slice_pos = clamp(slice_pos, 0, _get_max_slice())
+	slice_pos = clamp(slice_pos, _get_min_slice(), _get_max_slice())
 	_preview_cells.clear()
 	_drag_start = Vector2i(-1, -1)
 	_update_slice_label()
@@ -173,8 +195,6 @@ func _paint_cell(cell: Vector2i) -> void:
 	if not VoxelWorld.active_project:
 		return
 	var pos := _grid_to_world(cell.x, cell.y)
-	if not VoxelWorld.active_project.data.is_in_bounds(pos):
-		return
 	if _is_erasing:
 		VoxelWorld.clear_block(pos)
 	elif _is_placing and not VoxelWorld.selected_semantic.is_empty():
@@ -185,8 +205,6 @@ func _commit_preview() -> void:
 		return
 	for cell in _preview_cells:
 		var pos := _grid_to_world(cell.x, cell.y)
-		if not VoxelWorld.active_project.data.is_in_bounds(pos):
-			continue
 		if VoxelWorld.selected_semantic.is_empty():
 			VoxelWorld.clear_block(pos)
 		else:
@@ -217,9 +235,10 @@ func _do_fill(start: Vector2i) -> void:
 	if not VoxelWorld.active_project:
 		return
 	var data := VoxelWorld.active_project.data
-	var start_pos := _grid_to_world(start.x, start.y)
-	if not data.is_in_bounds(start_pos):
+	var gw := _get_grid_w(); var gh := _get_grid_h()
+	if start.x < 0 or start.x >= gw or start.y < 0 or start.y >= gh:
 		return
+	var start_pos := _grid_to_world(start.x, start.y)
 	var target_semantic := data.get_block(start_pos)
 	var fill_semantic := VoxelWorld.selected_semantic
 	if target_semantic == fill_semantic:
@@ -230,9 +249,9 @@ func _do_fill(start: Vector2i) -> void:
 		var cell: Vector2i = queue.pop_front()
 		if visited.has(cell):
 			continue
-		var pos := _grid_to_world(cell.x, cell.y)
-		if not data.is_in_bounds(pos):
+		if cell.x < 0 or cell.x >= gw or cell.y < 0 or cell.y >= gh:
 			continue
+		var pos := _grid_to_world(cell.x, cell.y)
 		if data.get_block(pos) != target_semantic:
 			continue
 		visited[cell] = true
@@ -252,7 +271,7 @@ func _do_fill(start: Vector2i) -> void:
 func set_slice(value: int) -> void:
 	if not VoxelWorld.active_project:
 		return
-	slice_pos = clamp(value, 0, _get_max_slice())
+	slice_pos = clamp(value, _get_min_slice(), _get_max_slice())
 	_update_slice_label()
 	_grid_area.queue_redraw()
 

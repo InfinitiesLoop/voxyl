@@ -39,7 +39,16 @@ fi
 log_file=$(mktemp -t validate-scripts-godot-log.XXXXXX)
 trap 'rm -f "$log_file"' EXIT
 
-godot_executable="${GODOT_EXECUTABLE:-/Applications/Godot.app/Contents/MacOS/Godot}"
+if [[ -n "${GODOT_EXECUTABLE:-}" ]]; then
+    godot_executable="$GODOT_EXECUTABLE"
+elif [[ -f "/Applications/Godot.app/Contents/MacOS/Godot" ]]; then
+    godot_executable="/Applications/Godot.app/Contents/MacOS/Godot"
+elif [[ -f "/c/godot.exe" ]]; then
+    godot_executable="/c/godot.exe"
+else
+    echo "ERROR: Godot executable not found. Set GODOT_EXECUTABLE to its path." >&2
+    exit 1
+fi
 
 if [[ ${#script_args[@]} -gt 0 ]]; then
     output=$("$godot_executable" -d --ignore-error-breaks --headless --log-file "$log_file" --path . --script tests/validate_all_scripts.gd -- "${script_args[@]}" 2>&1)

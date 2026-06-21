@@ -41,6 +41,14 @@ var _voxel_root: Node3D
 var _highlight: MeshInstance3D
 var _highlight_mat: StandardMaterial3D
 var _overlay: Control
+var _world_env: WorldEnvironment
+var _grid_plane: MeshInstance3D
+var _sky_sphere: MeshInstance3D
+
+# --- Skybox ---
+var _skyboxes: Array = []
+var _current_sky: int = 0
+var _sky_label_timer: float = 0.0
 
 # --- Dirty flag ---
 var _dirty := false
@@ -58,9 +66,8 @@ func _ready() -> void:
 func _on_project_opened(_p: VoxelProject) -> void:
 	_mark_dirty()
 	# Position camera to see the whole scene on first open
-	var s := VoxelWorld.active_project.data.size
-	var center := Vector3(s.x * 0.5, s.y * 0.5, s.z * 0.5)
-	var dist: float = max(s.x, s.y, s.z) * 2.0
+	var center := _get_world_center()
+	var dist := 16.0
 	_camera_pos = center + Vector3(sin(deg_to_rad(225.0)) * dist * 0.7, dist * 0.55, cos(deg_to_rad(225.0)) * dist * 0.7)
 	_yaw = 45.0
 	_pitch = -30.0
@@ -81,19 +88,45 @@ func _setup_viewport() -> void:
 	_viewport.transparent_bg = false
 	svc.add_child(_viewport)
 
-	var world_env := WorldEnvironment.new()
-	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.10, 0.10, 0.14)
-	env.ambient_light_color = Color(0.5, 0.5, 0.55)
-	env.ambient_light_energy = 1.0
-	world_env.environment = env
-	_viewport.add_child(world_env)
+	_world_env = WorldEnvironment.new()
+	_world_env.environment = Environment.new()
+	_viewport.add_child(_world_env)
+	_init_skyboxes()
+	_apply_sky()
 
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-50, 45, 0)
 	sun.light_energy = 1.3
 	_viewport.add_child(sun)
+
+	var fill := DirectionalLight3D.new()
+	fill.rotation_degrees = Vector3(40, -135, 0)
+	fill.light_color = Color(1.0, 1.0, 1.0)
+	fill.light_energy = 0.5
+	_viewport.add_child(fill)
+
+	_sky_sphere = MeshInstance3D.new()
+	var sphere_mesh := SphereMesh.new()
+	sphere_mesh.radius = 450.0
+	sphere_mesh.height = 900.0
+	sphere_mesh.radial_segments = 32
+	sphere_mesh.rings = 16
+	_sky_sphere.mesh = sphere_mesh
+	var sky_mat := ShaderMaterial.new()
+	sky_mat.shader = _make_sky_shader()
+	sky_mat.render_priority = -100
+	_sky_sphere.material_override = sky_mat
+	_viewport.add_child(_sky_sphere)
+
+	_grid_plane = MeshInstance3D.new()
+	var plane_mesh := PlaneMesh.new()
+	plane_mesh.size = Vector2(600.0, 600.0)
+	_grid_plane.mesh = plane_mesh
+	var grid_mat := ShaderMaterial.new()
+	grid_mat.shader = _make_grid_shader()
+	_grid_plane.material_override = grid_mat
+	_grid_plane.position.y = -0.01
+	_viewport.add_child(_grid_plane)
 
 	_camera = Camera3D.new()
 	_viewport.add_child(_camera)
@@ -102,15 +135,12 @@ func _setup_viewport() -> void:
 	_viewport.add_child(_voxel_root)
 
 	_highlight_mat = StandardMaterial3D.new()
-	_highlight_mat.albedo_color = Color(1.0, 1.0, 1.0, 0.35)
-	_highlight_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_highlight_mat.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
 	_highlight_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_highlight_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_highlight_mat.flags_use_point_size = false
 
 	_highlight = MeshInstance3D.new()
-	var hl_mesh := BoxMesh.new()
-	hl_mesh.size = Vector3(1.04, 1.04, 1.04)
-	_highlight.mesh = hl_mesh
+	_highlight.mesh = ImmediateMesh.new()
 	_highlight.material_override = _highlight_mat
 	_highlight.visible = false
 	_viewport.add_child(_highlight)
@@ -126,10 +156,161 @@ func _setup_overlay() -> void:
 	add_child(_overlay)
 
 # ---------------------------------------------------------------------------
+# Skybox presets
+# ---------------------------------------------------------------------------
+
+func _init_skyboxes() -> void:
+	_skyboxes = [
+		{"name": "Night", "fn": "_sky_night"},
+	]
+
+func _apply_sky() -> void:
+	var env := _world_env.environment
+	call(_skyboxes[_current_sky]["fn"], env)
+
+func _sky_night(env: Environment) -> void:
+	env.background_mode = Environment.BG_COLOR
+	env.background_color = Color(0.02, 0.00, 0.06)
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	env.ambient_light_color = Color(0.25, 0.18, 0.5)
+	env.ambient_light_energy = 0.9
+
+func _make_sky_shader() -> Shader:
+	var shader := Shader.new()
+	shader.code = """
+shader_type spatial;
+render_mode unshaded, cull_front, depth_draw_never, blend_mix;
+
+varying vec3 sky_dir;
+
+void vertex() {
+	sky_dir = VERTEX;
+}
+
+// 3D hash — no seams because there are no UV coordinates to wrap
+float hash3(vec3 p) {
+	p = fract(p * vec3(127.1, 311.7, 74.7));
+	p += dot(p, p.yzx + 74.27);
+	return fract((p.x + p.y) * p.z);
+}
+
+// 3D value noise — evaluates smoothly across any direction, zero seams
+float vnoise3(vec3 p) {
+	vec3 i = floor(p);
+	vec3 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	return mix(
+		mix(mix(hash3(i),               hash3(i + vec3(1,0,0)), f.x),
+		    mix(hash3(i + vec3(0,1,0)), hash3(i + vec3(1,1,0)), f.x), f.y),
+		mix(mix(hash3(i + vec3(0,0,1)), hash3(i + vec3(1,0,1)), f.x),
+		    mix(hash3(i + vec3(0,1,1)), hash3(i + vec3(1,1,1)), f.x), f.y),
+		f.z);
+}
+
+// Stars via cube-face projection: uniform cell size across all sky directions,
+// no pole compression, no seam. Each face has its own cell grid.
+float stars(vec3 dir, float scale, float threshold) {
+	vec3 a = abs(dir);
+	vec2 fuv;
+	float face;
+	if (a.x >= a.y && a.x >= a.z) {
+		fuv = dir.yz / a.x;  face = sign(dir.x);
+	} else if (a.y >= a.x && a.y >= a.z) {
+		fuv = dir.xz / a.y;  face = sign(dir.y) + 2.0;
+	} else {
+		fuv = dir.xy / a.z;  face = sign(dir.z) + 4.0;
+	}
+	vec2 cell = floor((fuv * 0.5 + 0.5) * scale);
+	vec2 local = fract((fuv * 0.5 + 0.5) * scale);
+	vec3 seed = vec3(cell, face);
+	float rng = hash3(seed);
+	if (rng < threshold) return 0.0;
+	vec2 pos = vec2(hash3(seed + vec3(7.3, 2.1, 0.0)), hash3(seed + vec3(1.7, 9.4, 0.0)));
+	float d = length(local - pos);
+	float sz = 0.03 + hash3(seed + vec3(3.1, 0.0, 0.0)) * 0.04;
+	return smoothstep(sz, 0.0, d) * rng;
+}
+
+void fragment() {
+	vec3 dir = normalize(sky_dir);
+
+	float s = 0.0;
+	s += stars(dir, 50.0,  0.86);
+	s += stars(dir, 80.0,  0.89) * 0.7;
+	s += stars(dir, 120.0, 0.91) * 0.5;
+	s = clamp(s, 0.0, 1.0);
+
+	// Nebula — 3D layered noise, no seam possible
+	float n1 = vnoise3(dir * 2.0);
+	float n2 = vnoise3(dir * 4.5 + vec3(1.3, 2.7, 0.4));
+	float n3 = vnoise3(dir * 9.0 + vec3(2.1, 0.5, 3.2));
+	float nebula = n1 * 0.55 + n2 * 0.30 + n3 * 0.15;
+	nebula = smoothstep(0.45, 0.72, nebula) * 0.5;
+
+	float hv  = vnoise3(dir * 1.5 + vec3(4.0, 2.0, 1.0));
+	float hv2 = vnoise3(dir * 1.2 + vec3(0.5, 3.5, 2.0));
+	vec3 neb_col = mix(vec3(0.30, 0.04, 0.50), vec3(0.04, 0.15, 0.55), hv);
+	neb_col = mix(neb_col, vec3(0.50, 0.06, 0.28), hv2 * 0.35);
+
+	vec3 base = vec3(0.006, 0.001, 0.015);
+	ALBEDO = base + neb_col * nebula + vec3(s);
+	ALPHA = 1.0;
+}
+"""
+	return shader
+
+func _make_grid_shader() -> Shader:
+	var shader := Shader.new()
+	shader.code = """
+shader_type spatial;
+render_mode unshaded, cull_disabled, blend_mix, depth_draw_never;
+
+varying vec3 world_pos;
+
+void vertex() {
+	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+}
+
+void fragment() {
+	// 1-unit grid (cyan)
+	vec2 coord = world_pos.xz;
+	vec2 g = abs(fract(coord - 0.5) - 0.5) / fwidth(coord);
+	float line1 = 1.0 - clamp(min(g.x, g.y), 0.0, 1.0);
+
+	// 16-unit chunk grid (purple, thicker)
+	vec2 coord8 = world_pos.xz / 16.0;
+	vec2 g8 = abs(fract(coord8 - 0.5) - 0.5) / (fwidth(coord8) * 3.0);
+	float line8 = 1.0 - clamp(min(g8.x, g8.y), 0.0, 1.0);
+
+	float dist = length(world_pos.xz - CAMERA_POSITION_WORLD.xz);
+	float fade = 1.0 - smoothstep(18.0, 55.0, dist);
+
+	vec3 color = mix(vec3(0.08, 0.75, 1.0), vec3(0.65, 0.30, 1.0), line8);
+	float alpha = clamp(max(line1, line8 * 2.5), 0.0, 1.0) * fade;
+
+	ALBEDO = color;
+	ALPHA = alpha;
+}
+"""
+	return shader
+
+func _cycle_sky() -> void:
+	if _skyboxes.size() <= 1:
+		return
+	_current_sky = (_current_sky + 1) % _skyboxes.size()
+	_apply_sky()
+	_sky_label_timer = 2.5
+	_overlay.queue_redraw()
+
+# ---------------------------------------------------------------------------
 # Per-frame movement (only while cursor captured)
 # ---------------------------------------------------------------------------
 
 func _process(delta: float) -> void:
+	if _sky_label_timer > 0.0:
+		_sky_label_timer -= delta
+		if _sky_label_timer <= 0.0:
+			_overlay.queue_redraw()
 	if not _fly_mode or not is_visible_in_tree():
 		return
 	var forward := _get_look_dir()
@@ -176,6 +357,7 @@ func _input(event: InputEvent) -> void:
 				KEY_X: _request_slice(0)
 				KEY_Y: _request_slice(1)
 				KEY_Z: _request_slice(2)
+				KEY_B: _cycle_sky()
 			# 1–9 palette slots (captured mode only)
 			if _fly_mode:
 				var kc := key.keycode
@@ -264,6 +446,11 @@ func _update_camera() -> void:
 	_camera.position = _camera_pos
 	var look_target := _camera_pos + _get_look_dir()
 	_camera.look_at(look_target, Vector3.UP)
+	if _grid_plane:
+		_grid_plane.position.x = _camera_pos.x
+		_grid_plane.position.z = _camera_pos.z
+	if _sky_sphere:
+		_sky_sphere.position = _camera_pos
 
 func _get_look_dir() -> Vector3:
 	var yaw_rad := deg_to_rad(_yaw)
@@ -277,8 +464,11 @@ func _get_look_dir() -> Vector3:
 func _get_world_center() -> Vector3:
 	if not VoxelWorld.active_project:
 		return Vector3.ZERO
-	var s := VoxelWorld.active_project.data.size
-	return Vector3(s.x * 0.5, s.y * 0.5, s.z * 0.5)
+	var aabb := VoxelWorld.active_project.data.get_used_aabb()
+	if aabb.is_empty():
+		return Vector3.ZERO
+	var mn: Vector3i = aabb[0]; var mx: Vector3i = aabb[1]
+	return Vector3(mn.x + mx.x + 1, mn.y + mx.y + 1, mn.z + mx.z + 1) * 0.5
 
 # ---------------------------------------------------------------------------
 # Voxel rebuild
@@ -332,21 +522,66 @@ func _update_crosshair_target() -> void:
 	if _target_hit:
 		_target_block = result.pos
 		_target_place = result.prev_pos
-		_highlight_mat.albedo_color = Color(1.0, 1.0, 1.0, 0.35)
-		_highlight.position = Vector3(_target_block.x + 0.5, _target_block.y + 0.5, _target_block.z + 0.5)
+		var normal := _target_place - _target_block
+		_highlight_mat.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
+		_highlight_mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
+		_draw_face_highlight(_target_block, normal)
 		_highlight.visible = true
 	else:
 		var floor_result := _raycast_floor_plane(_camera_pos, _get_look_dir())
 		_floor_hit = floor_result.get("hit", false)
 		if _floor_hit:
 			_floor_place = floor_result.pos
-			_highlight_mat.albedo_color = Color(0.4, 1.0, 0.5, 0.22)
-			_highlight.position = Vector3(_floor_place.x + 0.5, _floor_place.y + 0.5, _floor_place.z + 0.5)
+			_highlight_mat.albedo_color = Color(0.08, 0.75, 1.0, 0.22)
+			_highlight_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			_draw_floor_fill(_floor_place)
 			_highlight.visible = true
 		else:
 			_highlight.visible = false
 
 	_overlay.queue_redraw()
+
+func _draw_floor_fill(cell: Vector3i) -> void:
+	var y := float(cell.y) + 0.005
+	var x0 := float(cell.x);  var x1 := x0 + 1.0
+	var z0 := float(cell.z);  var z1 := z0 + 1.0
+	var im := _highlight.mesh as ImmediateMesh
+	im.clear_surfaces()
+	im.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+	im.surface_add_vertex(Vector3(x0, y, z0))
+	im.surface_add_vertex(Vector3(x1, y, z0))
+	im.surface_add_vertex(Vector3(x1, y, z1))
+	im.surface_add_vertex(Vector3(x0, y, z0))
+	im.surface_add_vertex(Vector3(x1, y, z1))
+	im.surface_add_vertex(Vector3(x0, y, z1))
+	im.surface_end()
+
+func _draw_face_highlight(block: Vector3i, normal: Vector3i) -> void:
+	var n := Vector3(normal)
+	var center := Vector3(block) + Vector3(0.5, 0.5, 0.5) + n * 0.502
+	var t1: Vector3
+	var t2: Vector3
+	if abs(n.y) > 0.5:
+		t1 = Vector3(0.5, 0.0, 0.0)
+		t2 = Vector3(0.0, 0.0, 0.5)
+	elif abs(n.x) > 0.5:
+		t1 = Vector3(0.0, 0.5, 0.0)
+		t2 = Vector3(0.0, 0.0, 0.5)
+	else:
+		t1 = Vector3(0.5, 0.0, 0.0)
+		t2 = Vector3(0.0, 0.5, 0.0)
+	var c0 := center - t1 - t2
+	var c1 := center + t1 - t2
+	var c2 := center + t1 + t2
+	var c3 := center - t1 + t2
+	var im := _highlight.mesh as ImmediateMesh
+	im.clear_surfaces()
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	im.surface_add_vertex(c0); im.surface_add_vertex(c1)
+	im.surface_add_vertex(c1); im.surface_add_vertex(c2)
+	im.surface_add_vertex(c2); im.surface_add_vertex(c3)
+	im.surface_add_vertex(c3); im.surface_add_vertex(c0)
+	im.surface_end()
 
 func _raycast_grid(origin: Vector3, direction: Vector3, max_dist: float) -> Dictionary:
 	if not VoxelWorld.active_project:
@@ -372,7 +607,7 @@ func _raycast_grid(origin: Vector3, direction: Vector3, max_dist: float) -> Dict
 	var t := 0.0
 	while t < max_dist:
 		var cur := Vector3i(ix, iy, iz)
-		if data.is_in_bounds(cur) and not data.get_block(cur).is_empty():
+		if not data.get_block(cur).is_empty():
 			return {hit = true, pos = cur, prev_pos = prev}
 		prev = cur
 		if tx <= ty and tx <= tz:
@@ -396,7 +631,7 @@ func _raycast_floor_plane(origin: Vector3, direction: Vector3) -> Dictionary:
 	var hit_world := origin + dir * t
 	var cell := Vector3i(int(floor(hit_world.x)), _floor_y, int(floor(hit_world.z)))
 	var data := VoxelWorld.active_project.data
-	if not data.is_in_bounds(cell) or not data.get_block(cell).is_empty():
+	if not data.get_block(cell).is_empty():
 		return {hit = false}
 	return {hit = true, pos = cell}
 
@@ -413,8 +648,6 @@ func _place_targeted_block() -> void:
 	elif _floor_hit:
 		place_pos = _floor_place
 	else:
-		return
-	if not VoxelWorld.active_project.data.is_in_bounds(place_pos):
 		return
 	VoxelWorld.set_block(place_pos, VoxelWorld.selected_semantic)
 	_update_crosshair_target()
@@ -478,6 +711,10 @@ func _draw_overlay() -> void:
 	_overlay.draw_circle(center, 3.0, Color(0,0,0,0.4))
 	_draw_hotbar()
 	var font := ThemeDB.fallback_font
+	if _sky_label_timer > 0.0 and _skyboxes.size() > 1:
+		var sky_name: String = _skyboxes[_current_sky]["name"]
+		_overlay.draw_string(font, Vector2(_overlay.size.x * 0.5, 32.0),
+			"Sky: " + sky_name, HORIZONTAL_ALIGNMENT_CENTER, -1, 16, Color(1,1,1,0.85))
 	var hint := "WASD/Arrows move  ·  Space/RCtrl/ROpt up  ·  Shift// down  ·  LMB erase  ·  RMB place  ·  X/Y/Z slice  ·  1–9 palette  ·  Esc"
 	_overlay.draw_string(font, Vector2(10.0, _overlay.size.y - 10.0),
 		hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1,1,1,0.45))
