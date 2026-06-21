@@ -3,7 +3,7 @@
 [ext_resource type="Script" path="res://scripts/ui/Main.gd" id="1"]
 [ext_resource type="PackedScene" path="res://scenes/ui/HomeScreen.tscn" id="2"]
 [ext_resource type="PackedScene" path="res://scenes/ui/ToolsPanel.tscn" id="3"]
-[ext_resource type="PackedScene" path="res://scenes/views/View3D.tscn" id="5"]
+[ext_resource type="Script" path="res://scripts/ui/MultiViewShell.gd" id="5"]
 [ext_resource type="PackedScene" path="res://scenes/ui/PalettePanel.tscn" id="6"]
 
 [node name="Main" type="Control"]
@@ -56,14 +56,11 @@ size_flags_vertical = 3
 [node name="ToolsPanel" parent="Editor/VBoxContainer/ContentArea" instance=ExtResource("3")]
 layout_mode = 2
 
-[node name="TabContainer" type="TabContainer" parent="Editor/VBoxContainer/ContentArea"]
-layout_mode = 2
-size_flags_horizontal = 3
-
-[node name="View3D" parent="Editor/VBoxContainer/ContentArea/TabContainer" instance=ExtResource("5")]
+[node name="ViewShell" type="Control" parent="Editor/VBoxContainer/ContentArea"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
+script = ExtResource("5")
 
 [node name="PalettePanel" parent="Editor/VBoxContainer/ContentArea" instance=ExtResource("6")]
 layout_mode = 2

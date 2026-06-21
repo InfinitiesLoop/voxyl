@@ -1,0 +1,295 @@
+class_name MultiViewShell
+extends Control
+
+# Tiling shell that replaces the editor's single TabContainer. The document area
+# is a tree of nested SplitContainers whose leaves are ViewPanes (tab-groups of
+# views). Exactly one pane is focused; only the focused pane's current view is
+# "active" and receives global input. View instances are reparented — never
+# recreated — across any re-layout, so their state survives.
+
+const View3DScene := preload("res://scenes/views/View3D.tscn")
+const Slice2DScene := preload("res://scenes/views/View2DGrid.tscn")
+
+enum Preset { SINGLE, COLUMNS, ROWS, GRID }
+
+var focused_pane: ViewPane = null
+
+var _focus_overlay: Control
+var _last_overlay_rect := Rect2()
+
+func _ready() -> void:
+	_focus_overlay = Control.new()
+	_focus_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_focus_overlay.draw.connect(_draw_focus_overlay)
+
+	var pane := _make_pane()
+	add_child(pane)
+	add_child(_focus_overlay)  # kept last so the highlight draws on top
+	_normalize_children()
+
+	var view := _make_3d_view()
+	_attach_view(pane, view)
+	_set_focus(pane)
+
+	VoxelWorld.slice_view_requested.connect(_on_slice_requested)
+	set_process(true)
+
+# ---------------------------------------------------------------------------
+# Focus highlight (a border tracking the focused pane, drawn over everything)
+# ---------------------------------------------------------------------------
+
+func _process(_delta: float) -> void:
+	if is_instance_valid(focused_pane) and focused_pane.is_inside_tree():
+		var r := Rect2(focused_pane.global_position, focused_pane.size)
+		_focus_overlay.visible = true
+		if r != _last_overlay_rect:
+			_last_overlay_rect = r
+			_focus_overlay.global_position = r.position
+			_focus_overlay.size = r.size
+			_focus_overlay.queue_redraw()
+	elif _focus_overlay.visible:
+		_focus_overlay.visible = false
+
+func _draw_focus_overlay() -> void:
+	_focus_overlay.draw_rect(Rect2(Vector2.ONE, _focus_overlay.size - Vector2(2, 2)),
+		Color(0.3, 0.72, 1.0, 0.9), false, 2.0)
+
+# ---------------------------------------------------------------------------
+# Public commands (driven from the EditorBar, acting on the focused pane)
+# ---------------------------------------------------------------------------
+
+func split_focused(vertical: bool) -> void:
+	if is_instance_valid(focused_pane):
+		_split(focused_pane, vertical)
+
+func close_focused_pane() -> void:
+	if not is_instance_valid(focused_pane) or _all_panes().size() <= 1:
+		return
+	var pane := focused_pane
+	for c in pane.get_children():
+		pane.remove_child(c)
+		c.queue_free()
+	collapse_if_empty(pane)  # explicit so an already-empty pane collapses too
+
+func add_3d_view_to_focused() -> void:
+	var pane := focused_pane if is_instance_valid(focused_pane) else _first_pane()
+	if pane:
+		_attach_view(pane, _make_3d_view())
+		_set_focus(pane)
+
+func apply_preset(preset: Preset) -> void:
+	var views := _all_views()
+	for v in views:
+		v.get_parent().remove_child(v)
+	for c in get_children():
+		if c != _focus_overlay:
+			remove_child(c)
+			c.queue_free()
+	var panes := _build_preset(preset)
+	_normalize_children()
+	for i in views.size():
+		_attach_view(panes[i % panes.size()], views[i], false)
+	for p in panes:
+		if p.get_tab_count() > 0:
+			p.current_tab = 0
+	_set_focus(panes[0])
+
+# ---------------------------------------------------------------------------
+# Structural operations
+# ---------------------------------------------------------------------------
+
+func _split(pane: ViewPane, vertical: bool) -> void:
+	var sc: SplitContainer
+	if vertical:
+		sc = _v()
+	else:
+		sc = _h()
+	var new_pane := _make_pane()
+	_replace_node(pane, sc)
+	sc.add_child(pane)
+	sc.add_child(new_pane)
+	_normalize_children()
+	_set_focus(new_pane)
+
+func collapse_if_empty(pane: ViewPane) -> void:
+	call_deferred("_do_collapse", pane)
+
+func _do_collapse(pane: ViewPane) -> void:
+	if not is_instance_valid(pane) or pane.get_tab_count() > 0:
+		return
+	var parent := pane.get_parent()
+	if not (parent is SplitContainer):
+		return  # the root pane is allowed to stay empty — never zero panes
+	var sibling: Control = null
+	for c in parent.get_children():
+		if c != pane:
+			sibling = c
+			break
+	if sibling == null:
+		return
+	parent.remove_child(sibling)
+	_replace_node(parent, sibling)  # sibling takes the split's place
+	parent.queue_free()             # frees the split and the empty pane
+	_normalize_children()
+	if not is_instance_valid(focused_pane):
+		_set_focus(_first_pane())
+
+# Swap `old` for `new` in old's parent, preserving the child slot.
+func _replace_node(old: Control, new: Control) -> void:
+	var parent := old.get_parent()
+	var idx := old.get_index()
+	parent.remove_child(old)
+	parent.add_child(new)
+	parent.move_child(new, idx)
+
+func _build_preset(preset: Preset) -> Array:
+	match preset:
+		Preset.COLUMNS:
+			var sc := _h(); var a := _make_pane(); var b := _make_pane()
+			sc.add_child(a); sc.add_child(b); add_child(sc)
+			return [a, b]
+		Preset.ROWS:
+			var sc := _v(); var a := _make_pane(); var b := _make_pane()
+			sc.add_child(a); sc.add_child(b); add_child(sc)
+			return [a, b]
+		Preset.GRID:
+			var outer := _v(); var top := _h(); var bot := _h()
+			var a := _make_pane(); var b := _make_pane()
+			var c := _make_pane(); var d := _make_pane()
+			top.add_child(a); top.add_child(b)
+			bot.add_child(c); bot.add_child(d)
+			outer.add_child(top); outer.add_child(bot); add_child(outer)
+			return [a, b, c, d]
+		_:
+			var p := _make_pane()
+			add_child(p)
+			return [p]
+
+# Keep the structural root at child 0 and the overlay last; fit the root to us.
+func _normalize_children() -> void:
+	if is_instance_valid(_focus_overlay) and _focus_overlay.get_parent() == self:
+		move_child(_focus_overlay, get_child_count() - 1)
+	for c in get_children():
+		if c != _focus_overlay:
+			(c as Control).set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+			break
+
+# ---------------------------------------------------------------------------
+# Panes & views
+# ---------------------------------------------------------------------------
+
+func _make_pane() -> ViewPane:
+	var p := ViewPane.new()
+	p.pane_focus_requested.connect(_set_focus)
+	p.pane_emptied.connect(collapse_if_empty)
+	p.tab_changed.connect(_on_pane_tab_changed.bind(p))
+	return p
+
+func _on_pane_tab_changed(_tab: int, pane: ViewPane) -> void:
+	if pane == focused_pane:
+		_update_active_views()
+
+func _make_3d_view() -> Control:
+	var v := View3DScene.instantiate()
+	v.set_meta("tab_title", "3D")
+	_connect_view(v)
+	return v
+
+func _make_slice_view(axis: int, center: Vector3i) -> Control:
+	var v := Slice2DScene.instantiate()
+	v.set_meta("tab_title", _slice_title(axis, center))
+	_connect_view(v)
+	return v
+
+func _connect_view(v: Control) -> void:
+	if v.has_signal("focus_requested"):
+		v.focus_requested.connect(_on_view_focus_requested.bind(v))
+
+func _on_view_focus_requested(view: Control) -> void:
+	var pane := view.get_parent()
+	if pane is ViewPane:
+		_set_focus(pane)
+
+func _attach_view(pane: ViewPane, view: Control, make_current: bool = true) -> void:
+	view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	pane.add_child(view)
+	var idx := view.get_index()
+	if view.has_meta("tab_title"):
+		pane.set_tab_title(idx, view.get_meta("tab_title"))
+	if make_current:
+		pane.current_tab = idx
+
+func _on_slice_requested(axis: int, center: Vector3i) -> void:
+	var pane := focused_pane if is_instance_valid(focused_pane) else _first_pane()
+	if not pane:
+		return
+	var view := _make_slice_view(axis, center)
+	_attach_view(pane, view)
+	view.configure(axis, center)  # now in-tree, so the 2D view centers itself
+	_set_focus(pane)
+
+func _slice_title(axis: int, c: Vector3i) -> String:
+	var label: String = (["X", "Y", "Z"] as Array)[axis]
+	var hv: Vector2i
+	match axis:
+		0: hv = Vector2i(c.z, c.y)
+		2: hv = Vector2i(c.x, c.y)
+		_: hv = Vector2i(c.x, c.z)
+	return "%s=%d (%d,%d)" % [label, c[axis], hv.x, hv.y]
+
+# ---------------------------------------------------------------------------
+# Focus & active state
+# ---------------------------------------------------------------------------
+
+func _set_focus(pane: ViewPane) -> void:
+	if not is_instance_valid(pane):
+		return
+	focused_pane = pane
+	_update_active_views()
+
+# Only the focused pane's currently-visible view is active (receives global
+# input). Everything else is inactive even while visible in another pane.
+func _update_active_views() -> void:
+	var active_view: Node = null
+	if is_instance_valid(focused_pane):
+		active_view = focused_pane.get_current_tab_control()
+	for v in _all_views():
+		if v.has_method("set_active"):
+			v.set_active(v == active_view)
+
+# ---------------------------------------------------------------------------
+# Tree traversal helpers
+# ---------------------------------------------------------------------------
+
+func _all_panes(node: Node = self) -> Array:
+	var result: Array = []
+	for c in node.get_children():
+		if c is ViewPane:
+			result.append(c)
+		elif c is SplitContainer:
+			result.append_array(_all_panes(c))
+	return result
+
+func _all_views() -> Array:
+	var views: Array = []
+	for p in _all_panes():
+		for c in p.get_children():
+			views.append(c)
+	return views
+
+func _first_pane() -> ViewPane:
+	var panes := _all_panes()
+	return panes[0] if not panes.is_empty() else null
+
+func _h() -> HSplitContainer:
+	var s := HSplitContainer.new()
+	s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	s.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	return s
+
+func _v() -> VSplitContainer:
+	var s := VSplitContainer.new()
+	s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	s.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	return s

@@ -1,6 +1,9 @@
 class_name View2DGrid
 extends VBoxContainer
 
+# Emitted on a mouse press in the grid so the shell can focus this pane.
+signal focus_requested
+
 const CELL_SIZE := 32
 const VIEW_PADDING := 4
 # Minimum in-plane radius (in cells) drawn around the center, so a slice that
@@ -28,6 +31,10 @@ var _cell_px := float(CELL_SIZE)
 var _user_pan := Vector2.ZERO
 var _panning := false
 var _pan_last := Vector2.ZERO
+
+# Set by the shell (focus). The 2D view's input is per-control via gui_input, so
+# this is mostly for symmetry / future use rather than input gating.
+var _active := true
 
 @onready var _layer_label: Label = $LayerBar/LayerLabel
 @onready var _grid_area: Control = $GridArea
@@ -214,6 +221,8 @@ func _zoom_at(anchor: Vector2, factor: float) -> void:
 
 func _on_grid_input(event: InputEvent) -> void:
 	var tool := VoxelWorld.active_tool
+	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
+		focus_requested.emit()
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_LEFT:
@@ -347,6 +356,9 @@ func _do_fill(start: Vector2i) -> void:
 # ---------------------------------------------------------------------------
 # Slice navigation
 # ---------------------------------------------------------------------------
+
+func set_active(active: bool) -> void:
+	_active = active
 
 func set_slice(value: int) -> void:
 	if not VoxelWorld.active_project:

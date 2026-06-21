@@ -1,6 +1,9 @@
 class_name View3D
 extends Control
 
+# Emitted on a mouse press inside the viewport so the shell can focus this pane.
+signal focus_requested
+
 # ---------------------------------------------------------------------------
 # Single unified camera — one position/orientation used in both modes.
 # "Fly mode" only controls whether the cursor is captured.
@@ -26,6 +29,11 @@ var _pitch := -20.0  # vertical look angle (degrees)
 
 # Whether the cursor is captured (first-person controls active)
 var _fly_mode := false
+
+# Set by the shell: only the focused pane's current view processes global input.
+# (View3D._input is a global handler, so multiple visible 3D views would
+# otherwise all react to the same keys/mouse.)
+var _active := true
 
 # Drag-to-look state (used in non-captured mode)
 var _drag_looking := false
@@ -437,7 +445,7 @@ func _process(delta: float) -> void:
 # ---------------------------------------------------------------------------
 
 func _input(event: InputEvent) -> void:
-	if not is_visible_in_tree():
+	if not _active or not is_visible_in_tree():
 		return
 
 	# Slice-select is modal — it consumes keyboard input until confirmed/cancelled.
@@ -499,6 +507,8 @@ func _input(event: InputEvent) -> void:
 
 # Non-captured mouse: drag-to-look + scroll-to-dolly
 func _on_svc_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
+		focus_requested.emit()
 	if _slice_active:
 		_handle_slice_mouse(event)
 		return
@@ -534,6 +544,8 @@ func _on_svc_input(event: InputEvent) -> void:
 # ---------------------------------------------------------------------------
 
 func _capture_cursor() -> void:
+	if not _active:
+		return
 	_fly_mode = true
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 	_overlay.visible = true
@@ -551,6 +563,18 @@ func _release_cursor() -> void:
 	_highlight.visible = false
 	_target_hit = false
 	_floor_hit = false
+
+# Called by the shell when focus changes. Losing focus drops any captured
+# cursor and exits slice-select so a background view can't keep grabbing input.
+func set_active(active: bool) -> void:
+	if _active == active:
+		return
+	_active = active
+	if not _active:
+		if _fly_mode:
+			_release_cursor()
+		if _slice_active:
+			_exit_slice_select()
 
 # ---------------------------------------------------------------------------
 # Camera  (same update path regardless of fly mode)
