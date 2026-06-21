@@ -66,9 +66,12 @@ var _normal_mats := {}        # semantic -> StandardMaterial3D (base appearance)
 var _faded_mats := {}         # semantic -> StandardMaterial3D (off-plane fade)
 var _onplane_mats := {}       # semantic -> StandardMaterial3D (on-plane pop)
 var _plane_sheet: MeshInstance3D
-var _plane_sheet_mat: StandardMaterial3D
+var _plane_sheet_mat: ShaderMaterial
 var _slice_marker: MeshInstance3D
 var _slice_marker_mat: StandardMaterial3D
+var _slice_pulse := 0.0               # animates (breathes) the center marker
+var _slice_bounds_lo := Vector3.ZERO  # cached plane extent — avoids a per-frame AABB scan
+var _slice_bounds_hi := Vector3.ZERO
 
 func _ready() -> void:
 	_setup_viewport()
@@ -170,13 +173,11 @@ func _setup_viewport() -> void:
 	_highlight.visible = false
 	_viewport.add_child(_highlight)
 
-	# Slice-select: translucent sheet that cuts through the build at the slice.
-	_plane_sheet_mat = StandardMaterial3D.new()
-	_plane_sheet_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_plane_sheet_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_plane_sheet_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_plane_sheet_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-	_plane_sheet_mat.albedo_color = Color(0.12, 0.8, 1.0, 0.16)
+	# Slice-select: translucent sheet (with a cell grid) cutting through the slice.
+	_plane_sheet_mat = ShaderMaterial.new()
+	_plane_sheet_mat.shader = _make_slice_plane_shader()
+	_plane_sheet_mat.set_shader_parameter("fill_color", Color(0.12, 0.8, 1.0, 0.13))
+	_plane_sheet_mat.set_shader_parameter("line_color", Color(0.45, 0.95, 1.0, 0.5))
 	_plane_sheet = MeshInstance3D.new()
 	_plane_sheet.mesh = ImmediateMesh.new()
 	_plane_sheet.material_override = _plane_sheet_mat
@@ -342,6 +343,42 @@ void fragment() {
 """
 	return shader
 
+# Translucent fill + cell grid for the slice-select plane sheet. The grid lives
+# in world space and snaps to integer cell boundaries; `slice_axis` selects which
+# two world axes lie in the plane.
+func _make_slice_plane_shader() -> Shader:
+	var shader := Shader.new()
+	shader.code = """
+shader_type spatial;
+render_mode unshaded, cull_disabled, blend_mix, depth_draw_never;
+
+uniform int slice_axis;
+uniform vec4 fill_color;
+uniform vec4 line_color;
+
+varying vec3 world_pos;
+
+void vertex() {
+	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+}
+
+void fragment() {
+	vec2 coord;
+	if (slice_axis == 0) {
+		coord = world_pos.zy;
+	} else if (slice_axis == 2) {
+		coord = world_pos.xy;
+	} else {
+		coord = world_pos.xz;
+	}
+	vec2 g = abs(fract(coord - 0.5) - 0.5) / fwidth(coord);
+	float line = 1.0 - clamp(min(g.x, g.y), 0.0, 1.0);
+	ALBEDO = mix(fill_color.rgb, line_color.rgb, line);
+	ALPHA = mix(fill_color.a, line_color.a, line);
+}
+"""
+	return shader
+
 func _cycle_sky() -> void:
 	if _skyboxes.size() <= 1:
 		return
@@ -359,7 +396,12 @@ func _process(delta: float) -> void:
 		_sky_label_timer -= delta
 		if _sky_label_timer <= 0.0:
 			_overlay.queue_redraw()
-	if not _fly_mode or not is_visible_in_tree() or _slice_active:
+	if _slice_active:
+		if is_visible_in_tree():
+			_slice_pulse += delta
+			_update_slice_marker()
+		return
+	if not _fly_mode or not is_visible_in_tree():
 		return
 	var forward := _get_look_dir()
 	var flat_fwd := Vector3(forward.x, 0.0, forward.z)
@@ -760,6 +802,7 @@ func _enter_slice_select() -> void:
 	if _fly_mode:
 		_release_cursor()  # visible cursor for orbit-drag + click-to-confirm
 	_slice_active = true
+	_slice_pulse = 0.0
 	_highlight.visible = false
 	_overlay.visible = true
 	_plane_sheet.visible = true
@@ -896,6 +939,9 @@ func _update_slice_visuals() -> void:
 			mi.material_override = _onplane_mat_for(semantic)
 		else:
 			mi.material_override = _faded_mat_for(semantic)
+	var b := _slice_plane_bounds()
+	_slice_bounds_lo = b[0]
+	_slice_bounds_hi = b[1]
 	_update_plane_sheet()
 	_update_slice_marker()
 	_overlay.queue_redraw()
@@ -924,9 +970,9 @@ func _onplane_mat_for(semantic: String) -> StandardMaterial3D:
 	return _onplane_mats[semantic]
 
 func _update_plane_sheet() -> void:
-	var b := _slice_plane_bounds()
+	_plane_sheet_mat.set_shader_parameter("slice_axis", _slice_axis)
 	var off := float(_slice_center[_slice_axis]) + 0.5
-	var c := _plane_corners(b[0], b[1], off)
+	var c := _plane_corners(_slice_bounds_lo, _slice_bounds_hi, off)
 	var im := _plane_sheet.mesh as ImmediateMesh
 	im.clear_surfaces()
 	im.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -938,23 +984,24 @@ func _update_slice_marker() -> void:
 	var im := _slice_marker.mesh as ImmediateMesh
 	im.clear_surfaces()
 	im.surface_begin(Mesh.PRIMITIVE_LINES)
-	var b := _slice_plane_bounds()
 	var off := float(_slice_center[_slice_axis]) + 0.5
-	var c := _plane_corners(b[0], b[1], off)
+	var c := _plane_corners(_slice_bounds_lo, _slice_bounds_hi, off)
 	var border := Color(0.25, 0.85, 1.0, 0.85)
 	for i in 4:
 		_marker_line(im, c[i], c[(i + 1) % 4], border)
-	# Center cell: a distinct bright wireframe — chrome we own, not the block's color.
-	_draw_cell_wire(im, _slice_center, Color(1.0, 0.95, 0.4, 1.0))
+	# Center cell: a distinct wireframe that breathes — chrome we own, not the
+	# block's colour (which may not even be a flat colour).
+	var t := 0.5 + 0.5 * sin(_slice_pulse * 4.5)
+	_draw_cell_wire(im, _slice_center, Color(1.0, 0.95, 0.45) * (0.7 + 0.3 * t), 1.04 + 0.10 * t)
 	im.surface_end()
 
 func _marker_line(im: ImmediateMesh, a: Vector3, b: Vector3, col: Color) -> void:
 	im.surface_set_color(col); im.surface_add_vertex(a)
 	im.surface_set_color(col); im.surface_add_vertex(b)
 
-func _draw_cell_wire(im: ImmediateMesh, cell: Vector3i, col: Color) -> void:
-	var s := 1.06
-	var o := Vector3(cell) - Vector3(0.03, 0.03, 0.03)
+func _draw_cell_wire(im: ImmediateMesh, cell: Vector3i, col: Color, s: float) -> void:
+	var half := (s - 1.0) * 0.5
+	var o := Vector3(cell) - Vector3(half, half, half)
 	var p := [
 		o + Vector3(0, 0, 0), o + Vector3(s, 0, 0), o + Vector3(s, 0, s), o + Vector3(0, 0, s),
 		o + Vector3(0, s, 0), o + Vector3(s, s, 0), o + Vector3(s, s, s), o + Vector3(0, s, s),
