@@ -32,6 +32,10 @@ func _run() -> void:
 	_check("starts with one pane", _panes(shell).size() == 1)
 	_check("starts with one (3D) view", _views(shell).size() == 1)
 
+	var tb := (_panes(shell)[0] as ViewPane).get_tab_bar()
+	_check("tab bar enables cross-pane drag",
+		tb.drag_to_rearrange_enabled and tb.tabs_rearrange_group == ViewPane.REARRANGE_GROUP)
+
 	shell.apply_preset(MultiViewShell.Preset.GRID)
 	await get_tree().process_frame
 	_check("2x2 preset → 4 panes", _panes(shell).size() == 4)

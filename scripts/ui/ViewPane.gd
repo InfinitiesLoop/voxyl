@@ -17,6 +17,11 @@ func _ready() -> void:
 	drag_to_rearrange_enabled = true
 	tabs_rearrange_group = REARRANGE_GROUP
 	var tb := get_tab_bar()
+	# TabContainer forwards the rearrange group to its TabBar but NOT the
+	# drag-enabled flag, so set it on the bar directly or cross-pane drops are
+	# rejected (the dragged tab shows the "no drop" cursor).
+	tb.drag_to_rearrange_enabled = true
+	tb.tabs_rearrange_group = REARRANGE_GROUP
 	tb.tab_close_display_policy = TabBar.CLOSE_BUTTON_SHOW_ACTIVE_ONLY
 	tb.tab_close_pressed.connect(_on_tab_close_pressed)
 	tab_clicked.connect(func(_t): pane_focus_requested.emit(self))

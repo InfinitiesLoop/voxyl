@@ -491,12 +491,16 @@ func _input(event: InputEvent) -> void:
 		return
 
 	# --- Captured mouse: look + edit ---
+	# While flying we own all mouse input — consume it so an unconsumed click
+	# can't fall through to GUI hit-testing (at the captured/centre position) and
+	# steal focus into another pane.
 	if event is InputEventMouseMotion:
 		var motion := event as InputEventMouseMotion
 		_yaw -= motion.relative.x * 0.18
 		_pitch = clamp(_pitch - motion.relative.y * 0.18, -89.0, 89.0)
 		_update_camera()
 		_update_crosshair_target()
+		get_viewport().set_input_as_handled()
 	elif event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
 		var mb := event as InputEventMouseButton
 		match mb.button_index:
@@ -504,6 +508,7 @@ func _input(event: InputEvent) -> void:
 			MOUSE_BUTTON_RIGHT:       _place_targeted_block()
 			MOUSE_BUTTON_WHEEL_UP:    _cycle_palette(-1)
 			MOUSE_BUTTON_WHEEL_DOWN:  _cycle_palette(1)
+		get_viewport().set_input_as_handled()
 
 # Non-captured mouse: drag-to-look + scroll-to-dolly
 func _on_svc_input(event: InputEvent) -> void:
