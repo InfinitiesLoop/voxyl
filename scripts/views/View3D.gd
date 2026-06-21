@@ -528,8 +528,10 @@ func _input(event: InputEvent) -> void:
 
 # Non-captured mouse: drag-to-look + scroll-to-dolly
 func _on_svc_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
+	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed and not _active:
 		focus_requested.emit()
+		get_viewport().set_input_as_handled()
+		return
 	if _slice_active:
 		_handle_slice_mouse(event)
 		return

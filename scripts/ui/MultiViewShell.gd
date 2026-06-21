@@ -78,7 +78,6 @@ func _process(_delta: float) -> void:
 	if is_inside_tree():
 		var dragging := get_viewport().gui_is_dragging()
 		if dragging != _drop_layer.visible:
-			print("[drag] gui_is_dragging changed → ", dragging)
 			_drop_layer.visible = dragging
 			_drop_layer.mouse_filter = Control.MOUSE_FILTER_PASS if dragging else Control.MOUSE_FILTER_IGNORE
 			if not dragging:
@@ -118,7 +117,9 @@ func close_focused_pane() -> void:
 	collapse_if_empty(pane)  # explicit so an already-empty pane collapses too
 
 func add_3d_view_to_focused() -> void:
-	var pane := focused_pane if is_instance_valid(focused_pane) else _first_pane()
+	var pane := _first_empty_pane()
+	if not pane:
+		pane = focused_pane if is_instance_valid(focused_pane) else _first_pane()
 	if pane:
 		_attach_view(pane, _make_3d_view())
 		_set_focus(pane)
@@ -269,7 +270,9 @@ func _attach_view(pane: ViewPane, view: Control, make_current: bool = true) -> v
 		pane.current_tab = idx
 
 func _on_slice_requested(axis: int, center: Vector3i, flipped: bool = false) -> void:
-	var pane := focused_pane if is_instance_valid(focused_pane) else _first_pane()
+	var pane := _first_empty_pane()
+	if not pane:
+		pane = focused_pane if is_instance_valid(focused_pane) else _first_pane()
 	if not pane:
 		return
 	var view := _make_slice_view(axis, center)
@@ -333,20 +336,15 @@ func _broadcast_guide_if_changed() -> void:
 
 func is_tab_drag(data: Variant) -> bool:
 	if not (data is Dictionary):
-		print("[drag] is_tab_drag: data is NOT a Dictionary (type=%d)" % typeof(data))
 		return false
 	var t: String = data.get("type", "")
-	var ok := t == "tab" or t == "tab_element" or t == "tabc_element"
-	print("[drag] is_tab_drag: type='%s' keys=%s → %s" % [t, str(data.keys()), str(ok)])
-	return ok
+	return t == "tab" or t == "tab_element" or t == "tabc_element"
 
 func drop_tab(data: Variant, global_pos: Vector2) -> void:
 	var pane := _pane_at(global_pos)
-	print("[drag] drop_tab: pane=%s pos=%s" % [str(pane), str(global_pos)])
 	if not pane:
 		return
 	var view := _view_from_drag(data)
-	print("[drag] drop_tab: view=%s view_parent=%s same_pane=%s" % [str(view), str(view.get_parent() if view else null), str(view.get_parent() == pane if view else "n/a")])
 	if not view or view.get_parent() == pane:
 		return
 	view.get_parent().remove_child(view)
@@ -356,7 +354,6 @@ func drop_tab(data: Variant, global_pos: Vector2) -> void:
 func _view_from_drag(data: Variant) -> Control:
 	var path: NodePath = data.get("from_path", NodePath())
 	var from_node := get_node_or_null(path)
-	print("[drag] _view_from_drag: from_path=%s from_node=%s" % [str(path), str(from_node)])
 	if from_node == null:
 		return null
 	# from_path may point to the TabBar (parent is ViewPane) or the ViewPane itself.
@@ -366,12 +363,9 @@ func _view_from_drag(data: Variant) -> Control:
 	elif from_node.get_parent() is ViewPane:
 		src = from_node.get_parent() as ViewPane
 	else:
-		print("[drag] _view_from_drag: could not resolve ViewPane from node=%s parent=%s" % [str(from_node), str(from_node.get_parent())])
 		return null
-	print("[drag] _view_from_drag: src=%s" % [str(src)])
 	# Godot 4.6 uses "tab_index"; older API used "tab_element"/"tabc_element".
 	var idx: int = data.get("tab_index", data.get("tab_element", data.get("tabc_element", -1)))
-	print("[drag] _view_from_drag: idx=%d tab_count=%d" % [idx, src.get_tab_count()])
 	if idx < 0 or idx >= src.get_tab_count():
 		return null
 	return src.get_tab_control(idx)
@@ -405,6 +399,12 @@ func _all_views() -> Array:
 func _first_pane() -> ViewPane:
 	var panes := _all_panes()
 	return panes[0] if not panes.is_empty() else null
+
+func _first_empty_pane() -> ViewPane:
+	for p in _all_panes():
+		if p.get_tab_count() == 0:
+			return p
+	return null
 
 func _h() -> HSplitContainer:
 	var s := HSplitContainer.new()

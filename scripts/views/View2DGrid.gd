@@ -262,9 +262,11 @@ func _on_grid_input(event: InputEvent) -> void:
 			_flipped = not _flipped
 			_grid_area.queue_redraw()
 			return
-	var tool := VoxelWorld.active_tool
-	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
+	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed and not _active:
 		focus_requested.emit()
+		_grid_area.accept_event()
+		return
+	var tool := VoxelWorld.active_tool
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_LEFT:

@@ -54,7 +54,7 @@ func _build_projects_tab() -> Control:
 
 	_projects_container = VBoxContainer.new()
 	_projects_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_projects_container.add_theme_constant_override("separation", 6)
+	_projects_container.add_theme_constant_override("separation", 8)
 	scroll.add_child(_projects_container)
 
 	return root
@@ -65,32 +65,78 @@ func _rebuild_projects() -> void:
 	for project in VoxelWorld.workspace.projects:
 		_projects_container.add_child(_make_project_row(project))
 
-func _make_project_row(project: VoxelProject) -> HBoxContainer:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
+func _make_project_row(project: VoxelProject) -> Control:
+	var style_n := StyleBoxFlat.new()
+	style_n.bg_color = Color(0.18, 0.18, 0.20)
+	style_n.set_corner_radius_all(6)
+	style_n.content_margin_left = 10; style_n.content_margin_right = 10
+	style_n.content_margin_top = 10;  style_n.content_margin_bottom = 10
 
-	var name_btn := Button.new()
-	name_btn.text = project.name
-	name_btn.flat = true
-	name_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	name_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(name_btn)
+	var style_h := StyleBoxFlat.new()
+	style_h.bg_color = Color(0.26, 0.26, 0.30)
+	style_h.set_corner_radius_all(6)
+	style_h.content_margin_left = 10; style_h.content_margin_right = 10
+	style_h.content_margin_top = 10;  style_h.content_margin_bottom = 10
 
-	var open_btn := Button.new()
-	open_btn.text = "Open →"
-	open_btn.pressed.connect(func(): open_project_requested.emit(project))
-	row.add_child(open_btn)
+	var card := PanelContainer.new()
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	card.add_theme_stylebox_override("panel", style_n)
+	card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	card.mouse_entered.connect(func(): card.add_theme_stylebox_override("panel", style_h))
+	card.mouse_exited.connect(func(): card.add_theme_stylebox_override("panel", style_n))
+	card.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT and (ev as InputEventMouseButton).pressed:
+			open_project_requested.emit(project)
+	)
+
+	var hbox := HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 14)
+	hbox.mouse_filter = Control.MOUSE_FILTER_PASS
+	card.add_child(hbox)
+
+	var thumb := Control.new()
+	thumb.custom_minimum_size = Vector2(60, 60)
+	thumb.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	thumb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	thumb.draw.connect(func(): _draw_voxyl_logo(thumb))
+	hbox.add_child(thumb)
+
+	var name_lbl := Label.new()
+	name_lbl.text = project.name
+	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	name_lbl.add_theme_font_size_override("font_size", 15)
+	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hbox.add_child(name_lbl)
 
 	var del_btn := Button.new()
 	del_btn.text = "✕"
 	del_btn.flat = true
+	del_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	del_btn.pressed.connect(func():
 		VoxelWorld.workspace.remove_project(project.name)
 		VoxelWorld.workspace_changed.emit()
 	)
-	row.add_child(del_btn)
+	hbox.add_child(del_btn)
 
-	return row
+	return card
+
+func _draw_voxyl_logo(ctl: Control) -> void:
+	var s: float = minf(ctl.size.x, ctl.size.y) / 14.0
+	var ix := Vector2(s, s * 0.5); var iy := Vector2(0.0, -s); var iz := Vector2(-s, s * 0.5)
+	var o := ctl.size * 0.5
+	var p: Callable = func(x: float, y: float, z: float) -> Vector2: return o + ix * x + iy * y + iz * z
+
+	# X arm — gray Base: top and front face
+	ctl.draw_colored_polygon(PackedVector2Array([p.call(0,6,4), p.call(10,6,4), p.call(10,6,6), p.call(0,6,6)]), Color(0.80, 0.80, 0.80))
+	ctl.draw_colored_polygon(PackedVector2Array([p.call(0,4,6), p.call(10,4,6), p.call(10,6,6), p.call(0,6,6)]), Color(0.55, 0.55, 0.55))
+	# Z arm — brick Highlight: top and right face
+	ctl.draw_colored_polygon(PackedVector2Array([p.call(4,6,0), p.call(6,6,0), p.call(6,6,10), p.call(4,6,10)]), Color(0.88, 0.50, 0.38))
+	ctl.draw_colored_polygon(PackedVector2Array([p.call(6,4,0), p.call(6,4,10), p.call(6,6,10), p.call(6,6,0)]), Color(0.65, 0.33, 0.24))
+	# Y arm — wood Accent: top, front, right (drawn last — tallest, always on top)
+	ctl.draw_colored_polygon(PackedVector2Array([p.call(4,10,4), p.call(6,10,4), p.call(6,10,6), p.call(4,10,6)]), Color(0.90, 0.72, 0.45))
+	ctl.draw_colored_polygon(PackedVector2Array([p.call(4,0,6), p.call(6,0,6), p.call(6,10,6), p.call(4,10,6)]), Color(0.75, 0.58, 0.35))
+	ctl.draw_colored_polygon(PackedVector2Array([p.call(6,0,4), p.call(6,0,6), p.call(6,10,6), p.call(6,10,4)]), Color(0.65, 0.50, 0.28))
 
 func _on_new_project() -> void:
 	var dialog := AcceptDialog.new()
