@@ -10,10 +10,6 @@ func get_entry(semantic_name: String) -> PaletteEntry:
 			return e
 	return null
 
-func get_color(semantic_name: String) -> Color:
-	var e := get_entry(semantic_name)
-	return e.color if e else Color(0.35, 0.35, 0.35)
-
 func get_block_type_name(semantic_name: String) -> String:
 	var e := get_entry(semantic_name)
 	return e.block_type_name if e else ""

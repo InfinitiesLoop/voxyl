@@ -9,6 +9,7 @@ signal block_changed(pos: Vector3i, semantic_name: String)
 signal selection_changed(semantic_name: String)
 signal tool_changed(tool: Tool)
 signal slice_view_requested(axis: int, center: Vector3i, flipped: bool)
+signal block_type_changed()
 
 var workspace: VoxelWorkspace
 var active_project: VoxelProject
@@ -48,10 +49,15 @@ func get_color_for_semantic(semantic_name: String) -> Color:
 	for palette_name in active_project.palette_names:
 		var palette := workspace.get_palette(palette_name)
 		if palette:
-			var entry := palette.get_entry(semantic_name)
-			if entry:
-				result = entry.color
+			var bt_name := palette.get_block_type_name(semantic_name)
+			if not bt_name.is_empty():
+				var bt := workspace.get_block_type(bt_name)
+				if bt:
+					result = bt.color
 	return result
+
+func notify_block_type_changed() -> void:
+	block_type_changed.emit()
 
 func get_block_type_for_semantic(semantic_name: String) -> String:
 	var result := ""
@@ -166,5 +172,8 @@ func _add_default_palette() -> void:
 		var e := PaletteEntry.new()
 		e.semantic_name = s[0]
 		e.block_type_name = s[1]
-		e.color = s[2]
 		p.entries.append(e)
+		# Color lives on the block type, not the palette entry.
+		var bt := workspace.get_block_type(s[1])
+		if bt:
+			bt.color = s[2]

@@ -7,6 +7,8 @@ var _projects_container: VBoxContainer
 var _palettes_list: LibraryList
 var _palette_editor: Control
 var _block_types_list: LibraryList
+var _bt_detail: Control
+var _selected_block_type: String = ""
 var _editing_palette: Palette
 var _entry_list: VBoxContainer
 
@@ -223,7 +225,7 @@ func _on_palette_selected(palette_name: String) -> void:
 	# Column headers
 	var headers := HBoxContainer.new()
 	vbox.add_child(headers)
-	for h in ["Semantic Name", "Block Type", "Color", ""]:
+	for h in ["Semantic Name", "Block Type", "Preview", ""]:
 		var lbl := Label.new()
 		lbl.text = h
 		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL if h != "" else 0
@@ -263,25 +265,30 @@ func _make_entry_row(entry: PaletteEntry) -> HBoxContainer:
 	name_edit.focus_exited.connect(func(): entry.semantic_name = name_edit.text.strip_edges())
 	row.add_child(name_edit)
 
+	var swatch := ColorRect.new()
+	swatch.custom_minimum_size = Vector2(20, 0)
+	swatch.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
 	var block_picker := OptionButton.new()
 	block_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var current_idx := 0
 	for i in VoxelWorld.workspace.block_types.size():
-		var bt := VoxelWorld.workspace.block_types[i]
-		block_picker.add_item(bt.name)
-		if bt.name == entry.block_type_name:
+		var btype := VoxelWorld.workspace.block_types[i]
+		block_picker.add_item(btype.name)
+		if btype.name == entry.block_type_name:
 			current_idx = i
 	block_picker.selected = current_idx
 	block_picker.item_selected.connect(func(idx):
 		entry.block_type_name = VoxelWorld.workspace.block_types[idx].name
+		var nb := VoxelWorld.workspace.get_block_type(entry.block_type_name)
+		swatch.color = nb.color if nb else Color(0.5, 0.5, 0.5)
 	)
 	row.add_child(block_picker)
 
-	var color_btn := ColorPickerButton.new()
-	color_btn.color = entry.color
-	color_btn.custom_minimum_size = Vector2(48, 0)
-	color_btn.color_changed.connect(func(c): entry.color = c)
-	row.add_child(color_btn)
+	var init_bt := VoxelWorld.workspace.get_block_type(entry.block_type_name)
+	swatch.color = init_bt.color if init_bt else Color(0.5, 0.5, 0.5)
+	row.add_child(swatch)
 
 	var del_btn := Button.new()
 	del_btn.text = "✕"
@@ -309,10 +316,11 @@ func _make_add_entry_row() -> HBoxContainer:
 		block_picker.add_item(bt.name)
 	row.add_child(block_picker)
 
-	var color_btn := ColorPickerButton.new()
-	color_btn.color = Color(0.6, 0.6, 0.6)
-	color_btn.custom_minimum_size = Vector2(48, 0)
-	row.add_child(color_btn)
+	# Spacer to align with the swatch column in entry rows
+	var gap := Control.new()
+	gap.custom_minimum_size = Vector2(20, 0)
+	gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(gap)
 
 	var add_btn := Button.new()
 	add_btn.text = "+"
@@ -324,7 +332,6 @@ func _make_add_entry_row() -> HBoxContainer:
 		e.semantic_name = n
 		var pidx := block_picker.selected
 		e.block_type_name = VoxelWorld.workspace.block_types[pidx].name if pidx >= 0 else ""
-		e.color = color_btn.color
 		_editing_palette.entries.append(e)
 		name_input.text = ""
 		_refresh_palette_entries()
@@ -347,17 +354,110 @@ func _on_delete_palette(palette_name: String) -> void:
 # ---------------------------------------------------------------------------
 
 func _build_block_types_tab() -> Control:
-	var root := _margin(16)
+	var root := Control.new()
 	root.name = "Block Types"
+
+	var split := HSplitContainer.new()
+	split.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.add_child(split)
+
+	var left := _margin(12)
+	left.custom_minimum_size.x = 200
+	split.add_child(left)
 
 	_block_types_list = LibraryList.new()
 	_block_types_list.list_title = "Block Types"
-	_block_types_list.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_block_types_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_block_types_list.add_requested.connect(_on_add_block_type)
 	_block_types_list.delete_requested.connect(_on_delete_block_type)
-	root.add_child(_block_types_list)
+	_block_types_list.item_selected.connect(_on_block_type_selected)
+	left.add_child(_block_types_list)
+
+	var right := _margin(16)
+	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	split.add_child(right)
+
+	var right_vbox := VBoxContainer.new()
+	right_vbox.add_theme_constant_override("separation", 12)
+	right.add_child(right_vbox)
+
+	var placeholder := Label.new()
+	placeholder.name = "Placeholder"
+	placeholder.text = "Select a block type to edit it."
+	right_vbox.add_child(placeholder)
+
+	right.set_meta("vbox", right_vbox)
+	_bt_detail = right
 
 	return root
+
+func _on_block_type_selected(bt_name: String) -> void:
+	_selected_block_type = bt_name
+	_refresh_bt_detail()
+
+func _refresh_bt_detail() -> void:
+	if not _bt_detail:
+		return
+	var vbox: VBoxContainer = _bt_detail.get_meta("vbox")
+	for c in vbox.get_children():
+		c.queue_free()
+	await get_tree().process_frame
+
+	var bt := VoxelWorld.workspace.get_block_type(_selected_block_type)
+	if not bt:
+		var lbl := Label.new()
+		lbl.name = "Placeholder"
+		lbl.text = "Select a block type to edit it."
+		vbox.add_child(lbl)
+		return
+
+	var name_lbl := Label.new()
+	name_lbl.text = bt.name
+	name_lbl.add_theme_font_size_override("font_size", 15)
+	vbox.add_child(name_lbl)
+
+	var preview := Control.new()
+	preview.custom_minimum_size = Vector2(80, 80)
+	preview.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	preview.draw.connect(func(): _draw_block_preview(preview, bt.color))
+	vbox.add_child(preview)
+
+	var color_row := HBoxContainer.new()
+	vbox.add_child(color_row)
+
+	var color_lbl := Label.new()
+	color_lbl.text = "Color"
+	color_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	color_row.add_child(color_lbl)
+
+	var color_btn := ColorPickerButton.new()
+	color_btn.color = bt.color
+	color_btn.custom_minimum_size = Vector2(80, 0)
+	color_btn.color_changed.connect(func(c: Color):
+		bt.color = c
+		preview.queue_redraw()
+		VoxelWorld.notify_block_type_changed()
+	)
+	color_row.add_child(color_btn)
+
+func _draw_block_preview(ctl: Control, color: Color) -> void:
+	var s: float = minf(ctl.size.x, ctl.size.y) / 2.5
+	var o := ctl.size * 0.5
+	# Top face: lightened
+	ctl.draw_colored_polygon(PackedVector2Array([
+		o + Vector2(0.0, -s), o + Vector2(s, -s * 0.5),
+		o + Vector2(0.0, 0.0), o + Vector2(-s, -s * 0.5),
+	]), color.lightened(0.25))
+	# Front face (z+): base color
+	ctl.draw_colored_polygon(PackedVector2Array([
+		o + Vector2(-s, -s * 0.5), o + Vector2(0.0, 0.0),
+		o + Vector2(0.0, s), o + Vector2(-s, s * 0.5),
+	]), color)
+	# Right face (x+): darkened
+	ctl.draw_colored_polygon(PackedVector2Array([
+		o + Vector2(s, -s * 0.5), o + Vector2(0.0, 0.0),
+		o + Vector2(0.0, s), o + Vector2(s, s * 0.5),
+	]), color.darkened(0.25))
 
 func _on_add_block_type(block_name: String) -> void:
 	if not VoxelWorld.workspace.get_block_type(block_name):

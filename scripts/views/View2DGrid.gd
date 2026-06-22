@@ -64,6 +64,7 @@ func _ready() -> void:
 	_grid_area.gui_input.connect(_on_grid_input)
 	VoxelWorld.block_changed.connect(func(_p, _s): _grid_area.queue_redraw())
 	VoxelWorld.palette_stack_changed.connect(_grid_area.queue_redraw)
+	VoxelWorld.block_type_changed.connect(_grid_area.queue_redraw)
 	VoxelWorld.project_opened.connect(func(_p): _reset())
 	_update_slice_label()
 

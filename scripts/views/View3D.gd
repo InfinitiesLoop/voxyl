@@ -104,6 +104,7 @@ func _ready() -> void:
 	VoxelWorld.project_opened.connect(_on_project_opened)
 	VoxelWorld.block_changed.connect(func(_p, _s): _mark_dirty())
 	VoxelWorld.palette_stack_changed.connect(func(): _mark_dirty(); if _fly_mode: _overlay.queue_redraw())
+	VoxelWorld.block_type_changed.connect(func(): _mark_dirty(); if _fly_mode: _overlay.queue_redraw())
 	VoxelWorld.selection_changed.connect(func(_s): if _fly_mode: _overlay.queue_redraw())
 	visibility_changed.connect(_on_visibility_changed)
 	set_process(true)
@@ -480,7 +481,7 @@ func _input(event: InputEvent) -> void:
 				KEY_SHIFT: _rshift_held = key.pressed
 
 		if key.pressed:
-			if key.keycode == KEY_TAB:
+			if key.keycode == KEY_TAB or key.keycode == KEY_ENTER or key.keycode == KEY_KP_ENTER:
 				_enter_slice_select()
 				get_viewport().set_input_as_handled()
 				return
@@ -1221,7 +1222,7 @@ func _draw_overlay() -> void:
 		var sky_name: String = _skyboxes[_current_sky]["name"]
 		_overlay.draw_string(font, Vector2(_overlay.size.x * 0.5, 32.0),
 			"Sky: " + sky_name, HORIZONTAL_ALIGNMENT_CENTER, -1, 16, Color(1,1,1,0.85))
-	var hint := "WASD/Arrows move  ·  Space/RCtrl/ROpt up  ·  Shift// down  ·  LMB erase  ·  RMB place  ·  Tab slice  ·  1–9 palette  ·  Esc"
+	var hint := "WASD/Arrows move  ·  Space/RCtrl/ROpt up  ·  Shift// down  ·  LMB erase  ·  RMB place  ·  Tab/Enter slice  ·  1–9 palette  ·  Esc"
 	_overlay.draw_string(font, Vector2(10.0, _overlay.size.y - 10.0),
 		hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1,1,1,0.45))
 

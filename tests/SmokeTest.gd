@@ -60,11 +60,12 @@ func _test_last_wins() -> void:
 	print("-- last-wins palette layering")
 	var ws := VoxelWorld.workspace
 	var project := ws.get_project("My First Build")
+	var diamond := ws.add_block_type("Diamond Block")
+	diamond.color = Color.CYAN
 	var override := ws.add_palette("__test_override__")
 	var e := PaletteEntry.new()
 	e.semantic_name = "Base"
 	e.block_type_name = "Diamond Block"
-	e.color = Color.CYAN
 	override.entries.append(e)
 	project.palette_names.append("__test_override__")
 	VoxelWorld.open(project)
@@ -73,3 +74,4 @@ func _test_last_wins() -> void:
 	_check("non-overridden entry still resolves", not VoxelWorld.get_block_type_for_semantic("Accent").is_empty())
 	project.palette_names.pop_back()
 	ws.remove_palette("__test_override__")
+	ws.remove_block_type("Diamond Block")
