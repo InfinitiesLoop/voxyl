@@ -12,8 +12,8 @@ func _init() -> void:
 # Returns all semantic names currently placed in this project's voxel data.
 func used_semantic_names() -> Array[String]:
 	var seen := {}
-	for v in data.cells.values():
-		seen[v] = true
+	for cell: BlockCell in data.cells.values():
+		seen[cell.type_id] = true
 	var result: Array[String] = []
 	result.assign(seen.keys())
 	return result

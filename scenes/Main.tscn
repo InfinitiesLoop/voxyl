@@ -1,10 +1,11 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=6 format=3]
 
 [ext_resource type="Script" path="res://scripts/ui/Main.gd" id="1"]
 [ext_resource type="PackedScene" path="res://scenes/ui/HomeScreen.tscn" id="2"]
 [ext_resource type="PackedScene" path="res://scenes/ui/ToolsPanel.tscn" id="3"]
 [ext_resource type="Script" path="res://scripts/ui/MultiViewShell.gd" id="5"]
 [ext_resource type="PackedScene" path="res://scenes/ui/PalettePanel.tscn" id="6"]
+[ext_resource type="PackedScene" path="res://scenes/ui/Hotbar.tscn" id="7"]
 
 [node name="Main" type="Control"]
 layout_mode = 3
@@ -63,4 +64,7 @@ size_flags_vertical = 3
 script = ExtResource("5")
 
 [node name="PalettePanel" parent="Editor/VBoxContainer/ContentArea" instance=ExtResource("6")]
+layout_mode = 2
+
+[node name="Hotbar" parent="Editor/VBoxContainer" instance=ExtResource("7")]
 layout_mode = 2

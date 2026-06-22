@@ -32,6 +32,17 @@ func _run() -> void:
 	_check("starts with four panes (default 2×2)", _panes(shell).size() == 4)
 	_check("starts with one (3D) view", _views(shell).size() == 1)
 
+	# Oriented + shaped cells must rebuild in 3D without error (stairs/slab meshes).
+	VoxelWorld.set_block(Vector3i(0, 0, 0), "Stairs",
+		Orientation.make(Orientation.Facing.EAST, true))
+	VoxelWorld.set_block(Vector3i(0, 1, 0), "Slab")
+	var v3d: Node = _views(shell)[0]
+	v3d._rebuild()
+	_check("3D rebuild keeps a node for an oriented stairs cell",
+		(v3d.get("_cell_nodes") as Dictionary).has(Vector3i(0, 0, 0)))
+	VoxelWorld.clear_block(Vector3i(0, 0, 0))
+	VoxelWorld.clear_block(Vector3i(0, 1, 0))
+
 	var tb := (_panes(shell)[0] as ViewPane).get_tab_bar()
 	_check("tab bar enables cross-pane drag",
 		tb.drag_to_rearrange_enabled and tb.tabs_rearrange_group == ViewPane.REARRANGE_GROUP)

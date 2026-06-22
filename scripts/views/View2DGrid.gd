@@ -28,6 +28,9 @@ var _is_placing := false
 var _is_erasing := false
 var _drag_start := Vector2i(-1, -1)
 var _preview_cells: Array[Vector2i] = []
+# Orientation for the in-progress stroke, derived from which quadrant of the cell
+# the press landed in (so a click already orients stairs/slabs sensibly).
+var _place_orientation := 0
 
 # View transform (pan/zoom). The view auto-centers on _center; _user_pan is the
 # manual offset on top of that, and _cell_px is the zoom (pixels per cell).
@@ -196,7 +199,8 @@ func _draw_grid() -> void:
 	for h in _get_grid_w():
 		for v in _get_grid_h():
 			var rect := Rect2(origin + Vector2(h, v) * _cell_px, cell_dim)
-			var semantic := data.get_block(_grid_to_world(h, v))
+			var world := _grid_to_world(h, v)
+			var semantic := data.get_block(world)
 			var fill: Color
 			if semantic.is_empty():
 				fill = Color(0.12, 0.12, 0.12)
@@ -204,6 +208,10 @@ func _draw_grid() -> void:
 				fill = VoxelWorld.get_color_for_semantic(semantic)
 			_grid_area.draw_rect(rect, fill)
 			_grid_area.draw_rect(rect, Color(0.22, 0.22, 0.22), false)
+			# Shaped (non-cube) blocks carry an orientation; show which way they face
+			# within this plane so 2D editing of stairs/slabs is legible.
+			if not semantic.is_empty() and VoxelWorld.get_shape_for_semantic(semantic) != BlockType.Shape.FULL:
+				_draw_facing_glyph(rect, data.get_orientation(world))
 
 	if not _preview_cells.is_empty():
 		var preview_color := VoxelWorld.get_color_for_semantic(VoxelWorld.selected_semantic)
@@ -226,9 +234,70 @@ func _draw_grid() -> void:
 
 	_draw_hint()
 
+# Facing arrow for an oriented cell, mapped from world facing into this slice's
+# screen space. A facing perpendicular to the plane (pointing into/out of screen)
+# is drawn as a diamond. Two redundant cues distinguish upside-down (so it stays
+# legible over any future block texture, in colour or in greyscale):
+#   • right-side-up → SOLID arrowhead, light fill
+#   • upside-down   → HOLLOW (outlined) arrowhead, cool tint, + a bar on the shaft
+# Every shape carries a dark outline halo so it reads on light and dark blocks.
+const _GLYPH_OUTLINE := Color(0, 0, 0, 0.8)
+
+func _draw_facing_glyph(rect: Rect2, orientation: int) -> void:
+	var top := Orientation.is_top(orientation)
+	var dir := _facing_screen_dir(Orientation.facing_of(orientation))
+	var col := Color(0.5, 0.8, 1.0, 0.97) if top else Color(1, 1, 1, 0.95)
+	var c := rect.position + rect.size * 0.5
+	var s := minf(rect.size.x, rect.size.y)
+	if dir == Vector2.ZERO:
+		var d := s * 0.16
+		var dia := PackedVector2Array([c + Vector2(0, -d), c + Vector2(d, 0), c + Vector2(0, d), c + Vector2(-d, 0)])
+		_glyph_poly(dia, col, not top)
+		return
+	var perp := Vector2(-dir.y, dir.x)
+	var reach := s * 0.30
+	var back := c - dir * (reach * 0.55)
+	var hw := s * 0.17
+	var head := PackedVector2Array([c + dir * reach, back + perp * hw, back - perp * hw])
+	var shaft_w := maxf(1.5, s * 0.05)
+	_grid_area.draw_line(c - dir * reach, back, _GLYPH_OUTLINE, shaft_w + 2.0)
+	_grid_area.draw_line(c - dir * reach, back, col, shaft_w)
+	_glyph_poly(head, col, not top)
+	if top:  # extra greyscale-safe cue: a bar across the shaft
+		_grid_area.draw_line(c - perp * (hw * 0.9), c + perp * (hw * 0.9), col, shaft_w)
+
+# Draw a glyph polygon either filled (right-side-up) or hollow (upside-down),
+# always with a dark outline so it survives any background.
+func _glyph_poly(pts: PackedVector2Array, fill: Color, filled: bool) -> void:
+	var closed := pts.duplicate()
+	closed.append(pts[0])
+	if filled:
+		_grid_area.draw_colored_polygon(pts, fill)
+		_grid_area.draw_polyline(closed, _GLYPH_OUTLINE, 1.5)
+	else:
+		_grid_area.draw_polyline(closed, _GLYPH_OUTLINE, 3.0)
+		_grid_area.draw_polyline(closed, fill, 1.8)
+
+# Screen-space unit direction (down = +y) for a world facing in this slice plane.
+# Zero vector means the facing is perpendicular to the plane.
+func _facing_screen_dir(facing: int) -> Vector2:
+	var d: Vector3i = Orientation.DIRS[facing]
+	var sx := 0.0
+	var sy := 0.0
+	match axis:
+		1:  # top-down: h→X (right), v→Z (down)
+			sx = d.x; sy = d.z
+		0:  # X-slice side: h→Z (right), v→Y (up)
+			sx = d.z; sy = -d.y
+		2:  # Z-slice front: h→X (right), v→Y (up)
+			sx = d.x; sy = -d.y
+	if _flipped:
+		sx = -sx
+	return Vector2(sx, sy)
+
 func _draw_hint() -> void:
 	var font := ThemeDB.fallback_font
-	var hint := "LMB paint  ·  RMB erase  ·  Wheel zoom  ·  Middle-drag pan  ·  ▲ / ▼ layer  ·  F flip"
+	var hint := "LMB paint (quadrant orients) · RMB erase · R rotate · Shift+R flip · Scroll slot · Shift+Scroll zoom · Mid-drag pan · ▲/▼ layer · F mirror"
 	var fs := 12
 	var tw := font.get_string_size(hint, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 	var y := _grid_area.size.y - 6.0
@@ -258,11 +327,6 @@ func _zoom_at(anchor: Vector2, factor: float) -> void:
 	_grid_area.queue_redraw()
 
 func _on_grid_input(event: InputEvent) -> void:
-	if event is InputEventKey and (event as InputEventKey).pressed:
-		if (event as InputEventKey).keycode == KEY_F:
-			_flipped = not _flipped
-			_grid_area.queue_redraw()
-			return
 	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed and not _active:
 		focus_requested.emit()
 		_grid_area.accept_event()
@@ -273,6 +337,7 @@ func _on_grid_input(event: InputEvent) -> void:
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			if mb.pressed:
 				var cell := _mouse_to_cell(mb.position)
+				_place_orientation = _orientation_from_pos(mb.position)
 				match tool:
 					VoxelWorld.Tool.PAINT:
 						_is_placing = true
@@ -300,11 +365,14 @@ func _on_grid_input(event: InputEvent) -> void:
 			_panning = mb.pressed
 			_pan_last = mb.position
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP:
+			# Plain wheel scrubs the hotbar (shared with 3D); Shift+wheel zooms.
 			if mb.pressed:
-				_zoom_at(mb.position, 1.15)
+				if mb.shift_pressed: _zoom_at(mb.position, 1.15)
+				else: _cycle_hotbar(-1)
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			if mb.pressed:
-				_zoom_at(mb.position, 1.0 / 1.15)
+				if mb.shift_pressed: _zoom_at(mb.position, 1.0 / 1.15)
+				else: _cycle_hotbar(1)
 	elif event is InputEventMouseMotion:
 		if _panning:
 			# Self-heal if the release happened off-canvas (gui_input never saw it).
@@ -332,7 +400,7 @@ func _paint_cell(cell: Vector2i) -> void:
 	if _is_erasing:
 		VoxelWorld.clear_block(pos)
 	elif _is_placing and not VoxelWorld.selected_semantic.is_empty():
-		VoxelWorld.set_block(pos, VoxelWorld.selected_semantic)
+		VoxelWorld.set_block(pos, VoxelWorld.selected_semantic, _place_orientation)
 
 func _commit_preview() -> void:
 	if not VoxelWorld.active_project:
@@ -342,7 +410,7 @@ func _commit_preview() -> void:
 		if VoxelWorld.selected_semantic.is_empty():
 			VoxelWorld.clear_block(pos)
 		else:
-			VoxelWorld.set_block(pos, VoxelWorld.selected_semantic)
+			VoxelWorld.set_block(pos, VoxelWorld.selected_semantic, _place_orientation)
 	_preview_cells = []
 	_drag_start = Vector2i(-1, -1)
 
@@ -392,11 +460,90 @@ func _do_fill(start: Vector2i) -> void:
 		if fill_semantic.is_empty():
 			VoxelWorld.clear_block(pos)
 		else:
-			VoxelWorld.set_block(pos, fill_semantic)
+			VoxelWorld.set_block(pos, fill_semantic, _place_orientation)
 		queue.append(Vector2i(cell.x + 1, cell.y))
 		queue.append(Vector2i(cell.x - 1, cell.y))
 		queue.append(Vector2i(cell.x, cell.y + 1))
 		queue.append(Vector2i(cell.x, cell.y - 1))
+
+# ---------------------------------------------------------------------------
+# Orientation: quadrant-on-place + R/Shift+R re-orient (and F mirror)
+# ---------------------------------------------------------------------------
+
+# Keyboard goes through _unhandled_input (the grid Control can't hold focus), so
+# only the focused pane's active view acts. R rotates the hovered block about
+# this plane's perpendicular axis; Shift+R flips it upside-down; F mirrors the
+# whole view.
+func _unhandled_input(event: InputEvent) -> void:
+	if not _active or not is_visible_in_tree() or not VoxelWorld.active_project:
+		return
+	if not (event is InputEventKey) or not (event as InputEventKey).pressed:
+		return
+	var key := event as InputEventKey
+	match key.keycode:
+		KEY_R:
+			_rotate_hovered(key.shift_pressed)
+			get_viewport().set_input_as_handled()
+		KEY_F:
+			_flipped = not _flipped
+			_grid_area.queue_redraw()
+			get_viewport().set_input_as_handled()
+
+func _cycle_hotbar(delta: int) -> void:
+	var n := VoxelWorld.HOTBAR_SIZE
+	VoxelWorld.select_slot((VoxelWorld.active_slot + delta % n + n) % n)
+
+# Orientation implied by where inside the cell the press landed. In a top-down
+# slice the dominant offset axis picks the horizontal facing; in a side slice the
+# horizontal half picks facing and the vertical half picks right-side-up vs upside
+# down — so the four quadrants of a stair's cell give its four configurations.
+func _orientation_from_pos(mouse_pos: Vector2) -> int:
+	var cell := _mouse_to_cell(mouse_pos)
+	var cell_origin := _draw_origin() + Vector2(cell) * _cell_px
+	var local := (mouse_pos - cell_origin) / _cell_px
+	var fx := local.x - 0.5  # -0.5..0.5, + = right
+	var fy := local.y - 0.5  # -0.5..0.5, + = down
+	match axis:
+		1:  # top-down: pick N/E/S/W by the dominant offset
+			if absf(fx) >= absf(fy):
+				var east := fx >= 0.0
+				if _flipped: east = not east
+				return Orientation.make(Orientation.Facing.EAST if east else Orientation.Facing.WEST)
+			return Orientation.make(Orientation.Facing.SOUTH if fy >= 0.0 else Orientation.Facing.NORTH)
+		0:  # X-slice side: h→Z facing, upper half → upside-down
+			var south := fx >= 0.0
+			if _flipped: south = not south
+			return Orientation.make(Orientation.Facing.SOUTH if south else Orientation.Facing.NORTH, fy < 0.0)
+		2:  # Z-slice front: h→X facing, upper half → upside-down
+			var east2 := fx >= 0.0
+			if _flipped: east2 = not east2
+			return Orientation.make(Orientation.Facing.EAST if east2 else Orientation.Facing.WEST, fy < 0.0)
+	return 0
+
+# One R step: turn the in-plane facing. Top-down turns through all four; a side
+# slice swaps the two horizontal facings it can show (use Shift+R for upside-down).
+func _rotate_in_plane(o: int) -> int:
+	match axis:
+		1:
+			return Orientation.rotate_cw(o)
+		0:
+			var f := Orientation.facing_of(o)
+			var nf := Orientation.Facing.NORTH if f == Orientation.Facing.SOUTH else Orientation.Facing.SOUTH
+			return Orientation.make(nf, Orientation.is_top(o))
+		2:
+			var f2 := Orientation.facing_of(o)
+			var nf2 := Orientation.Facing.WEST if f2 == Orientation.Facing.EAST else Orientation.Facing.EAST
+			return Orientation.make(nf2, Orientation.is_top(o))
+	return o
+
+func _rotate_hovered(flip_top: bool) -> void:
+	var cell := _mouse_to_cell(_grid_area.get_local_mouse_position())
+	var world := _grid_to_world(cell.x, cell.y)
+	var c := VoxelWorld.active_project.data.get_cell(world)
+	if c == null:
+		return
+	var o := Orientation.toggle_top(c.orientation) if flip_top else _rotate_in_plane(c.orientation)
+	VoxelWorld.reorient_block(world, o)
 
 # ---------------------------------------------------------------------------
 # Slice navigation

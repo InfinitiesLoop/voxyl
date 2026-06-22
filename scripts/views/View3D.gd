@@ -82,6 +82,7 @@ var _slice_center := Vector3i.ZERO
 var _orbit_dist := 16.0       # camera distance to the pivot while orbiting
 var _drag_moved := false      # distinguishes an orbit-drag from a confirm-click
 var _cell_nodes := {}         # Vector3i -> MeshInstance3D (filled in _rebuild)
+var _shape_meshes := {}       # BlockType.Shape -> Mesh (built lazily, shared)
 var _normal_mats := {}        # semantic -> StandardMaterial3D (base appearance)
 var _faded_mats := {}         # semantic -> StandardMaterial3D (off-plane fade)
 var _onplane_mats := {}       # semantic -> StandardMaterial3D (on-plane pop)
@@ -491,11 +492,15 @@ func _input(event: InputEvent) -> void:
 				return
 			if key.keycode == KEY_B:
 				_cycle_sky()
-			# 1–9 palette slots (captured mode only)
+			# 1–9 palette slots + R rotate (captured mode only)
 			if _fly_mode:
 				var kc := key.keycode
 				if kc >= KEY_1 and kc <= KEY_9:
 					_select_palette_slot(kc - KEY_1)
+					get_viewport().set_input_as_handled()
+					return
+				if kc == KEY_R:
+					_rotate_targeted_block(key.shift_pressed)
 					get_viewport().set_input_as_handled()
 					return
 
@@ -523,6 +528,7 @@ func _input(event: InputEvent) -> void:
 		match mb.button_index:
 			MOUSE_BUTTON_LEFT:        _erase_targeted_block()
 			MOUSE_BUTTON_RIGHT:       _place_targeted_block()
+			MOUSE_BUTTON_MIDDLE:      _pick_targeted_block()
 			MOUSE_BUTTON_WHEEL_UP:    _cycle_palette(-1)
 			MOUSE_BUTTON_WHEEL_DOWN:  _cycle_palette(1)
 		get_viewport().set_input_as_handled()
@@ -692,19 +698,22 @@ func _rebuild() -> void:
 		return
 	var data := VoxelWorld.active_project.data
 	for pos: Vector3i in data.cells.keys():
-		var semantic: String = data.cells[pos]
+		var cell: BlockCell = data.cells[pos]
+		var semantic: String = cell.type_id
 		if semantic.is_empty():
 			continue
 		if not _normal_mats.has(semantic):
 			var mat := StandardMaterial3D.new()
 			mat.albedo_color = VoxelWorld.get_color_for_semantic(semantic)
 			_normal_mats[semantic] = mat
+		var shape := VoxelWorld.get_shape_for_semantic(semantic)
 		var mi := MeshInstance3D.new()
-		var mesh := BoxMesh.new()
-		mesh.size = Vector3(0.94, 0.94, 0.94)
-		mi.mesh = mesh
+		mi.mesh = _mesh_for_shape(shape)
 		mi.material_override = _normal_mats[semantic]
-		mi.position = Vector3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5)
+		# Rotate by orientation (cubes ignore it); meshes are authored centered, so
+		# the basis spins about the cell center.
+		var basis := Basis() if shape == BlockType.Shape.FULL else Orientation.basis_of(cell.orientation)
+		mi.transform = Transform3D(basis, Vector3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5))
 		mi.set_meta("semantic", semantic)
 		_voxel_root.add_child(mi)
 		_cell_nodes[pos] = mi
@@ -713,6 +722,40 @@ func _rebuild() -> void:
 	if _slice_active:
 		_update_slice_visuals()
 	_refresh_guide()  # the guide plane spans the build, so resize it on rebuild
+
+# Shared, lazily-built mesh per shape. Authored centered on the origin and facing
+# NORTH (-Z) / bottom-half so Orientation.basis_of() can rotate it into place.
+func _mesh_for_shape(shape: BlockType.Shape) -> Mesh:
+	if _shape_meshes.has(shape):
+		return _shape_meshes[shape]
+	var mesh: Mesh
+	match shape:
+		BlockType.Shape.SLAB:
+			mesh = _combine_boxes([
+				[Vector3(0, -0.235, 0), Vector3(0.94, 0.47, 0.94)],  # bottom half
+			])
+		BlockType.Shape.STAIRS:
+			mesh = _combine_boxes([
+				[Vector3(0, -0.235, 0),    Vector3(0.94, 0.47, 0.94)],  # bottom slab
+				[Vector3(0, 0.235, 0.235), Vector3(0.94, 0.47, 0.47)],  # upper back step
+			])
+		_:
+			var box := BoxMesh.new()
+			box.size = Vector3(0.94, 0.94, 0.94)
+			mesh = box
+	_shape_meshes[shape] = mesh
+	return mesh
+
+# Build one mesh from a set of [center, size] boxes. BoxMesh already carries the
+# right normals/UVs/winding, so append_from gives clean, well-lit geometry.
+func _combine_boxes(boxes: Array) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for b in boxes:
+		var box := BoxMesh.new()
+		box.size = b[1]
+		st.append_from(box, 0, Transform3D(Basis(), b[0]))
+	return st.commit()
 
 # ---------------------------------------------------------------------------
 # Raycast
@@ -853,19 +896,66 @@ func _place_targeted_block() -> void:
 	if not VoxelWorld.active_project or VoxelWorld.selected_semantic.is_empty():
 		return
 	var place_pos: Vector3i
+	var face_normal: Vector3i
 	if _target_hit:
 		place_pos = _target_place
+		face_normal = _target_place - _target_block  # points out of the placed-against face
 	elif _floor_hit:
 		place_pos = _floor_place
+		face_normal = Vector3i(0, 1, 0)  # standing on the ground plane
 	else:
 		return
-	VoxelWorld.set_block(place_pos, VoxelWorld.selected_semantic)
+	# Orient like Minecraft: the block faces the player, and lands top-half when
+	# placed against a ceiling or while looking up at a side face. Tweak afterwards
+	# with R (rotate about the face you're looking at).
+	var o := _derive_place_orientation(place_pos, face_normal)
+	VoxelWorld.set_block(place_pos, VoxelWorld.selected_semantic, o)
 	_update_crosshair_target()
+
+func _derive_place_orientation(place_pos: Vector3i, face_normal: Vector3i) -> int:
+	var to_cam := _camera_pos - (Vector3(place_pos) + Vector3(0.5, 0.5, 0.5))
+	var facing := Orientation.from_dir(Vector3(to_cam.x, 0.0, to_cam.z))
+	var top := false
+	if face_normal.y < 0:
+		top = true       # placed under a block
+	elif face_normal.y > 0:
+		top = false      # placed on top of one (or the floor)
+	else:
+		top = _get_look_dir().y > 0.2  # side face, looking up → upper half
+	return Orientation.make(facing, top)
 
 func _erase_targeted_block() -> void:
 	if not _target_hit or not VoxelWorld.active_project:
 		return
 	VoxelWorld.clear_block(_target_block)
+	_update_crosshair_target()
+
+# MC creative "pick block": copy the targeted cell's semantic + orientation into
+# the hand (active hotbar slot, or jump to an existing slot holding it).
+func _pick_targeted_block() -> void:
+	if not _target_hit or not VoxelWorld.active_project:
+		return
+	var cell := VoxelWorld.active_project.data.get_cell(_target_block)
+	if cell:
+		VoxelWorld.pick_block(cell.type_id)
+
+# Rotate the crosshair-targeted block about the axis of the face you're looking
+# at: looking at the top/bottom turns the block (cycles facing); looking at a
+# side flips it upside-down. Shift reverses the turn. This is how you re-orient
+# in 3D — there is no global orientation mode.
+func _rotate_targeted_block(reverse: bool) -> void:
+	if not _target_hit or not VoxelWorld.active_project:
+		return
+	var cell := VoxelWorld.active_project.data.get_cell(_target_block)
+	if cell == null:
+		return
+	var normal := _target_place - _target_block  # face pointing toward the camera
+	var o := cell.orientation
+	if absi(normal.y) >= absi(normal.x) and absi(normal.y) >= absi(normal.z):
+		o = Orientation.rotate_cw(o, -1 if reverse else 1)
+	else:
+		o = Orientation.toggle_top(o)
+	VoxelWorld.reorient_block(_target_block, o)
 	_update_crosshair_target()
 
 # ---------------------------------------------------------------------------
@@ -1189,20 +1279,13 @@ func _vec_max(a: Vector3i, b: Vector3i) -> Vector3i:
 # Palette cycling
 # ---------------------------------------------------------------------------
 
+# Wheel scrubs the shared hotbar, MC-style (wrapping across the 9 slots).
 func _cycle_palette(delta: int) -> void:
-	var names := VoxelWorld.merged_semantic_names()
-	if names.is_empty():
-		return
-	var idx := names.find(VoxelWorld.selected_semantic)
-	if idx < 0: idx = 0
-	idx = (idx + delta) % names.size()
-	if idx < 0: idx += names.size()
-	VoxelWorld.select_semantic(names[idx])
+	var n := VoxelWorld.HOTBAR_SIZE
+	VoxelWorld.select_slot((VoxelWorld.active_slot + delta % n + n) % n)
 
 func _select_palette_slot(slot: int) -> void:
-	var names := VoxelWorld.merged_semantic_names()
-	if slot < names.size():
-		VoxelWorld.select_semantic(names[slot])
+	VoxelWorld.select_slot(slot)
 
 # ---------------------------------------------------------------------------
 # 2D overlay: crosshair · hotbar · hints
@@ -1216,45 +1299,11 @@ func _draw_overlay() -> void:
 	_overlay.draw_line(center + Vector2(-14, 0),  center + Vector2(14, 0),  Color(1,1,1,0.9), 1.5)
 	_overlay.draw_line(center + Vector2(0,  -14), center + Vector2(0,  14), Color(1,1,1,0.9), 1.5)
 	_overlay.draw_circle(center, 3.0, Color(0,0,0,0.4))
-	_draw_hotbar()
 	var font := ThemeDB.fallback_font
 	if _sky_label_timer > 0.0 and _skyboxes.size() > 1:
 		var sky_name: String = _skyboxes[_current_sky]["name"]
 		_overlay.draw_string(font, Vector2(_overlay.size.x * 0.5, 32.0),
 			"Sky: " + sky_name, HORIZONTAL_ALIGNMENT_CENTER, -1, 16, Color(1,1,1,0.85))
-	var hint := "WASD/Arrows move  ·  Space/RCtrl/ROpt up  ·  Shift// down  ·  LMB erase  ·  RMB place  ·  Tab/Enter slice  ·  1–9 palette  ·  Esc"
+	var hint := "WASD move  ·  Space/RCtrl up · Shift// down  ·  LMB erase · RMB place · MMB pick  ·  R rotate (look at face)  ·  Tab slice · 1–9 slot · Esc"
 	_overlay.draw_string(font, Vector2(10.0, _overlay.size.y - 10.0),
 		hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1,1,1,0.45))
-
-func _draw_hotbar() -> void:
-	var names := VoxelWorld.merged_semantic_names()
-	if names.is_empty():
-		return
-	const SLOT := 44.0
-	const GAP  := 4.0
-	const BOTTOM_MARGIN := 28.0
-	var total := names.size()
-	var sel_idx := maxi(0, names.find(VoxelWorld.selected_semantic))
-	var visible_count := mini(total, 9)
-	var start_idx := 0
-	if total > 9:
-		start_idx = clampi(sel_idx - 4, 0, total - 9)
-	var total_w := visible_count * SLOT + (visible_count - 1) * GAP
-	var sx := (_overlay.size.x - total_w) * 0.5
-	var sy := _overlay.size.y - BOTTOM_MARGIN - SLOT
-	_overlay.draw_rect(Rect2(sx - 6, sy - 6, total_w + 12, SLOT + 12), Color(0,0,0,0.55))
-	var font := ThemeDB.fallback_font
-	for i in visible_count:
-		var idx := start_idx + i
-		var semantic := names[idx]
-		var color := VoxelWorld.get_color_for_semantic(semantic)
-		var rx := sx + i * (SLOT + GAP)
-		var slot_rect := Rect2(rx, sy, SLOT, SLOT)
-		var is_selected := semantic == VoxelWorld.selected_semantic
-		_overlay.draw_rect(slot_rect, color.darkened(0.35))
-		_overlay.draw_rect(slot_rect.grow(-4), color)
-		_overlay.draw_rect(slot_rect, Color(1,1,1, 0.9 if is_selected else 0.25),
-			false, 2.5 if is_selected else 1.0)
-		if i < 9:
-			_overlay.draw_string(font, Vector2(rx + 3.0, sy + 13.0), str(i + 1),
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1,1,1,0.7))

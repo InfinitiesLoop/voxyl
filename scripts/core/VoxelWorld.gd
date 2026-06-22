@@ -10,28 +10,58 @@ signal selection_changed(semantic_name: String)
 signal tool_changed(tool: Tool)
 signal slice_view_requested(axis: int, center: Vector3i, flipped: bool)
 signal block_type_changed()
+# Unified hotbar shared by every view (no view owns it). hotbar_changed fires on
+# slot reassignment; active_slot_changed when the highlighted slot moves.
+signal hotbar_changed()
+signal active_slot_changed(slot: int)
+
+const HOTBAR_SIZE := 9
 
 var workspace: VoxelWorkspace
 var active_project: VoxelProject
 var selected_semantic: String = ""
 var active_tool: Tool = Tool.PAINT
 
+# Shared 9-slot hotbar: each entry is a semantic name ("" = empty slot). The
+# active slot's semantic is the selected_semantic used for placement.
+var hotbar: Array[String] = []
+var active_slot: int = 0
+
 func _ready() -> void:
 	workspace = VoxelWorkspace.new()
+	hotbar.resize(HOTBAR_SIZE)
+	hotbar.fill("")
 	_populate_defaults()
 	workspace_changed.emit()
 
 func open(project: VoxelProject) -> void:
 	active_project = project
+	_seed_hotbar_from_palette()
 	var names := merged_semantic_names()
-	selected_semantic = names[0] if not names.is_empty() else ""
+	selected_semantic = hotbar[active_slot] if not hotbar[active_slot].is_empty() \
+		else (names[0] if not names.is_empty() else "")
 	project_opened.emit(project)
+	hotbar_changed.emit()
+	active_slot_changed.emit(active_slot)
 
-func set_block(pos: Vector3i, semantic_name: String) -> void:
+# Place a block. Orientation is decided by the edit view at placement time
+# (2D: the clicked quadrant; 3D: how you place it), so it's always explicit here.
+func set_block(pos: Vector3i, semantic_name: String, orientation: int = 0) -> void:
 	if not active_project:
 		return
-	active_project.data.set_block(pos, semantic_name)
+	active_project.data.set_block(pos, semantic_name, orientation)
 	block_changed.emit(pos, semantic_name)
+
+# Re-orient an existing cell in place (the R / Shift+R rotate tools). No-op if the
+# cell is empty; emits block_changed so every view repaints.
+func reorient_block(pos: Vector3i, orientation: int) -> void:
+	if not active_project:
+		return
+	var cell := active_project.data.get_cell(pos)
+	if cell == null:
+		return
+	cell.orientation = orientation
+	block_changed.emit(pos, cell.type_id)
 
 func clear_block(pos: Vector3i) -> void:
 	if not active_project:
@@ -71,6 +101,23 @@ func get_block_type_for_semantic(semantic_name: String) -> String:
 				result = bt
 	return result
 
+# Resolved render shape (FULL/SLAB/STAIRS) for a semantic, via the palette stack
+# (last-wins, same as color/block-type). Shape is a visual property of the mapped
+# block type — the data never stores it.
+func get_shape_for_semantic(semantic_name: String) -> BlockType.Shape:
+	var result := BlockType.Shape.FULL
+	if not active_project:
+		return result
+	for palette_name in active_project.palette_names:
+		var palette := workspace.get_palette(palette_name)
+		if palette:
+			var bt_name := palette.get_block_type_name(semantic_name)
+			if not bt_name.is_empty():
+				var bt := workspace.get_block_type(bt_name)
+				if bt:
+					result = bt.shape
+	return result
+
 func merged_semantic_names() -> Array[String]:
 	var seen := {}
 	var result: Array[String] = []
@@ -104,6 +151,54 @@ func move_palette_in_stack(project: VoxelProject, from_idx: int, to_idx: int) ->
 func select_semantic(semantic_name: String) -> void:
 	selected_semantic = semantic_name
 	selection_changed.emit(semantic_name)
+
+# ---------------------------------------------------------------------------
+# Hotbar (unified across all views)
+# ---------------------------------------------------------------------------
+
+# Make `slot` the active one; its semantic becomes the selection used to place.
+func select_slot(slot: int) -> void:
+	if slot < 0 or slot >= HOTBAR_SIZE:
+		return
+	active_slot = slot
+	active_slot_changed.emit(slot)
+	select_semantic(hotbar[slot])
+
+# Assign a semantic to a slot (does not change which slot is active).
+func set_hotbar_slot(slot: int, semantic_name: String) -> void:
+	if slot < 0 or slot >= HOTBAR_SIZE:
+		return
+	hotbar[slot] = semantic_name
+	hotbar_changed.emit()
+	if slot == active_slot:
+		select_semantic(semantic_name)
+
+# Put a semantic "in hand": if it's already on the hotbar, just jump to that
+# slot; otherwise drop it into the active slot. This is MC creative "pick block".
+func pick_block(semantic_name: String) -> void:
+	if semantic_name.is_empty():
+		return
+	var existing := hotbar.find(semantic_name)
+	if existing >= 0:
+		select_slot(existing)
+	else:
+		hotbar[active_slot] = semantic_name
+		hotbar_changed.emit()
+		select_semantic(semantic_name)
+
+# Fill empty hotbar slots from the palette so a freshly opened project is usable.
+# Existing assignments are preserved; only blanks get filled, in palette order.
+func _seed_hotbar_from_palette() -> void:
+	var names := merged_semantic_names()
+	var next := 0
+	for slot in HOTBAR_SIZE:
+		if not hotbar[slot].is_empty():
+			continue
+		while next < names.size() and hotbar.has(names[next]):
+			next += 1
+		if next < names.size():
+			hotbar[slot] = names[next]
+			next += 1
 
 func set_active_tool(tool: Tool) -> void:
 	active_tool = tool
@@ -156,6 +251,12 @@ func _add_default_block_types() -> void:
 	]
 	for n in names:
 		workspace.add_block_type(n)
+	# Shaped blocks — orientation only reads as something other than a cube once
+	# the mapped block type declares a non-full shape.
+	workspace.add_block_type("Oak Stairs").shape = BlockType.Shape.STAIRS
+	workspace.add_block_type("Stone Brick Stairs").shape = BlockType.Shape.STAIRS
+	workspace.add_block_type("Stone Slab").shape = BlockType.Shape.SLAB
+	workspace.add_block_type("Oak Slab").shape = BlockType.Shape.SLAB
 
 func _add_default_palette() -> void:
 	var p := workspace.add_palette("Default")
@@ -167,6 +268,8 @@ func _add_default_palette() -> void:
 		["Trim",      "Cobblestone",   Color(0.42, 0.42, 0.40)],
 		["Floor",     "Dirt",          Color(0.48, 0.35, 0.22)],
 		["Roof",      "Spruce Planks", Color(0.38, 0.28, 0.18)],
+		["Stairs",    "Oak Stairs",    Color(0.74, 0.58, 0.33)],
+		["Slab",      "Stone Slab",    Color(0.60, 0.60, 0.62)],
 	]
 	for s in slots:
 		var e := PaletteEntry.new()

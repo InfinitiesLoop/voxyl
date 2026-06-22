@@ -115,9 +115,25 @@ func _build_semantic_buttons() -> void:
 		btn.add_theme_stylebox_override("pressed", pressed_style)
 
 		var captured := semantic_name
-		btn.pressed.connect(func(): VoxelWorld.select_semantic(captured))
+		# Clicking a palette block swaps it into the active hotbar slot (and selects
+		# it). Dragging it drops it onto a specific slot. Either way the palette is
+		# the source of blocks; the hotbar is the working set.
+		btn.pressed.connect(func(): VoxelWorld.set_hotbar_slot(VoxelWorld.active_slot, captured))
+		btn.set_drag_forwarding(
+			func(_at): return _make_drag(captured, color),
+			func(_at, _data): return false,
+			func(_at, _data): pass)
 		add_child(btn)
 		_buttons[semantic_name] = btn
+
+# Drag payload + a little color swatch as the drag preview.
+func _make_drag(semantic_name: String, color: Color) -> Variant:
+	var preview := ColorRect.new()
+	preview.color = color
+	preview.custom_minimum_size = Vector2(28, 28)
+	preview.size = Vector2(28, 28)
+	set_drag_preview(preview)
+	return {"type": "palette_block", "semantic": semantic_name}
 
 func _on_selection_changed(semantic_name: String) -> void:
 	for s in _buttons:
