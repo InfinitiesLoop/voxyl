@@ -17,9 +17,17 @@ extends Resource
 # `color` is the rendered material — the planning/"undecided" path stays first-
 # class. color is also the sampled average of an imported texture (decision 1),
 # so the fast 2D/planning views never need pixels.
+#
+# state_map is the optional, nested orientation → model binding (decision 5): an
+# importer fills it from a Minecraft blockstate's `variants` so different facings
+# can resolve to different models (stairs, logs, …). It still references models by
+# id. When null, model_id is the single model rendered at every orientation (today's
+# behavior — the view rotates it via Orientation.basis_of). model_id should mirror
+# state_map.default_model_id() so non-orientation-aware code still resolves geometry.
 enum Shape { FULL, SLAB, STAIRS }
 
 @export var name: String = ""
 @export var color: Color = Color(0.5, 0.5, 0.5)
 @export var shape: Shape = Shape.FULL
 @export var model_id: String = ""
+@export var state_map: BlockStateMap = null

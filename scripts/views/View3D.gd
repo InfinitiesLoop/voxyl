@@ -91,6 +91,24 @@ var _model_meshes := {}       # model id (String) -> Mesh (built lazily, shared)
 var _normal_mats := {}        # semantic -> StandardMaterial3D (base appearance)
 var _faded_mats := {}         # semantic -> StandardMaterial3D (off-plane fade)
 var _onplane_mats := {}       # semantic -> StandardMaterial3D (on-plane pop)
+
+# --- Textured render path (additive — the color path above is untouched) ------
+# Models that bind textures get per-face geometry with explicit UVs and one surface
+# per distinct texture (BoxMesh's atlas UVs can't show a per-face image); the
+# material is bound per surface so a model never owns texture state — it's resolved
+# from the workspace library on each rebuild. Models with no textures stay on the
+# color path, so the default build (no textures) renders exactly as before.
+var _textured_model_meshes := {}  # model id -> { "mesh": ArrayMesh, "keys": Array[String] }
+var _texture_cache := {}          # image_path -> ImageTexture (heavy; kept across rebuilds)
+var _model_tex_cache := {}        # model id -> { texture_key -> { "tex":, "image": } }
+var _surface_mats := {}           # "<model id>|<texture_key>" -> Material
+var _anim_shaders := {}           # TextureAsset.Transparency -> Shader (one per variant)
+
+# Outward normal per BlockModel.Dir (NORTH=-Z, EAST=+X, SOUTH=+Z, WEST=-X, UP, DOWN).
+const _DIR_NORMALS := {
+	0: Vector3(0, 0, -1), 1: Vector3(1, 0, 0), 2: Vector3(0, 0, 1),
+	3: Vector3(-1, 0, 0), 4: Vector3(0, 1, 0), 5: Vector3(0, -1, 0),
+}
 var _plane_sheet: MeshInstance3D
 var _plane_sheet_mat: ShaderMaterial
 var _slice_marker: MeshInstance3D
@@ -699,6 +717,10 @@ func _rebuild() -> void:
 	_normal_mats.clear()
 	_faded_mats.clear()
 	_onplane_mats.clear()
+	# Per-rebuild material caches (pick up palette / block-type edits); the heavy
+	# ImageTexture cache and shared geometry/shaders persist across rebuilds.
+	_model_tex_cache.clear()
+	_surface_mats.clear()
 	if not VoxelWorld.active_project:
 		return
 	var data := VoxelWorld.active_project.data
@@ -707,21 +729,15 @@ func _rebuild() -> void:
 		var semantic: String = cell.type_id
 		if semantic.is_empty():
 			continue
-		if not _normal_mats.has(semantic):
-			var mat := StandardMaterial3D.new()
-			mat.albedo_color = VoxelWorld.get_color_for_semantic(semantic)
-			_normal_mats[semantic] = mat
 		var model := VoxelWorld.get_model_for_semantic(semantic)
 		var mi := MeshInstance3D.new()
-		mi.mesh = _mesh_for_model(model)
-		mi.material_override = _normal_mats[semantic]
+		_apply_cell_appearance(mi, semantic, model)
 		# Geometry comes from the resolved BlockModel (built centered on the cell).
 		# The orientation basis spins it about the cell center; the uniform
 		# VOXEL_SCALE shrink leaves the inter-voxel gap. A plain cube at the default
 		# orientation reduces to identity·scale — i.e. the old full-block render.
 		var basis := Orientation.basis_of(cell.orientation).scaled(Vector3.ONE * VOXEL_SCALE)
 		mi.transform = Transform3D(basis, Vector3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5))
-		mi.set_meta("semantic", semantic)
 		_voxel_root.add_child(mi)
 		_cell_nodes[pos] = mi
 	# Re-apply emphasis if a rebuild happened while choosing a slice (e.g. an edit
@@ -736,7 +752,7 @@ func _rebuild() -> void:
 # BoxMesh carries clean normals/UVs/winding, so append_from gives well-lit geometry.
 # (Per-face textures/UVs from the model are wired in at the Phase 1 material step.)
 func _mesh_for_model(model: BlockModel) -> Mesh:
-	var key := model.id if not model.id.is_empty() else str(model.get_instance_id())
+	var key := _model_key(model)
 	if _model_meshes.has(key):
 		return _model_meshes[key]
 	var st := SurfaceTool.new()
@@ -750,6 +766,224 @@ func _mesh_for_model(model: BlockModel) -> Mesh:
 	var mesh := st.commit()
 	_model_meshes[key] = mesh
 	return mesh
+
+func _model_key(model: BlockModel) -> String:
+	return model.id if not model.id.is_empty() else str(model.get_instance_id())
+
+# ---------------------------------------------------------------------------
+# Cell appearance: textured path (new) layered over the color path (Phase 0)
+# ---------------------------------------------------------------------------
+
+# Pick geometry + materials for one cell. The textured path runs when the resolved
+# model binds loadable textures; otherwise the original color path renders (so the
+# default build, which has none, is byte-for-byte unchanged). The "textured" meta
+# tells slice-mode how to restore the base look afterward.
+func _apply_cell_appearance(mi: MeshInstance3D, semantic: String, model: BlockModel) -> void:
+	mi.set_meta("semantic", semantic)
+	var resolved := _resolve_model_textures(model)
+	if resolved.is_empty():
+		mi.mesh = _mesh_for_model(model)
+		mi.material_override = _color_material(semantic)
+		mi.set_meta("textured", false)
+		return
+	var entry := _textured_mesh_for_model(model)
+	mi.mesh = entry["mesh"]
+	var keys: Array = entry["keys"]
+	for i in keys.size():
+		mi.set_surface_override_material(i, _surface_material(semantic, model, keys[i], resolved))
+	mi.set_meta("textured", true)
+
+# Base color material for a semantic (the planning/"undecided" path). Cached in
+# _normal_mats, which slice-mode also restores from.
+func _color_material(semantic: String) -> StandardMaterial3D:
+	if not _normal_mats.has(semantic):
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = VoxelWorld.get_color_for_semantic(semantic)
+		_normal_mats[semantic] = mat
+	return _normal_mats[semantic]
+
+# Resolve a model's texture-key bindings to loadable textures through the workspace
+# library (model.textures holds TextureAsset *ids*). Keys whose asset is missing or
+# whose pixels won't load are dropped; an empty result sends the cell to the color
+# path. Cached per model id for the rebuild.
+func _resolve_model_textures(model: BlockModel) -> Dictionary:
+	if not model.has_textures():
+		return {}
+	var mid := _model_key(model)
+	if _model_tex_cache.has(mid):
+		return _model_tex_cache[mid]
+	var out := {}
+	for key in model.textures:
+		var asset := VoxelWorld.workspace.get_texture_asset(model.textures[key])
+		if asset == null or asset.image_path.is_empty():
+			continue
+		var image := _cached_texture(asset.image_path)
+		if image == null:
+			continue
+		out[key] = {"tex": asset, "image": image}
+	_model_tex_cache[mid] = out
+	return out
+
+func _cached_texture(image_path: String) -> ImageTexture:
+	if not _texture_cache.has(image_path):
+		_texture_cache[image_path] = AssetLibrary.load_texture(image_path)
+	return _texture_cache[image_path]
+
+# Per-face geometry for a textured model: one surface per distinct texture_key, with
+# explicit UVs from each face's uv rect. Cached (geometry only) by model id; the
+# parallel "keys" list lets the caller bind a material per surface. Centered exactly
+# like the color mesh, so Orientation + VOXEL_SCALE apply identically.
+func _textured_mesh_for_model(model: BlockModel) -> Dictionary:
+	var mid := _model_key(model)
+	if _textured_model_meshes.has(mid):
+		return _textured_model_meshes[mid]
+	var tools := {}              # texture_key -> SurfaceTool
+	var order: Array[String] = []  # commit order → surface index
+	for element in model.elements:
+		var from: Vector3 = element["from"]
+		var to: Vector3 = element["to"]
+		var faces: Dictionary = element["faces"]
+		for dir in faces:
+			var face: Dictionary = faces[dir]
+			var key := str(face.get("texture_key", "all"))
+			if not tools.has(key):
+				var st := SurfaceTool.new()
+				st.begin(Mesh.PRIMITIVE_TRIANGLES)
+				tools[key] = st
+				order.append(key)
+			_add_face(tools[key], int(dir), from, to, face.get("uv", Rect2(0, 0, 1, 1)))
+	var mesh := ArrayMesh.new()
+	var keys: Array[String] = []
+	for key in order:
+		tools[key].generate_tangents()
+		tools[key].commit(mesh)
+		keys.append(key)
+	var entry := {"mesh": mesh, "keys": keys}
+	_textured_model_meshes[mid] = entry
+	return entry
+
+# Append one textured quad (two triangles) for a box face. Vertices are centered
+# (corner - 0.5) to match the color mesh. Winding is self-correcting: Godot's front
+# faces wind so the geometric cross product points *opposite* the surface normal, so
+# flip the perimeter when our chosen order came out the other way.
+func _add_face(st: SurfaceTool, dir: int, from: Vector3, to: Vector3, uv: Rect2) -> void:
+	var n: Vector3 = _DIR_NORMALS[dir]
+	var corners := _face_corners(dir, from, to)
+	# UVs parallel to the perimeter corners (top-left, bottom-left, bottom-right, top-right).
+	var uvs := [
+		uv.position,
+		Vector2(uv.position.x, uv.end.y),
+		uv.end,
+		Vector2(uv.end.x, uv.position.y),
+	]
+	if (corners[1] - corners[0]).cross(corners[2] - corners[0]).dot(n) > 0.0:
+		corners = [corners[0], corners[3], corners[2], corners[1]]
+		uvs = [uvs[0], uvs[3], uvs[2], uvs[1]]
+	for tri in [[0, 1, 2], [0, 2, 3]]:
+		for i in tri:
+			st.set_normal(n)
+			st.set_uv(uvs[i])
+			st.add_vertex(corners[i] - Vector3(0.5, 0.5, 0.5))
+
+# Four perimeter corners of a box face in [0,1] box space (centering happens in
+# _add_face). Order is consistent per face; _add_face fixes winding for Godot.
+func _face_corners(dir: int, a: Vector3, b: Vector3) -> Array:
+	match dir:
+		0:  # NORTH (-Z)
+			return [Vector3(a.x, b.y, a.z), Vector3(a.x, a.y, a.z), Vector3(b.x, a.y, a.z), Vector3(b.x, b.y, a.z)]
+		1:  # EAST (+X)
+			return [Vector3(b.x, b.y, a.z), Vector3(b.x, a.y, a.z), Vector3(b.x, a.y, b.z), Vector3(b.x, b.y, b.z)]
+		2:  # SOUTH (+Z)
+			return [Vector3(b.x, b.y, b.z), Vector3(b.x, a.y, b.z), Vector3(a.x, a.y, b.z), Vector3(a.x, b.y, b.z)]
+		3:  # WEST (-X)
+			return [Vector3(a.x, b.y, b.z), Vector3(a.x, a.y, b.z), Vector3(a.x, a.y, a.z), Vector3(a.x, b.y, a.z)]
+		4:  # UP (+Y)
+			return [Vector3(a.x, b.y, a.z), Vector3(a.x, b.y, b.z), Vector3(b.x, b.y, b.z), Vector3(b.x, b.y, a.z)]
+		_:  # DOWN (-Y)
+			return [Vector3(a.x, a.y, b.z), Vector3(a.x, a.y, a.z), Vector3(b.x, a.y, a.z), Vector3(b.x, a.y, b.z)]
+
+# Material for one textured surface: the bound texture's static or animated
+# material, cached by model+key; a face bound to a key the model never supplied
+# falls back to the semantic's color.
+func _surface_material(semantic: String, model: BlockModel, key: String, resolved: Dictionary) -> Material:
+	if not resolved.has(key):
+		return _color_material(semantic)
+	var cache_key := _model_key(model) + "|" + key
+	if not _surface_mats.has(cache_key):
+		var info: Dictionary = resolved[key]
+		var asset: TextureAsset = info["tex"]
+		var image: ImageTexture = info["image"]
+		var mat: Material
+		if asset.is_animated():
+			mat = _animated_material(asset, image)
+		else:
+			mat = _static_texture_material(asset, image)
+		_surface_mats[cache_key] = mat
+	return _surface_mats[cache_key]
+
+func _static_texture_material(asset: TextureAsset, image: ImageTexture) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_texture = image
+	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST  # MC art is pixel-exact
+	match asset.transparency:
+		TextureAsset.Transparency.CUTOUT:
+			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+		TextureAsset.Transparency.TRANSLUCENT:
+			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	return m
+
+# Animated textures are an MC-style vertical frame strip. One ShaderMaterial walks
+# the V-offset down the strip from TIME — no per-frame mesh/material churn, and all
+# instances sharing the material animate in lockstep. frame_time is seconds/frame
+# (the importer converts MC's ticks); 0 → effectively static.
+func _animated_material(asset: TextureAsset, image: ImageTexture) -> ShaderMaterial:
+	var sm := ShaderMaterial.new()
+	sm.shader = _anim_shader_for(asset.transparency)
+	sm.set_shader_parameter("tex", image)
+	sm.set_shader_parameter("frame_count", asset.frame_count)
+	sm.set_shader_parameter("frame_time", asset.frame_time)
+	sm.set_shader_parameter("interp", asset.interpolate)
+	return sm
+
+# One shader per transparency variant (render_mode is fixed at compile time), built
+# lazily and cached. The frame walk is identical across variants.
+func _anim_shader_for(transparency: TextureAsset.Transparency) -> Shader:
+	if _anim_shaders.has(transparency):
+		return _anim_shaders[transparency]
+	var render_mode := "cull_back"
+	var alpha_body := ""
+	match transparency:
+		TextureAsset.Transparency.CUTOUT:
+			alpha_body = "\tif (c.a < 0.5) { discard; }\n"
+		TextureAsset.Transparency.TRANSLUCENT:
+			render_mode = "cull_back, blend_mix"
+			alpha_body = "\tALPHA = c.a;\n"
+	var shader := Shader.new()
+	shader.code = """
+shader_type spatial;
+render_mode %s;
+
+uniform sampler2D tex : source_color, filter_nearest;
+uniform int frame_count = 1;
+uniform float frame_time = 0.0;
+uniform bool interp = false;
+
+void fragment() {
+	float fc = max(float(frame_count), 1.0);
+	float t = frame_time > 0.0 ? TIME / frame_time : 0.0;
+	float f = floor(mod(t, fc));
+	// Frames stack vertically (MC layout); advance V one frame-height per step.
+	vec4 c = texture(tex, vec2(UV.x, (UV.y + f) / fc));
+	if (interp) {
+		float nf = mod(f + 1.0, fc);
+		vec4 c2 = texture(tex, vec2(UV.x, (UV.y + nf) / fc));
+		c = mix(c, c2, fract(t));
+	}
+%s	ALBEDO = c.rgb;
+}
+""" % [render_mode, alpha_body]
+	_anim_shaders[transparency] = shader
+	return shader
 
 # ---------------------------------------------------------------------------
 # Raycast
@@ -1000,10 +1234,7 @@ func _exit_slice_select() -> void:
 		return
 	_slice_active = false
 	for pos: Vector3i in _cell_nodes:
-		var mi: MeshInstance3D = _cell_nodes[pos]
-		var semantic: String = mi.get_meta("semantic", "")
-		if _normal_mats.has(semantic):
-			mi.material_override = _normal_mats[semantic]
+		_restore_base_material(_cell_nodes[pos])
 	_plane_sheet.visible = false
 	_slice_marker.visible = false
 	_overlay.visible = _fly_mode
@@ -1144,6 +1375,16 @@ func _update_slice_visuals() -> void:
 	_update_plane_sheet()
 	_update_slice_marker()
 	_overlay.queue_redraw()
+
+# Return a cell to its non-slice look: textured cells drop the override so their
+# per-surface materials show again; color cells get their base color material back.
+func _restore_base_material(mi: MeshInstance3D) -> void:
+	if mi.get_meta("textured", false):
+		mi.material_override = null
+		return
+	var semantic: String = mi.get_meta("semantic", "")
+	if _normal_mats.has(semantic):
+		mi.material_override = _normal_mats[semantic]
 
 # Off-plane appearance: dithered (order-independent) coverage + a brightness
 # knockdown. An operation on the rendered block, not an assumption about its color.

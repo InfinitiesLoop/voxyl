@@ -15,6 +15,9 @@ func _ready() -> void:
 	_test_shapes()
 	_test_models()
 	_test_reorient()
+	_test_asset_library()
+	_test_library_serialization()
+	_test_mc_import()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
@@ -191,3 +194,231 @@ func _test_reorient() -> void:
 	VoxelWorld.reorient_block(Vector3i(40, 40, 40), Orientation.make(Orientation.Facing.WEST))
 	_check("reorient of empty cell creates nothing", project.data.get_cell(Vector3i(40, 40, 40)) == null)
 	VoxelWorld.clear_block(p)
+
+func _test_asset_library() -> void:
+	print("-- asset library (storage accessor)")
+	# Point the single storage root at throwaway user:// scratch so the test never
+	# writes into the repo, then restore it.
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_test_lib__"
+	_rm_rf(AssetLibrary.ROOT)
+	_check("path_for() is the root itself", AssetLibrary.path_for() == AssetLibrary.ROOT)
+	_check("path_for joins the root", AssetLibrary.path_for("a/b") == AssetLibrary.ROOT.path_join("a/b"))
+	AssetLibrary.ensure_dir(AssetLibrary.PIXELS_DIR)
+	var img := Image.create_empty(16, 16, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0.2, 0.6, 0.9))
+	_check("png writes under the library", img.save_png(AssetLibrary.path_for("pixels/test.png")) == OK)
+	_check("file_exists sees the written file", AssetLibrary.file_exists("pixels/test.png"))
+	var tex := AssetLibrary.load_texture("pixels/test.png")
+	_check("load_texture returns a texture", tex != null)
+	_check("loaded texture keeps the saved size",
+		tex != null and tex.get_width() == 16 and tex.get_height() == 16)
+	_check("missing image loads as null", AssetLibrary.load_image("pixels/nope.png") == null)
+	_rm_rf(AssetLibrary.ROOT)
+	AssetLibrary.ROOT = saved_root
+
+func _test_library_serialization() -> void:
+	print("-- library serialization round-trip")
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_test_lib__"
+	_rm_rf(AssetLibrary.ROOT)
+
+	# Author a model + texture + block type by hand (the importer-agnostic path).
+	var ws := VoxelWorkspace.new()
+	var model := BlockModel.new()
+	model.id = "test_pillar"
+	model.elements = [BlockModel.box_element(Vector3(0.25, 0, 0.25), Vector3(0.75, 1, 0.75), "all")]
+	model.textures = {"all": "test_tex"}
+	ws.add_block_model(model)
+	var tex := TextureAsset.new()
+	tex.id = "test_tex"
+	tex.image_path = "pixels/test_tex.png"
+	tex.frame_count = 4
+	tex.frame_time = 0.25
+	tex.transparency = TextureAsset.Transparency.CUTOUT
+	tex.average_color = Color(0.3, 0.7, 0.2)
+	ws.add_texture_asset(tex)
+	var bt := ws.add_block_type("Test Block")
+	bt.model_id = "test_pillar"
+
+	_check("save_all succeeds", LibraryStore.save_all(ws) == OK)
+
+	# Load into a fresh workspace and confirm every field survived the trip.
+	var ws2 := VoxelWorkspace.new()
+	LibraryStore.load_into(ws2)
+	var m2 := ws2.get_block_model("test_pillar")
+	_check("model round-trips", m2 != null and m2.id == "test_pillar")
+	_check("model elements (Vector3 geometry) survive",
+		m2 != null and m2.elements.size() == 1
+		and m2.elements[0]["from"] == Vector3(0.25, 0, 0.25)
+		and m2.elements[0]["to"] == Vector3(0.75, 1, 0.75))
+	_check("model texture bindings survive", m2 != null and m2.textures.get("all", "") == "test_tex")
+	var t2 := ws2.get_texture_asset("test_tex")
+	_check("texture animation fields survive",
+		t2 != null and t2.frame_count == 4 and is_equal_approx(t2.frame_time, 0.25))
+	_check("texture transparency + average color survive",
+		t2 != null and t2.transparency == TextureAsset.Transparency.CUTOUT
+		and t2.average_color.is_equal_approx(Color(0.3, 0.7, 0.2)))
+	var bt2 := ws2.get_block_type("Test Block")
+	_check("block type round-trips with its model_id", bt2 != null and bt2.model_id == "test_pillar")
+
+	_rm_rf(AssetLibrary.ROOT)
+	AssetLibrary.ROOT = saved_root
+
+# Phase 2: the MC importer translates a synthetic `assets/<ns>/...` tree (we never
+# bundle real MC assets — decision 4) into voxyl's neutral material layer. Exercises
+# the parent chain, coordinate/UV conversion, texture copy + .mcmeta animation,
+# average-color sampling, and blockstate variants → BlockStateMap.
+func _test_mc_import() -> void:
+	print("-- mc importer (Phase 2 translator)")
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_mclib__"
+	var src := "user://__voxyl_mcsrc__"
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	var assets := src + "/assets"
+
+	# Shared MC templates (minecraft ns): cube defines the geometry + per-face #vars;
+	# cube_all binds every face to a single #all. Bare parent refs default to minecraft.
+	_write_file(assets + "/minecraft/models/block/cube.json", """
+{ "elements": [ { "from": [0,0,0], "to": [16,16,16], "faces": {
+	"down": {"texture":"#down"}, "up": {"texture":"#up"},
+	"north": {"texture":"#north"}, "south": {"texture":"#south"},
+	"west": {"texture":"#west"}, "east": {"texture":"#east"} } } ] }
+""")
+	_write_file(assets + "/minecraft/models/block/cube_all.json", """
+{ "parent": "block/cube", "textures": {
+	"particle":"#all","down":"#all","up":"#all",
+	"north":"#all","south":"#all","west":"#all","east":"#all" } }
+""")
+	# A mod namespace whose blocks inherit the vanilla templates by qualified ref.
+	_write_file(assets + "/testmod/models/block/test_block.json", """
+{ "parent": "minecraft:block/cube_all", "textures": {"all":"testmod:block/test_tex"} }
+""")
+	_write_file(assets + "/testmod/models/block/test_anim_model.json", """
+{ "parent": "minecraft:block/cube_all", "textures": {"all":"testmod:block/test_anim"} }
+""")
+	# A half-height element overriding the inherited cube → coord conversion 16→1.
+	_write_file(assets + "/testmod/models/block/test_slab.json", """
+{ "parent": "minecraft:block/cube_all", "textures": {"all":"testmod:block/test_tex"},
+  "elements": [ { "from": [0,0,0], "to": [16,8,16], "faces": {
+	"down": {"texture":"#all"}, "up": {"texture":"#all"},
+	"north": {"texture":"#all"}, "south": {"texture":"#all"},
+	"west": {"texture":"#all"}, "east": {"texture":"#all"} } } ] }
+""")
+	_write_file(assets + "/testmod/blockstates/test_block.json",
+		"""{ "variants": { "": { "model": "testmod:block/test_block" } } }""")
+	_write_file(assets + "/testmod/blockstates/test_anim.json",
+		"""{ "variants": { "": { "model": "testmod:block/test_anim_model" } } }""")
+	_write_file(assets + "/testmod/blockstates/test_slab.json",
+		"""{ "variants": { "": { "model": "testmod:block/test_slab" } } }""")
+	# Orientation variants → BlockStateMap; y-rotation captured per facing.
+	_write_file(assets + "/testmod/blockstates/test_stairs.json", """
+{ "variants": {
+	"facing=east":  { "model": "testmod:block/test_block" },
+	"facing=south": { "model": "testmod:block/test_block", "y": 90 },
+	"facing=west":  { "model": "testmod:block/test_block", "y": 180 },
+	"facing=north": { "model": "testmod:block/test_block", "y": 270 } } }
+""")
+	# Pixels: a flat-colored static texture, and a 2-frame vertical strip + .mcmeta.
+	var tex_color := Color(0.2, 0.5, 0.8)
+	var tex := Image.create_empty(16, 16, false, Image.FORMAT_RGBA8)
+	tex.fill(tex_color)
+	_write_png(assets + "/testmod/textures/block/test_tex.png", tex)
+	var anim := Image.create_empty(16, 32, false, Image.FORMAT_RGBA8)
+	anim.fill(Color(0.4, 0.2, 0.1))
+	_write_png(assets + "/testmod/textures/block/test_anim.png", anim)
+	_write_file(assets + "/testmod/textures/block/test_anim.png.mcmeta",
+		"""{ "animation": { "frametime": 4, "interpolate": true } }""")
+
+	var ws := VoxelWorkspace.new()
+	var imp := MCImporter.new(assets, ws)
+	imp.import_namespace("testmod")
+
+	_check("all four blocks imported",
+		imp.imported_blocks.size() == 4 and imp.imported_blocks.has("test_block")
+		and imp.imported_blocks.has("test_stairs"))
+
+	# Block type + primary model.
+	var bt := ws.get_block_type("test_block")
+	_check("block type emitted with a model_id",
+		bt != null and bt.model_id == "testmod:block/test_block")
+	var model := ws.get_block_model("testmod:block/test_block")
+	_check("leaf model imported (parent geometry merged in)",
+		model != null and model.elements.size() == 1
+		and model.elements[0]["from"] == Vector3.ZERO
+		and model.elements[0]["to"] == Vector3.ONE)
+	_check("template parents are flattened, not added as models",
+		ws.get_block_model("minecraft:block/cube_all") == null
+		and ws.get_block_model("minecraft:block/cube") == null)
+	_check("model binds a texture key the view can resolve",
+		model != null and model.has_textures()
+		and model.textures.has("testmod:block/test_tex"))
+
+	# Texture copied to the library + loadable end-to-end.
+	var t := ws.get_texture_asset("testmod:block/test_tex")
+	_check("texture asset created", t != null and t.id == "testmod:block/test_tex")
+	_check("texture pixels copied into the library + loadable",
+		t != null and AssetLibrary.load_image(t.image_path) != null)
+	_check("texture imported once (dedup across blocks)",
+		ws.texture_assets.size() == 2)
+	_check("opaque texture classified opaque",
+		t != null and t.transparency == TextureAsset.Transparency.OPAQUE)
+
+	# Average color sampled at import, mirrored to BlockType.color (decision 1).
+	_check("average color sampled from the texture",
+		t != null and _color_near(t.average_color, tex_color, 0.02))
+	_check("planning color mirrors the texture average",
+		bt != null and _color_near(bt.color, tex_color, 0.02))
+
+	# Partial element: 0–16 → 0–1, half height.
+	var slab := ws.get_block_model("testmod:block/test_slab")
+	_check("partial element converts 16→1 units",
+		slab != null and slab.elements[0]["to"] == Vector3(1.0, 0.5, 1.0))
+
+	# Animation: .mcmeta frames + ticks→seconds.
+	var at := ws.get_texture_asset("testmod:block/test_anim")
+	_check("animated texture frame_count from strip height",
+		at != null and at.frame_count == 2)
+	_check("frametime ticks converted to seconds (4/20)",
+		at != null and is_equal_approx(at.frame_time, 0.2))
+	_check("interpolate flag parsed", at != null and at.interpolate)
+
+	# Blockstate variants → BlockStateMap (orientation → model + rotation).
+	var stairs := ws.get_block_type("test_stairs")
+	_check("orientation variants captured in a state_map",
+		stairs != null and stairs.state_map != null and not stairs.state_map.is_empty())
+	var east := stairs.state_map.resolve(Orientation.make(Orientation.Facing.EAST, false))
+	var north := stairs.state_map.resolve(Orientation.make(Orientation.Facing.NORTH, false))
+	_check("facing=east resolves to its model with no rotation",
+		east.get("model_id", "") == "testmod:block/test_block" and int(east.get("y_rot", -1)) == 0)
+	_check("facing=north carries its y rotation", int(north.get("y_rot", -1)) == 270)
+
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	AssetLibrary.ROOT = saved_root
+
+func _color_near(a: Color, b: Color, tol: float) -> bool:
+	return absf(a.r - b.r) <= tol and absf(a.g - b.g) <= tol and absf(a.b - b.b) <= tol
+
+# Write `text` to a user://-scratch absolute path, creating parent dirs as needed.
+func _write_file(path: String, text: String) -> void:
+	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f != null:
+		f.store_string(text)
+
+func _write_png(path: String, image: Image) -> void:
+	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
+	image.save_png(path)
+
+# Recursively delete a directory tree (test scratch cleanup). No-op if absent.
+func _rm_rf(path: String) -> void:
+	var dir := DirAccess.open(path)
+	if dir == null:
+		return
+	for f in dir.get_files():
+		DirAccess.remove_absolute(path.path_join(f))
+	for d in dir.get_directories():
+		_rm_rf(path.path_join(d))
+	DirAccess.remove_absolute(path)

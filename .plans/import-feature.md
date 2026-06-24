@@ -1,8 +1,42 @@
 # Block Import Pipeline — Design Plan
 
-Status: **Phase 0 complete.** Pick up at Phase 1.
+Status: **Phase 2 complete.** Pick up at Phase 3 (connecting/multipart blocks).
 
 Progress log:
+- **Phase 2 (done, 2026-06-23):** the MC translator. New `scripts/mcimport/MCImporter.gd`
+  is the *only* MC-aware module (the plugin boundary — core stays MC-free); it reads
+  `assets/<ns>/{blockstates,models,textures}` off disk (res://·user://·absolute) and
+  fills the workspace libraries + copies pixels through `AssetLibrary`. `import_block`
+  resolves the model **parent chain** (`_resolve_model_json`, cached; textures merge
+  child-wins, elements inherited-or-replaced), converts elements (16→1 units, faces →
+  `BlockModel` faces with uv/cullface/rotation/tint_index; auto-UV when MC omits it,
+  exact for full faces), imports each referenced PNG once (`_ensure_texture`: copy +
+  `_scan_image` average-color/transparency + `.mcmeta` animation, **ticks→seconds ÷20**),
+  samples the dominant texture's average into `BlockType.color` (decision 1), and parses
+  blockstate `variants` into a **`BlockStateMap`** (new neutral resource, nested on
+  `BlockType`). Refs canonicalize to `ns:path` (bare → minecraft) so models/textures
+  dedup by id; **template parents (cube/cube_all) are flattened into each leaf model,
+  never added as standalone models** (Phase 1 carry-over honored). `import_all()` walks
+  every namespace → modded MC is free. `multipart` blockstates warn + skip (Phase 3).
+  18 new smoke assertions (synthetic `assets/` tree — we bundle no MC content,
+  decision 4) + 2 new shell assertions (importer → View3D render loop). 80 (was 62)
+  smoke + 29 (was 27) shell green; validate clean.
+- **Phase 1 (done, 2026-06-23):** neutral library container + asset storage +
+  textured/animated rendering. New `scripts/core/AssetLibrary.gd` is the single
+  storage accessor — `ROOT` (static var, `res://library`) is the one swap point for
+  res://→user:// later; `path_for`/`ensure_dir`/`file_exists`/`list_files`/
+  `load_image`/`load_texture` (loads loose PNGs via `Image.load`, bypassing the
+  editor import pipeline — decision 3). New `scripts/core/LibraryStore.gd` persists
+  the id-addressed libraries (`BlockModel`/`TextureAsset`/`BlockType`) as loose
+  `.tres` under `models/`·`textures/`·`block_types/` (`pixels/<ns>/` holds the raw
+  images `TextureAsset.image_path` points at); `save_all`/`load_into` (load merges
+  by id/name so built-ins survive). `View3D` gained an **additive** textured path:
+  models with bound, loadable textures render per-face quads (one surface per
+  distinct texture_key, explicit UVs) with static `StandardMaterial3D`s or, for
+  frame strips, a `ShaderMaterial` that walks the V-offset from `TIME`; models with
+  no textures keep the BoxMesh **color path untouched**, so the default build is
+  byte-for-byte unchanged. `.gitignore` excludes `/library/` (decision 4). 62 (was
+  48) smoke + 27 (was 21) shell assertions green; validate clean.
 - **Phase 0 (done, 2026-06-23):** material layer generalized. `BlockModel` +
   `TextureAsset` resources added; `VoxelWorkspace` gained `block_models` /
   `texture_assets` libraries with id-keyed CRUD + `register_builtin_models()`;
@@ -202,29 +236,87 @@ Decisions made while implementing Phase 0 (for future phases):
 - `BlockType.shape` and `BlockModel` coexist intentionally (backward-compat +
   the 2D glyph). If/when 2D consumes models, revisit whether `shape` retires.
 
-### Phase 1 — Neutral library container + asset storage
-- Implement the storage accessor (`res://`-relative, abstracted).
-- Define on-disk layout + serialization for `BlockModel`/`TextureAsset`/`BlockType`.
-- Animated-texture rendering: keep MC's vertical frame strip; render with a small
-  shader that advances the V-offset by `frame_time` from `TIME` (one material, no
-  per-frame mesh churn). Wire into the Phase 0 material builder.
-- This container is fillable by hand or by any importer, not just MC.
+### Phase 1 — Neutral library container + asset storage ✅ DONE
+- [x] Implement the storage accessor (`res://`-relative, abstracted).
+      → `scripts/core/AssetLibrary.gd` (`ROOT` static var = the single swap point).
+- [x] Define on-disk layout + serialization for `BlockModel`/`TextureAsset`/
+      `BlockType`. → `scripts/core/LibraryStore.gd` (loose `.tres`; `models/`,
+      `textures/`, `block_types/`, `pixels/<ns>/`).
+- [x] Animated-texture rendering: MC's vertical frame strip, one `ShaderMaterial`
+      advancing the V-offset by `frame_time` from `TIME` (no per-frame churn,
+      instances animate in lockstep). → `View3D._anim_shader_for` /
+      `_animated_material`, wired into the cell-appearance builder.
+- [x] Container is fillable by hand or by any importer (round-trip test authors a
+      model/texture/block type with no importer in sight).
 
-### Phase 2 — MC importer (the translator)
+Decisions made while implementing Phase 1 (for future phases):
+- **Two render paths, color stays primary.** Textured rendering is purely
+  additive: a model with loadable textures → per-face quads + per-surface
+  materials; a model with none → the existing BoxMesh + color material. The default
+  build (no textures) is untouched. Slice-mode (the 2D-planning emphasis) stays
+  **color-based** even for textured cells — it overrides `material_override` with
+  the average color, consistent with decision 1 (fast planning, color never
+  vestigial). `_restore_base_material` drops the override afterward.
+- **Texture binding is model-level, resolved per-render.** `model.textures` maps
+  texture_key → `TextureAsset` id; `View3D` resolves ids → loadable images through
+  the workspace library each rebuild (cached). No view owns texture state. Phase 2
+  must flatten each MC block into its **own** `BlockModel` (parent geometry + that
+  block's own bindings) — models are only shared when geometry *and* textures match.
+- **Godot winding gotcha (baked into `_add_face`):** Godot's front faces wind so
+  the triangle's geometric cross product points *opposite* the surface normal
+  (verified by probe). The face builder self-corrects (flips the perimeter if it
+  came out the other way), and a ShellTest asserts every textured triangle is
+  front-facing — so Phase 2/3 geometry can't silently invert.
+- **File format is `.tres` behind `LibraryStore`** (decision 5 = neutral *data
+  model*, not a neutral *encoding*). It's plain text / hand-editable and carries no
+  `.import` sidecar. If external-tool authoring ever needs JSON, change it in
+  `LibraryStore` alone. `load_into` **merges** by id/name (never nukes built-ins).
+- **`frame_time` is seconds/frame** in `TextureAsset` (the shader consumes it
+  directly); the Phase 2 importer converts MC's ticks (×1/20) on the way in.
+- **`average_color` still feeds the planning views** — Phase 2 samples it from the
+  main texture at import and mirrors it into `BlockType.color` (decision 1), so 2D
+  and slice-mode never touch pixels.
+
+### Phase 2 — MC importer (the translator) ✅ DONE
 Standalone module reading `assets/<ns>/{blockstates,models,textures}`:
-- Resolve model `parent` chain; merge `textures` maps + `elements` (vanilla
-  geometry lives in `block/block`, `block/cube`, `block/stairs`, `block/slab`…).
-- Convert elements: 0–16 coords → voxyl units; faces → `BlockModel` faces
-  (uv, rotation, cullface, tintindex).
-- Copy referenced PNGs into the asset library via the accessor; parse
-  `.png.mcmeta` `animation` → `TextureAsset` frames.
-- Parse blockstate `variants` → `BlockStateMap`, mapping MC `facing`/`half` onto
-  voxyl `Orientation`; flatten unmodeled properties to a sensible default.
-- Emit one `BlockType` per block (name from block id) with the sampled
-  `average_color` fallback.
-- **Modded MC is nearly free:** mods ship the identical `assets/<namespace>/...`
-  layout inside jars. Point the importer at a mods folder; each namespace imports
-  the same way. Design for it from the start.
+- [x] Resolve model `parent` chain; merge `textures` maps + `elements`.
+      → `MCImporter._resolve_model_json` (cached; child textures win, elements
+      inherited unless the child defines its own).
+- [x] Convert elements: 0–16 coords → voxyl units; faces → `BlockModel` faces
+      (uv, rotation, cullface, tintindex). → `_convert_elements` / `_face_uv`
+      (auto-UV derived from the element footprint when MC omits `uv`).
+- [x] Copy referenced PNGs into the asset library via the accessor; parse
+      `.png.mcmeta` `animation` → `TextureAsset` frames. → `_ensure_texture` /
+      `_apply_mcmeta` (frametime ticks ÷20 → seconds; `_scan_image` for
+      average-color + a transparency class).
+- [x] Parse blockstate `variants` → `BlockStateMap`, mapping MC `facing`/`half`
+      onto voxyl `Orientation`; flatten unmodeled properties. → new neutral
+      `scripts/core/BlockStateMap.gd`, nested on `BlockType.state_map`.
+- [x] Emit one `BlockType` per block (name = block id) with the sampled
+      `average_color` and `model_id` = the resting-orientation model.
+- [x] **Modded MC is nearly free:** `import_all()` walks every namespace under the
+      assets root; bare refs canonicalize to `minecraft`, qualified refs stay put.
+
+Decisions made while implementing Phase 2 (for Phase 3):
+- **`BlockStateMap` data is captured but not yet consumed by views.** The importer
+  fully translates `variants` into orientation → `{model_id, x_rot, y_rot, uvlock}`,
+  and `BlockType.model_id` points at the **resting-orientation** model so the existing
+  textured path renders imported blocks correctly *at default orientation*. Per-
+  orientation model selection + applying the variant's MC x/y rotation is **deferred
+  to the Phase 3 render-time resolver in the views** — it's the same integration point
+  the multipart/connection resolver needs, and the rotation convention (MC bakes
+  facing into the variant's x/y; voxyl currently rotates one NORTH-authored model via
+  `Orientation.basis_of`) needs *visual* verification, not just headless asserts.
+  **Guardrail for Phase 3:** when a `state_map` drives a block, the view must use the
+  variant's x/y rotation and **not** also apply `basis_of` (double-rotation).
+- **Surfaces are keyed by texture identity.** A face's `texture_key` is the canonical
+  texture ref (`ns:path`), so `model.textures` is an identity map for imports and
+  faces sharing a texture share one render surface (max sharing). Hand-authored models
+  may still use friendly keys like `"all"` — `View3D` treats the key as opaque.
+- **Element-level rotation (`rotation: {origin,axis,angle}`)** — used by rails/levers/
+  fences — is **not** converted yet (warned, skipped). Add it when Phase 3 needs the
+  rotated sub-cubes. UV `rotation`/flips are stored on the face but not yet applied to
+  the geometry's UVs either.
 
 ### Phase 3 — Connecting / multipart blocks (fences, walls, panes, bars, redstone)
 - Handle MC's `multipart` blockstate form (`when` conditions on `north=true`…).

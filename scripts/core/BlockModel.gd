@@ -33,6 +33,13 @@ const BUILTIN_STAIRS := "stairs"
 @export var textures: Dictionary = {}        # texture_key:String -> TextureAsset id:String
 @export var ambient_occlusion: bool = true
 
+# True when the model binds any texture keys. The built-ins (full/slab/stairs)
+# carry none, so they stay on the color path; an importer/hand-authored model with
+# bindings opts into the textured render path. A quick gate before the (costlier)
+# resolution of each key to an actual loadable image.
+func has_textures() -> bool:
+	return not textures.is_empty()
+
 # --- Construction helpers ---------------------------------------------------
 
 # A face bound to `texture_key`, full-face UVs by default. cullface/rotation/

@@ -2,6 +2,10 @@
 .godot/
 .nomedia
 
+# Imported asset library (AssetLibrary.ROOT). These are the user's own MC/resource
+# assets, read at runtime — never bundled or committed (see import-feature.md).
+/library/
+
 # Godot-specific ignores
 .import/
 export.cfg
