@@ -1,6 +1,19 @@
 # Block Import Pipeline — Design Plan
 
-Status: **design captured, not started.** Pick up at Phase 0.
+Status: **Phase 0 complete.** Pick up at Phase 1.
+
+Progress log:
+- **Phase 0 (done, 2026-06-23):** material layer generalized. `BlockModel` +
+  `TextureAsset` resources added; `VoxelWorkspace` gained `block_models` /
+  `texture_assets` libraries with id-keyed CRUD + `register_builtin_models()`;
+  `BlockType` gained `model_id`; `VoxelWorld` gained `get_model_for_semantic` /
+  `get_texture_for_semantic`; `View3D` now builds geometry from `BlockModel`
+  elements (`_mesh_for_model`, the old `_mesh_for_shape`/`_combine_boxes` are
+  gone). FULL/SLAB/STAIRS are built-in models. 48 + 21 tests green; default build
+  renders identically (model at true [0,1] size × a view-applied 0.94 scale ==
+  the old baked geometry). NOTE: new `class_name` scripts require a reimport
+  (`/c/godot.exe --headless --import --path .`) before validation can resolve
+  them.
 
 Goal: a pipeline to bring new block types into voxyl by reading the *same asset
 format Minecraft and modded MC already use* — so we can visualize real blocks,
@@ -156,17 +169,38 @@ Layout sketch (under the abstracted root):
 
 ## Phases
 
-### Phase 0 — Generalize the material layer (NO MC yet) ← start here
+### Phase 0 — Generalize the material layer (NO MC yet) ✅ DONE
 The real architectural work; must land before any import code.
-- Add `BlockModel` + `TextureAsset` resources.
-- Generalize `View3D._mesh_for_shape` → a mesh builder that consumes
-  `BlockModel.elements` and builds textured materials (replaces hardcoded boxes
-  + per-semantic color-only material).
-- Add `VoxelWorld.get_model_for_semantic` / `get_texture_for_semantic`.
-- Express FULL / SLAB / STAIRS as built-in `BlockModel`s.
-- **Validate:** existing default build still renders; `tools/validate-scripts.sh`
-  and `tests/run_tests.sh` pass (Windows: see memory note — Godot at `/c/godot.exe`,
-  `run_tests.sh` needs `GODOT=` override).
+- [x] Add `BlockModel` + `TextureAsset` resources.
+      → `scripts/core/BlockModel.gd`, `scripts/core/TextureAsset.gd`.
+- [x] Generalize `View3D._mesh_for_shape` → a mesh builder that consumes
+      `BlockModel.elements` (replaces hardcoded boxes + the shape enum switch).
+      → `View3D._mesh_for_model`, keyed/cached by model id. **Carry-over to
+      Phase 1:** it still applies one color material per semantic; per-face
+      *textured* materials (multiple surfaces / UVs from the face data) are
+      wired in at the Phase 1 material step. The face/uv data already rides on
+      the model elements, unused for now.
+- [x] Add `VoxelWorld.get_model_for_semantic` / `get_texture_for_semantic`.
+      Same last-wins palette walk as the color/shape resolvers. `get_texture_*`
+      returns null today (no textures imported → color path).
+- [x] Express FULL / SLAB / STAIRS as built-in `BlockModel`s.
+      → `BlockModel.builtin_full/slab/stairs`, reserved ids `full`/`slab`/
+      `stairs`, seeded via `VoxelWorkspace.register_builtin_models()` in
+      `VoxelWorld._ready`. `BlockType.shape` is kept as the *fallback selector*
+      when `model_id` is empty (also still drives the 2D facing glyph + Hotbar
+      hint), so nothing regressed.
+- [x] **Validate:** default build renders identically; `validate-scripts.sh` clean;
+      48 (smoke) + 21 (shell) tests pass. New `_test_models` covers the resolver.
+
+Decisions made while implementing Phase 0 (for future phases):
+- The inter-voxel gap is a **view rendering style**, not model geometry: models
+  are authored at true size ([0,1] = a full block) and `View3D.VOXEL_SCALE`
+  (0.94) shrinks them. Keep new models true-size; let views inset.
+- Built-in models carry full per-face `faces` dicts (texture_key/uv/cullface/
+  rotation/tint_index) even though Phase 0 only reads `from`/`to`. Phase 1 can
+  rely on the face schema being present.
+- `BlockType.shape` and `BlockModel` coexist intentionally (backward-compat +
+  the 2D glyph). If/when 2D consumes models, revisit whether `shape` retires.
 
 ### Phase 1 — Neutral library container + asset storage
 - Implement the storage accessor (`res://`-relative, abstracted).

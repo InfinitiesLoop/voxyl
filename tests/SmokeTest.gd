@@ -13,6 +13,7 @@ func _ready() -> void:
 	_test_cell_orientation_tags()
 	_test_hotbar()
 	_test_shapes()
+	_test_models()
 	_test_reorient()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
@@ -139,6 +140,41 @@ func _test_shapes() -> void:
 		VoxelWorld.get_shape_for_semantic("Slab") == BlockType.Shape.SLAB)
 	_check("plain semantic resolves to FULL",
 		VoxelWorld.get_shape_for_semantic("Base") == BlockType.Shape.FULL)
+
+func _test_models() -> void:
+	print("-- model resolution (Phase 0 material layer)")
+	var ws := VoxelWorld.workspace
+	VoxelWorld.open(ws.get_project("My First Build"))
+	_check("built-in models registered",
+		ws.get_block_model(BlockModel.BUILTIN_FULL) != null
+		and ws.get_block_model(BlockModel.BUILTIN_SLAB) != null
+		and ws.get_block_model(BlockModel.BUILTIN_STAIRS) != null)
+	# A semantic resolves to the built-in model matching its block type's shape.
+	var base_model := VoxelWorld.get_model_for_semantic("Base")
+	_check("plain semantic resolves to full model",
+		base_model != null and base_model.id == BlockModel.BUILTIN_FULL)
+	_check("slab semantic resolves to slab model",
+		VoxelWorld.get_model_for_semantic("Slab").id == BlockModel.BUILTIN_SLAB)
+	_check("stairs semantic resolves to stairs model",
+		VoxelWorld.get_model_for_semantic("Stairs").id == BlockModel.BUILTIN_STAIRS)
+	_check("full model is a single unit-cube element",
+		base_model.elements.size() == 1
+		and base_model.elements[0]["from"] == Vector3.ZERO
+		and base_model.elements[0]["to"] == Vector3.ONE)
+	# No textures imported yet → color path; texture resolver returns null.
+	_check("no texture for semantic in the color path",
+		VoxelWorld.get_texture_for_semantic("Base") == null)
+	# An explicit model_id overrides the shape fallback (the additive path).
+	var custom := BlockModel.new()
+	custom.id = "__test_pillar__"
+	custom.elements = [BlockModel.box_element(Vector3(0.25, 0, 0.25), Vector3(0.75, 1, 0.75))]
+	ws.add_block_model(custom)
+	var bt := ws.get_block_type("Stone")  # "Base" maps to Stone, shape FULL
+	bt.model_id = "__test_pillar__"
+	_check("explicit model_id overrides shape fallback",
+		VoxelWorld.get_model_for_semantic("Base").id == "__test_pillar__")
+	bt.model_id = ""
+	ws.remove_block_model("__test_pillar__")
 
 func _test_reorient() -> void:
 	print("-- reorient existing cells (R / Shift+R)")

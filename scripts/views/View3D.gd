@@ -14,6 +14,11 @@ signal focus_requested
 # TODO: drive this from a user sensitivity setting.
 const DOLLY_STEP := 1.25
 
+# Uniform shrink applied to every voxel mesh, leaving the subtle gap between
+# blocks. This is a view rendering style, not model geometry: BlockModel elements
+# are authored at true size (a full block fills [0,1]) and the view insets them.
+const VOXEL_SCALE := 0.94
+
 # Keys the camera consumes while flying, so they don't also drive the UI
 # (e.g. arrow keys switching tabs or moving focus).
 const _MOVEMENT_KEYS := [
@@ -82,7 +87,7 @@ var _slice_center := Vector3i.ZERO
 var _orbit_dist := 16.0       # camera distance to the pivot while orbiting
 var _drag_moved := false      # distinguishes an orbit-drag from a confirm-click
 var _cell_nodes := {}         # Vector3i -> MeshInstance3D (filled in _rebuild)
-var _shape_meshes := {}       # BlockType.Shape -> Mesh (built lazily, shared)
+var _model_meshes := {}       # model id (String) -> Mesh (built lazily, shared)
 var _normal_mats := {}        # semantic -> StandardMaterial3D (base appearance)
 var _faded_mats := {}         # semantic -> StandardMaterial3D (off-plane fade)
 var _onplane_mats := {}       # semantic -> StandardMaterial3D (on-plane pop)
@@ -706,13 +711,15 @@ func _rebuild() -> void:
 			var mat := StandardMaterial3D.new()
 			mat.albedo_color = VoxelWorld.get_color_for_semantic(semantic)
 			_normal_mats[semantic] = mat
-		var shape := VoxelWorld.get_shape_for_semantic(semantic)
+		var model := VoxelWorld.get_model_for_semantic(semantic)
 		var mi := MeshInstance3D.new()
-		mi.mesh = _mesh_for_shape(shape)
+		mi.mesh = _mesh_for_model(model)
 		mi.material_override = _normal_mats[semantic]
-		# Rotate by orientation (cubes ignore it); meshes are authored centered, so
-		# the basis spins about the cell center.
-		var basis := Basis() if shape == BlockType.Shape.FULL else Orientation.basis_of(cell.orientation)
+		# Geometry comes from the resolved BlockModel (built centered on the cell).
+		# The orientation basis spins it about the cell center; the uniform
+		# VOXEL_SCALE shrink leaves the inter-voxel gap. A plain cube at the default
+		# orientation reduces to identity·scale — i.e. the old full-block render.
+		var basis := Orientation.basis_of(cell.orientation).scaled(Vector3.ONE * VOXEL_SCALE)
 		mi.transform = Transform3D(basis, Vector3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5))
 		mi.set_meta("semantic", semantic)
 		_voxel_root.add_child(mi)
@@ -723,39 +730,26 @@ func _rebuild() -> void:
 		_update_slice_visuals()
 	_refresh_guide()  # the guide plane spans the build, so resize it on rebuild
 
-# Shared, lazily-built mesh per shape. Authored centered on the origin and facing
-# NORTH (-Z) / bottom-half so Orientation.basis_of() can rotate it into place.
-func _mesh_for_shape(shape: BlockType.Shape) -> Mesh:
-	if _shape_meshes.has(shape):
-		return _shape_meshes[shape]
-	var mesh: Mesh
-	match shape:
-		BlockType.Shape.SLAB:
-			mesh = _combine_boxes([
-				[Vector3(0, -0.235, 0), Vector3(0.94, 0.47, 0.94)],  # bottom half
-			])
-		BlockType.Shape.STAIRS:
-			mesh = _combine_boxes([
-				[Vector3(0, -0.235, 0),    Vector3(0.94, 0.47, 0.94)],  # bottom slab
-				[Vector3(0, 0.235, 0.235), Vector3(0.94, 0.47, 0.47)],  # upper back step
-			])
-		_:
-			var box := BoxMesh.new()
-			box.size = Vector3(0.94, 0.94, 0.94)
-			mesh = box
-	_shape_meshes[shape] = mesh
-	return mesh
-
-# Build one mesh from a set of [center, size] boxes. BoxMesh already carries the
-# right normals/UVs/winding, so append_from gives clean, well-lit geometry.
-func _combine_boxes(boxes: Array) -> ArrayMesh:
+# Shared, lazily-built mesh per model id. Each BlockModel element is a box
+# (from..to in [0,1] voxyl units); we center it on the cell origin so
+# Orientation.basis_of() rotates about the cell center and VOXEL_SCALE shrinks it.
+# BoxMesh carries clean normals/UVs/winding, so append_from gives well-lit geometry.
+# (Per-face textures/UVs from the model are wired in at the Phase 1 material step.)
+func _mesh_for_model(model: BlockModel) -> Mesh:
+	var key := model.id if not model.id.is_empty() else str(model.get_instance_id())
+	if _model_meshes.has(key):
+		return _model_meshes[key]
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for b in boxes:
+	for element in model.elements:
+		var from: Vector3 = element["from"]
+		var to: Vector3 = element["to"]
 		var box := BoxMesh.new()
-		box.size = b[1]
-		st.append_from(box, 0, Transform3D(Basis(), b[0]))
-	return st.commit()
+		box.size = to - from
+		st.append_from(box, 0, Transform3D(Basis(), (from + to) * 0.5 - Vector3(0.5, 0.5, 0.5)))
+	var mesh := st.commit()
+	_model_meshes[key] = mesh
+	return mesh
 
 # ---------------------------------------------------------------------------
 # Raycast

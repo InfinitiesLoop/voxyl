@@ -29,6 +29,7 @@ var active_slot: int = 0
 
 func _ready() -> void:
 	workspace = VoxelWorkspace.new()
+	workspace.register_builtin_models()
 	hotbar.resize(HOTBAR_SIZE)
 	hotbar.fill("")
 	_populate_defaults()
@@ -117,6 +118,39 @@ func get_shape_for_semantic(semantic_name: String) -> BlockType.Shape:
 				if bt:
 					result = bt.shape
 	return result
+
+# Resolved render geometry for a semantic, as a BlockModel. Same last-wins
+# palette-stack walk as color/shape: find the mapped block type, then return its
+# explicit model (model_id → library) or the built-in model for its `shape`.
+# Always returns a model so the view never special-cases geometry.
+func get_model_for_semantic(semantic_name: String) -> BlockModel:
+	var bt := workspace.get_block_type(get_block_type_for_semantic(semantic_name))
+	if bt and not bt.model_id.is_empty():
+		var explicit := workspace.get_block_model(bt.model_id)
+		if explicit:
+			return explicit
+	var shape_id := _builtin_model_id_for_shape(bt.shape if bt else BlockType.Shape.FULL)
+	var builtin := workspace.get_block_model(shape_id)
+	return builtin if builtin else BlockModel.builtin_by_id(shape_id)
+
+# Primary TextureAsset for a semantic (the model's "all"/"side"/first binding),
+# or null when the resolved model carries no textures — the color path. Resolves
+# texture ids through the workspace library, same stack walk as the others.
+# (Per-face lookup by slice-plane normal is deferred; see the plan.)
+func get_texture_for_semantic(semantic_name: String) -> TextureAsset:
+	var model := get_model_for_semantic(semantic_name)
+	if model == null or model.textures.is_empty():
+		return null
+	var key := "all"
+	if not model.textures.has(key):
+		key = "side" if model.textures.has("side") else model.textures.keys()[0]
+	return workspace.get_texture_asset(model.textures[key])
+
+func _builtin_model_id_for_shape(shape: BlockType.Shape) -> String:
+	match shape:
+		BlockType.Shape.SLAB: return BlockModel.BUILTIN_SLAB
+		BlockType.Shape.STAIRS: return BlockModel.BUILTIN_STAIRS
+		_: return BlockModel.BUILTIN_FULL
 
 func merged_semantic_names() -> Array[String]:
 	var seen := {}
