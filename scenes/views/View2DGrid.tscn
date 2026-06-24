@@ -7,23 +7,41 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 script = ExtResource("1")
 
-[node name="LayerBar" type="HBoxContainer" parent="."]
-custom_minimum_size = Vector2(0, 32)
+[node name="Toolbar" type="PanelContainer" parent="."]
 
-[node name="LayerDownBtn" type="Button" parent="LayerBar"]
+[node name="LayerBar" type="HBoxContainer" parent="Toolbar"]
+custom_minimum_size = Vector2(0, 30)
+
+[node name="RotateCCWBtn" type="Button" parent="Toolbar/LayerBar"]
+custom_minimum_size = Vector2(28, 0)
+text = "↺"
+tooltip_text = "Rotate view CCW"
+
+[node name="LayerDownBtn" type="Button" parent="Toolbar/LayerBar"]
+custom_minimum_size = Vector2(28, 0)
 text = "▼"
+tooltip_text = "Previous layer"
 
-[node name="LayerLabel" type="Label" parent="LayerBar"]
+[node name="LayerLabel" type="Label" parent="Toolbar/LayerBar"]
 size_flags_horizontal = 3
-text = "Layer 0"
+text = "Y = 0"
 horizontal_alignment = 1
 vertical_alignment = 1
 
-[node name="LayerUpBtn" type="Button" parent="LayerBar"]
+[node name="LayerUpBtn" type="Button" parent="Toolbar/LayerBar"]
+custom_minimum_size = Vector2(28, 0)
 text = "▲"
+tooltip_text = "Next layer"
+
+[node name="RotateCWBtn" type="Button" parent="Toolbar/LayerBar"]
+custom_minimum_size = Vector2(28, 0)
+text = "↻"
+tooltip_text = "Rotate view CW"
 
 [node name="GridArea" type="Control" parent="."]
 size_flags_vertical = 3
 
-[connection signal="pressed" from="LayerBar/LayerDownBtn" to="." method="_on_layer_down_pressed"]
-[connection signal="pressed" from="LayerBar/LayerUpBtn" to="." method="_on_layer_up_pressed"]
+[connection signal="pressed" from="Toolbar/LayerBar/RotateCCWBtn" to="." method="_on_rotate_ccw_pressed"]
+[connection signal="pressed" from="Toolbar/LayerBar/LayerDownBtn" to="." method="_on_layer_down_pressed"]
+[connection signal="pressed" from="Toolbar/LayerBar/LayerUpBtn" to="." method="_on_layer_up_pressed"]
+[connection signal="pressed" from="Toolbar/LayerBar/RotateCWBtn" to="." method="_on_rotate_cw_pressed"]
