@@ -86,7 +86,7 @@ var _slice_axis := 1
 var _slice_center := Vector3i.ZERO
 var _orbit_dist := 16.0       # camera distance to the pivot while orbiting
 var _drag_moved := false      # distinguishes an orbit-drag from a confirm-click
-var _cell_nodes := {}         # Vector3i -> MeshInstance3D (filled in _rebuild)
+var _cell_nodes := {}         # Vector3i -> MeshInstance3D, or Node3D container of parts (multipart)
 var _model_meshes := {}       # model id (String) -> Mesh (built lazily, shared)
 var _normal_mats := {}        # semantic -> StandardMaterial3D (base appearance)
 var _faded_mats := {}         # semantic -> StandardMaterial3D (off-plane fade)
@@ -729,22 +729,96 @@ func _rebuild() -> void:
 		var semantic: String = cell.type_id
 		if semantic.is_empty():
 			continue
-		var model := VoxelWorld.get_model_for_semantic(semantic)
-		var mi := MeshInstance3D.new()
-		_apply_cell_appearance(mi, semantic, model)
-		# Geometry comes from the resolved BlockModel (built centered on the cell).
-		# The orientation basis spins it about the cell center; the uniform
-		# VOXEL_SCALE shrink leaves the inter-voxel gap. A plain cube at the default
-		# orientation reduces to identity·scale — i.e. the old full-block render.
-		var basis := Orientation.basis_of(cell.orientation).scaled(Vector3.ONE * VOXEL_SCALE)
-		mi.transform = Transform3D(basis, Vector3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5))
-		_voxel_root.add_child(mi)
-		_cell_nodes[pos] = mi
+		# A cell resolves to one or more render parts (geometry + a model rotation).
+		# A plain block is a single part; a connecting/multipart block is its post
+		# plus a side part per connected neighbor. The uniform VOXEL_SCALE shrink
+		# leaves the inter-voxel gap; a plain cube at the default orientation reduces
+		# to identity·scale — i.e. the old full-block render, byte-for-byte.
+		var parts := _resolve_cell_parts(pos, cell, semantic)
+		var center := Vector3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5)
+		var node: Node3D
+		if parts.size() == 1:
+			# Common case (every default-build cell): a single MeshInstance3D, placed
+			# directly so the node structure — and thus the render — is unchanged.
+			var mi := MeshInstance3D.new()
+			_apply_cell_appearance(mi, semantic, parts[0]["model"])
+			mi.transform = Transform3D((parts[0]["basis"] as Basis).scaled(Vector3.ONE * VOXEL_SCALE), center)
+			node = mi
+		else:
+			# Multipart: a container at the cell center holding one child per part,
+			# each with its own model + rotation. The cached per-model meshes and
+			# per-surface materials are reused across parts and cells.
+			var container := Node3D.new()
+			container.position = center
+			for part in parts:
+				var mi := MeshInstance3D.new()
+				_apply_cell_appearance(mi, semantic, part["model"])
+				mi.transform = Transform3D((part["basis"] as Basis).scaled(Vector3.ONE * VOXEL_SCALE), Vector3.ZERO)
+				container.add_child(mi)
+			node = container
+		_voxel_root.add_child(node)
+		_cell_nodes[pos] = node
 	# Re-apply emphasis if a rebuild happened while choosing a slice (e.g. an edit
 	# in another view, or a palette change).
 	if _slice_active:
 		_update_slice_visuals()
 	_refresh_guide()  # the guide plane spans the build, so resize it on rebuild
+
+# ---------------------------------------------------------------------------
+# Render-time part resolver
+#
+# Turns a cell into the list of {model, basis} parts to draw. This is the single
+# integration point for a block type's state_map: plain blocks, orientation
+# variants, and connecting/multipart blocks all funnel through here so the rebuild
+# loop never special-cases them. Connection flags are DERIVED from neighbors at
+# render time and never stored on the cell (data stores intent only).
+# ---------------------------------------------------------------------------
+
+func _resolve_cell_parts(pos: Vector3i, cell: BlockCell, semantic: String) -> Array:
+	var bt := VoxelWorld.get_block_type_object_for_semantic(semantic)
+	var sm: BlockStateMap = bt.state_map if bt else null
+	# Connecting block: its post + a side part for each occupied neighbor.
+	if sm != null and sm.is_multipart():
+		var conns := _cell_connections(pos)
+		var out: Array = []
+		for part in sm.resolve_parts(conns):
+			var m := VoxelWorld.workspace.get_block_model(str(part.get("model_id", "")))
+			if m != null:
+				out.append({"model": m, "basis": _rotation_basis(int(part.get("x_rot", 0)), int(part.get("y_rot", 0)))})
+		if not out.is_empty():
+			return out
+	# Orientation variant: pick this facing's model + its baked rotation. We apply
+	# the variant's x/y here INSTEAD of Orientation.basis_of, so the rotation MC
+	# already encoded isn't applied twice (the Phase 2 → 3 guardrail).
+	elif sm != null and not sm.is_empty():
+		var entry := sm.resolve(cell.orientation)
+		if not entry.is_empty():
+			var m := VoxelWorld.workspace.get_block_model(str(entry.get("model_id", "")))
+			if m != null:
+				return [{"model": m, "basis": _rotation_basis(int(entry.get("x_rot", 0)), int(entry.get("y_rot", 0)))}]
+	# Plain block (and the safety net if a state_map's model went missing): the
+	# resolved model rotated by the cell's own orientation.
+	return [{"model": VoxelWorld.get_model_for_semantic(semantic), "basis": Orientation.basis_of(cell.orientation)}]
+
+# Boolean connection flags for a cell: a direction connects when its neighbor cell
+# is occupied. Keyed by BlockModel.Dir (0..5), matching the dirs the importer wrote
+# into a part's `when` clauses. A deliberately simple, intent-only rule — refine it
+# later (solidity / same-type) without touching the data layer.
+func _cell_connections(pos: Vector3i) -> Dictionary:
+	var data := VoxelWorld.active_project.data
+	var conns := {}
+	for dir in _DIR_NORMALS:
+		var npos := pos + Vector3i(_DIR_NORMALS[dir])
+		conns[dir] = not data.get_block(npos).is_empty()
+	return conns
+
+# Model rotation for a state_map-driven part, in voxyl's convention. y degrees turn
+# the model clockwise seen from above (NORTH→EAST→SOUTH→WEST), x degrees tilt about
+# the world X axis; MC bakes x then y, so y is on the left. Verified against the
+# horizontal facings: a NORTH-pointing arm with y=90 lands EAST, matching how MC
+# rotates fence sides and stairs.
+func _rotation_basis(x_deg: int, y_deg: int) -> Basis:
+	return Basis(Vector3.UP, deg_to_rad(-y_deg)) * Basis(Vector3.RIGHT, deg_to_rad(-x_deg))
 
 # Shared, lazily-built mesh per model id. Each BlockModel element is a box
 # (from..to in [0,1] voxyl units); we center it on the cell origin so
@@ -1363,12 +1437,10 @@ func _orbit_camera() -> void:
 func _update_slice_visuals() -> void:
 	var offset: int = _slice_center[_slice_axis]
 	for pos: Vector3i in _cell_nodes:
-		var mi: MeshInstance3D = _cell_nodes[pos]
-		var semantic: String = mi.get_meta("semantic", "")
-		if pos[_slice_axis] == offset:
-			mi.material_override = _onplane_mat_for(semantic)
-		else:
-			mi.material_override = _faded_mat_for(semantic)
+		var on_plane := pos[_slice_axis] == offset
+		for mi in _cell_mesh_instances(_cell_nodes[pos]):
+			var semantic: String = mi.get_meta("semantic", "")
+			mi.material_override = _onplane_mat_for(semantic) if on_plane else _faded_mat_for(semantic)
 	var b := _slice_plane_bounds()
 	_slice_bounds_lo = b[0]
 	_slice_bounds_hi = b[1]
@@ -1378,13 +1450,26 @@ func _update_slice_visuals() -> void:
 
 # Return a cell to its non-slice look: textured cells drop the override so their
 # per-surface materials show again; color cells get their base color material back.
-func _restore_base_material(mi: MeshInstance3D) -> void:
-	if mi.get_meta("textured", false):
-		mi.material_override = null
-		return
-	var semantic: String = mi.get_meta("semantic", "")
-	if _normal_mats.has(semantic):
-		mi.material_override = _normal_mats[semantic]
+# Accepts a single MeshInstance3D or a multipart container (restores every part).
+func _restore_base_material(node: Node) -> void:
+	for mi in _cell_mesh_instances(node):
+		if mi.get_meta("textured", false):
+			mi.material_override = null
+		else:
+			var semantic: String = mi.get_meta("semantic", "")
+			if _normal_mats.has(semantic):
+				mi.material_override = _normal_mats[semantic]
+
+# The MeshInstance3D(s) a cell node owns: itself for a single-part cell, or its
+# children for a multipart container. Lets slice-mode treat both uniformly.
+func _cell_mesh_instances(node: Node) -> Array:
+	if node is MeshInstance3D:
+		return [node]
+	var out: Array = []
+	for child in node.get_children():
+		if child is MeshInstance3D:
+			out.append(child)
+	return out
 
 # Off-plane appearance: dithered (order-independent) coverage + a brightness
 # knockdown. An operation on the rendered block, not an assumption about its color.

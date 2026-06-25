@@ -18,6 +18,8 @@ func _ready() -> void:
 	_test_asset_library()
 	_test_library_serialization()
 	_test_mc_import()
+	_test_statemap_multipart()
+	_test_mc_import_multipart()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
@@ -397,6 +399,114 @@ func _test_mc_import() -> void:
 	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(src)
 	AssetLibrary.ROOT = saved_root
+
+# Phase 3: the neutral multipart map on its own — OR/AND clause matching and part
+# selection from derived connection flags, with no importer or view involved.
+func _test_statemap_multipart() -> void:
+	print("-- multipart state map (connection parts)")
+	var sm := BlockStateMap.new()
+	sm.add_part([], "post")                      # always-on (the post)
+	sm.add_part([{0: true}], "side", 0, 0)       # north (dir 0)
+	sm.add_part([{1: true}], "side", 0, 90)      # east  (dir 1)
+	sm.add_part([{0: true, 1: true}], "corner")  # north AND east (one clause)
+	sm.add_part([{2: true}, {3: true}], "cap")   # south OR west (two clauses)
+	_check("non-empty multipart map reads as multipart",
+		sm.is_multipart() and not sm.is_empty())
+	_check("default part is the always-on post", sm.default_part_model_id() == "post")
+	# No connections → just the post.
+	var none := sm.resolve_parts({})
+	_check("no neighbors → post only", none.size() == 1 and none[0]["model_id"] == "post")
+	# North connected → post + north side; the AND-corner and OR-cap stay off.
+	_check("north connection → post + north side",
+		_part_ids(sm.resolve_parts({0: true})) == ["post", "side"])
+	# North+East → post + both sides + the AND corner.
+	_check("north+east → post, two sides, the AND corner",
+		_part_ids(sm.resolve_parts({0: true, 1: true})) == ["post", "side", "side", "corner"])
+	# OR clause: matches south alone or west alone, but not an unrelated direction.
+	_check("OR clause matches either branch (not an unrelated dir)",
+		_part_ids(sm.resolve_parts({2: true})).has("cap")
+		and _part_ids(sm.resolve_parts({3: true})).has("cap")
+		and not _part_ids(sm.resolve_parts({0: true})).has("cap"))
+
+# Phase 3: the importer translates an MC `multipart` blockstate (a fence) into the
+# neutral multipart map — boolean direction conditions become connection clauses,
+# multi-value conditions (wall/redstone style) are skipped, not fatal.
+func _test_mc_import_multipart() -> void:
+	print("-- mc importer multipart (fences/panes/bars)")
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_mpimport__"
+	var src := "user://__voxyl_mpsrc__"
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	var assets := src + "/assets"
+
+	# A fence: a post (always) + a side arm per connected horizontal neighbor, the
+	# same model rotated by y. One stray part uses a non-boolean (wall-style) value
+	# to prove unhandled conditions are skipped rather than aborting the import.
+	_write_file(assets + "/testmod/blockstates/test_fence.json", """
+{ "multipart": [
+	{ "apply": { "model": "testmod:block/fence_post" } },
+	{ "when": { "north": "true" }, "apply": { "model": "testmod:block/fence_side" } },
+	{ "when": { "east":  "true" }, "apply": { "model": "testmod:block/fence_side", "y": 90 } },
+	{ "when": { "south": "true" }, "apply": { "model": "testmod:block/fence_side", "y": 180 } },
+	{ "when": { "west":  "true" }, "apply": { "model": "testmod:block/fence_side", "y": 270 } },
+	{ "when": { "up": "tall" }, "apply": { "model": "testmod:block/fence_side" } } ] }
+""")
+	_write_file(assets + "/testmod/models/block/fence_post.json", """
+{ "textures": {"all":"testmod:block/planks"}, "elements": [ { "from": [6,0,6], "to": [10,16,10], "faces": {
+	"down": {"texture":"#all"}, "up": {"texture":"#all"},
+	"north": {"texture":"#all"}, "south": {"texture":"#all"},
+	"west": {"texture":"#all"}, "east": {"texture":"#all"} } } ] }
+""")
+	_write_file(assets + "/testmod/models/block/fence_side.json", """
+{ "textures": {"all":"testmod:block/planks"}, "elements": [ { "from": [7,6,0], "to": [9,15,9], "faces": {
+	"down": {"texture":"#all"}, "up": {"texture":"#all"},
+	"north": {"texture":"#all"}, "south": {"texture":"#all"},
+	"west": {"texture":"#all"}, "east": {"texture":"#all"} } } ] }
+""")
+	var planks := Image.create_empty(16, 16, false, Image.FORMAT_RGBA8)
+	planks.fill(Color(0.6, 0.45, 0.25))
+	_write_png(assets + "/testmod/textures/block/planks.png", planks)
+
+	var ws := VoxelWorkspace.new()
+	var imp := MCImporter.new(assets, ws)
+	imp.import_block("testmod", "test_fence")
+
+	var bt := ws.get_block_type("test_fence")
+	_check("fence imported with a multipart state_map",
+		bt != null and bt.state_map != null and bt.state_map.is_multipart())
+	_check("fence model_id points at the always-on post",
+		bt != null and bt.model_id == "testmod:block/fence_post")
+	_check("post + 4 boolean sides translated; non-boolean part skipped",
+		bt != null and bt.state_map.parts.size() == 5)
+	_check("the non-boolean 'when' part was warned + skipped",
+		_warns_contain(imp, "unhandled 'when'"))
+	_check("post + side models imported",
+		ws.get_block_model("testmod:block/fence_post") != null
+		and ws.get_block_model("testmod:block/fence_side") != null)
+	_check("shared texture imported once", ws.texture_assets.size() == 1)
+	# Connection resolution end-to-end: isolated → post; east neighbor → +y=90 side.
+	var sm := bt.state_map
+	_check("isolated fence resolves to the post only", sm.resolve_parts({}).size() == 1)
+	var east_parts := sm.resolve_parts({1: true})   # EAST connected (dir 1)
+	_check("east connection adds the y=90 side",
+		east_parts.size() == 2 and int(east_parts[1].get("y_rot", -1)) == 90)
+
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	AssetLibrary.ROOT = saved_root
+
+func _part_ids(parts: Array) -> Array:
+	var out: Array = []
+	for p in parts:
+		out.append(p["model_id"])
+	return out
+
+func _warns_contain(imp: MCImporter, needle: String) -> bool:
+	for w in imp.warnings:
+		if w.find(needle) >= 0:
+			return true
+	return false
 
 func _color_near(a: Color, b: Color, tol: float) -> bool:
 	return absf(a.r - b.r) <= tol and absf(a.g - b.g) <= tol and absf(a.b - b.b) <= tol

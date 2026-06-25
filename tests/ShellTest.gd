@@ -45,6 +45,7 @@ func _run() -> void:
 
 	_check_textured_render(v3d)
 	_check_imported_render(v3d)
+	_check_multipart_render(v3d)
 
 	var tb := (_panes(shell)[0] as ViewPane).get_tab_bar()
 	_check("tab bar enables cross-pane drag",
@@ -234,6 +235,67 @@ func _check_imported_render(v3d: Node) -> void:
 	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(src)
 	AssetLibrary.ROOT = saved_root
+
+# Phase 3: a multipart/connecting block must render as a render-time set of parts —
+# its post when isolated, and an extra side part per occupied neighbor — with the
+# connection state derived from neighbors, never stored. Hand-built (color path) so
+# the assertion is about the part/container structure the view builds, not textures.
+func _check_multipart_render(v3d: Node) -> void:
+	var ws := VoxelWorld.workspace
+	var post := BlockModel.new()
+	post.id = "mp_post"
+	post.elements = [BlockModel.box_element(Vector3(0.375, 0, 0.375), Vector3(0.625, 1, 0.625))]
+	var side := BlockModel.new()
+	side.id = "mp_side"
+	side.elements = [BlockModel.box_element(Vector3(0.4375, 0.375, 0), Vector3(0.5625, 0.9375, 0.5))]
+	ws.add_block_model(post)
+	ws.add_block_model(side)
+	var sm := BlockStateMap.new()
+	sm.add_part([], "mp_post")              # always
+	sm.add_part([{0: true}], "mp_side", 0, 0)    # north
+	sm.add_part([{1: true}], "mp_side", 0, 90)   # east
+	sm.add_part([{2: true}], "mp_side", 0, 180)  # south
+	sm.add_part([{3: true}], "mp_side", 0, 270)  # west
+	var bt := ws.add_block_type("MPFenceBlock")
+	bt.model_id = "mp_post"
+	bt.state_map = sm
+	var pal := ws.add_palette("__mp_test__")
+	var e := PaletteEntry.new()
+	e.semantic_name = "MPFence"; e.block_type_name = "MPFenceBlock"
+	pal.entries.append(e)
+	var project := VoxelWorld.active_project
+	project.palette_names.append("__mp_test__")
+
+	# Isolated: just the post → a single MeshInstance3D node (no container).
+	VoxelWorld.set_block(Vector3i(0, 8, 0), "MPFence")
+	v3d._rebuild()
+	var iso = (v3d.get("_cell_nodes") as Dictionary).get(Vector3i(0, 8, 0))
+	_check("isolated multipart cell → single node (post only)", iso is MeshInstance3D)
+
+	# Add north (-Z) and east (+X) neighbors → post + 2 sides in a container.
+	VoxelWorld.set_block(Vector3i(0, 8, -1), "Base")
+	VoxelWorld.set_block(Vector3i(1, 8, 0), "Base")
+	v3d._rebuild()
+	var con = (v3d.get("_cell_nodes") as Dictionary).get(Vector3i(0, 8, 0))
+	_check("connected multipart cell → container of parts",
+		con is Node3D and not (con is MeshInstance3D))
+	var part_meshes := 0
+	if con is Node3D:
+		for c in (con as Node3D).get_children():
+			if c is MeshInstance3D:
+				part_meshes += 1
+	_check("post + 2 connected sides → 3 part meshes", part_meshes == 3)
+
+	# Teardown — restore the workspace/project for the checks that follow.
+	VoxelWorld.clear_block(Vector3i(0, 8, 0))
+	VoxelWorld.clear_block(Vector3i(0, 8, -1))
+	VoxelWorld.clear_block(Vector3i(1, 8, 0))
+	project.palette_names.erase("__mp_test__")
+	ws.remove_palette("__mp_test__")
+	ws.remove_block_type("MPFenceBlock")
+	ws.remove_block_model("mp_post")
+	ws.remove_block_model("mp_side")
+	v3d._rebuild()
 
 func _write_text(path: String, text: String) -> void:
 	DirAccess.make_dir_recursive_absolute(path.get_base_dir())

@@ -80,8 +80,7 @@ func import_block(ns: String, block_id: String) -> BlockType:
 		_warn("unreadable blockstate: %s:%s" % [ns, block_id])
 		return null
 	if bs.has("multipart"):
-		_warn("multipart blockstate skipped (Phase 3): %s:%s" % [ns, block_id])
-		return null
+		return _import_multipart(ns, block_id, bs["multipart"])
 	if not bs.has("variants"):
 		_warn("blockstate has no variants: %s:%s" % [ns, block_id])
 		return null
@@ -103,9 +102,86 @@ func import_block(ns: String, block_id: String) -> BlockType:
 
 	# The resting-orientation model is what BlockType.model_id and the current 3D
 	# path resolve; sample its dominant texture for the planning color (decision 1).
-	var primary_ref := state_map.default_model_id()
-	var primary_model := _workspace.get_block_model(primary_ref)
+	return _emit_block_type(block_id, state_map.default_model_id(), state_map)
 
+# Translate an MC `multipart` blockstate (fences, panes, bars) into a multipart
+# BlockStateMap. Each rule is { when?, apply }: `apply` names the model (+ optional
+# x/y rotation), `when` the connection condition. Boolean direction conditions
+# (north/east/…=true/false) are translated; multi-value vocabularies (walls'
+# low/tall, redstone's side/up) are out of this phase — those parts are skipped
+# (warned), so the block still imports with whatever parts we can render (at least
+# the always-on post).
+func _import_multipart(ns: String, block_id: String, multipart) -> BlockType:
+	if not (multipart is Array):
+		_warn("malformed multipart: %s:%s" % [ns, block_id])
+		return null
+	var state_map := BlockStateMap.new()
+	for rule in multipart:
+		if not (rule is Dictionary):
+			continue
+		var apply = rule.get("apply")
+		if apply is Array:
+			apply = apply[0] if not apply.is_empty() else null   # weighted → first
+		if not (apply is Dictionary):
+			continue
+		var model_ref := _canonical(str(apply.get("model", "")))
+		if _ensure_model(model_ref) == null:
+			continue
+		var clauses = _parse_when(rule.get("when", null))
+		if clauses == null:
+			_warn("multipart part skipped (unhandled 'when'): %s:%s" % [ns, block_id])
+			continue
+		state_map.add_part(clauses, model_ref,
+			int(apply.get("x", 0)), int(apply.get("y", 0)), bool(apply.get("uvlock", false)))
+	if state_map.parts.is_empty():
+		_warn("multipart had no usable parts: %s:%s" % [ns, block_id])
+		return null
+	return _emit_block_type(block_id, state_map.default_part_model_id(), state_map)
+
+# Translate an MC `when` condition into the neutral OR-of-clauses form. Returns the
+# clause Array ([] when the rule has no `when` → always applies), or null when the
+# condition can't be expressed with boolean direction flags (caller skips the part).
+func _parse_when(when):
+	if when == null:
+		return []                          # no condition → always
+	if not (when is Dictionary):
+		return null
+	if when.has("OR"):
+		var clauses: Array = []
+		for sub in when["OR"]:
+			var c = _parse_clause(sub)
+			if c != null:                  # drop sub-clauses we can't translate
+				clauses.append(c)
+		if clauses.is_empty():
+			return null
+		return clauses
+	if when.has("AND"):
+		return null                        # nested AND-of-conditions not handled yet
+	var clause = _parse_clause(when)
+	if clause == null:
+		return null
+	return [clause]
+
+# One MC `when` clause (a dict of property=value) → { dir:int -> bool }, or null if
+# any property isn't a boolean direction connection (e.g. shape=, or walls' low/tall).
+func _parse_clause(d):
+	if not (d is Dictionary):
+		return null
+	var clause := {}
+	for k in d.keys():
+		var dir: int = _DIR6.get(str(k), -1)
+		if dir < 0:
+			return null
+		var v := str(d[k]).to_lower()
+		if v != "true" and v != "false":
+			return null
+		clause[dir] = (v == "true")
+	return clause
+
+# Create/update the BlockType for an imported block: bind its primary model, nest
+# the state map, and mirror the dominant texture's average into the planning color.
+func _emit_block_type(block_id: String, primary_ref: String, state_map: BlockStateMap) -> BlockType:
+	var primary_model := _workspace.get_block_model(primary_ref)
 	var bt := _workspace.get_block_type(block_id)
 	if bt == null:
 		bt = _workspace.add_block_type(block_id)
@@ -114,7 +190,6 @@ func import_block(ns: String, block_id: String) -> BlockType:
 	var avg = _model_average_color(primary_model)
 	if avg != null:
 		bt.color = avg
-
 	if not imported_blocks.has(block_id):
 		imported_blocks.append(block_id)
 	return bt

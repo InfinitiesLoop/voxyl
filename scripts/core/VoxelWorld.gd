@@ -102,6 +102,13 @@ func get_block_type_for_semantic(semantic_name: String) -> String:
 				result = bt
 	return result
 
+# The resolved BlockType object for a semantic (last-wins palette walk), or null.
+# Views that need more than color/geometry — e.g. the 3D view reading a block's
+# state_map to drive orientation variants / multipart connection parts — go through
+# this. It's still the material layer: the data never names a block type.
+func get_block_type_object_for_semantic(semantic_name: String) -> BlockType:
+	return workspace.get_block_type(get_block_type_for_semantic(semantic_name))
+
 # Resolved render shape (FULL/SLAB/STAIRS) for a semantic, via the palette stack
 # (last-wins, same as color/block-type). Shape is a visual property of the mapped
 # block type — the data never stores it.

@@ -1,8 +1,52 @@
 # Block Import Pipeline — Design Plan
 
-Status: **Phase 2 complete.** Pick up at Phase 3 (connecting/multipart blocks).
+Status: **Phase 3 complete.** Pick up at Phase 4 (tinting / biome colors).
 
 Progress log:
+- **Phase 3 (done, 2026-06-23):** connecting/multipart blocks + a unified render-time
+  part resolver. `BlockStateMap` gained a neutral `parts` array (multipart) beside
+  `entries` (variants): a part is `{when, model_id, x_rot, y_rot, uvlock}` where `when`
+  is an OR-of-clauses, each clause a `{Dir:int → bool}` AND — zero MC strings. New
+  `is_multipart`/`add_part`/`resolve_parts`/`default_part_model_id`. `MCImporter` now
+  translates `multipart` blockstates (`_import_multipart` + `_parse_when`/`_parse_clause`):
+  boolean direction conditions (north/east/…=true/false) become clauses; multi-value
+  vocabularies (walls' low/tall, redstone's none/side/up, and `AND`-of-conditions) are
+  warned + skipped, so the block still imports its post. `BlockType.model_id` = the
+  always-on (post) part; the bt-emit boilerplate is shared via `_emit_block_type`.
+  `View3D` funnels every cell through `_resolve_cell_parts(pos, cell, semantic) →
+  [{model, basis}]`: plain blocks → one part (model + `basis_of`, default build
+  byte-for-byte unchanged); multipart → post + a side per occupied neighbor (connections
+  DERIVED via `_cell_connections`, never stored — `BlockCell` untouched); variant blocks
+  → this facing's model + the variant's baked x/y rotation via the new `_rotation_basis`
+  INSTEAD of `basis_of` (the Phase 2→3 guardrail — no double-rotation). Single-part cells
+  stay a lone `MeshInstance3D` (unchanged node structure); multipart cells become a
+  `Node3D` container of per-part mesh instances — slice-mode + `_restore_base_material`
+  iterate `_cell_mesh_instances(node)` so both shapes behave. New
+  `VoxelWorld.get_block_type_object_for_semantic` (last-wins) hands the view the resolved
+  BlockType+state_map. 94 (was 80) smoke + 32 (was 29) shell green; validate clean; app
+  boots clean.
+
+  Decisions made (for Phase 4+):
+  - **Connection = neighbor occupancy.** Deliberately simple, derived purely from
+    VoxelData, nothing stored (data = intent). Refine later (solidity / same-type /
+    model-bounds) without touching the data layer or the resolver's shape.
+  - **Boolean connections only this phase (fences, glass panes, iron bars).** Walls
+    (low/tall) and redstone (none/side/up) carry a *multi-value per-direction* state, not
+    a bool — those parts are skipped, so such blocks import as a bare post. Generalizing
+    `when` to dir→state (string) plus a per-block connection-state computer is the
+    follow-up.
+  - **Rotation convention reused from `Orientation.basis_of`.** `_rotation_basis(x,y) =
+    Basis(UP,-y°)·Basis(RIGHT,-x°)`; verified for the horizontal y-90° steps (a
+    NORTH-pointing arm + y=90 → EAST, matching MC fence sides). x=180 (upside-down) and
+    wall geometry still want *visual* confirmation — headless asserts only check
+    structure/counts. Variant blocks now consume this, fixing a latent Phase 2 mismatch
+    (an east-base MC model rendered unrotated at voxyl-NORTH).
+  - **Element-level rotation still deferred.** Fence/pane/bar geometry is axis-aligned,
+    so Phase 3 didn't need `rotation:{origin,axis,angle}`; it stays warned/skipped until
+    rails/levers (or rotated wall caps) need it.
+  - **Full rebuild recomputes connections.** `block_changed` → `_mark_dirty` → full
+    `_rebuild`, so placing/clearing a neighbor re-derives every cell's parts. No
+    incremental-neighbor path; revisit only if rebuild cost shows up.
 - **Phase 2 (done, 2026-06-23):** the MC translator. New `scripts/mcimport/MCImporter.gd`
   is the *only* MC-aware module (the plugin boundary — core stays MC-free); it reads
   `assets/<ns>/{blockstates,models,textures}` off disk (res://·user://·absolute) and
@@ -318,14 +362,28 @@ Decisions made while implementing Phase 2 (for Phase 3):
   rotated sub-cubes. UV `rotation`/flips are stored on the face but not yet applied to
   the geometry's UVs either.
 
-### Phase 3 — Connecting / multipart blocks (fences, walls, panes, bars, redstone)
-- Handle MC's `multipart` blockstate form (`when` conditions on `north=true`…).
-- These need a **render-time connection resolver** in the views: for a connecting
-  block type, inspect neighbors, compute connection flags, select model parts.
-- **Connection state is derived, never stored** — `BlockCell` gains nothing.
-  Same as MC; fully consistent with "data stores intent." This is the one place
-  rendering needs neighbor context — call it out so nobody starts writing
-  connection state into the data.
+### Phase 3 — Connecting / multipart blocks (fences, panes, bars) ✅ DONE
+- [x] Handle MC's `multipart` blockstate form (`when` conditions on `north=true`…).
+      → `MCImporter._import_multipart` / `_parse_when` / `_parse_clause`; boolean
+      direction conditions only (walls' low/tall + redstone's side/up are skipped,
+      warned — those need a multi-value connection vocabulary; see Phase 3 decisions).
+- [x] **Render-time connection resolver** in the view: `View3D._resolve_cell_parts`
+      inspects neighbors (`_cell_connections`), selects parts via
+      `BlockStateMap.resolve_parts`, and builds a `Node3D` container of per-part mesh
+      instances (single-part cells stay a lone `MeshInstance3D`).
+- [x] **Connection state is derived, never stored** — `BlockCell` gained nothing;
+      flags come from neighbor occupancy at render time, recomputed on every rebuild.
+- [x] Folded the deferred Phase 2 variant-rotation consumption into the same resolver
+      (`_rotation_basis`, no double-`basis_of`).
+- [x] **Validate:** 94 (smoke) + 32 (shell) green; validate clean; app boots clean.
+
+Still open after Phase 3 (carried into the relevant later phase / a future pass):
+- **Walls + redstone** — multi-value per-direction connection states (low/tall,
+  none/side/up). Generalize `when` to dir→state strings + a per-block state computer.
+- **Element-level rotation** (`rotation:{origin,axis,angle}`) — still warned/skipped;
+  add when rails/levers/rotated caps need rotated sub-cubes.
+- **Rotation x=180 / upside-down + wall geometry** want a *visual* check (headless
+  asserts only cover the boolean y-90° connecting case structurally).
 
 ### Phase 4 — Tinting / biome colors
 - Grayscale + `tintindex` textures (grass, leaves, water, foliage) tinted from
