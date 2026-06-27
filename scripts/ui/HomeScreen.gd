@@ -365,13 +365,24 @@ func _build_block_types_tab() -> Control:
 	left.custom_minimum_size.x = 200
 	split.add_child(left)
 
+	var left_vbox := VBoxContainer.new()
+	left_vbox.add_theme_constant_override("separation", 8)
+	left.add_child(left_vbox)
+
+	# Import blocks from the user's own MC assets (Phase 5). Imported block types
+	# land in the library below and are assigned to palettes via the normal workflow.
+	var import_btn := Button.new()
+	import_btn.text = "Add blocks…"
+	import_btn.pressed.connect(_on_import_blocks)
+	left_vbox.add_child(import_btn)
+
 	_block_types_list = LibraryList.new()
 	_block_types_list.list_title = "Block Types"
 	_block_types_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_block_types_list.add_requested.connect(_on_add_block_type)
 	_block_types_list.delete_requested.connect(_on_delete_block_type)
 	_block_types_list.item_selected.connect(_on_block_type_selected)
-	left.add_child(_block_types_list)
+	left_vbox.add_child(_block_types_list)
 
 	var right := _margin(16)
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -458,6 +469,11 @@ func _draw_block_preview(ctl: Control, color: Color) -> void:
 		o + Vector2(s, -s * 0.5), o + Vector2(0.0, 0.0),
 		o + Vector2(0.0, s), o + Vector2(s, s * 0.5),
 	]), color.darkened(0.25))
+
+func _on_import_blocks() -> void:
+	var panel := ImportPanel.new()
+	get_tree().root.add_child(panel)
+	panel.popup_centered()
 
 func _on_add_block_type(block_name: String) -> void:
 	if not VoxelWorld.workspace.get_block_type(block_name):

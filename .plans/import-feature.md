@@ -1,8 +1,128 @@
 # Block Import Pipeline — Design Plan
 
-Status: **Phase 4 complete.** Pick up at Phase 5 (import UX + library management).
+Status: **Phase 5 complete + pre-1.8 path + import-UX polish.** Remaining items are
+the "Open questions / revisit later" list, not a numbered phase.
 
 Progress log:
+- **Phase 5.2 (done, 2026-06-27):** import-UX polish from real vanilla-import feedback
+  (a ~1048-block import felt frozen, warnings were a bare count, names were unhelpful).
+  - **Namespace-aware naming + overwrite.** `ImportService.name_for(ns,id)` treats the
+    `minecraft` namespace as the *default* (no prefix): vanilla blocks import as `dirt`,
+    `oak_planks`; every other namespace keeps its prefix (`create:cogwheel`). Because
+    the importer reuses a block type by name, a vanilla import **overwrites** a like-
+    named shipped default in place. The MC-specific "minecraft == default ns" rule lives
+    only in the importer plugin — core `VoxelWorkspace` stays MC-free.
+  - **Lowercase default block types.** `VoxelWorld._add_default_block_types` /
+    `_add_default_palette` now ship `stone`, `oak_planks`, `oak_stairs`, … (MC-id style
+    but still generic, no `minecraft:`), so importing the real game slots its textured
+    blocks straight over the placeholders. The defaults don't *depend* on MC.
+  - **Non-freezing import + progress.** `ImportService` gained an incremental API
+    (`begin_import`/`import_step`/`end_import`); `import_selected` is now a thin wrapper
+    over it. New `ImportProgressDialog` (`scripts/ui/`) drives it, `await`-ing a frame
+    every 16 blocks so the bar/label repaint on the main thread, then shows the result.
+  - **Warnings are shown, not just counted.** The dialog lists the warning lines in a
+    scrollable read-only box plus a category summary (count per message prefix), so
+    "1706 warnings" becomes legible ("blocks we couldn't fully translate — normal for a
+    full game import").
+  - **Selection defaults.** The browse list selects all by default; the "Select all"
+    button became a checkbox that also deselects; search re-applies the checkbox state.
+  - **Test isolation fix.** Startup `LibraryStore.load_into` made autoload-based tests
+    depend on whatever `res://library` a prior import left behind. New
+    `VoxelWorld.reset_for_tests()` (called first by both test scenes) rebuilds pristine,
+    library-free defaults. 156 (was 150) smoke + 42 (was 37) shell green; validate clean;
+    boots clean.
+- **Phase 5.1 (done, 2026-06-26):** pre-1.8 (1.7.10-era) import. Discovered when the
+  user pointed at a real GT New Horizons (MC 1.7.10) instance: pre-1.8 mods ship **no
+  blockstate/model JSON** (blocks were drawn by Java code), only loose textures under
+  `assets/<ns>/textures/blocks/*.png`. So the Phase 2–5 importer (which keys off
+  blockstates) imports nothing from them. Added a second translator, **`MCFlatImporter`**
+  (`scripts/mcimport/MCFlatImporter.gd`), that synthesizes voxyl's neutral layer from
+  those bare textures — every block a unit cube. It's **smarter than "always a cube"**:
+  block textures across that era follow vanilla's face-naming convention
+  (`<base>_top`/`_bottom`/`_side`/`_front`), with the separator varying by mod
+  (underscore in Thaumcraft, dot in Railcraft, **camelCase** in EnderIO —
+  `solarPanelAdvancedSide`). `_tokenize` splits a name on `_`/`.`/`-`/space **and
+  camelCase boundaries**; `_classify` strips trailing state words (`on`/`off`/`active`/
+  `filled`/digits…) and a trailing face token, yielding a `{base, face}`. Textures
+  sharing a base are grouped into ONE multi-face cube — but only when **corroborated**
+  (≥2 distinct faces, or a face + a plain texture); a lone suffixed texture or a plain
+  one stays its own uniform cube, so a coincidence (`treetop`) never invents a block.
+  Faces fill specific dirs first, then `side`→horizontals, then a sensible default for
+  gaps. Texture ingestion (copy/scan/animate, incl. `.png.mcmeta` which 1.7.10 already
+  uses) is **shared with MCImporter** via the new static **`MCTexImport`** helper
+  (MCImporter now delegates `_ensure_texture`/`_split_ref`/scan/mcmeta to it — one
+  source of truth, zero behavior change, all prior tests unchanged). `ImportService`
+  gained a `Mode { JSON, FLAT }` that routes to the right importer (same sources,
+  same browse/import/dedup/persist). `ImportPanel` gained a **Format** OptionButton
+  ("Minecraft 1.8+ (block models)" / "Older / pre-1.8 (textures only)") that
+  re-browses on change, plus a caveat note in FLAT mode that shapes are guessed, and
+  a **"Common locations"** menu (`MCInstallLocations`, pure path construction per
+  `OS.get_name()`) that jumps the file/folder picker to where vanilla / CurseForge /
+  Prism keep things on Windows & macOS (+ a Linux fallback). Prompted by real
+  confusion that vanilla blocks (`minecraft:stone`/`dirt`) live in a version **.jar**,
+  not in a mods folder — while a backport mod like Et Futurum supplies the
+  `minecraft:`-namespace blocks that *do* appear in `mods/`. Locations present on the
+  machine jump the right picker straight there; missing ones stay listed (disabled) as
+  a hint. 150 (was 128) smoke + 37 (was 34) shell green; validate clean; boots clean.
+
+  Honest limits of FLAT mode (documented in the panel + class header): only geometry
+  *recorded in assets* can be recovered, and pre-1.8 records none — so slabs/stairs/
+  fences/cross-plants all come in as cubes; transparency is detected (cutout/translucent)
+  but never drives shape; runtime-composited mods (GregTech overlays) won't reassemble;
+  textures in nested `blocks/<subdir>/` aren't browsed (flat listing only). The naming
+  heuristic is a *default*, not a guarantee — everything imported is still a re-tintable,
+  re-shapeable material-layer block the user can fix by hand.
+
+- **Phase 5 (done, 2026-06-26):** import UX + library management. The MC-awareness
+  was already complete (Phases 2–4); Phase 5 is the *source + browse + persistence*
+  layer plus a thin UI. New **`MCAssetSource`** abstraction (`scripts/mcimport/`)
+  decouples *where bytes live* from MCImporter's MC-layout knowledge: pure path
+  →bytes/listing I/O relative to the assets root, with `MCDirSource` (a folder, the
+  old behavior) and `MCZipSource` (a `ZIPReader` over a resource-pack `.zip` / mod
+  `.jar`, mapping `<rel>` → `assets/<rel>` inside the archive). `MCImporter` now
+  **reads through a source** instead of building OS paths (`_init` still accepts a
+  String, wrapping it in `MCDirSource`, so every Phase 2–4 test is byte-for-byte
+  unchanged); gained public `list_namespaces()`/`list_blocks(ns)` for browsing
+  without importing, and an optional `name_override` on `import_block` so a caller
+  can name a BlockType something other than the bare id. New
+  **`ImportService`** orchestrates: `detect_sources(path)` (a `.zip`/`.jar` → one zip
+  source; a folder with an `assets/` child → its assets root; a mods folder → one zip
+  per archive; else the folder as assets root), `available_blocks()` (the browse
+  list, `{ns,id,ref,source}` sorted by ref), and `import_selected()` which **dedups +
+  namespaces** names (bare id when unique, qualified `ns:id` on a cross-namespace
+  collision — friendly in the common single-pack case, collision-safe for multi-mod)
+  then persists via `LibraryStore.save_all`. New **`ImportPanel`** (`Window`) is the
+  "Add blocks…" UX off the HomeScreen Block-Types tab: file/folder source pickers,
+  a search box, a multiselect `ItemList`, import, and the always-visible licensing
+  note (decision 4). `VoxelWorld._ready` now calls `LibraryStore.load_into` so
+  imported libraries survive a restart (projects/palettes are still code-seeded each
+  launch — only the shared block-type/model/texture libraries persist). 128 (was 107)
+  smoke + 34 shell green; validate clean; app boots clean.
+
+  Decisions made while implementing Phase 5:
+  - **Source abstraction sits *below* MCImporter, not inside core.** It's pure I/O
+    (no MC concepts), so it doesn't violate "core stays MC-free" — MCImporter remains
+    the one module that knows the `blockstates/models/textures` layout. Adding a new
+    source kind (an HTTP pack, a directory index) is a new `MCAssetSource` subclass,
+    nothing else.
+  - **Lazy read, never extract.** Zip blocks are resolved file-by-file through the
+    open `ZIPReader` (the parent chain pulls only what it needs), so importing 3 of a
+    1000-block jar touches 3 blocks' worth of files. No temp-dir extraction.
+  - **Dedup naming lives in the service, not the importer.** `import_block` still
+    emits the bare id by default (tests unchanged); the service decides the final
+    name from the *whole selection* and passes it via `name_override`. Collision rule:
+    qualify when the bare id repeats in the selection, or when an existing imported
+    block type's `model_id` namespace differs. Defaults (empty `model_id`, Title-Case
+    names) never false-positive against MC's lowercase ids.
+  - **Persistence is library-only.** `save_all`/`load_into` already merge by id/name,
+    so startup load over the code-seeded defaults is safe. Projects and palettes are
+    *not* persisted yet (pre-existing) — out of scope here; an imported block shows up
+    in the Block-Types library and is assigned to a palette via the existing workflow.
+  - **Synchronous import.** A full-jar import copies many PNGs; threading/progress is
+    deferred (can't headless-verify a thread well, and the service is structured so a
+    progress callback drops in later). Fine for selective imports, the common path.
+  - **Still open:** threaded/progress import for huge selections; persisting
+    projects/palettes; a tint-override editor (carried from Phase 4).
 - **Phase 4 (done, 2026-06-25):** biome tinting. MC tints grayscale `tintindex`
   textures (grass, leaves, water) from biome colormaps decided in *Java*, not assets —
   the model JSON only carries a per-face `tintindex`. voxyl has no biomes, so the
@@ -442,13 +562,22 @@ visual property), defaulting to the MC plains/default biome.
       New `_test_mc_import_tint` / `_test_tint_resolver` (smoke) + `_check_tinted_render`
       (shell).
 
-### Phase 5 — Import UX + library management
-- "Add blocks…" panel: pick a source (resource-pack zip, unzipped assets dir, or
-  mods folder), browse / search / multiselect, import.
-- Dedup + namespace generated names.
-- Show the licensing note (decision 4): imports from the user's own install.
-- Assigning imported `BlockType`s to palette semantics = the **existing** palette
-  workflow, unchanged.
+### Phase 5 — Import UX + library management ✅ DONE
+- [x] "Add blocks…" panel: pick a source (resource-pack zip / mod jar, unzipped
+      pack/assets dir, or mods folder), browse / search / multiselect, import.
+      → `scripts/ui/ImportPanel.gd` off the HomeScreen Block-Types tab, over
+      `ImportService` + the new `MCAssetSource` (`MCDirSource` / `MCZipSource`).
+- [x] Dedup + namespace generated names. → `ImportService._resolve_names` (bare id
+      when unique, qualified `ns:id` on a cross-namespace collision).
+- [x] Show the licensing note (decision 4): imports from the user's own install.
+      → always-visible note in `ImportPanel`.
+- [x] Assigning imported `BlockType`s to palette semantics = the **existing** palette
+      workflow, unchanged (import only fills the block-type library).
+- [x] Imported libraries persist across restarts — `LibraryStore.save_all` after an
+      import, `load_into` at startup in `VoxelWorld._ready`.
+- [x] **Validate:** 128 (smoke) + 34 (shell) green; validate clean; app boots clean.
+      New `_test_asset_sources` (dir/zip parity + zip→importer) + `_test_import_service`
+      (browse / import / dedup / persist).
 
 ---
 

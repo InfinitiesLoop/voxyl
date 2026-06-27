@@ -15,15 +15,17 @@ extends RefCounted
 # each imports the same way.
 #
 # Usage:
-#   var imp := MCImporter.new(assets_root, VoxelWorld.workspace)
+#   var imp := MCImporter.new(source, VoxelWorld.workspace)
 #   imp.import_namespace("minecraft")      # or imp.import_all()
 #   # → workspace libraries are filled in memory + pixels copied to disk;
 #   # the caller persists with LibraryStore.save_all(workspace).
 #
-# `assets_root` is the directory that directly contains the namespace folders (the
-# `assets/` dir of an unzipped resource pack or `.jar`). Reads go straight off disk
-# (res://, user://, or an absolute OS path); writes go through AssetLibrary so the
-# storage root stays the one swap point (decision 3).
+# `source` is an MCAssetSource — the assets root that directly contains the
+# namespace folders, whether that's a directory on disk or inside a resource-pack
+# `.zip` / mod `.jar`. For convenience (and the existing tests) a plain String path
+# is accepted and wrapped in an MCDirSource. Reads go through the source; writes
+# (copied pixels) go through AssetLibrary so the storage root stays the one swap
+# point (decision 3).
 
 # MC face / direction names, in BlockModel.Dir order (NORTH,EAST,SOUTH,WEST,UP,DOWN).
 # Orientation.Facing shares the same ordering, so this one table serves both the
@@ -32,7 +34,7 @@ const _DIR6 := {
 	"north": 0, "east": 1, "south": 2, "west": 3, "up": 4, "down": 5,
 }
 
-var _assets_root: String
+var _source: MCAssetSource
 var _workspace: VoxelWorkspace
 
 # Per-run caches. Resolved model JSON is cached by ref so the shared MC templates
@@ -44,9 +46,26 @@ var _resolved_cache := {}   # model ref -> { textures, elements, ao }
 var imported_blocks: Array[String] = []
 var warnings: Array[String] = []
 
-func _init(assets_root: String, workspace: VoxelWorkspace) -> void:
-	_assets_root = assets_root
+func _init(source, workspace: VoxelWorkspace) -> void:
+	_source = source if source is MCAssetSource else MCDirSource.new(source)
 	_workspace = workspace
+
+# ---------------------------------------------------------------------------
+# Browse (Phase 5) — list what's importable without importing anything.
+# ---------------------------------------------------------------------------
+
+# Namespaces the source offers (its top-level dirs), for the import browser.
+func list_namespaces() -> PackedStringArray:
+	return _source.list_namespaces()
+
+# Block ids (blockstate basenames) under a namespace — the browsable, importable
+# blocks, with nothing imported yet.
+func list_blocks(ns: String) -> PackedStringArray:
+	var out := PackedStringArray()
+	for file_name in _source.list_files("%s/blockstates" % ns):
+		if file_name.ends_with(".json"):
+			out.append(file_name.get_basename())
+	return out
 
 # ---------------------------------------------------------------------------
 # Entry points
@@ -54,33 +73,33 @@ func _init(assets_root: String, workspace: VoxelWorkspace) -> void:
 
 # Import every namespace found directly under the assets root (the modded case).
 func import_all() -> void:
-	var dir := DirAccess.open(_assets_root)
-	if dir == null:
-		_warn("assets root not found: %s" % _assets_root)
-		return
-	for ns in dir.get_directories():
+	for ns in _source.list_namespaces():
 		import_namespace(ns)
 
 # Import every block whose blockstate lives under `<ns>/blockstates/`.
 func import_namespace(ns: String) -> void:
-	var dir := DirAccess.open(_dir_path(ns, "blockstates"))
-	if dir == null:
+	var files := _source.list_files("%s/blockstates" % ns)
+	if files.is_empty():
 		_warn("no blockstates for namespace: %s" % ns)
 		return
-	for file_name in dir.get_files():
+	for file_name in files:
 		if file_name.ends_with(".json"):
 			import_block(ns, file_name.get_basename())
 
 # Translate one block (its blockstate + every model/texture it references) into a
 # BlockType in the workspace. Returns the BlockType, or null if it couldn't be read
-# or used a form not handled yet (multipart → Phase 3). Idempotent by name.
-func import_block(ns: String, block_id: String) -> BlockType:
-	var bs = _read_json(_blockstate_file(ns, block_id))
+# or used a form not handled yet. Idempotent by name. `name_override` lets a caller
+# (the import service deduping across namespaces) name the BlockType something other
+# than the bare block id — e.g. the qualified "ns:id" — without the importer needing
+# to know about collisions; "" keeps the bare block id.
+func import_block(ns: String, block_id: String, name_override := "") -> BlockType:
+	var bt_name := name_override if not name_override.is_empty() else block_id
+	var bs = _read_json(_blockstate_rel(ns, block_id))
 	if bs == null:
 		_warn("unreadable blockstate: %s:%s" % [ns, block_id])
 		return null
 	if bs.has("multipart"):
-		return _import_multipart(ns, block_id, bs["multipart"])
+		return _import_multipart(ns, block_id, bt_name, bs["multipart"])
 	if not bs.has("variants"):
 		_warn("blockstate has no variants: %s:%s" % [ns, block_id])
 		return null
@@ -102,7 +121,7 @@ func import_block(ns: String, block_id: String) -> BlockType:
 
 	# The resting-orientation model is what BlockType.model_id and the current 3D
 	# path resolve; sample its dominant texture for the planning color (decision 1).
-	return _emit_block_type(block_id, state_map.default_model_id(), state_map)
+	return _emit_block_type(bt_name, state_map.default_model_id(), state_map)
 
 # Translate an MC `multipart` blockstate (fences, panes, bars) into a multipart
 # BlockStateMap. Each rule is { when?, apply }: `apply` names the model (+ optional
@@ -111,7 +130,7 @@ func import_block(ns: String, block_id: String) -> BlockType:
 # low/tall, redstone's side/up) are out of this phase — those parts are skipped
 # (warned), so the block still imports with whatever parts we can render (at least
 # the always-on post).
-func _import_multipart(ns: String, block_id: String, multipart) -> BlockType:
+func _import_multipart(ns: String, block_id: String, bt_name: String, multipart) -> BlockType:
 	if not (multipart is Array):
 		_warn("malformed multipart: %s:%s" % [ns, block_id])
 		return null
@@ -136,7 +155,7 @@ func _import_multipart(ns: String, block_id: String, multipart) -> BlockType:
 	if state_map.parts.is_empty():
 		_warn("multipart had no usable parts: %s:%s" % [ns, block_id])
 		return null
-	return _emit_block_type(block_id, state_map.default_part_model_id(), state_map)
+	return _emit_block_type(bt_name, state_map.default_part_model_id(), state_map)
 
 # Translate an MC `when` condition into the neutral OR-of-clauses form. Returns the
 # clause Array ([] when the rule has no `when` → always applies), or null when the
@@ -180,19 +199,20 @@ func _parse_clause(d):
 
 # Create/update the BlockType for an imported block: bind its primary model, nest
 # the state map, and mirror the dominant texture's average into the planning color.
-func _emit_block_type(block_id: String, primary_ref: String, state_map: BlockStateMap) -> BlockType:
+# `bt_name` is the final, possibly-deduped name (bare block id or qualified "ns:id").
+func _emit_block_type(bt_name: String, primary_ref: String, state_map: BlockStateMap) -> BlockType:
 	var primary_model := _workspace.get_block_model(primary_ref)
-	var bt := _workspace.get_block_type(block_id)
+	var bt := _workspace.get_block_type(bt_name)
 	if bt == null:
-		bt = _workspace.add_block_type(block_id)
+		bt = _workspace.add_block_type(bt_name)
 	bt.model_id = primary_ref
 	bt.state_map = state_map
 	var avg = _model_average_color(primary_model)
 	if avg != null:
 		bt.color = avg
 	_apply_tint(bt, primary_model)
-	if not imported_blocks.has(block_id):
-		imported_blocks.append(block_id)
+	if not imported_blocks.has(bt_name):
+		imported_blocks.append(bt_name)
 	return bt
 
 # ---------------------------------------------------------------------------
@@ -287,7 +307,7 @@ func _resolve_model_json(model_ref: String, depth: int):
 		return null
 	if _resolved_cache.has(model_ref):
 		return _resolved_cache[model_ref]
-	var j = _read_json(_model_file(model_ref))
+	var j = _read_json(_model_rel(model_ref))
 	if j == null:
 		return null
 	var base := {"textures": {}, "elements": [], "ao": true}
@@ -365,87 +385,10 @@ func _resolve_texture_var(textures_map: Dictionary, value: String, depth: int) -
 # Textures (PNG + .mcmeta → TextureAsset)
 # ---------------------------------------------------------------------------
 
-# Ensure a TextureAsset exists for a texture ref, copying its PNG into the library
-# and parsing any `.mcmeta` animation. Deduped by id (qualified ref). Returns null
-# if the source PNG is missing/unreadable.
+# Ensure a TextureAsset exists for a texture ref — delegated to the shared ingestion
+# helper so both MC importers copy/scan/animate pixels identically.
 func _ensure_texture(texture_ref: String) -> TextureAsset:
-	var sr := _split_ref(texture_ref)
-	var id: String = "%s:%s" % [sr["ns"], sr["path"]]
-	var existing := _workspace.get_texture_asset(id)
-	if existing != null:
-		return existing
-
-	var src := _texture_file(texture_ref)
-	var img := Image.new()
-	if not FileAccess.file_exists(src) or img.load(src) != OK:
-		_warn("texture image missing: %s" % texture_ref)
-		return null
-
-	# Copy pixels into the library (frame strips kept as-is). image_path is stored
-	# library-relative so AssetLibrary resolves it under whatever ROOT is current.
-	var rel := "%s/%s/%s.png" % [AssetLibrary.PIXELS_DIR, sr["ns"], sr["path"]]
-	AssetLibrary.ensure_dir(rel.get_base_dir())
-	img.save_png(AssetLibrary.path_for(rel))
-
-	var asset := TextureAsset.new()
-	asset.id = id
-	asset.image_path = rel
-	var scan := _scan_image(img)
-	asset.average_color = scan["average"]
-	asset.transparency = scan["transparency"]
-	_apply_mcmeta(asset, src + ".mcmeta", img)
-	_workspace.add_texture_asset(asset)
-	return asset
-
-# One pass over the pixels for both the planning color and a transparency class.
-# average ignores (near-)transparent pixels so a glass/leaf border doesn't wash the
-# color toward black. Partial alpha anywhere → TRANSLUCENT; only hard 0/1 alpha with
-# some fully-transparent pixels → CUTOUT; otherwise OPAQUE.
-func _scan_image(img: Image) -> Dictionary:
-	var w := img.get_width()
-	var h := img.get_height()
-	var r := 0.0; var g := 0.0; var b := 0.0; var n := 0
-	var has_transparent := false
-	var has_partial := false
-	for y in h:
-		for x in w:
-			var c := img.get_pixel(x, y)
-			if c.a < 0.05:
-				has_transparent = true
-				continue
-			if c.a < 0.95:
-				has_partial = true
-			r += c.r; g += c.g; b += c.b; n += 1
-	var average := Color(0.5, 0.5, 0.5)
-	if n > 0:
-		average = Color(r / n, g / n, b / n)
-	var transparency := TextureAsset.Transparency.OPAQUE
-	if has_partial:
-		transparency = TextureAsset.Transparency.TRANSLUCENT
-	elif has_transparent:
-		transparency = TextureAsset.Transparency.CUTOUT
-	return {"average": average, "transparency": transparency}
-
-# Parse an MC `.mcmeta` animation block onto the asset. MC stacks frames vertically
-# as square tiles, so frame_count = height / width. frametime is in ticks → seconds
-# (÷20, the render shader consumes seconds/frame directly — Phase 1 note).
-func _apply_mcmeta(asset: TextureAsset, mcmeta_path: String, img: Image) -> void:
-	var j = _read_json(mcmeta_path)
-	if j == null or not j.has("animation"):
-		return
-	var anim = j["animation"]
-	var w := maxi(img.get_width(), 1)
-	asset.frame_count = maxi(1, floori(img.get_height() / float(w)))
-	asset.frame_time = float(int(anim.get("frametime", 1))) / 20.0
-	asset.interpolate = bool(anim.get("interpolate", false))
-	if anim.has("frames"):
-		var order: Array[int] = []
-		for fr in anim["frames"]:
-			if fr is Dictionary:
-				order.append(int(fr.get("index", 0)))   # per-frame time ignored (Phase 2)
-			else:
-				order.append(int(fr))
-		asset.frame_order = order
+	return MCTexImport.ensure_texture(_workspace, _source, texture_ref, warnings)
 
 # ---------------------------------------------------------------------------
 # UVs + sampling helpers
@@ -570,12 +513,9 @@ func _classify_tint(texture_ref: String) -> Dictionary:
 # ---------------------------------------------------------------------------
 
 # Split "ns:path" → {ns, path}; a bare ref defaults to the "minecraft" namespace
-# (MC's rule, applied identically for any mod's refs).
+# (MC's rule, applied identically for any mod's refs). Shared with the flat importer.
 func _split_ref(ref: String) -> Dictionary:
-	var colon := ref.find(":")
-	if colon >= 0:
-		return {"ns": ref.substr(0, colon), "path": ref.substr(colon + 1)}
-	return {"ns": "minecraft", "path": ref}
+	return MCTexImport.split_ref(ref)
 
 # Canonical "ns:path" form of a ref, so the same model/texture deduplicates to one
 # library id whether a pack wrote it bare or fully qualified. A bare ref defaults to
@@ -587,27 +527,19 @@ func _canonical(ref: String) -> String:
 	var sr := _split_ref(ref)
 	return "%s:%s" % [sr["ns"], sr["path"]]
 
-func _dir_path(ns: String, sub: String) -> String:
-	return "%s/%s/%s" % [_assets_root, ns, sub]
+# Paths are relative to the assets root; the source resolves them to disk / zip.
+func _blockstate_rel(ns: String, block_id: String) -> String:
+	return "%s/blockstates/%s.json" % [ns, block_id]
 
-func _blockstate_file(ns: String, block_id: String) -> String:
-	return "%s/%s/blockstates/%s.json" % [_assets_root, ns, block_id]
-
-func _model_file(model_ref: String) -> String:
+func _model_rel(model_ref: String) -> String:
 	var sr := _split_ref(model_ref)
-	return "%s/%s/models/%s.json" % [_assets_root, sr["ns"], sr["path"]]
+	return "%s/models/%s.json" % [sr["ns"], sr["path"]]
 
-func _texture_file(texture_ref: String) -> String:
-	var sr := _split_ref(texture_ref)
-	return "%s/%s/textures/%s.png" % [_assets_root, sr["ns"], sr["path"]]
-
-func _read_json(abs_path: String):
-	if not FileAccess.file_exists(abs_path):
+func _read_json(rel: String):
+	var text := _source.read_text(rel)
+	if text.is_empty():
 		return null
-	var f := FileAccess.open(abs_path, FileAccess.READ)
-	if f == null:
-		return null
-	return JSON.parse_string(f.get_as_text())
+	return JSON.parse_string(text)
 
 func _warn(msg: String) -> void:
 	warnings.append(msg)

@@ -22,6 +22,7 @@ func _check(label: String, condition: bool) -> void:
 		_fail += 1
 
 func _run() -> void:
+	VoxelWorld.reset_for_tests()   # pristine defaults, ignore any persisted library
 	VoxelWorld.open(VoxelWorld.workspace.get_project("My First Build"))
 
 	var shell := MultiViewShell.new()
@@ -47,6 +48,8 @@ func _run() -> void:
 	_check_imported_render(v3d)
 	_check_multipart_render(v3d)
 	_check_tinted_render(v3d)
+	_check_flat_render(v3d)
+	await _check_import_progress()
 
 	var tb := (_panes(shell)[0] as ViewPane).get_tab_bar()
 	_check("tab bar enables cross-pane drag",
@@ -352,6 +355,112 @@ func _check_tinted_render(v3d: Node) -> void:
 	ws.remove_block_model("testmod:block/tint_leaves")
 	ws.remove_texture_asset("testmod:block/tint_leaves_tex")
 	v3d._rebuild()
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	AssetLibrary.ROOT = saved_root
+
+# Phase 5 / pre-1.8: a block synthesized by MCFlatImporter from loose textures must
+# render through the same per-face textured path. A multi-face block (distinct top vs
+# side) yields more than one surface, proving the per-face bindings flow to the view —
+# closing importer → view for the textures-only format with no model JSON in sight.
+func _check_flat_render(v3d: Node) -> void:
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_shelltest_flatlib__"
+	var src := "user://__voxyl_shelltest_flatsrc__"
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	var blocks := src + "/assets/testmod/textures/blocks"
+	for face in [["pillar_top", Color(0.8, 0.2, 0.2)], ["pillar_side", Color(0.2, 0.6, 0.2)]]:
+		var img := Image.create_empty(16, 16, false, Image.FORMAT_RGBA8)
+		img.fill(face[1])
+		DirAccess.make_dir_recursive_absolute((blocks + "/" + face[0] + ".png").get_base_dir())
+		img.save_png(blocks + "/" + face[0] + ".png")
+
+	var ws := VoxelWorld.workspace
+	var imp := MCFlatImporter.new(src + "/assets", ws)
+	imp.import_block("testmod", "pillar")          # top + side → multi-face cube
+	var pal := ws.add_palette("__flat_test__")
+	var e := PaletteEntry.new()
+	e.semantic_name = "FlatTest"; e.block_type_name = "pillar"
+	pal.entries.append(e)
+	var project := VoxelWorld.active_project
+	project.palette_names.append("__flat_test__")
+
+	VoxelWorld.set_block(Vector3i(0, 10, 0), "FlatTest")
+	v3d._rebuild()
+	var mi: MeshInstance3D = (v3d.get("_cell_nodes") as Dictionary).get(Vector3i(0, 10, 0))
+	_check("flat-imported block renders through the textured path",
+		mi != null and mi.get_meta("textured", false))
+	_check("flat multi-face block splits into per-texture surfaces (top ≠ side)",
+		mi != null and mi.mesh.get_surface_count() == 2)
+	_check("flat block's surfaces carry the copied textures",
+		mi != null and mi.get_surface_override_material(0) is StandardMaterial3D
+		and (mi.get_surface_override_material(0) as StandardMaterial3D).albedo_texture != null)
+
+	# Teardown — restore the workspace/project for any checks that follow.
+	VoxelWorld.clear_block(Vector3i(0, 10, 0))
+	project.palette_names.erase("__flat_test__")
+	ws.remove_palette("__flat_test__")
+	ws.remove_block_type("pillar")
+	ws.remove_block_model("testmod:flat/pillar")
+	ws.remove_texture_asset("testmod:blocks/pillar_top")
+	ws.remove_texture_asset("testmod:blocks/pillar_side")
+	v3d._rebuild()
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	AssetLibrary.ROOT = saved_root
+
+# The import progress window must drive the incremental import to completion across
+# frames on the main thread (the fix for the "frozen window" of a big batch), end with
+# its results, and surface warnings. Exercised in-tree so the awaiting actually ticks.
+func _check_import_progress() -> void:
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_shelltest_proglib__"
+	var src := "user://__voxyl_shelltest_progsrc__"
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	var assets := src + "/assets"
+	# Two importable blocks + one that will warn (its model is missing) so the warnings
+	# panel has something to show.
+	for id in ["prog_a", "prog_b", "prog_broken"]:
+		_write_text("%s/minecraft/blockstates/%s.json" % [assets, id],
+			'{"variants":{"":{"model":"minecraft:block/%s"}}}' % id)
+	for id in ["prog_a", "prog_b"]:
+		_write_text("%s/minecraft/models/block/%s.json" % [assets, id],
+			'{"textures":{"all":"minecraft:block/%s"},"elements":[{"from":[0,0,0],"to":[16,16,16],"faces":{"up":{"texture":"#all"}}}]}' % id)
+		var img := Image.create_empty(16, 16, false, Image.FORMAT_RGBA8)
+		img.fill(Color(0.4, 0.5, 0.6))
+		DirAccess.make_dir_recursive_absolute(("%s/minecraft/textures/block/%s.png" % [assets, id]).get_base_dir())
+		img.save_png("%s/minecraft/textures/block/%s.png" % [assets, id])
+
+	var ws := VoxelWorld.workspace
+	var svc := ImportService.new(ImportService.detect_sources(src), ws)
+	var sel := svc.available_blocks()
+
+	var dlg := ImportProgressDialog.new()
+	add_child(dlg)
+	await dlg.run(svc, sel)
+
+	_check("progress dialog imports the good blocks (broken one skipped)",
+		svc.imported_count == 2 and ws.get_block_type("prog_a") != null)
+	_check("progress dialog collected warnings for the broken block",
+		not svc.warnings.is_empty())
+	_check("progress dialog enables Close when finished",
+		not (dlg.get("_close_btn") as Button).disabled)
+	_check("progress bar reaches full on completion",
+		(dlg.get("_bar") as ProgressBar).value == (dlg.get("_bar") as ProgressBar).max_value)
+	_check("warnings are surfaced in the dialog, not just counted",
+		(dlg.get("_warn_box") as TextEdit).visible
+		and not (dlg.get("_warn_box") as TextEdit).text.is_empty())
+
+	dlg.queue_free()
+	ws.remove_block_type("prog_a")
+	ws.remove_block_type("prog_b")
+	ws.remove_block_model("minecraft:block/prog_a")
+	ws.remove_block_model("minecraft:block/prog_b")
+	ws.remove_texture_asset("minecraft:block/prog_a")
+	ws.remove_texture_asset("minecraft:block/prog_b")
+	svc.close()
 	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(src)
 	AssetLibrary.ROOT = saved_root

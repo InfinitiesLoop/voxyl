@@ -33,6 +33,24 @@ func _ready() -> void:
 	hotbar.resize(HOTBAR_SIZE)
 	hotbar.fill("")
 	_populate_defaults()
+	# Restore any previously imported material library (Phase 5). Merges by id/name
+	# over the code-seeded defaults; a no-op on a fresh install where nothing's been
+	# imported yet. Projects/palettes are still code-seeded each launch — only the
+	# shared block-type/model/texture libraries persist.
+	LibraryStore.load_into(workspace)
+	workspace_changed.emit()
+
+# Rebuild a pristine, library-free workspace. Tests call this first so they run
+# against the code-seeded defaults regardless of whatever LibraryStore.load_into
+# merged in at startup (a real res://library left by a prior import would otherwise
+# make autoload-based assertions non-deterministic).
+func reset_for_tests() -> void:
+	workspace = VoxelWorkspace.new()
+	workspace.register_builtin_models()
+	active_project = null
+	hotbar.fill("")
+	active_slot = 0
+	_populate_defaults()
 	workspace_changed.emit()
 
 func open(project: VoxelProject) -> void:
@@ -290,45 +308,50 @@ func _add_default_blocks(project: VoxelProject) -> void:
 				project.data.set_block(Vector3i(x, y, z), "Highlight")
 
 func _add_default_block_types() -> void:
+	# Names are lowercase, underscore-style ids that line up with Minecraft block ids
+	# (which the importer treats as the un-prefixed/default namespace). They're still
+	# generic descriptive names, not a `minecraft:` namespace, so the defaults don't
+	# depend on MC — but importing the real game makes `minecraft:dirt` resolve to the
+	# same "dirt" name and overwrite this placeholder in place.
 	var names := [
-		"Stone", "Cobblestone", "Stone Bricks", "Mossy Stone Bricks", "Cracked Stone Bricks",
-		"Gravel", "Sand", "Sandstone", "Dirt", "Grass Block", "Clay", "Mud",
-		"Oak Log", "Oak Planks", "Spruce Log", "Spruce Planks",
-		"Birch Log", "Birch Planks", "Dark Oak Log", "Dark Oak Planks",
-		"Acacia Log", "Acacia Planks", "Jungle Log", "Jungle Planks",
-		"Mangrove Log", "Mangrove Planks",
-		"Brick", "Nether Brick", "Quartz Block", "Smooth Quartz",
-		"Prismarine", "Dark Prismarine", "Sea Lantern",
-		"Iron Block", "Gold Block", "Copper Block", "Cut Copper",
-		"Glass", "Glass Pane", "Iron Bars",
-		"Obsidian", "Deepslate", "Tuff", "Calcite",
-		"Glowstone", "Shroomlight", "Lantern",
-		"White Concrete", "Gray Concrete", "Black Concrete",
-		"White Terracotta", "Orange Terracotta", "Brown Terracotta",
-		"White Wool", "Red Wool", "Blue Wool", "Green Wool", "Yellow Wool",
-		"Leaves", "Vines", "Bamboo", "Water", "Lava",
+		"stone", "cobblestone", "stone_bricks", "mossy_stone_bricks", "cracked_stone_bricks",
+		"gravel", "sand", "sandstone", "dirt", "grass_block", "clay", "mud",
+		"oak_log", "oak_planks", "spruce_log", "spruce_planks",
+		"birch_log", "birch_planks", "dark_oak_log", "dark_oak_planks",
+		"acacia_log", "acacia_planks", "jungle_log", "jungle_planks",
+		"mangrove_log", "mangrove_planks",
+		"bricks", "nether_bricks", "quartz_block", "smooth_quartz",
+		"prismarine", "dark_prismarine", "sea_lantern",
+		"iron_block", "gold_block", "copper_block", "cut_copper",
+		"glass", "glass_pane", "iron_bars",
+		"obsidian", "deepslate", "tuff", "calcite",
+		"glowstone", "shroomlight", "lantern",
+		"white_concrete", "gray_concrete", "black_concrete",
+		"white_terracotta", "orange_terracotta", "brown_terracotta",
+		"white_wool", "red_wool", "blue_wool", "green_wool", "yellow_wool",
+		"oak_leaves", "vine", "bamboo", "water", "lava",
 	]
 	for n in names:
 		workspace.add_block_type(n)
 	# Shaped blocks — orientation only reads as something other than a cube once
 	# the mapped block type declares a non-full shape.
-	workspace.add_block_type("Oak Stairs").shape = BlockType.Shape.STAIRS
-	workspace.add_block_type("Stone Brick Stairs").shape = BlockType.Shape.STAIRS
-	workspace.add_block_type("Stone Slab").shape = BlockType.Shape.SLAB
-	workspace.add_block_type("Oak Slab").shape = BlockType.Shape.SLAB
+	workspace.add_block_type("oak_stairs").shape = BlockType.Shape.STAIRS
+	workspace.add_block_type("stone_brick_stairs").shape = BlockType.Shape.STAIRS
+	workspace.add_block_type("stone_slab").shape = BlockType.Shape.SLAB
+	workspace.add_block_type("oak_slab").shape = BlockType.Shape.SLAB
 
 func _add_default_palette() -> void:
 	var p := workspace.add_palette("Default")
 	var slots := [
-		["Base",      "Stone",         Color(0.55, 0.55, 0.55)],
-		["Accent",    "Oak Planks",    Color(0.75, 0.60, 0.35)],
-		["Highlight", "Brick",         Color(0.72, 0.38, 0.28)],
-		["Detail",    "Glass",         Color(0.55, 0.78, 0.92)],
-		["Trim",      "Cobblestone",   Color(0.42, 0.42, 0.40)],
-		["Floor",     "Dirt",          Color(0.48, 0.35, 0.22)],
-		["Roof",      "Spruce Planks", Color(0.38, 0.28, 0.18)],
-		["Stairs",    "Oak Stairs",    Color(0.74, 0.58, 0.33)],
-		["Slab",      "Stone Slab",    Color(0.60, 0.60, 0.62)],
+		["Base",      "stone",         Color(0.55, 0.55, 0.55)],
+		["Accent",    "oak_planks",    Color(0.75, 0.60, 0.35)],
+		["Highlight", "bricks",        Color(0.72, 0.38, 0.28)],
+		["Detail",    "glass",         Color(0.55, 0.78, 0.92)],
+		["Trim",      "cobblestone",   Color(0.42, 0.42, 0.40)],
+		["Floor",     "dirt",          Color(0.48, 0.35, 0.22)],
+		["Roof",      "spruce_planks", Color(0.38, 0.28, 0.18)],
+		["Stairs",    "oak_stairs",    Color(0.74, 0.58, 0.33)],
+		["Slab",      "stone_slab",    Color(0.60, 0.60, 0.62)],
 	]
 	for s in slots:
 		var e := PaletteEntry.new()

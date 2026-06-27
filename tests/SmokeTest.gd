@@ -5,6 +5,7 @@ var _fail := 0
 
 func _ready() -> void:
 	print("\n=== voxyl smoke test ===\n")
+	VoxelWorld.reset_for_tests()   # pristine defaults, ignore any persisted library
 	_test_workspace_init()
 	_test_block_ops()
 	_test_palette_resolution()
@@ -22,6 +23,12 @@ func _ready() -> void:
 	_test_mc_import_multipart()
 	_test_mc_import_tint()
 	_test_tint_resolver()
+	_test_asset_sources()
+	_test_import_service()
+	_test_incremental_import()
+	_test_flat_import()
+	_test_import_service_flat()
+	_test_install_locations()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
@@ -176,7 +183,7 @@ func _test_models() -> void:
 	custom.id = "__test_pillar__"
 	custom.elements = [BlockModel.box_element(Vector3(0.25, 0, 0.25), Vector3(0.75, 1, 0.75))]
 	ws.add_block_model(custom)
-	var bt := ws.get_block_type("Stone")  # "Base" maps to Stone, shape FULL
+	var bt := ws.get_block_type("stone")  # "Base" maps to stone, shape FULL
 	bt.model_id = "__test_pillar__"
 	_check("explicit model_id overrides shape fallback",
 		VoxelWorld.get_model_for_semantic("Base").id == "__test_pillar__")
@@ -618,6 +625,350 @@ func _test_tint_resolver() -> void:
 	ws.remove_palette("__tint_pal__")
 	ws.remove_block_type("__TintBlock__")
 	VoxelWorld.open(project)
+
+# Phase 5: the asset-source abstraction. A directory tree and a .zip carrying the
+# *same* synthetic assets must answer list/has/read identically, so MCImporter reads
+# a resource pack the same way it reads an unzipped folder.
+func _test_asset_sources() -> void:
+	print("-- mc asset sources (dir + zip parity)")
+	var base := "user://__voxyl_src__"
+	_rm_rf(base)
+	var assets := base + "/assets"
+	var bs := '{"variants":{"":{"model":"minecraft:block/stone"}}}'
+	var model := '{"textures":{"all":"minecraft:block/stone"},"elements":[{"from":[0,0,0],"to":[16,16,16],"faces":{"up":{"texture":"#all"}}}]}'
+	_write_file(assets + "/minecraft/blockstates/stone.json", bs)
+	_write_file(assets + "/minecraft/models/block/stone.json", model)
+	_write_solid(assets + "/minecraft/textures/block/stone.png", Color(0.5, 0.5, 0.5))
+
+	# Pack the identical tree under assets/ into a .zip (a resource pack layout).
+	var zip := base + "/pack.zip"
+	var packer := ZIPPacker.new()
+	packer.open(zip)
+	_zip_add(packer, "assets/minecraft/blockstates/stone.json", bs.to_utf8_buffer())
+	_zip_add(packer, "assets/minecraft/models/block/stone.json", model.to_utf8_buffer())
+	_zip_add(packer, "assets/minecraft/textures/block/stone.png",
+		FileAccess.get_file_as_bytes(assets + "/minecraft/textures/block/stone.png"))
+	packer.close()
+
+	var dsrc := MCDirSource.new(assets)
+	var zsrc := MCZipSource.new(zip)
+	for pair in [["dir", dsrc], ["zip", zsrc]]:
+		var tag: String = pair[0]
+		var src: MCAssetSource = pair[1]
+		_check("%s lists the namespace" % tag, src.list_namespaces().has("minecraft"))
+		_check("%s lists blockstate files" % tag,
+			src.list_files("minecraft/blockstates").has("stone.json"))
+		_check("%s has_file sees a nested model" % tag,
+			src.has_file("minecraft/models/block/stone.json"))
+		_check("%s reads json text" % tag,
+			src.read_text("minecraft/blockstates/stone.json").contains("variants"))
+		_check("%s reads a png into an Image" % tag,
+			src.read_image("minecraft/textures/block/stone.png") != null)
+		_check("%s reports a missing file as empty/null" % tag,
+			not src.has_file("minecraft/nope.json")
+			and src.read_text("minecraft/nope.json") == ""
+			and src.read_image("minecraft/nope.png") == null)
+
+	# The importer reads a zip source end-to-end, exactly like a directory.
+	var ws := VoxelWorkspace.new()
+	MCImporter.new(zsrc, ws).import_namespace("minecraft")
+	_check("importer translates a block straight out of a zip",
+		ws.get_block_type("stone") != null
+		and ws.get_block_model("minecraft:block/stone") != null)
+
+	zsrc.close()
+	_rm_rf(base)
+
+# Phase 5: the import service — detect sources from a chosen path, browse the blocks
+# they offer, import a selected subset, dedup/namespace colliding ids, and persist
+# the library. No UI involved (the panel is a thin shell over this).
+func _test_import_service() -> void:
+	print("-- import service (browse + import + dedup + persist)")
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_impsvc_lib__"
+	var src_root := "user://__voxyl_impsvc_src__"
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src_root)
+	var assets := src_root + "/assets"
+
+	# Two namespaces; "widget" exists in both (a cross-namespace collision), "stone"
+	# only in minecraft. Each block is a self-contained full cube + one texture.
+	for ref in [["minecraft", "stone"], ["minecraft", "widget"], ["othermod", "widget"]]:
+		var ns: String = ref[0]
+		var id: String = ref[1]
+		_write_file("%s/%s/blockstates/%s.json" % [assets, ns, id],
+			'{"variants":{"":{"model":"%s:block/%s"}}}' % [ns, id])
+		_write_file("%s/%s/models/block/%s.json" % [assets, ns, id],
+			'{"textures":{"all":"%s:block/%s"},"elements":[{"from":[0,0,0],"to":[16,16,16],"faces":{"up":{"texture":"#all"}}}]}' % [ns, id])
+		_write_solid("%s/%s/textures/block/%s.png" % [assets, ns, id], Color(0.5, 0.4, 0.3))
+
+	# detect_sources on a pack root (a folder with an assets/ child) → one dir source.
+	var sources := ImportService.detect_sources(src_root)
+	_check("detect finds one source for a pack root", sources.size() == 1)
+
+	var ws := VoxelWorkspace.new()
+	# A shipped-style default that a vanilla import should overwrite in place.
+	var placeholder := ws.add_block_type("stone")
+	placeholder.color = Color(0.99, 0.0, 0.99)   # sentinel: gets replaced by the import
+	var svc := ImportService.new(sources, ws)
+	var avail := svc.available_blocks()
+	_check("browse lists every block across namespaces", avail.size() == 3)
+	_check("browse refs are namespaced and sorted",
+		avail[0]["ref"] == "minecraft:stone" and avail[2]["ref"] == "othermod:widget")
+
+	var n := svc.import_selected(avail)
+	_check("all selected blocks import", n == 3)
+	# minecraft == default namespace → vanilla blocks get clean, un-prefixed names.
+	_check("vanilla blocks keep clean un-prefixed names",
+		ws.get_block_type("stone") != null and ws.get_block_type("widget") != null)
+	_check("modded blocks keep their namespace prefix",
+		ws.get_block_type("othermod:widget") != null)
+	_check("no minecraft-prefixed names are stored",
+		ws.get_block_type("minecraft:stone") == null and ws.get_block_type("minecraft:widget") == null)
+	# Overwrite: the import filled the existing "stone" in place (same instance), not a
+	# duplicate — the sentinel color is gone and it now carries a model.
+	_check("importing a vanilla block overwrites the like-named default in place",
+		ws.get_block_type("stone") == placeholder
+		and not placeholder.model_id.is_empty()
+		and placeholder.color != Color(0.99, 0.0, 0.99))
+	var stone_count := 0
+	for bt in ws.block_types:
+		if bt.name == "stone":
+			stone_count += 1
+	_check("overwrite did not duplicate the block type", stone_count == 1)
+
+	# Persisted to disk: a fresh workspace loads what was imported.
+	var ws2 := VoxelWorkspace.new()
+	LibraryStore.load_into(ws2)
+	_check("imported library persisted via LibraryStore",
+		ws2.get_block_type("stone") != null and ws2.get_block_type("othermod:widget") != null)
+
+	svc.close()
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src_root)
+	AssetLibrary.ROOT = saved_root
+
+# The incremental import API the progress UI drives: begin_import → import_step per
+# block → end_import. Each step reports success, counts accrue, and the result + the
+# persisted library match a one-shot import.
+func _test_incremental_import() -> void:
+	print("-- incremental import (progress-driven)")
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_incr_lib__"
+	var src_root := "user://__voxyl_incr_src__"
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src_root)
+	var assets := src_root + "/assets"
+	for id in ["alpha", "beta"]:
+		_write_file("%s/minecraft/blockstates/%s.json" % [assets, id],
+			'{"variants":{"":{"model":"minecraft:block/%s"}}}' % id)
+		_write_file("%s/minecraft/models/block/%s.json" % [assets, id],
+			'{"textures":{"all":"minecraft:block/%s"},"elements":[{"from":[0,0,0],"to":[16,16,16],"faces":{"up":{"texture":"#all"}}}]}' % id)
+		_write_solid("%s/minecraft/textures/block/%s.png" % [assets, id], Color(0.3, 0.5, 0.7))
+
+	var ws := VoxelWorkspace.new()
+	var svc := ImportService.new(ImportService.detect_sources(src_root), ws)
+	var avail := svc.available_blocks()
+
+	var total := svc.begin_import(avail)
+	_check("begin_import reports the total to step through", total == 2)
+	var stepped_ok := 0
+	for i in total:
+		if svc.import_step(i):
+			stepped_ok += 1
+	_check("each step imports its block", stepped_ok == 2 and svc.imported_count == 2)
+	# Nothing is written to disk until end_import.
+	var mid := VoxelWorkspace.new()
+	LibraryStore.load_into(mid)
+	_check("library not persisted until end_import", mid.get_block_type("alpha") == null)
+	svc.end_import()
+	var after := VoxelWorkspace.new()
+	LibraryStore.load_into(after)
+	_check("end_import persists the imported blocks",
+		after.get_block_type("alpha") != null and after.get_block_type("beta") != null)
+
+	svc.close()
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src_root)
+	AssetLibrary.ROOT = saved_root
+
+# Pre-1.8 import: a 1.7.10-style tree has NO blockstates/models, only loose
+# textures under textures/blocks/. MCFlatImporter groups them by base name (across
+# underscore / dot / camelCase / glued separators), strips state suffixes, and
+# synthesizes a unit-cube BlockModel per block — multi-face when corroborated,
+# uniform otherwise. The 1.8+ importer finds nothing in the same tree.
+func _test_flat_import() -> void:
+	print("-- flat importer (pre-1.8 textures-only)")
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_flatlib__"
+	var src := "user://__voxyl_flatsrc__"
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	var assets := src + "/assets"
+	var blocks := assets + "/testmod/textures/blocks"
+
+	var c_stone := Color(0.5, 0.5, 0.5)
+	var c_top := Color(0.8, 0.2, 0.2);  var c_side := Color(0.2, 0.8, 0.2)
+	var c_front := Color(0.2, 0.2, 0.8); var c_front_on := Color(0.9, 0.9, 0.1)
+	_write_solid(blocks + "/stone.png", c_stone)
+	# Underscore-separated multi-face + an on/off state pair on the front.
+	_write_solid(blocks + "/furnace_top.png", c_top)
+	_write_solid(blocks + "/furnace_side.png", c_side)
+	_write_solid(blocks + "/furnace_front_off.png", c_front)
+	_write_solid(blocks + "/furnace_front_on.png", c_front_on)
+	# Dot-separated (Railcraft style) and camelCase (EnderIO style) and glued.
+	_write_solid(blocks + "/signal.lamp.top.png", c_top)
+	_write_solid(blocks + "/signal.lamp.bottom.png", c_side)
+	_write_solid(blocks + "/solarPanelSide.png", c_side)
+	_write_solid(blocks + "/solarPanelTop.png", c_top)
+	_write_solid(blocks + "/arcaneside.png", c_side)
+	_write_solid(blocks + "/arcanetop.png", c_top)
+	# A lone face texture with no siblings → stays standalone, not a fake block.
+	_write_solid(blocks + "/treetop.png", Color(0.3, 0.5, 0.2))
+	# An animated texture (2-frame vertical strip + .mcmeta), as in 1.7.10.
+	var anim := Image.create_empty(16, 32, false, Image.FORMAT_RGBA8)
+	anim.fill(Color(0.7, 0.3, 0.1))
+	_write_png(blocks + "/magma.png", anim)
+	_write_file(blocks + "/magma.png.mcmeta", '{"animation":{"frametime":2}}')
+
+	var ws := VoxelWorkspace.new()
+	var imp := MCFlatImporter.new(assets, ws)
+
+	# Browse: 7 blocks — the four faced groups collapse to one each; stone, magma,
+	# treetop stand alone. (12 PNGs → 7 blocks.)
+	var listed := imp.list_blocks("testmod")
+	_check("flat browse groups faces into blocks",
+		listed.size() == 7
+		and Array(listed).has("furnace") and Array(listed).has("signal_lamp")
+		and Array(listed).has("solar_panel") and Array(listed).has("arcane")
+		and Array(listed).has("stone") and Array(listed).has("treetop"))
+	_check("lone suffix texture stays standalone (no fake 'tree' block)",
+		Array(listed).has("treetop") and not Array(listed).has("tree"))
+
+	# Uniform block: a single texture on all six faces.
+	var stone_bt := imp.import_block("testmod", "stone")
+	var stone_m := ws.get_block_model("testmod:flat/stone")
+	_check("uniform block → full cube, one texture on every face",
+		stone_bt != null and stone_m != null and stone_m.textures.size() == 1
+		and stone_m.elements[0]["faces"][BlockModel.Dir.UP]["texture_key"] == "testmod:blocks/stone"
+		and stone_m.elements[0]["faces"][BlockModel.Dir.NORTH]["texture_key"] == "testmod:blocks/stone")
+	_check("uniform planning color is the texture average",
+		stone_bt != null and _color_near(stone_bt.color, c_stone, 0.02))
+
+	# Multi-face block: top/side/front mapped; front uses the resting (off) state;
+	# the unspecified bottom falls back to side.
+	imp.import_block("testmod", "furnace")
+	var fm := ws.get_block_model("testmod:flat/furnace")
+	var ff: Dictionary = fm.elements[0]["faces"]
+	_check("multi-face: top maps to the _top texture",
+		ff[BlockModel.Dir.UP]["texture_key"] == "testmod:blocks/furnace_top")
+	_check("multi-face: front maps to NORTH, resting (off) state chosen",
+		ff[BlockModel.Dir.NORTH]["texture_key"] == "testmod:blocks/furnace_front_off")
+	_check("multi-face: a side fills the other horizontals",
+		ff[BlockModel.Dir.EAST]["texture_key"] == "testmod:blocks/furnace_side"
+		and ff[BlockModel.Dir.WEST]["texture_key"] == "testmod:blocks/furnace_side")
+	_check("multi-face: unspecified bottom falls back (to side here)",
+		ff[BlockModel.Dir.DOWN]["texture_key"] == "testmod:blocks/furnace_side")
+	_check("multi-face block binds its three distinct textures", fm.textures.size() == 3)
+
+	# Separator coverage: dot + camelCase resolve the same way as underscore.
+	imp.import_block("testmod", "signal_lamp")
+	imp.import_block("testmod", "solar_panel")
+	var sl: Dictionary = ws.get_block_model("testmod:flat/signal_lamp").elements[0]["faces"]
+	var sp: Dictionary = ws.get_block_model("testmod:flat/solar_panel").elements[0]["faces"]
+	_check("dot-separated faces resolve (signal.lamp.top → UP)",
+		sl[BlockModel.Dir.UP]["texture_key"] == "testmod:blocks/signal.lamp.top"
+		and sl[BlockModel.Dir.DOWN]["texture_key"] == "testmod:blocks/signal.lamp.bottom")
+	_check("camelCase faces resolve (solarPanelTop → UP, Side → horizontals)",
+		sp[BlockModel.Dir.UP]["texture_key"] == "testmod:blocks/solarPanelTop"
+		and sp[BlockModel.Dir.NORTH]["texture_key"] == "testmod:blocks/solarPanelSide")
+
+	# Animation survives the flat path (shared ingestion with the JSON importer).
+	imp.import_block("testmod", "magma")
+	var mt := ws.get_texture_asset("testmod:blocks/magma")
+	_check("flat animated texture keeps its frames",
+		mt != null and mt.frame_count == 2 and is_equal_approx(mt.frame_time, 0.1))
+
+	# The 1.8+ importer finds nothing in a pre-1.8 tree (no blockstates).
+	var ws2 := VoxelWorkspace.new()
+	var jimp := MCImporter.new(assets, ws2)
+	jimp.import_namespace("testmod")
+	_check("the 1.8+ importer imports nothing from a pre-1.8 tree",
+		jimp.imported_blocks.is_empty() and _warns_contain(jimp, "no blockstates"))
+
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	AssetLibrary.ROOT = saved_root
+
+# Pre-1.8 import through the service: FLAT mode browses + imports the synthesized
+# blocks and persists them, exactly like the JSON path but via MCFlatImporter.
+func _test_import_service_flat() -> void:
+	print("-- import service (pre-1.8 FLAT mode)")
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_flatsvc_lib__"
+	var src_root := "user://__voxyl_flatsvc_src__"
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src_root)
+	var blocks := src_root + "/assets/testmod/textures/blocks"
+	_write_solid(blocks + "/cobble.png", Color(0.4, 0.4, 0.4))
+	_write_solid(blocks + "/machine_top.png", Color(0.7, 0.7, 0.2))
+	_write_solid(blocks + "/machine_side.png", Color(0.2, 0.7, 0.7))
+
+	var sources := ImportService.detect_sources(src_root)
+	var ws := VoxelWorkspace.new()
+	var svc := ImportService.new(sources, ws, ImportService.Mode.FLAT)
+	var avail := svc.available_blocks()
+	_check("FLAT browse synthesizes blocks (cobble + grouped machine)",
+		avail.size() == 2)
+	var n := svc.import_selected(avail)
+	# testmod is not the minecraft namespace, so names keep the prefix.
+	_check("FLAT import creates the namespaced block types",
+		n == 2 and ws.get_block_type("testmod:cobble") != null
+		and ws.get_block_type("testmod:machine") != null)
+	_check("FLAT import builds a cube model with textures",
+		ws.get_block_model("testmod:flat/machine") != null
+		and ws.get_block_model("testmod:flat/machine").has_textures())
+
+	var ws2 := VoxelWorkspace.new()
+	LibraryStore.load_into(ws2)
+	_check("FLAT-imported library persisted to disk",
+		ws2.get_block_type("testmod:machine") != null and ws2.get_block_type("testmod:cobble") != null)
+
+	svc.close()
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src_root)
+	AssetLibrary.ROOT = saved_root
+
+# The import UI's "common locations" helper: well-formed, platform-appropriate
+# entries covering the three launchers. Existence is machine-dependent so it's not
+# asserted; structure + which launchers are offered is.
+func _test_install_locations() -> void:
+	print("-- install location hints (import UX)")
+	var entries := MCInstallLocations.candidates()
+	_check("candidates are offered for this platform", entries.size() >= 3)
+	var all_well_formed := true
+	var labels := ""
+	for e in entries:
+		labels += " " + str(e["label"])
+		if str(e["label"]).is_empty() or str(e["path"]).is_empty():
+			all_well_formed = false
+		if not (e["picker"] == "file" or e["picker"] == "dir"):
+			all_well_formed = false
+		if not (e["exists"] is bool):
+			all_well_formed = false
+	_check("every entry has a label, path, file/dir picker, and exists flag", all_well_formed)
+	_check("vanilla, CurseForge and Prism are all covered",
+		labels.contains("Vanilla") and labels.contains("CurseForge") and labels.contains("Prism"))
+	_check("a version-jar entry is a file pick (vanilla blocks live in a .jar)",
+		entries.any(func(e): return e["picker"] == "file" and str(e["label"]).contains("version jar")))
+	_check("an instance entry is a folder pick (mods live in a folder)",
+		entries.any(func(e): return e["picker"] == "dir" and str(e["label"]).contains("instance")))
+
+# Add one file to an open ZIPPacker (test fixture archives).
+func _zip_add(packer: ZIPPacker, path: String, bytes: PackedByteArray) -> void:
+	packer.start_file(path)
+	packer.write_file(bytes)
+	packer.close_file()
 
 # A solid-filled 16×16 RGBA PNG at `path` (test fixture pixels).
 func _write_solid(path: String, color: Color) -> void:
