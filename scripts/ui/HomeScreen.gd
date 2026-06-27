@@ -6,8 +6,9 @@ signal open_project_requested(project: VoxelProject)
 var _projects_container: VBoxContainer
 var _palettes_list: LibraryList
 var _palette_editor: Control
-var _block_types_list: LibraryList
+var _block_grid: BlockGrid
 var _bt_detail: Control
+var _bt_preview: BlockPreview3D
 var _selected_block_type: String = ""
 var _editing_palette: Palette
 var _entry_list: VBoxContainer
@@ -361,49 +362,83 @@ func _build_block_types_tab() -> Control:
 	split.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.add_child(split)
 
-	var left := _margin(12)
-	left.custom_minimum_size.x = 200
-	split.add_child(left)
+	# Left: detail / edit panel for the selected block (3D preview + fields).
+	_bt_detail = _build_bt_detail()
+	split.add_child(_bt_detail)
+	# Explicit initial divider position so it doesn't drift as blocks are selected.
+	split.split_offset = 340
 
-	var left_vbox := VBoxContainer.new()
-	left_vbox.add_theme_constant_override("separation", 8)
-	left.add_child(left_vbox)
-
-	# Import blocks from the user's own MC assets (Phase 5). Imported block types
-	# land in the library below and are assigned to palettes via the normal workflow.
-	var import_btn := Button.new()
-	import_btn.text = "Add blocks…"
-	import_btn.pressed.connect(_on_import_blocks)
-	left_vbox.add_child(import_btn)
-
-	_block_types_list = LibraryList.new()
-	_block_types_list.list_title = "Block Types"
-	_block_types_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_block_types_list.add_requested.connect(_on_add_block_type)
-	_block_types_list.delete_requested.connect(_on_delete_block_type)
-	_block_types_list.item_selected.connect(_on_block_type_selected)
-	left_vbox.add_child(_block_types_list)
-
-	var right := _margin(16)
+	# Right (main): action header + the JEI-style icon grid.
+	var right := _margin(12)
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	split.add_child(right)
 
-	var right_vbox := VBoxContainer.new()
-	right_vbox.add_theme_constant_override("separation", 12)
-	right.add_child(right_vbox)
+	var rvbox := VBoxContainer.new()
+	rvbox.add_theme_constant_override("separation", 8)
+	right.add_child(rvbox)
 
-	var placeholder := Label.new()
-	placeholder.name = "Placeholder"
-	placeholder.text = "Select a block type to edit it."
-	right_vbox.add_child(placeholder)
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 8)
+	rvbox.add_child(header)
 
-	right.set_meta("vbox", right_vbox)
-	_bt_detail = right
+	var new_btn := Button.new()
+	new_btn.text = "New block…"
+	new_btn.pressed.connect(_on_new_block)
+	header.add_child(new_btn)
+
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(spacer)
+
+	# Import blocks from the user's own MC assets — they land in this same grid.
+	var import_btn := Button.new()
+	import_btn.text = "Add blocks…"
+	import_btn.pressed.connect(_on_import_blocks)
+	header.add_child(import_btn)
+
+	_block_grid = BlockGrid.new()
+	_block_grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_block_grid.block_selected.connect(_on_block_type_selected)
+	rvbox.add_child(_block_grid)
 
 	return root
 
+# The left detail panel shell: a styled PanelContainer (its background makes the
+# split seam visible) at a fixed width, holding a scrollable vbox. The fixed width +
+# clipped labels keep the divider from shifting as different blocks are selected.
+# _refresh_bt_detail fills the vbox, which is stashed in meta so the rebuild finds it.
+func _build_bt_detail() -> Control:
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size.x = 340
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.13, 0.13, 0.15)
+	sb.content_margin_left = 16
+	sb.content_margin_right = 16
+	sb.content_margin_top = 16
+	sb.content_margin_bottom = 16
+	panel.add_theme_stylebox_override("panel", sb)
+
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	panel.add_child(scroll)
+
+	var vbox := VBoxContainer.new()
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_theme_constant_override("separation", 10)
+	scroll.add_child(vbox)
+
+	var placeholder := Label.new()
+	placeholder.name = "Placeholder"
+	placeholder.text = "Select a block to edit it."
+	vbox.add_child(placeholder)
+
+	panel.set_meta("vbox", vbox)
+	return panel
+
 func _on_block_type_selected(bt_name: String) -> void:
 	_selected_block_type = bt_name
+	if _block_grid:
+		_block_grid.set_selected(bt_name)
 	_refresh_bt_detail()
 
 func _refresh_bt_detail() -> void:
@@ -412,77 +447,270 @@ func _refresh_bt_detail() -> void:
 	var vbox: VBoxContainer = _bt_detail.get_meta("vbox")
 	for c in vbox.get_children():
 		c.queue_free()
+	_bt_preview = null
 	await get_tree().process_frame
 
 	var bt := VoxelWorld.workspace.get_block_type(_selected_block_type)
 	if not bt:
 		var lbl := Label.new()
 		lbl.name = "Placeholder"
-		lbl.text = "Select a block type to edit it."
+		lbl.text = "Select a block to edit it."
 		vbox.add_child(lbl)
 		return
 
+	# Name is read-only: palette entries reference block types by name, so renaming
+	# would silently break those refs (rename is intentionally out of scope).
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 8)
 	var name_lbl := Label.new()
 	name_lbl.text = bt.name
-	name_lbl.add_theme_font_size_override("font_size", 15)
-	vbox.add_child(name_lbl)
+	name_lbl.add_theme_font_size_override("font_size", 16)
+	name_lbl.clip_text = true
+	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	header.add_child(name_lbl)
+	var files_btn := Button.new()
+	files_btn.text = "Open folder"
+	files_btn.tooltip_text = "Reveal this block in the library in your file browser"
+	files_btn.pressed.connect(func(): _on_open_in_files(bt))
+	header.add_child(files_btn)
+	vbox.add_child(header)
 
-	var preview := Control.new()
-	preview.custom_minimum_size = Vector2(80, 80)
-	preview.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	preview.draw.connect(func(): _draw_block_preview(preview, bt.color))
-	vbox.add_child(preview)
+	# Live, rotatable 3D render of the block.
+	_bt_preview = BlockPreview3D.new()
+	_bt_preview.custom_minimum_size = Vector2(0, 280)
+	_bt_preview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_child(_bt_preview)
+	_bt_preview.set_block(bt)
 
-	var color_row := HBoxContainer.new()
-	vbox.add_child(color_row)
-
-	var color_lbl := Label.new()
-	color_lbl.text = "Color"
-	color_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	color_row.add_child(color_lbl)
-
-	var color_btn := ColorPickerButton.new()
-	color_btn.color = bt.color
-	color_btn.custom_minimum_size = Vector2(80, 0)
-	color_btn.color_changed.connect(func(c: Color):
+	vbox.add_child(_labeled_picker("Color", bt.color, func(c: Color):
 		bt.color = c
-		preview.queue_redraw()
-		VoxelWorld.notify_block_type_changed()
-	)
-	color_row.add_child(color_btn)
+		_after_block_edit(bt)))
 
-func _draw_block_preview(ctl: Control, color: Color) -> void:
-	var s: float = minf(ctl.size.x, ctl.size.y) / 2.5
-	var o := ctl.size * 0.5
-	# Top face: lightened
-	ctl.draw_colored_polygon(PackedVector2Array([
-		o + Vector2(0.0, -s), o + Vector2(s, -s * 0.5),
-		o + Vector2(0.0, 0.0), o + Vector2(-s, -s * 0.5),
-	]), color.lightened(0.25))
-	# Front face (z+): base color
-	ctl.draw_colored_polygon(PackedVector2Array([
-		o + Vector2(-s, -s * 0.5), o + Vector2(0.0, 0.0),
-		o + Vector2(0.0, s), o + Vector2(-s, s * 0.5),
-	]), color)
-	# Right face (x+): darkened
-	ctl.draw_colored_polygon(PackedVector2Array([
-		o + Vector2(s, -s * 0.5), o + Vector2(0.0, 0.0),
-		o + Vector2(0.0, s), o + Vector2(s, s * 0.5),
-	]), color.darkened(0.25))
+	vbox.add_child(_labeled_picker("Tint", bt.tint, func(c: Color):
+		bt.tint = c
+		_after_block_edit(bt)))
+
+	var shape_row := HBoxContainer.new()
+	var shape_lbl := Label.new()
+	shape_lbl.text = "Shape"
+	shape_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	shape_row.add_child(shape_lbl)
+	var shape_opt := OptionButton.new()
+	for s in ["Full", "Slab", "Stairs"]:
+		shape_opt.add_item(s)
+	shape_opt.selected = int(bt.shape)
+	shape_opt.item_selected.connect(func(idx: int):
+		bt.shape = idx as BlockType.Shape
+		_after_block_edit(bt))
+	shape_row.add_child(shape_opt)
+	vbox.add_child(shape_row)
+
+	vbox.add_child(HSeparator.new())
+
+	var tex_header := Label.new()
+	tex_header.text = "Textures"
+	vbox.add_child(tex_header)
+	_build_texture_bindings(vbox, bt)
+
+	vbox.add_child(HSeparator.new())
+
+	var del_btn := Button.new()
+	del_btn.text = "Delete block"
+	del_btn.pressed.connect(func(): _on_delete_block_type(bt.name))
+	vbox.add_child(del_btn)
+
+# A "<caption> [color]" row whose ColorPickerButton invokes `on_change(Color)`.
+func _labeled_picker(caption: String, value: Color, on_change: Callable) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	var lbl := Label.new()
+	lbl.text = caption
+	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(lbl)
+	var btn := ColorPickerButton.new()
+	btn.color = value
+	btn.custom_minimum_size = Vector2(90, 0)
+	btn.color_changed.connect(on_change)
+	row.add_child(btn)
+	return row
+
+# Texture-binding rows for the block's model. A block with no explicit (textured)
+# model gets a "Set texture…" action that creates a full-cube model; one with bound
+# keys lists each with a swatch + "Replace…".
+func _build_texture_bindings(vbox: VBoxContainer, bt: BlockType) -> void:
+	var model := _editable_model(bt)
+	if model == null or not model.has_textures():
+		var set_btn := Button.new()
+		set_btn.text = "Set texture…"
+		set_btn.pressed.connect(func(): _on_set_texture(bt))
+		vbox.add_child(set_btn)
+		return
+	for key in model.textures:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		row.add_child(_texture_swatch(model.textures[key]))
+		var klbl := Label.new()
+		klbl.text = key
+		klbl.tooltip_text = key
+		klbl.clip_text = true
+		klbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		klbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(klbl)
+		var rep := Button.new()
+		rep.text = "Replace…"
+		rep.pressed.connect(func(): _on_replace_texture(bt, model, key))
+		row.add_child(rep)
+		vbox.add_child(row)
+
+# A 32×32 preview of a bound texture: the image itself (NEAREST) when loadable, else
+# a flat swatch of its planning average color.
+func _texture_swatch(asset_id: String) -> Control:
+	var asset := VoxelWorld.workspace.get_texture_asset(asset_id)
+	if asset != null and not asset.image_path.is_empty():
+		var img := BlockIconRender.cached_texture(asset.image_path)
+		if img != null:
+			var swatch := TextureRect.new()
+			swatch.texture = img
+			swatch.custom_minimum_size = Vector2(32, 32)
+			swatch.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+			swatch.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			return swatch
+	var rect := ColorRect.new()
+	rect.color = asset.average_color if asset != null else Color(0.5, 0.5, 0.5)
+	rect.custom_minimum_size = Vector2(32, 32)
+	return rect
+
+# The block's own editable model (explicit model_id), or null for a built-in shape
+# (no model to edit yet — the "Set texture…" path creates one).
+func _editable_model(bt: BlockType) -> BlockModel:
+	if bt.model_id.is_empty():
+		return null
+	return VoxelWorld.workspace.get_block_model(bt.model_id)
+
+func _on_set_texture(bt: BlockType) -> void:
+	_pick_png(func(path: String):
+		var ws := VoxelWorld.workspace
+		var asset := TextureIngest.ingest_file(ws, path, "custom:%s/all" % bt.name)
+		if asset == null:
+			return
+		var model := ws.get_block_model("custom:%s" % bt.name)
+		if model == null:
+			model = BlockModel.new()
+			model.id = "custom:%s" % bt.name
+			ws.add_block_model(model)
+		model.elements = [BlockModel.box_element(Vector3.ZERO, Vector3.ONE, "all")]
+		model.textures = {"all": asset.id}
+		bt.model_id = model.id
+		bt.color = asset.average_color
+		_after_block_edit(bt)
+		_refresh_bt_detail())
+
+# Rebind one texture key to a freshly ingested PNG. The new asset gets a per-block id
+# so replacing never clobbers a shared imported texture's pixels.
+func _on_replace_texture(bt: BlockType, model: BlockModel, key: String) -> void:
+	_pick_png(func(path: String):
+		var ws := VoxelWorld.workspace
+		var asset := TextureIngest.ingest_file(ws, path, "custom:%s/%s" % [bt.name, key])
+		if asset == null:
+			return
+		model.textures[key] = asset.id
+		_after_block_edit(bt)
+		_refresh_bt_detail())
+
+# Common post-edit: notify views, refresh this block's preview + grid icon, persist.
+func _after_block_edit(bt: BlockType) -> void:
+	VoxelWorld.notify_block_type_changed()
+	if _bt_preview:
+		_bt_preview.set_block(bt)
+	if _block_grid:
+		_block_grid.refresh_icons()
+	LibraryStore.save_all(VoxelWorld.workspace)
+
+func _on_new_block() -> void:
+	var dlg := NewBlockDialog.new()
+	dlg.submitted.connect(_create_block)
+	get_tree().root.add_child(dlg)
+	dlg.popup_centered()
+
+# Build a new block type from the dialog's picks. Textures are optional: with none,
+# the block is a gray full cube (the "build before you decide" path); with an "all"
+# texture and optional Top/Bottom, a full-cube BlockModel is bound to those keys.
+func _create_block(block_name: String, all_path: String, top_path: String, bottom_path: String) -> void:
+	var ws := VoxelWorld.workspace
+	if ws.get_block_type(block_name) != null:
+		return
+	var bt := ws.add_block_type(block_name)
+	var all_asset := _ingest_opt(ws, all_path, block_name, "all")
+	var top_asset := _ingest_opt(ws, top_path, block_name, "top")
+	var bottom_asset := _ingest_opt(ws, bottom_path, block_name, "bottom")
+	if all_asset != null or top_asset != null or bottom_asset != null:
+		var model := BlockModel.new()
+		model.id = "custom:%s" % block_name
+		var elem := BlockModel.box_element(Vector3.ZERO, Vector3.ONE, "all")
+		model.textures = {}
+		if all_asset != null:
+			model.textures["all"] = all_asset.id
+		if top_asset != null:
+			model.textures["top"] = top_asset.id
+			elem["faces"][BlockModel.Dir.UP] = BlockModel.make_face("top")
+		if bottom_asset != null:
+			model.textures["bottom"] = bottom_asset.id
+			elem["faces"][BlockModel.Dir.DOWN] = BlockModel.make_face("bottom")
+		model.elements = [elem]
+		ws.add_block_model(model)
+		bt.model_id = model.id
+		var primary := all_asset if all_asset != null else (top_asset if top_asset != null else bottom_asset)
+		bt.color = primary.average_color
+	LibraryStore.save_all(ws)
+	VoxelWorld.workspace_changed.emit()
+	_selected_block_type = block_name
+	if _block_grid:
+		_block_grid.set_selected(block_name)
+	_refresh_bt_detail()
+
+# Ingest an optional PNG under a per-block/key id; null when no path was chosen.
+func _ingest_opt(ws: VoxelWorkspace, path: String, block_name: String, key: String) -> TextureAsset:
+	if path.is_empty():
+		return null
+	return TextureIngest.ingest_file(ws, path, "custom:%s/%s" % [block_name, key])
 
 func _on_import_blocks() -> void:
 	var panel := ImportPanel.new()
 	get_tree().root.add_child(panel)
 	panel.popup_centered()
 
-func _on_add_block_type(block_name: String) -> void:
-	if not VoxelWorld.workspace.get_block_type(block_name):
-		VoxelWorld.workspace.add_block_type(block_name)
-		VoxelWorld.workspace_changed.emit()
+# Reveal the block's saved resource in the OS file browser. Persists first so the
+# .tres exists, then highlights it (falling back to the library root if needed).
+func _on_open_in_files(bt: BlockType) -> void:
+	LibraryStore.save_all(VoxelWorld.workspace)
+	var rel := AssetLibrary.BLOCK_TYPES_DIR.path_join(bt.name.validate_filename() + ".tres")
+	var abs_path := ProjectSettings.globalize_path(AssetLibrary.path_for(rel))
+	if FileAccess.file_exists(abs_path):
+		OS.shell_show_in_file_manager(abs_path)
+	else:
+		OS.shell_open(ProjectSettings.globalize_path(AssetLibrary.path_for()))
 
 func _on_delete_block_type(block_name: String) -> void:
 	VoxelWorld.workspace.remove_block_type(block_name)
+	if _selected_block_type == block_name:
+		_selected_block_type = ""
+	LibraryStore.save_all(VoxelWorld.workspace)
 	VoxelWorld.workspace_changed.emit()
+	_refresh_bt_detail()
+
+# Pick a PNG from the OS filesystem and hand its path to `on_pick`.
+func _pick_png(on_pick: Callable) -> void:
+	var fd := FileDialog.new()
+	fd.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	fd.access = FileDialog.ACCESS_FILESYSTEM
+	fd.filters = PackedStringArray(["*.png ; PNG Images"])
+	fd.use_native_dialog = true
+	fd.file_selected.connect(func(p: String):
+		on_pick.call(p)
+		fd.queue_free())
+	fd.canceled.connect(fd.queue_free)
+	get_tree().root.add_child(fd)
+	fd.popup_centered(Vector2i(720, 500))
 
 # ---------------------------------------------------------------------------
 # Shared
@@ -493,8 +721,8 @@ func _refresh(_arg = null) -> void:
 		_rebuild_projects()
 	if _palettes_list:
 		_palettes_list.populate(VoxelWorld.workspace.palettes.map(func(p): return p.name))
-	if _block_types_list:
-		_block_types_list.populate(VoxelWorld.workspace.block_types.map(func(bt): return bt.name))
+	if _block_grid:
+		_block_grid.populate(VoxelWorld.workspace.block_types)
 
 func _margin(px: int) -> MarginContainer:
 	var m := MarginContainer.new()

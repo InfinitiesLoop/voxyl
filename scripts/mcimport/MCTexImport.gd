@@ -49,34 +49,11 @@ static func ensure_texture(workspace: VoxelWorkspace, source: MCAssetSource,
 	workspace.add_texture_asset(asset)
 	return asset
 
-# One pass over the pixels for both the planning color and a transparency class.
-# average ignores (near-)transparent pixels so a glass/leaf border doesn't wash the
-# color toward black. Partial alpha anywhere → TRANSLUCENT; only hard 0/1 alpha with
-# some fully-transparent pixels → CUTOUT; otherwise OPAQUE.
+# The neutral pixel scan now lives in TextureIngest (core/), shared with the block
+# library's own texture ingest. Kept here as a thin wrapper so the MC importers and
+# their tests call the same name; core/ never depends on mcimport/.
 static func scan_image(img: Image) -> Dictionary:
-	var w := img.get_width()
-	var h := img.get_height()
-	var r := 0.0; var g := 0.0; var b := 0.0; var n := 0
-	var has_transparent := false
-	var has_partial := false
-	for y in h:
-		for x in w:
-			var c := img.get_pixel(x, y)
-			if c.a < 0.05:
-				has_transparent = true
-				continue
-			if c.a < 0.95:
-				has_partial = true
-			r += c.r; g += c.g; b += c.b; n += 1
-	var average := Color(0.5, 0.5, 0.5)
-	if n > 0:
-		average = Color(r / n, g / n, b / n)
-	var transparency := TextureAsset.Transparency.OPAQUE
-	if has_partial:
-		transparency = TextureAsset.Transparency.TRANSLUCENT
-	elif has_transparent:
-		transparency = TextureAsset.Transparency.CUTOUT
-	return {"average": average, "transparency": transparency}
+	return TextureIngest.scan_image(img)
 
 # Parse an MC `.mcmeta` animation block onto the asset. MC stacks frames vertically
 # as square tiles, so frame_count = height / width. frametime is in ticks → seconds

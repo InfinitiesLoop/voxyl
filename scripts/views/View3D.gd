@@ -104,11 +104,8 @@ var _model_tex_cache := {}        # model id -> { texture_key -> { "tex":, "imag
 var _surface_mats := {}           # "<model id>|<texture_key>" -> Material
 var _anim_shaders := {}           # TextureAsset.Transparency -> Shader (one per variant)
 
-# Outward normal per BlockModel.Dir (NORTH=-Z, EAST=+X, SOUTH=+Z, WEST=-X, UP, DOWN).
-const _DIR_NORMALS := {
-	0: Vector3(0, 0, -1), 1: Vector3(1, 0, 0), 2: Vector3(0, 0, 1),
-	3: Vector3(-1, 0, 0), 4: Vector3(0, 1, 0), 5: Vector3(0, -1, 0),
-}
+# Box-face outward normals live in BlockMesher.DIR_NORMALS (shared geometry); the
+# connection-flag scan below reads them from there.
 var _plane_sheet: MeshInstance3D
 var _plane_sheet_mat: ShaderMaterial
 var _slice_marker: MeshInstance3D
@@ -807,8 +804,8 @@ func _resolve_cell_parts(pos: Vector3i, cell: BlockCell, semantic: String) -> Ar
 func _cell_connections(pos: Vector3i) -> Dictionary:
 	var data := VoxelWorld.active_project.data
 	var conns := {}
-	for dir in _DIR_NORMALS:
-		var npos := pos + Vector3i(_DIR_NORMALS[dir])
+	for dir in BlockMesher.DIR_NORMALS:
+		var npos := pos + Vector3i(BlockMesher.DIR_NORMALS[dir])
 		conns[dir] = not data.get_block(npos).is_empty()
 	return conns
 
@@ -820,26 +817,14 @@ func _cell_connections(pos: Vector3i) -> Dictionary:
 func _rotation_basis(x_deg: int, y_deg: int) -> Basis:
 	return Basis(Vector3.UP, deg_to_rad(-y_deg)) * Basis(Vector3.RIGHT, deg_to_rad(-x_deg))
 
-# Shared, lazily-built mesh per model id. Each BlockModel element is a box
-# (from..to in [0,1] voxyl units); we center it on the cell origin so
-# Orientation.basis_of() rotates about the cell center and VOXEL_SCALE shrinks it.
-# BoxMesh carries clean normals/UVs/winding, so append_from gives well-lit geometry.
-# (Per-face textures/UVs from the model are wired in at the Phase 1 material step.)
+# Per-model-id cache around BlockMesher.color_mesh (the shared geometry builder).
+# Orientation.basis_of() rotates the centered box about the cell center and
+# VOXEL_SCALE shrinks it; the cache keeps the rebuild cheap across cells/rebuilds.
 func _mesh_for_model(model: BlockModel) -> Mesh:
 	var key := _model_key(model)
-	if _model_meshes.has(key):
-		return _model_meshes[key]
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for element in model.elements:
-		var from: Vector3 = element["from"]
-		var to: Vector3 = element["to"]
-		var box := BoxMesh.new()
-		box.size = to - from
-		st.append_from(box, 0, Transform3D(Basis(), (from + to) * 0.5 - Vector3(0.5, 0.5, 0.5)))
-	var mesh := st.commit()
-	_model_meshes[key] = mesh
-	return mesh
+	if not _model_meshes.has(key):
+		_model_meshes[key] = BlockMesher.color_mesh(model)
+	return _model_meshes[key]
 
 func _model_key(model: BlockModel) -> String:
 	return model.id if not model.id.is_empty() else str(model.get_instance_id())
@@ -908,88 +893,16 @@ func _cached_texture(image_path: String) -> ImageTexture:
 		_texture_cache[image_path] = AssetLibrary.load_texture(image_path)
 	return _texture_cache[image_path]
 
-# Per-face geometry for a textured model: one surface per distinct texture_key, with
-# explicit UVs from each face's uv rect. Cached (geometry only) by model id; the
-# parallel "keys" list lets the caller bind a material per surface, and "tinted"
-# (also parallel) flags surfaces any of whose faces carry a tint_index — those get
-# the block's biome tint multiplied in (Phase 4). A texture in a given model is
-# uniformly tint-or-not in practice (MC authors grayscale tint textures specifically),
-# so grouping the flag per surface matches the per-face tint_index faithfully.
-# Centered exactly like the color mesh, so Orientation + VOXEL_SCALE apply identically.
+# Per-model-id cache around BlockMesher.textured_mesh (shared geometry). The result
+# is { mesh, keys, tinted }: "keys" (parallel to surface index) lets the caller bind
+# a material per surface, and "tinted" flags surfaces whose faces carry a tint_index
+# so the caller multiplies in the block's biome tint (Phase 4). Geometry only is
+# cached; materials are resolved per rebuild from the workspace library.
 func _textured_mesh_for_model(model: BlockModel) -> Dictionary:
 	var mid := _model_key(model)
-	if _textured_model_meshes.has(mid):
-		return _textured_model_meshes[mid]
-	var tools := {}              # texture_key -> SurfaceTool
-	var order: Array[String] = []  # commit order → surface index
-	var key_tinted := {}         # texture_key -> bool (any face tint_index >= 0)
-	for element in model.elements:
-		var from: Vector3 = element["from"]
-		var to: Vector3 = element["to"]
-		var faces: Dictionary = element["faces"]
-		for dir in faces:
-			var face: Dictionary = faces[dir]
-			var key := str(face.get("texture_key", "all"))
-			if not tools.has(key):
-				var st := SurfaceTool.new()
-				st.begin(Mesh.PRIMITIVE_TRIANGLES)
-				tools[key] = st
-				order.append(key)
-				key_tinted[key] = false
-			if int(face.get("tint_index", -1)) >= 0:
-				key_tinted[key] = true
-			_add_face(tools[key], int(dir), from, to, face.get("uv", Rect2(0, 0, 1, 1)))
-	var mesh := ArrayMesh.new()
-	var keys: Array[String] = []
-	var tinted: Array[bool] = []
-	for key in order:
-		tools[key].generate_tangents()
-		tools[key].commit(mesh)
-		keys.append(key)
-		tinted.append(bool(key_tinted[key]))
-	var entry := {"mesh": mesh, "keys": keys, "tinted": tinted}
-	_textured_model_meshes[mid] = entry
-	return entry
-
-# Append one textured quad (two triangles) for a box face. Vertices are centered
-# (corner - 0.5) to match the color mesh. Winding is self-correcting: Godot's front
-# faces wind so the geometric cross product points *opposite* the surface normal, so
-# flip the perimeter when our chosen order came out the other way.
-func _add_face(st: SurfaceTool, dir: int, from: Vector3, to: Vector3, uv: Rect2) -> void:
-	var n: Vector3 = _DIR_NORMALS[dir]
-	var corners := _face_corners(dir, from, to)
-	# UVs parallel to the perimeter corners (top-left, bottom-left, bottom-right, top-right).
-	var uvs := [
-		uv.position,
-		Vector2(uv.position.x, uv.end.y),
-		uv.end,
-		Vector2(uv.end.x, uv.position.y),
-	]
-	if (corners[1] - corners[0]).cross(corners[2] - corners[0]).dot(n) > 0.0:
-		corners = [corners[0], corners[3], corners[2], corners[1]]
-		uvs = [uvs[0], uvs[3], uvs[2], uvs[1]]
-	for tri in [[0, 1, 2], [0, 2, 3]]:
-		for i in tri:
-			st.set_normal(n)
-			st.set_uv(uvs[i])
-			st.add_vertex(corners[i] - Vector3(0.5, 0.5, 0.5))
-
-# Four perimeter corners of a box face in [0,1] box space (centering happens in
-# _add_face). Order is consistent per face; _add_face fixes winding for Godot.
-func _face_corners(dir: int, a: Vector3, b: Vector3) -> Array:
-	match dir:
-		0:  # NORTH (-Z)
-			return [Vector3(a.x, b.y, a.z), Vector3(a.x, a.y, a.z), Vector3(b.x, a.y, a.z), Vector3(b.x, b.y, a.z)]
-		1:  # EAST (+X)
-			return [Vector3(b.x, b.y, a.z), Vector3(b.x, a.y, a.z), Vector3(b.x, a.y, b.z), Vector3(b.x, b.y, b.z)]
-		2:  # SOUTH (+Z)
-			return [Vector3(b.x, b.y, b.z), Vector3(b.x, a.y, b.z), Vector3(a.x, a.y, b.z), Vector3(a.x, b.y, b.z)]
-		3:  # WEST (-X)
-			return [Vector3(a.x, b.y, b.z), Vector3(a.x, a.y, b.z), Vector3(a.x, a.y, a.z), Vector3(a.x, b.y, a.z)]
-		4:  # UP (+Y)
-			return [Vector3(a.x, b.y, a.z), Vector3(a.x, b.y, b.z), Vector3(b.x, b.y, b.z), Vector3(b.x, b.y, a.z)]
-		_:  # DOWN (-Y)
-			return [Vector3(a.x, a.y, b.z), Vector3(a.x, a.y, a.z), Vector3(b.x, a.y, a.z), Vector3(b.x, a.y, b.z)]
+	if not _textured_model_meshes.has(mid):
+		_textured_model_meshes[mid] = BlockMesher.textured_mesh(model)
+	return _textured_model_meshes[mid]
 
 # Material for one textured surface: the bound texture's static or animated
 # material, cached by semantic+model+key; a face bound to a key the model never
