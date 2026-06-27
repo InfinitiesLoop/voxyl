@@ -87,6 +87,24 @@ func get_color_for_semantic(semantic_name: String) -> Color:
 					result = bt.color
 	return result
 
+# Resolved biome tint for a semantic (last-wins palette walk, same as color). The
+# 3D view multiplies this into faces that carry a tint_index; WHITE (the default,
+# and the value for any block type that never set one) leaves the face untinted.
+# Still the material layer — the data never names a block type or a color.
+func get_tint_for_semantic(semantic_name: String) -> Color:
+	var result := Color.WHITE
+	if not active_project:
+		return result
+	for palette_name in active_project.palette_names:
+		var palette := workspace.get_palette(palette_name)
+		if palette:
+			var bt_name := palette.get_block_type_name(semantic_name)
+			if not bt_name.is_empty():
+				var bt := workspace.get_block_type(bt_name)
+				if bt:
+					result = bt.tint
+	return result
+
 func notify_block_type_changed() -> void:
 	block_type_changed.emit()
 

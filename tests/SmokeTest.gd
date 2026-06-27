@@ -20,6 +20,8 @@ func _ready() -> void:
 	_test_mc_import()
 	_test_statemap_multipart()
 	_test_mc_import_multipart()
+	_test_mc_import_tint()
+	_test_tint_resolver()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
@@ -495,6 +497,133 @@ func _test_mc_import_multipart() -> void:
 	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(src)
 	AssetLibrary.ROOT = saved_root
+
+# Phase 4: the importer bakes MC's plains-biome tint onto blocks whose model faces
+# carry a tintindex. Leaves (every face tinted) fold the tint into the planning color;
+# a grass block (only the top tinted) keeps its dominant side color and never mis-marks
+# the pre-composited side texture; a plain block stays untinted (WHITE).
+func _test_mc_import_tint() -> void:
+	print("-- mc importer tint (biome colors, Phase 4)")
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_tintlib__"
+	var src := "user://__voxyl_tintsrc__"
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	var assets := src + "/assets"
+
+	var foliage := Color(0.4667, 0.6706, 0.1843)
+	var grass := Color(0.5686, 0.7412, 0.3490)
+	var leaf_gray := Color(0.6, 0.6, 0.6)
+	var grass_top_gray := Color(0.55, 0.55, 0.55)
+	var grass_side := Color(0.45, 0.32, 0.2)
+	var dirt := Color(0.4, 0.3, 0.22)
+	var plain := Color(0.5, 0.5, 0.55)
+
+	# Leaves: full cube, every face tintindex 0, one grayscale texture.
+	_write_file(assets + "/testmod/models/block/test_leaves.json", """
+{ "textures": {"all":"testmod:block/test_leaves_tex"}, "elements": [ { "from":[0,0,0], "to":[16,16,16],
+	"faces": { "down":{"texture":"#all","tintindex":0},"up":{"texture":"#all","tintindex":0},
+	"north":{"texture":"#all","tintindex":0},"south":{"texture":"#all","tintindex":0},
+	"west":{"texture":"#all","tintindex":0},"east":{"texture":"#all","tintindex":0} } } ] }
+""")
+	# Grass block: only the top is tinted; sides/bottom are pre-composited (untinted).
+	_write_file(assets + "/testmod/models/block/test_grass.json", """
+{ "textures": {"top":"testmod:block/test_grass_top","side":"testmod:block/test_grass_side","bottom":"testmod:block/test_dirt"},
+	"elements": [ { "from":[0,0,0], "to":[16,16,16], "faces": {
+	"up":{"texture":"#top","tintindex":0}, "down":{"texture":"#bottom"},
+	"north":{"texture":"#side"},"south":{"texture":"#side"},"west":{"texture":"#side"},"east":{"texture":"#side"} } } ] }
+""")
+	# Plain: full cube, no tintindex anywhere.
+	_write_file(assets + "/testmod/models/block/test_plain.json", """
+{ "textures": {"all":"testmod:block/test_plain_tex"}, "elements": [ { "from":[0,0,0], "to":[16,16,16],
+	"faces": { "down":{"texture":"#all"},"up":{"texture":"#all"},"north":{"texture":"#all"},
+	"south":{"texture":"#all"},"west":{"texture":"#all"},"east":{"texture":"#all"} } } ] }
+""")
+	_write_file(assets + "/testmod/blockstates/test_leaves.json",
+		'{ "variants": { "": { "model": "testmod:block/test_leaves" } } }')
+	_write_file(assets + "/testmod/blockstates/test_grass.json",
+		'{ "variants": { "": { "model": "testmod:block/test_grass" } } }')
+	_write_file(assets + "/testmod/blockstates/test_plain.json",
+		'{ "variants": { "": { "model": "testmod:block/test_plain" } } }')
+	_write_solid(assets + "/testmod/textures/block/test_leaves_tex.png", leaf_gray)
+	_write_solid(assets + "/testmod/textures/block/test_grass_top.png", grass_top_gray)
+	_write_solid(assets + "/testmod/textures/block/test_grass_side.png", grass_side)
+	_write_solid(assets + "/testmod/textures/block/test_dirt.png", dirt)
+	_write_solid(assets + "/testmod/textures/block/test_plain_tex.png", plain)
+
+	var ws := VoxelWorkspace.new()
+	var imp := MCImporter.new(assets, ws)
+	imp.import_namespace("testmod")
+
+	# Leaves — fully tinted, color folded.
+	var leaves := ws.get_block_type("test_leaves")
+	var lm := ws.get_block_model("testmod:block/test_leaves")
+	_check("tinted blocks imported",
+		leaves != null and ws.get_block_type("test_grass") != null and ws.get_block_type("test_plain") != null)
+	_check("leaves face keeps its tint_index",
+		lm != null and int(lm.elements[0]["faces"][BlockModel.Dir.UP]["tint_index"]) == 0)
+	_check("leaves tint is the plains foliage default",
+		leaves != null and _color_near(leaves.tint, foliage, 0.01))
+	var lt := ws.get_texture_asset("testmod:block/test_leaves_tex")
+	_check("leaves texture marked as a foliage tint source",
+		lt != null and lt.tint_source == TextureAsset.TintSource.FOLIAGE)
+	_check("leaves planning color folds the tint in (grey source → green)",
+		leaves != null and _color_near(leaves.color, leaf_gray * foliage, 0.02)
+		and not _color_near(leaves.color, leaf_gray, 0.05))
+
+	# Grass — only the top is tinted; dominant side color is preserved.
+	var grass_bt := ws.get_block_type("test_grass")
+	_check("grass block tint is the plains grass default",
+		grass_bt != null and _color_near(grass_bt.tint, grass, 0.01))
+	_check("grass top texture marked as a grass tint source",
+		ws.get_texture_asset("testmod:block/test_grass_top") != null
+		and ws.get_texture_asset("testmod:block/test_grass_top").tint_source == TextureAsset.TintSource.GRASS)
+	_check("pre-composited grass side texture is never mis-marked",
+		ws.get_texture_asset("testmod:block/test_grass_side") != null
+		and ws.get_texture_asset("testmod:block/test_grass_side").tint_source == TextureAsset.TintSource.NONE)
+	_check("grass planning color stays the untinted dominant side (no fold)",
+		grass_bt != null and _color_near(grass_bt.color, grass_side, 0.02))
+
+	# Plain — no tintindex → no tint at all.
+	var plain_bt := ws.get_block_type("test_plain")
+	_check("untinted block keeps a white tint",
+		plain_bt != null and plain_bt.tint == Color.WHITE)
+
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	AssetLibrary.ROOT = saved_root
+
+# Phase 4: the per-semantic tint resolver walks the palette stack last-wins, exactly
+# like the color resolver, and defaults to WHITE for untinted / unknown semantics.
+func _test_tint_resolver() -> void:
+	print("-- tint resolver (palette stack)")
+	var ws := VoxelWorld.workspace
+	var project := ws.get_project("My First Build")
+	var bt := ws.add_block_type("__TintBlock__")
+	bt.tint = Color(0.2, 0.6, 0.3)
+	var pal := ws.add_palette("__tint_pal__")
+	var e := PaletteEntry.new()
+	e.semantic_name = "Base"
+	e.block_type_name = "__TintBlock__"
+	pal.entries.append(e)
+	project.palette_names.append("__tint_pal__")
+	VoxelWorld.open(project)
+	_check("tint resolves through the palette stack",
+		VoxelWorld.get_tint_for_semantic("Base") == Color(0.2, 0.6, 0.3))
+	_check("untinted semantic defaults to white",
+		VoxelWorld.get_tint_for_semantic("Accent") == Color.WHITE)
+	_check("unknown semantic defaults to white",
+		VoxelWorld.get_tint_for_semantic("__nope__") == Color.WHITE)
+	project.palette_names.pop_back()
+	ws.remove_palette("__tint_pal__")
+	ws.remove_block_type("__TintBlock__")
+	VoxelWorld.open(project)
+
+# A solid-filled 16×16 RGBA PNG at `path` (test fixture pixels).
+func _write_solid(path: String, color: Color) -> void:
+	var img := Image.create_empty(16, 16, false, Image.FORMAT_RGBA8)
+	img.fill(color)
+	_write_png(path, img)
 
 func _part_ids(parts: Array) -> Array:
 	var out: Array = []

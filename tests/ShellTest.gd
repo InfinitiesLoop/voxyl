@@ -46,6 +46,7 @@ func _run() -> void:
 	_check_textured_render(v3d)
 	_check_imported_render(v3d)
 	_check_multipart_render(v3d)
+	_check_tinted_render(v3d)
 
 	var tb := (_panes(shell)[0] as ViewPane).get_tab_bar()
 	_check("tab bar enables cross-pane drag",
@@ -296,6 +297,67 @@ func _check_multipart_render(v3d: Node) -> void:
 	ws.remove_block_model("mp_post")
 	ws.remove_block_model("mp_side")
 	v3d._rebuild()
+
+# Phase 4: an imported block whose model faces carry a tintindex renders with the
+# block's biome tint multiplied into the surface — the importer bakes the plains
+# default, the resolver hands the view the color, and the textured material modulates
+# the texture by it (StandardMaterial3D.albedo_color). Closes importer → view for tint.
+func _check_tinted_render(v3d: Node) -> void:
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_shelltest_tintlib__"
+	var src := "user://__voxyl_shelltest_tintsrc__"
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	var assets := src + "/assets"
+	# A leaves-style block: full cube, every face tintindex 0, one grayscale texture.
+	_write_text(assets + "/testmod/blockstates/tint_leaves.json",
+		'{ "variants": { "": { "model": "testmod:block/tint_leaves" } } }')
+	_write_text(assets + "/testmod/models/block/tint_leaves.json",
+		'{ "textures": {"all":"testmod:block/tint_leaves_tex"}, "elements": [ { "from":[0,0,0], "to":[16,16,16],'
+		+ ' "faces": { "down":{"texture":"#all","tintindex":0},"up":{"texture":"#all","tintindex":0},'
+		+ '"north":{"texture":"#all","tintindex":0},"south":{"texture":"#all","tintindex":0},'
+		+ '"west":{"texture":"#all","tintindex":0},"east":{"texture":"#all","tintindex":0} } } ] }')
+	var img := Image.create_empty(16, 16, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0.6, 0.6, 0.6))
+	DirAccess.make_dir_recursive_absolute((assets + "/testmod/textures/block/tint_leaves_tex.png").get_base_dir())
+	img.save_png(assets + "/testmod/textures/block/tint_leaves_tex.png")
+
+	var ws := VoxelWorld.workspace
+	var imp := MCImporter.new(assets, ws)
+	imp.import_block("testmod", "tint_leaves")
+	var bt := ws.get_block_type("tint_leaves")
+	var pal := ws.add_palette("__tint_test__")
+	var e := PaletteEntry.new()
+	e.semantic_name = "TintTest"; e.block_type_name = "tint_leaves"
+	pal.entries.append(e)
+	var project := VoxelWorld.active_project
+	project.palette_names.append("__tint_test__")
+
+	VoxelWorld.set_block(Vector3i(0, 9, 0), "TintTest")
+	v3d._rebuild()
+	var mi: MeshInstance3D = (v3d.get("_cell_nodes") as Dictionary).get(Vector3i(0, 9, 0))
+	var mat = mi.get_surface_override_material(0) if mi != null else null
+	_check("tinted imported block bakes its tint into the surface albedo",
+		mat is StandardMaterial3D and bt != null
+		and _color_near((mat as StandardMaterial3D).albedo_color, bt.tint, 0.001))
+	_check("the baked tint is the plains foliage default, not white",
+		bt != null and _color_near(bt.tint, Color(0.4667, 0.6706, 0.1843), 0.01)
+		and not _color_near(bt.tint, Color.WHITE, 0.1))
+
+	# Teardown — restore the workspace/project for the checks that follow.
+	VoxelWorld.clear_block(Vector3i(0, 9, 0))
+	project.palette_names.erase("__tint_test__")
+	ws.remove_palette("__tint_test__")
+	ws.remove_block_type("tint_leaves")
+	ws.remove_block_model("testmod:block/tint_leaves")
+	ws.remove_texture_asset("testmod:block/tint_leaves_tex")
+	v3d._rebuild()
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	AssetLibrary.ROOT = saved_root
+
+func _color_near(a: Color, b: Color, tol: float) -> bool:
+	return absf(a.r - b.r) <= tol and absf(a.g - b.g) <= tol and absf(a.b - b.b) <= tol
 
 func _write_text(path: String, text: String) -> void:
 	DirAccess.make_dir_recursive_absolute(path.get_base_dir())

@@ -190,6 +190,7 @@ func _emit_block_type(block_id: String, primary_ref: String, state_map: BlockSta
 	var avg = _model_average_color(primary_model)
 	if avg != null:
 		bt.color = avg
+	_apply_tint(bt, primary_model)
 	if not imported_blocks.has(block_id):
 		imported_blocks.append(block_id)
 	return bt
@@ -475,6 +476,15 @@ func _face_uv(mface, dir: int, from16, to16) -> Rect2:
 func _model_average_color(model: BlockModel):
 	if model == null or model.textures.is_empty():
 		return null
+	var asset := _workspace.get_texture_asset(_dominant_texture_key(model))
+	if asset != null:
+		return asset.average_color
+	return null
+
+# The texture_key bound to the most faces — the block's "main" texture, used both
+# for the planning color and for deciding whether to fold a tint into it. Falls
+# back to the first declared binding when the face scan is inconclusive.
+func _dominant_texture_key(model: BlockModel) -> String:
 	var counts := {}
 	for element in model.elements:
 		for dir in element["faces"]:
@@ -485,12 +495,75 @@ func _model_average_color(model: BlockModel):
 	for key in counts:
 		if counts[key] > best:
 			best = counts[key]; best_key = key
-	if best_key.is_empty():
+	if best_key.is_empty() and not model.textures.is_empty():
 		best_key = model.textures.keys()[0]
-	var asset := _workspace.get_texture_asset(model.textures.get(best_key, best_key))
-	if asset != null:
-		return asset.average_color
-	return null
+	return model.textures.get(best_key, best_key)
+
+# ---------------------------------------------------------------------------
+# Tint (Phase 4) — bake MC's biome colors into the neutral material layer.
+#
+# MC tints grayscale "tintindex" textures (grass, leaves, water) from per-biome
+# colormaps decided in Java code, NOT in the assets — the model JSON only carries a
+# `tintindex` flag per face. voxyl has no biomes, so we resolve the tint to a single
+# plains/default-biome color here (the one MC-specific bit, living in the importer
+# plugin) and stash it on BlockType.tint; the 3D view multiplies it into the tinted
+# faces. Which faces are tinted stays neutral data (the face's tint_index, already
+# converted in _convert_elements).
+# ---------------------------------------------------------------------------
+
+# MC's plains/default-biome tint colors (the swatches the colormaps yield at the
+# plains climate point). Users can re-tint per block afterwards — this is just the
+# import-time default the plan calls for.
+const _PLAINS_GRASS := Color(0.5686, 0.7412, 0.3490)    # #91BD59
+const _PLAINS_FOLIAGE := Color(0.4667, 0.6706, 0.1843)  # #77AB2F
+const _WATER_TINT := Color(0.2471, 0.4627, 0.8941)      # #3F76E4
+
+# Set BlockType.tint from the model's tinted faces (those with tint_index >= 0). No
+# tinted faces → leave it WHITE (no tint). Also marks each genuinely-tinted texture's
+# tint_source (only textures actually used on a tintindex face, so grass_block_side —
+# pre-composited, untinted — is never mis-marked). When the planning color itself
+# comes from a tinted texture, the tint is folded into BlockType.color so the
+# grey-source 2D/planning views still read as green/blue.
+func _apply_tint(bt: BlockType, model: BlockModel) -> void:
+	if model == null:
+		return
+	var tinted_counts := {}   # texture_key -> count of tinted faces using it
+	for element in model.elements:
+		var faces: Dictionary = element["faces"]
+		for dir in faces:
+			var face: Dictionary = faces[dir]
+			if int(face.get("tint_index", -1)) >= 0:
+				var key := str(face["texture_key"])
+				tinted_counts[key] = int(tinted_counts.get(key, 0)) + 1
+	if tinted_counts.is_empty():
+		return
+	# The biome color to apply: classify the most-used tinted texture's path.
+	var main_key := ""
+	var best := -1
+	for key in tinted_counts:
+		if tinted_counts[key] > best:
+			best = tinted_counts[key]; main_key = key
+	bt.tint = _classify_tint(main_key)["color"]
+	for key in tinted_counts:
+		var asset := _workspace.get_texture_asset(key)
+		if asset != null and asset.tint_source == TextureAsset.TintSource.NONE:
+			var cls := _classify_tint(key)
+			asset.tint_source = cls["source"]
+			asset.fixed_tint = cls["color"]
+	if tinted_counts.has(_dominant_texture_key(model)):
+		bt.color = bt.color * bt.tint
+
+# Guess a tint category (+ plains color) from a texture ref's path. MC decides this
+# in Java per block, so this path heuristic is the importer's best neutral stand-in;
+# the result is only a default the user can override. Unknown tintindex content
+# defaults to grass green (the most common case).
+func _classify_tint(texture_ref: String) -> Dictionary:
+	var path := str(_split_ref(texture_ref)["path"]).to_lower()
+	if path.contains("water"):
+		return {"source": TextureAsset.TintSource.FIXED, "color": _WATER_TINT}
+	if path.contains("leaves") or path.contains("foliage") or path.contains("vine") or path.contains("lily"):
+		return {"source": TextureAsset.TintSource.FOLIAGE, "color": _PLAINS_FOLIAGE}
+	return {"source": TextureAsset.TintSource.GRASS, "color": _PLAINS_GRASS}
 
 # ---------------------------------------------------------------------------
 # Ref + path helpers

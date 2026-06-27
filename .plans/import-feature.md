@@ -1,8 +1,47 @@
 # Block Import Pipeline — Design Plan
 
-Status: **Phase 3 complete.** Pick up at Phase 4 (tinting / biome colors).
+Status: **Phase 4 complete.** Pick up at Phase 5 (import UX + library management).
 
 Progress log:
+- **Phase 4 (done, 2026-06-25):** biome tinting. MC tints grayscale `tintindex`
+  textures (grass, leaves, water) from biome colormaps decided in *Java*, not assets —
+  the model JSON only carries a per-face `tintindex`. voxyl has no biomes, so the
+  importer resolves each tinted block to a single **plains/default-biome color** and
+  bakes it onto a new `BlockType.tint` (material-layer visual property, WHITE = no
+  tint / identity). `MCImporter._apply_tint` scans the primary model's faces for
+  `tint_index >= 0`, classifies the most-used tinted texture's *path*
+  (`_classify_tint`: water→`#3F76E4`, leaves/foliage/vine/lily→`#77AB2F`,
+  else→grass `#91BD59` — the one MC-specific bit, in the plugin) and stores it; it
+  also marks each genuinely-tinted texture's `TextureAsset.tint_source` (only textures
+  actually on a tintindex face, so a pre-composited `grass_block_side` is never
+  mis-marked) and **folds the tint into `BlockType.color`** when the planning/dominant
+  texture is itself tinted (leaves/water read green/blue in 2D; grass block keeps its
+  brown side). New `VoxelWorld.get_tint_for_semantic` (last-wins palette walk, WHITE
+  default). `View3D` multiplies the tint into faces: `_textured_mesh_for_model` now
+  emits a `tinted` flag per surface (any face with `tint_index >= 0`), and
+  `_surface_material(...,is_tinted,tint)` modulates — static via
+  `StandardMaterial3D.albedo_color`, animated via a new `tint` shader uniform (cache
+  key gained the semantic, since one model can render under two tints). WHITE is the
+  identity, so the default/untinted build is byte-for-byte unchanged. 107 (was 94)
+  smoke + 34 (was 32) shell green; validate clean; app boots clean.
+
+  Decisions made (for Phase 5+):
+  - **Tint is a per-`BlockType` color, gated by per-face `tint_index`.** This is the
+    faithful MC model (tintindex is the render gate; the color is per-block) AND the
+    plan's "expose tint as a per-BlockType color". `tint_index` already rode on the
+    face since Phase 2; nothing new touches the data layer.
+  - **Tint category is guessed from the texture path** because MC's real per-block
+    color provider lives in Java, not the assets. The guess is only the *default*; a
+    user can re-tint any block (it's a material-layer property). Water is treated as a
+    fixed color, not yet biome-varying.
+  - **Per-surface tint flag, not per-vertex.** A texture within one model is uniformly
+    tinted-or-not in real MC content, so flagging the whole surface matches the per-face
+    `tint_index` while keeping the shared, model-keyed mesh cache intact. If a future
+    block reuses one texture both tinted and untinted in the same model, revisit with
+    a vertex-color mask.
+  - **Still open:** real biome colormaps / per-biome water (voxyl has no biomes, so
+    likely a UI affordance — pick a biome preset — rather than terrain-driven); a tint
+    editor in the Phase 5 UX so users can override the imported default.
 - **Phase 3 (done, 2026-06-23):** connecting/multipart blocks + a unified render-time
   part resolver. `BlockStateMap` gained a neutral `parts` array (multipart) beside
   `entries` (variants): a part is `{when, model_id, x_rot, y_rot, uvlock}` where `when`
@@ -385,10 +424,23 @@ Still open after Phase 3 (carried into the relevant later phase / a future pass)
 - **Rotation x=180 / upside-down + wall geometry** want a *visual* check (headless
   asserts only cover the boolean y-90° connecting case structurally).
 
-### Phase 4 — Tinting / biome colors
-- Grayscale + `tintindex` textures (grass, leaves, water, foliage) tinted from
-  biome colormaps. voxyl has no biomes → expose tint as a per-`BlockType` color
-  (a material-layer visual property), defaulting to MC plains/default biome.
+### Phase 4 — Tinting / biome colors ✅ DONE
+Grayscale + `tintindex` textures (grass, leaves, water, foliage) tinted from biome
+colormaps. voxyl has no biomes → tint is a per-`BlockType` color (material-layer
+visual property), defaulting to the MC plains/default biome.
+- [x] New `BlockType.tint` (WHITE = no tint). New `VoxelWorld.get_tint_for_semantic`
+      (last-wins palette walk). → `scripts/core/BlockType.gd`, `VoxelWorld.gd`.
+- [x] Importer bakes the plains default + classifies tint category from the texture
+      path; marks `TextureAsset.tint_source` only for genuinely-tinted textures; folds
+      the tint into the planning `color` when the dominant texture is tinted.
+      → `MCImporter._apply_tint` / `_classify_tint` / `_dominant_texture_key`.
+- [x] `View3D` multiplies the tint into faces carrying a `tint_index` — per-surface
+      `tinted` flag from `_textured_mesh_for_model`, applied via
+      `StandardMaterial3D.albedo_color` (static) / a `tint` shader uniform (animated).
+      WHITE stays the identity, so the untinted build is byte-for-byte unchanged.
+- [x] **Validate:** 107 (smoke) + 34 (shell) green; validate clean; app boots clean.
+      New `_test_mc_import_tint` / `_test_tint_resolver` (smoke) + `_check_tinted_render`
+      (shell).
 
 ### Phase 5 — Import UX + library management
 - "Add blocks…" panel: pick a source (resource-pack zip, unzipped assets dir, or

@@ -24,6 +24,14 @@ extends Resource
 # id. When null, model_id is the single model rendered at every orientation (today's
 # behavior — the view rotates it via Orientation.basis_of). model_id should mirror
 # state_map.default_model_id() so non-orientation-aware code still resolves geometry.
+#
+# tint is the biome-color hint (Phase 4): a per-block visual property in the
+# material layer. Minecraft tints grayscale "tintindex" textures (grass, leaves,
+# water, foliage) from biome colormaps; voxyl has no biomes, so the importer bakes
+# the MC plains/default-biome color here and the 3D view multiplies it into faces
+# that carry a tint_index. WHITE is the identity (no tint) — every untinted block
+# stays WHITE, so the field is invisible unless a model actually opts in via
+# tint_index. Decoupled like color: edit it freely without touching voxel data.
 enum Shape { FULL, SLAB, STAIRS }
 
 @export var name: String = ""
@@ -31,3 +39,4 @@ enum Shape { FULL, SLAB, STAIRS }
 @export var shape: Shape = Shape.FULL
 @export var model_id: String = ""
 @export var state_map: BlockStateMap = null
+@export var tint: Color = Color.WHITE

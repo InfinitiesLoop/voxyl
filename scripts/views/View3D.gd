@@ -863,8 +863,13 @@ func _apply_cell_appearance(mi: MeshInstance3D, semantic: String, model: BlockMo
 	var entry := _textured_mesh_for_model(model)
 	mi.mesh = entry["mesh"]
 	var keys: Array = entry["keys"]
+	var tinted: Array = entry["tinted"]
+	# The biome tint is per block type (semantic); WHITE leaves the surface as-is, so
+	# the default/untinted build renders byte-for-byte as before.
+	var tint: Color = VoxelWorld.get_tint_for_semantic(semantic)
 	for i in keys.size():
-		mi.set_surface_override_material(i, _surface_material(semantic, model, keys[i], resolved))
+		mi.set_surface_override_material(i,
+			_surface_material(semantic, model, keys[i], resolved, bool(tinted[i]), tint))
 	mi.set_meta("textured", true)
 
 # Base color material for a semantic (the planning/"undecided" path). Cached in
@@ -905,14 +910,19 @@ func _cached_texture(image_path: String) -> ImageTexture:
 
 # Per-face geometry for a textured model: one surface per distinct texture_key, with
 # explicit UVs from each face's uv rect. Cached (geometry only) by model id; the
-# parallel "keys" list lets the caller bind a material per surface. Centered exactly
-# like the color mesh, so Orientation + VOXEL_SCALE apply identically.
+# parallel "keys" list lets the caller bind a material per surface, and "tinted"
+# (also parallel) flags surfaces any of whose faces carry a tint_index — those get
+# the block's biome tint multiplied in (Phase 4). A texture in a given model is
+# uniformly tint-or-not in practice (MC authors grayscale tint textures specifically),
+# so grouping the flag per surface matches the per-face tint_index faithfully.
+# Centered exactly like the color mesh, so Orientation + VOXEL_SCALE apply identically.
 func _textured_mesh_for_model(model: BlockModel) -> Dictionary:
 	var mid := _model_key(model)
 	if _textured_model_meshes.has(mid):
 		return _textured_model_meshes[mid]
 	var tools := {}              # texture_key -> SurfaceTool
 	var order: Array[String] = []  # commit order → surface index
+	var key_tinted := {}         # texture_key -> bool (any face tint_index >= 0)
 	for element in model.elements:
 		var from: Vector3 = element["from"]
 		var to: Vector3 = element["to"]
@@ -925,14 +935,19 @@ func _textured_mesh_for_model(model: BlockModel) -> Dictionary:
 				st.begin(Mesh.PRIMITIVE_TRIANGLES)
 				tools[key] = st
 				order.append(key)
+				key_tinted[key] = false
+			if int(face.get("tint_index", -1)) >= 0:
+				key_tinted[key] = true
 			_add_face(tools[key], int(dir), from, to, face.get("uv", Rect2(0, 0, 1, 1)))
 	var mesh := ArrayMesh.new()
 	var keys: Array[String] = []
+	var tinted: Array[bool] = []
 	for key in order:
 		tools[key].generate_tangents()
 		tools[key].commit(mesh)
 		keys.append(key)
-	var entry := {"mesh": mesh, "keys": keys}
+		tinted.append(bool(key_tinted[key]))
+	var entry := {"mesh": mesh, "keys": keys, "tinted": tinted}
 	_textured_model_meshes[mid] = entry
 	return entry
 
@@ -977,27 +992,35 @@ func _face_corners(dir: int, a: Vector3, b: Vector3) -> Array:
 			return [Vector3(a.x, a.y, b.z), Vector3(a.x, a.y, a.z), Vector3(b.x, a.y, a.z), Vector3(b.x, a.y, b.z)]
 
 # Material for one textured surface: the bound texture's static or animated
-# material, cached by model+key; a face bound to a key the model never supplied
-# falls back to the semantic's color.
-func _surface_material(semantic: String, model: BlockModel, key: String, resolved: Dictionary) -> Material:
+# material, cached by semantic+model+key; a face bound to a key the model never
+# supplied falls back to the semantic's color. `is_tinted` faces multiply `tint`
+# (the block's biome color) into the texture — WHITE is the identity, so untinted
+# surfaces are unchanged. The cache key carries the semantic because the same model
+# can render under two block types with different tints.
+func _surface_material(semantic: String, model: BlockModel, key: String,
+		resolved: Dictionary, is_tinted: bool, tint: Color) -> Material:
 	if not resolved.has(key):
 		return _color_material(semantic)
-	var cache_key := _model_key(model) + "|" + key
+	var cache_key := semantic + "|" + _model_key(model) + "|" + key
 	if not _surface_mats.has(cache_key):
 		var info: Dictionary = resolved[key]
 		var asset: TextureAsset = info["tex"]
 		var image: ImageTexture = info["image"]
+		var effective_tint := tint if is_tinted else Color.WHITE
 		var mat: Material
 		if asset.is_animated():
-			mat = _animated_material(asset, image)
+			mat = _animated_material(asset, image, effective_tint)
 		else:
-			mat = _static_texture_material(asset, image)
+			mat = _static_texture_material(asset, image, effective_tint)
 		_surface_mats[cache_key] = mat
 	return _surface_mats[cache_key]
 
-func _static_texture_material(asset: TextureAsset, image: ImageTexture) -> StandardMaterial3D:
+# `tint` modulates the texture (StandardMaterial3D multiplies albedo_texture by
+# albedo_color); WHITE leaves it untouched, so the default path is unchanged.
+func _static_texture_material(asset: TextureAsset, image: ImageTexture, tint: Color) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_texture = image
+	m.albedo_color = tint
 	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST  # MC art is pixel-exact
 	match asset.transparency:
 		TextureAsset.Transparency.CUTOUT:
@@ -1009,14 +1032,16 @@ func _static_texture_material(asset: TextureAsset, image: ImageTexture) -> Stand
 # Animated textures are an MC-style vertical frame strip. One ShaderMaterial walks
 # the V-offset down the strip from TIME — no per-frame mesh/material churn, and all
 # instances sharing the material animate in lockstep. frame_time is seconds/frame
-# (the importer converts MC's ticks); 0 → effectively static.
-func _animated_material(asset: TextureAsset, image: ImageTexture) -> ShaderMaterial:
+# (the importer converts MC's ticks); 0 → effectively static. `tint` multiplies the
+# sampled color (WHITE = identity), matching the static path.
+func _animated_material(asset: TextureAsset, image: ImageTexture, tint: Color) -> ShaderMaterial:
 	var sm := ShaderMaterial.new()
 	sm.shader = _anim_shader_for(asset.transparency)
 	sm.set_shader_parameter("tex", image)
 	sm.set_shader_parameter("frame_count", asset.frame_count)
 	sm.set_shader_parameter("frame_time", asset.frame_time)
 	sm.set_shader_parameter("interp", asset.interpolate)
+	sm.set_shader_parameter("tint", tint)
 	return sm
 
 # One shader per transparency variant (render_mode is fixed at compile time), built
@@ -1041,6 +1066,7 @@ uniform sampler2D tex : source_color, filter_nearest;
 uniform int frame_count = 1;
 uniform float frame_time = 0.0;
 uniform bool interp = false;
+uniform vec4 tint : source_color = vec4(1.0);
 
 void fragment() {
 	float fc = max(float(frame_count), 1.0);
@@ -1053,7 +1079,7 @@ void fragment() {
 		vec4 c2 = texture(tex, vec2(UV.x, (UV.y + nf) / fc));
 		c = mix(c, c2, fract(t));
 	}
-%s	ALBEDO = c.rgb;
+%s	ALBEDO = c.rgb * tint.rgb;
 }
 """ % [render_mode, alpha_body]
 	_anim_shaders[transparency] = shader
