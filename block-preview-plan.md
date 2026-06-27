@@ -40,7 +40,7 @@ faked 2D icon.
 - `scripts/ui/BlockIconBaker.gd` (Node, owned by `BlockGrid`) — a **pool of hidden
   `SubViewport`s** (transparent, own World3D, ambient + key/fill rig, near-isometric
   camera framed on the unit cell). `icon_for(bt)` returns a cached `ImageTexture` or
-  null + queues a bake. Bakes run **`BATCH` (20) blocks per frame** — each pool viewport
+  null + queues a bake. Bakes run **`BATCH` (50) blocks per frame** — each pool viewport
   renders one, all captured after a single `frame_post_draw` — then emit `icon_ready`.
 - Two-level cache: **in-memory** (block name → texture) and **on-disk** under
   `user://icon_cache/`, keyed by an appearance *signature* (model + shape + color + tint

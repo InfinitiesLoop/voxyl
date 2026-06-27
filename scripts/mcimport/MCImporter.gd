@@ -223,11 +223,27 @@ func _emit_block_type(bt_name: String, primary_ref: String, state_map: BlockStat
 # Properties voxyl doesn't model (shape=, waterlogged=, …) are dropped — the plan's
 # "flatten unmodeled properties to a sensible default". A weighted-random variant
 # (an array of models) takes the first.
+#
+# `shape` (stairs) is special: its inner_/outer_ values are *contextual corner forms*
+# that depend on neighbors — the same thing voxyl declines to model for multipart
+# connections. Flattening them onto the same (facing, half) as the straight form let a
+# corner model win as the block's primary, so a stair read as already-connected on two
+# sides. When a block offers a `shape=straight` resting form we keep only that; blocks
+# whose shape vocabulary has no straight (rails) are untouched.
 func _parse_variants(variants) -> Array:
 	var out: Array = []
 	if not (variants is Dictionary):
 		return out
+	var has_straight := false
 	for state_str in variants.keys():
+		if _variant_shape(state_str) == "straight":
+			has_straight = true
+			break
+	for state_str in variants.keys():
+		if has_straight:
+			var shape := _variant_shape(state_str)
+			if shape != "" and shape != "straight":
+				continue
 		var val = variants[state_str]
 		if val is Array:
 			val = val[0] if not val.is_empty() else null
@@ -243,6 +259,15 @@ func _parse_variants(variants) -> Array:
 			"uvlock": bool(val.get("uvlock", false)),
 		})
 	return out
+
+# The value of the `shape` property in an MC state string ("…,shape=inner_left" →
+# "inner_left"), or "" when absent. Used to keep only a stair's resting straight form.
+func _variant_shape(state_str: String) -> String:
+	for prop in state_str.split(","):
+		var kv := prop.split("=")
+		if kv.size() == 2 and kv[0] == "shape":
+			return kv[1]
+	return ""
 
 # Parse an MC state string ("facing=east,half=top") into voxyl orientation parts.
 # Only facing + the top/bottom half are meaningful to voxyl; everything else is

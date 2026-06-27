@@ -13,10 +13,21 @@ extends Control
 const _CAM_DIR := Vector3(0.9, 0.7, 1.2)
 const _AUTO_SPIN := 0.6   # radians/sec idle rotation
 
+# Selectable layouts, shown so a block can be judged in context (a lone block, a 1×3
+# column, a 3×3 wall) instead of only by itself. Cols × rows in the XY plane, so the
+# patch stands up vertically like a wall rather than lying flat as a floor.
+const _LAYOUTS := [
+	{"label": "1×1", "size": Vector2i(1, 1)},
+	{"label": "1×3", "size": Vector2i(1, 3)},
+	{"label": "3×3", "size": Vector2i(3, 3)},
+]
+
 var _viewport: SubViewport
 var _camera: Camera3D
 var _pivot: Node3D
-var _mesh_instance: MeshInstance3D
+
+var _block: BlockType         # current block, re-instanced per layout change
+var _layout := Vector2i(1, 1)  # cols × rows currently rendered
 
 var _cam_dist := 2.6
 var _dragging := false
@@ -38,25 +49,10 @@ func _ready() -> void:
 	_viewport.own_world_3d = true
 	svc.add_child(_viewport)
 
-	# Ambient so unlit faces aren't black; the scene background stays transparent.
-	var world_env := WorldEnvironment.new()
-	var env := Environment.new()
-	env.background_mode = Environment.BG_CLEAR_COLOR
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.72, 0.74, 0.80)
-	env.ambient_light_energy = 1.0
-	world_env.environment = env
-	_viewport.add_child(world_env)
-
-	# Key + fill, mirroring View3D's directional rig.
-	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-50, 45, 0)
-	sun.light_energy = 1.3
-	_viewport.add_child(sun)
-	var fill := DirectionalLight3D.new()
-	fill.rotation_degrees = Vector3(40, -135, 0)
-	fill.light_energy = 0.5
-	_viewport.add_child(fill)
+	# Shared lighting rig (kept identical to the baked grid icons via BlockLightRig) so
+	# the rotatable preview and the grid swatch read the same. Lower ambient + a stronger
+	# key give shaded, saturated faces instead of the flat, washed-out look of heavy fill.
+	BlockLightRig.apply(_viewport)
 
 	_camera = Camera3D.new()
 	_viewport.add_child(_camera)
@@ -64,9 +60,8 @@ func _ready() -> void:
 
 	_pivot = Node3D.new()
 	_viewport.add_child(_pivot)
-	_mesh_instance = MeshInstance3D.new()
-	_pivot.add_child(_mesh_instance)
 
+	_build_layout_bar()
 	set_process(true)
 
 func _process(delta: float) -> void:
@@ -76,11 +71,34 @@ func _process(delta: float) -> void:
 # Render `bt` (or clear when null) via the shared BlockRender3D builder, so this
 # rotatable preview and the baked grid icons resolve geometry + materials the same way.
 func set_block(bt: BlockType) -> void:
-	# Rebuild the instance so stale per-surface overrides never linger across blocks.
-	_mesh_instance.queue_free()
-	_mesh_instance = MeshInstance3D.new()
-	_pivot.add_child(_mesh_instance)
-	BlockRender3D.build_into(_mesh_instance, bt)
+	_block = bt
+	_rebuild_layout()
+
+# Rebuild the rendered patch: one freshly-built MeshInstance3D per cell of the current
+# layout, arranged in the XY plane (cols across, rows up) and centered on the pivot so
+# it spins about the middle. Fresh instances mean stale per-surface overrides never
+# linger across blocks/layouts.
+func _rebuild_layout() -> void:
+	for c in _pivot.get_children():
+		c.queue_free()
+	if _block == null:
+		return
+	var cols := _layout.x
+	var rows := _layout.y
+	for cx in cols:
+		for cy in rows:
+			var mi := MeshInstance3D.new()
+			_pivot.add_child(mi)
+			BlockRender3D.build_into(mi, _block)
+			mi.position = Vector3(cx - (cols - 1) * 0.5, cy - (rows - 1) * 0.5, 0.0)
+	# Pull the camera back so the whole patch frames, resetting any prior zoom.
+	_cam_dist = _base_dist_for_layout()
+	_update_camera()
+
+# Camera distance that frames the current patch: the single-block default, grown by the
+# patch's largest side so a 3×3 reads at the same on-screen size as a 1×1.
+func _base_dist_for_layout() -> float:
+	return 2.6 + float(maxi(_layout.x, _layout.y) - 1) * 1.4
 
 # --- Input: drag-to-spin + scroll-to-zoom -----------------------------------
 
@@ -93,11 +111,11 @@ func _on_svc_input(event: InputEvent) -> void:
 				_drag_last = mb.position
 			MOUSE_BUTTON_WHEEL_UP:
 				if mb.pressed:
-					_cam_dist = clampf(_cam_dist - 0.3, 1.5, 6.0)
+					_cam_dist = clampf(_cam_dist - 0.3, 1.5, 10.0)
 					_update_camera()
 			MOUSE_BUTTON_WHEEL_DOWN:
 				if mb.pressed:
-					_cam_dist = clampf(_cam_dist + 0.3, 1.5, 6.0)
+					_cam_dist = clampf(_cam_dist + 0.3, 1.5, 10.0)
 					_update_camera()
 	elif event is InputEventMouseMotion and _dragging:
 		var rel := (event as InputEventMouseMotion).relative
@@ -105,6 +123,38 @@ func _on_svc_input(event: InputEvent) -> void:
 		_pivot.rotation.x = clampf(_pivot.rotation.x - rel.y * 0.01, -1.3, 1.3)
 
 # --- Internals --------------------------------------------------------------
+
+# A centered row of layout toggles pinned along the bottom of the viewport. The row
+# itself ignores the mouse so drag-to-spin still works in the empty space around the
+# buttons; only the buttons capture clicks. They share a ButtonGroup so the active
+# footprint stays visibly pressed.
+func _build_layout_bar() -> void:
+	var bar := HBoxContainer.new()
+	bar.anchor_left = 0.0; bar.anchor_right = 1.0
+	bar.anchor_top = 1.0; bar.anchor_bottom = 1.0
+	bar.offset_top = -36; bar.offset_bottom = -8
+	bar.alignment = BoxContainer.ALIGNMENT_CENTER
+	bar.add_theme_constant_override("separation", 4)
+	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var group := ButtonGroup.new()
+	for layout in _LAYOUTS:
+		var btn := Button.new()
+		btn.text = layout["label"]
+		btn.toggle_mode = true
+		btn.button_group = group
+		btn.focus_mode = Control.FOCUS_NONE
+		if layout["size"] == _layout:
+			btn.button_pressed = true
+		var footprint: Vector2i = layout["size"]
+		btn.pressed.connect(func(): _set_layout(footprint))
+		bar.add_child(btn)
+	add_child(bar)
+
+func _set_layout(footprint: Vector2i) -> void:
+	if footprint == _layout:
+		return
+	_layout = footprint
+	_rebuild_layout()
 
 func _update_camera() -> void:
 	if not _camera:

@@ -19,7 +19,7 @@ extends Node
 signal icon_ready(block_name: String)
 
 const RES := 128                          # bake resolution (square); drawn down into the cell
-const BATCH := 20                         # blocks baked per frame (one viewport each)
+const BATCH := 50                         # blocks baked per frame (one viewport each)
 const _CAM_DIR := Vector3(0.9, 0.7, 1.2)  # 3/4 angle: shows top + two sides
 # A narrow FOV pulled back reads almost isometric — the block fills the icon with
 # minimal perspective distortion, rather than a small head-on cube.
@@ -28,7 +28,7 @@ const _CAM_DIST := 3.2
 const _CACHE_DIR := "user://icon_cache/"
 # Bump when the render setup (camera/lights/RES) changes, to invalidate every disk
 # icon — a block's signature embeds this, so stale-look icons can't survive an upgrade.
-const _BAKE_VERSION := 1
+const _BAKE_VERSION := 3
 
 var _cache := {}        # block_name -> ImageTexture (in-memory)
 var _queue: Array = []  # BlockType, FIFO of pending bakes
@@ -61,23 +61,8 @@ func _make_viewport() -> SubViewport:
 	vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	add_child(vp)
 
-	var world_env := WorldEnvironment.new()
-	var env := Environment.new()
-	env.background_mode = Environment.BG_CLEAR_COLOR
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.72, 0.74, 0.80)
-	env.ambient_light_energy = 1.0
-	world_env.environment = env
-	vp.add_child(world_env)
-
-	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-50, 45, 0)
-	sun.light_energy = 1.3
-	vp.add_child(sun)
-	var fill := DirectionalLight3D.new()
-	fill.rotation_degrees = Vector3(40, -135, 0)
-	fill.light_energy = 0.5
-	vp.add_child(fill)
+	# Shared lighting rig (see BlockLightRig) so a baked icon matches the live preview.
+	BlockLightRig.apply(vp)
 
 	# Add to the tree BEFORE aiming it: look_at() no-ops on a node that isn't inside
 	# the tree, which would leave the camera pointing straight down -Z (block off to

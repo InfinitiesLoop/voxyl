@@ -14,10 +14,11 @@ signal focus_requested
 # TODO: drive this from a user sensitivity setting.
 const DOLLY_STEP := 1.25
 
-# Uniform shrink applied to every voxel mesh, leaving the subtle gap between
-# blocks. This is a view rendering style, not model geometry: BlockModel elements
-# are authored at true size (a full block fills [0,1]) and the view insets them.
-const VOXEL_SCALE := 0.94
+# Uniform scale applied to every voxel mesh. This is a view rendering style, not
+# model geometry: BlockModel elements are authored at true size (a full block fills
+# [0,1]). At 1.0 a full block occupies its whole cell, so adjacent full blocks meet
+# flush with no air gap; partial models (slabs, fences) keep their authored size.
+const VOXEL_SCALE := 1.0
 
 # Keys the camera consumes while flying, so they don't also drive the UI
 # (e.g. arrow keys switching tabs or moving focus).
@@ -171,13 +172,13 @@ func _setup_viewport() -> void:
 
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-50, 45, 0)
-	sun.light_energy = 1.3
+	sun.light_energy = 1.0
 	_viewport.add_child(sun)
 
 	var fill := DirectionalLight3D.new()
 	fill.rotation_degrees = Vector3(40, -135, 0)
 	fill.light_color = Color(1.0, 1.0, 1.0)
-	fill.light_energy = 0.5
+	fill.light_energy = 0.35
 	_viewport.add_child(fill)
 
 	_sky_sphere = MeshInstance3D.new()
@@ -280,7 +281,7 @@ func _sky_night(env: Environment) -> void:
 	env.background_color = Color(0.02, 0.00, 0.06)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color(0.25, 0.18, 0.5)
-	env.ambient_light_energy = 0.9
+	env.ambient_light_energy = 0.6
 
 func _make_sky_shader() -> Shader:
 	var shader := Shader.new()
@@ -728,9 +729,9 @@ func _rebuild() -> void:
 			continue
 		# A cell resolves to one or more render parts (geometry + a model rotation).
 		# A plain block is a single part; a connecting/multipart block is its post
-		# plus a side part per connected neighbor. The uniform VOXEL_SCALE shrink
-		# leaves the inter-voxel gap; a plain cube at the default orientation reduces
-		# to identity·scale — i.e. the old full-block render, byte-for-byte.
+		# plus a side part per connected neighbor. The uniform VOXEL_SCALE leaves
+		# full blocks filling their whole cell (no air gap); a plain cube at the
+		# default orientation reduces to identity·scale — a flush full-block render.
 		var parts := _resolve_cell_parts(pos, cell, semantic)
 		var center := Vector3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5)
 		var node: Node3D
