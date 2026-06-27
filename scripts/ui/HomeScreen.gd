@@ -567,7 +567,7 @@ func _build_texture_bindings(vbox: VBoxContainer, bt: BlockType) -> void:
 func _texture_swatch(asset_id: String) -> Control:
 	var asset := VoxelWorld.workspace.get_texture_asset(asset_id)
 	if asset != null and not asset.image_path.is_empty():
-		var img := BlockIconRender.cached_texture(asset.image_path)
+		var img := BlockTextureCache.cached_texture(asset.image_path)
 		if img != null:
 			var swatch := TextureRect.new()
 			swatch.texture = img
@@ -623,7 +623,7 @@ func _after_block_edit(bt: BlockType) -> void:
 	if _bt_preview:
 		_bt_preview.set_block(bt)
 	if _block_grid:
-		_block_grid.refresh_icons()
+		_block_grid.refresh_icons(bt.name)
 	LibraryStore.save_all(VoxelWorld.workspace)
 
 func _on_new_block() -> void:

@@ -73,33 +73,14 @@ func _process(delta: float) -> void:
 	if not _dragging and is_visible_in_tree():
 		_pivot.rotation.y += delta * _AUTO_SPIN
 
-# Render `bt` (or clear when null). Resolves the model's textures through the
-# workspace library; textured models get one StandardMaterial3D per surface, plain
-# ones a single color material (the planning path). Animated textures show frame 0.
+# Render `bt` (or clear when null) via the shared BlockRender3D builder, so this
+# rotatable preview and the baked grid icons resolve geometry + materials the same way.
 func set_block(bt: BlockType) -> void:
 	# Rebuild the instance so stale per-surface overrides never linger across blocks.
 	_mesh_instance.queue_free()
 	_mesh_instance = MeshInstance3D.new()
 	_pivot.add_child(_mesh_instance)
-	if bt == null:
-		return
-	var model := _model_for(bt)
-	if model == null:
-		return
-	var resolved := _resolve_textures(model)
-	if resolved.is_empty():
-		_mesh_instance.mesh = BlockMesher.color_mesh(model)
-		var m := StandardMaterial3D.new()
-		m.albedo_color = bt.color
-		_mesh_instance.material_override = m
-		return
-	var entry := BlockMesher.textured_mesh(model)
-	_mesh_instance.mesh = entry["mesh"]
-	var keys: Array = entry["keys"]
-	var tinted: Array = entry["tinted"]
-	for i in keys.size():
-		_mesh_instance.set_surface_override_material(i,
-			_surface_material(keys[i], resolved, bool(tinted[i]), bt.tint, bt.color))
+	BlockRender3D.build_into(_mesh_instance, bt)
 
 # --- Input: drag-to-spin + scroll-to-zoom -----------------------------------
 
@@ -130,61 +111,3 @@ func _update_camera() -> void:
 		return
 	_camera.position = _CAM_DIR.normalized() * _cam_dist
 	_camera.look_at(Vector3.ZERO, Vector3.UP)
-
-# Texture-key bindings resolved to drawable textures (shared with the grid's cache,
-# so a PNG decodes once). Animated assets resolve to their frame-0 sub-image.
-# Returns key -> { asset, tex }.
-func _resolve_textures(model: BlockModel) -> Dictionary:
-	var out := {}
-	if not model.has_textures():
-		return out
-	for key in model.textures:
-		var asset := VoxelWorld.workspace.get_texture_asset(model.textures[key])
-		if asset == null:
-			continue
-		# Shared with the grid's cache; animated assets resolve to a real frame-0
-		# texture (a 3D material can't crop an AtlasTexture region).
-		var tex := BlockIconRender.face_texture(asset)
-		if tex == null:
-			continue
-		out[key] = {"asset": asset, "tex": tex}
-	return out
-
-# Material for one surface: the bound texture (NEAREST, with CUTOUT/TRANSLUCENT from
-# the asset), tinted only when the surface opts in via tint_index. A key the model
-# never supplied falls back to the block's flat color.
-func _surface_material(key: String, resolved: Dictionary, is_tinted: bool,
-		tint: Color, fallback: Color) -> Material:
-	if not resolved.has(key):
-		var c := StandardMaterial3D.new()
-		c.albedo_color = fallback
-		return c
-	var info: Dictionary = resolved[key]
-	var asset: TextureAsset = info["asset"]
-	var m := StandardMaterial3D.new()
-	m.albedo_texture = info["tex"]
-	m.albedo_color = tint if is_tinted else Color.WHITE
-	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
-	match asset.transparency:
-		TextureAsset.Transparency.CUTOUT:
-			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
-		TextureAsset.Transparency.TRANSLUCENT:
-			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	return m
-
-# The model to render: the block's explicit model_id (library), else the built-in
-# for its shape (mirrors VoxelWorld.get_model_for_semantic, but from the block type).
-func _model_for(bt: BlockType) -> BlockModel:
-	if not bt.model_id.is_empty():
-		var m := VoxelWorld.workspace.get_block_model(bt.model_id)
-		if m != null:
-			return m
-	var shape_id := _builtin_id(bt.shape)
-	var builtin := VoxelWorld.workspace.get_block_model(shape_id)
-	return builtin if builtin != null else BlockModel.builtin_by_id(shape_id)
-
-func _builtin_id(shape: BlockType.Shape) -> String:
-	match shape:
-		BlockType.Shape.SLAB: return BlockModel.BUILTIN_SLAB
-		BlockType.Shape.STAIRS: return BlockModel.BUILTIN_STAIRS
-		_: return BlockModel.BUILTIN_FULL
