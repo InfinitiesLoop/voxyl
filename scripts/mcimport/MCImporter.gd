@@ -35,7 +35,7 @@ const _DIR6 := {
 }
 
 var _source: MCAssetSource
-var _workspace: VoxelWorkspace
+var _library: BlockLibrary
 
 # Per-run caches. Resolved model JSON is cached by ref so the shared MC templates
 # (block/block, block/cube, block/cube_all, …) are parsed once even though hundreds
@@ -46,9 +46,9 @@ var _resolved_cache := {}   # model ref -> { textures, elements, ao }
 var imported_blocks: Array[String] = []
 var warnings: Array[String] = []
 
-func _init(source, workspace: VoxelWorkspace) -> void:
+func _init(source, library: BlockLibrary) -> void:
 	_source = source if source is MCAssetSource else MCDirSource.new(source)
-	_workspace = workspace
+	_library = library
 
 # ---------------------------------------------------------------------------
 # Browse (Phase 5) — list what's importable without importing anything.
@@ -201,10 +201,10 @@ func _parse_clause(d):
 # the state map, and mirror the dominant texture's average into the planning color.
 # `bt_name` is the final, possibly-deduped name (bare block id or qualified "ns:id").
 func _emit_block_type(bt_name: String, primary_ref: String, state_map: BlockStateMap) -> BlockType:
-	var primary_model := _workspace.get_block_model(primary_ref)
-	var bt := _workspace.get_block_type(bt_name)
+	var primary_model := _library.get_block_model(primary_ref)
+	var bt := _library.get_block_type(bt_name)
 	if bt == null:
-		bt = _workspace.add_block_type(bt_name)
+		bt = _library.add_block_type(bt_name)
 	bt.model_id = primary_ref
 	bt.state_map = state_map
 	var avg = _model_average_color(primary_model)
@@ -301,7 +301,7 @@ func _state_to_orientation(state_str: String) -> Dictionary:
 func _ensure_model(model_ref: String) -> BlockModel:
 	if model_ref.is_empty():
 		return null
-	var existing := _workspace.get_block_model(model_ref)
+	var existing := _library.get_block_model(model_ref)
 	if existing != null:
 		return existing
 	var resolved = _resolve_model_json(model_ref, 0)
@@ -319,7 +319,7 @@ func _ensure_model(model_ref: String) -> BlockModel:
 	model.elements = conv["elements"]
 	model.textures = conv["textures"]
 	model.ambient_occlusion = resolved["ao"]
-	_workspace.add_block_model(model)
+	_library.add_block_model(model)
 	return model
 
 # Resolve a model file and its parent chain into merged { textures, elements, ao }.
@@ -413,7 +413,7 @@ func _resolve_texture_var(textures_map: Dictionary, value: String, depth: int) -
 # Ensure a TextureAsset exists for a texture ref — delegated to the shared ingestion
 # helper so both MC importers copy/scan/animate pixels identically.
 func _ensure_texture(texture_ref: String) -> TextureAsset:
-	return MCTexImport.ensure_texture(_workspace, _source, texture_ref, warnings)
+	return MCTexImport.ensure_texture(_library, _source, texture_ref, warnings)
 
 # ---------------------------------------------------------------------------
 # UVs + sampling helpers
@@ -444,7 +444,7 @@ func _face_uv(mface, dir: int, from16, to16) -> Rect2:
 func _model_average_color(model: BlockModel):
 	if model == null or model.textures.is_empty():
 		return null
-	var asset := _workspace.get_texture_asset(_dominant_texture_key(model))
+	var asset := _library.get_texture_asset(_dominant_texture_key(model))
 	if asset != null:
 		return asset.average_color
 	return null
@@ -513,7 +513,7 @@ func _apply_tint(bt: BlockType, model: BlockModel) -> void:
 			best = tinted_counts[key]; main_key = key
 	bt.tint = _classify_tint(main_key)["color"]
 	for key in tinted_counts:
-		var asset := _workspace.get_texture_asset(key)
+		var asset := _library.get_texture_asset(key)
 		if asset != null and asset.tint_source == TextureAsset.TintSource.NONE:
 			var cls := _classify_tint(key)
 			asset.tint_source = cls["source"]

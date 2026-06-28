@@ -58,7 +58,7 @@ const _STATES := {
 const _GLUED_FACES := ["bottom", "facing", "front", "sides", "back", "side", "top"]
 
 var _source: MCAssetSource
-var _workspace: VoxelWorkspace
+var _library: BlockLibrary
 
 # ns -> { "subdir": "blocks"|"block", "blocks": { block_id -> {dir:int -> filename} } }
 var _plan_cache := {}
@@ -67,9 +67,9 @@ var _plan_cache := {}
 var imported_blocks: Array[String] = []
 var warnings: Array[String] = []
 
-func _init(source, workspace: VoxelWorkspace) -> void:
+func _init(source, library: BlockLibrary) -> void:
 	_source = source if source is MCAssetSource else MCDirSource.new(source)
-	_workspace = workspace
+	_library = library
 
 # ---------------------------------------------------------------------------
 # Browse
@@ -116,7 +116,7 @@ func import_block(ns: String, block_id: String, name_override := "") -> BlockTyp
 	for d in BlockModel.ALL_DIRS:
 		var filename: String = face_plan[d]
 		var asset := MCTexImport.ensure_texture(
-			_workspace, _source, "%s:%s/%s" % [ns, subdir, filename], warnings)
+			_library, _source, "%s:%s/%s" % [ns, subdir, filename], warnings)
 		if asset == null:
 			continue
 		faces[d] = BlockModel.make_face(asset.id)
@@ -127,22 +127,22 @@ func import_block(ns: String, block_id: String, name_override := "") -> BlockTyp
 		return null
 
 	var model_id := "%s:flat/%s" % [ns, block_id]
-	var model := _workspace.get_block_model(model_id)
+	var model := _library.get_block_model(model_id)
 	if model == null:
 		model = BlockModel.new()
 		model.id = model_id
-		_workspace.add_block_model(model)
+		_library.add_block_model(model)
 	model.elements = [{"from": Vector3.ZERO, "to": Vector3.ONE, "faces": faces}]
 	model.textures = textures
 
 	var bt_name := name_override if not name_override.is_empty() else block_id
-	var bt := _workspace.get_block_type(bt_name)
+	var bt := _library.get_block_type(bt_name)
 	if bt == null:
-		bt = _workspace.add_block_type(bt_name)
+		bt = _library.add_block_type(bt_name)
 	bt.model_id = model_id
 	bt.state_map = null
 	var dom := _dominant(counts)
-	var da := _workspace.get_texture_asset(dom)
+	var da := _library.get_texture_asset(dom)
 	if da != null:
 		bt.color = da.average_color
 	if not imported_blocks.has(bt_name):

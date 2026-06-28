@@ -29,24 +29,22 @@ var active_slot: int = 0
 
 func _ready() -> void:
 	workspace = VoxelWorkspace.new()
-	workspace.register_builtin_models()
 	hotbar.resize(HOTBAR_SIZE)
 	hotbar.fill("")
+	# Seed the built-in floor (basic library + Default palette + first project), then
+	# load any on-disk named libraries and saved palettes over it. `basic` is re-seeded
+	# here so a missing baseline block is always restored (it can't be emptied). A fresh
+	# install with nothing imported just keeps the code-seeded defaults.
 	_populate_defaults()
-	# Restore any previously imported material library (Phase 5). Merges by id/name
-	# over the code-seeded defaults; a no-op on a fresh install where nothing's been
-	# imported yet. Projects/palettes are still code-seeded each launch — only the
-	# shared block-type/model/texture libraries persist.
-	LibraryStore.load_into(workspace)
+	LibraryStore.load_persisted(workspace)
 	workspace_changed.emit()
 
-# Rebuild a pristine, library-free workspace. Tests call this first so they run
-# against the code-seeded defaults regardless of whatever LibraryStore.load_into
-# merged in at startup (a real res://library left by a prior import would otherwise
-# make autoload-based assertions non-deterministic).
+# Rebuild a pristine workspace from code alone. Tests call this first so they run
+# against the code-seeded defaults regardless of whatever LibraryStore loaded at
+# startup (a real on-disk library left by a prior import would otherwise make
+# autoload-based assertions non-deterministic).
 func reset_for_tests() -> void:
 	workspace = VoxelWorkspace.new()
-	workspace.register_builtin_models()
 	active_project = null
 	hotbar.fill("")
 	active_slot = 0
@@ -91,94 +89,87 @@ func clear_block(pos: Vector3i) -> void:
 func get_block(pos: Vector3i) -> String:
 	return active_project.data.get_block(pos) if active_project else ""
 
-func get_color_for_semantic(semantic_name: String) -> Color:
-	var result := Color(0.35, 0.35, 0.35)
+# Resolve a semantic to its winning palette + block type for the active project. Walks
+# the project's palette stack last-wins (the last palette that maps the semantic to a
+# block-type name wins), then resolves that name → BlockType through THAT palette's
+# library stack (first-hit, basic fallback). Returns {} when no palette maps it, else
+# { palette, name, bt } where `bt` may be null if no library in scope defines the name.
+func _resolve_semantic(semantic_name: String) -> Dictionary:
+	var result := {}
 	if not active_project:
 		return result
 	for palette_name in active_project.palette_names:
 		var palette := workspace.get_palette(palette_name)
-		if palette:
-			var bt_name := palette.get_block_type_name(semantic_name)
-			if not bt_name.is_empty():
-				var bt := workspace.get_block_type(bt_name)
-				if bt:
-					result = bt.color
+		if not palette:
+			continue
+		var bt_name := palette.get_block_type_name(semantic_name)
+		if bt_name.is_empty():
+			continue
+		result = {
+			"palette": palette,
+			"name": bt_name,
+			"bt": workspace.resolve_block_type(bt_name, palette.library_names),
+		}
 	return result
+
+# The winning palette's library stack for a semantic (for scoped model/texture
+# resolution), or [] when nothing maps it.
+func _libs_for_semantic(semantic_name: String) -> Array:
+	var r := _resolve_semantic(semantic_name)
+	return (r["palette"] as Palette).library_names if r.has("palette") else []
+
+func get_color_for_semantic(semantic_name: String) -> Color:
+	var bt: BlockType = _resolve_semantic(semantic_name).get("bt")
+	return bt.color if bt else Color(0.35, 0.35, 0.35)
 
 # Resolved biome tint for a semantic (last-wins palette walk, same as color). The
 # 3D view multiplies this into faces that carry a tint_index; WHITE (the default,
 # and the value for any block type that never set one) leaves the face untinted.
 # Still the material layer — the data never names a block type or a color.
 func get_tint_for_semantic(semantic_name: String) -> Color:
-	var result := Color.WHITE
-	if not active_project:
-		return result
-	for palette_name in active_project.palette_names:
-		var palette := workspace.get_palette(palette_name)
-		if palette:
-			var bt_name := palette.get_block_type_name(semantic_name)
-			if not bt_name.is_empty():
-				var bt := workspace.get_block_type(bt_name)
-				if bt:
-					result = bt.tint
-	return result
+	var bt: BlockType = _resolve_semantic(semantic_name).get("bt")
+	return bt.tint if bt else Color.WHITE
 
 func notify_block_type_changed() -> void:
 	block_type_changed.emit()
 
 func get_block_type_for_semantic(semantic_name: String) -> String:
-	var result := ""
-	if not active_project:
-		return result
-	for palette_name in active_project.palette_names:
-		var palette := workspace.get_palette(palette_name)
-		if palette:
-			var bt := palette.get_block_type_name(semantic_name)
-			if not bt.is_empty():
-				result = bt
-	return result
+	return _resolve_semantic(semantic_name).get("name", "")
 
 # The resolved BlockType object for a semantic (last-wins palette walk), or null.
 # Views that need more than color/geometry — e.g. the 3D view reading a block's
 # state_map to drive orientation variants / multipart connection parts — go through
 # this. It's still the material layer: the data never names a block type.
 func get_block_type_object_for_semantic(semantic_name: String) -> BlockType:
-	return workspace.get_block_type(get_block_type_for_semantic(semantic_name))
+	return _resolve_semantic(semantic_name).get("bt")
 
 # Resolved render shape (FULL/SLAB/STAIRS) for a semantic, via the palette stack
 # (last-wins, same as color/block-type). Shape is a visual property of the mapped
 # block type — the data never stores it.
 func get_shape_for_semantic(semantic_name: String) -> BlockType.Shape:
-	var result := BlockType.Shape.FULL
-	if not active_project:
-		return result
-	for palette_name in active_project.palette_names:
-		var palette := workspace.get_palette(palette_name)
-		if palette:
-			var bt_name := palette.get_block_type_name(semantic_name)
-			if not bt_name.is_empty():
-				var bt := workspace.get_block_type(bt_name)
-				if bt:
-					result = bt.shape
-	return result
+	var bt: BlockType = _resolve_semantic(semantic_name).get("bt")
+	return bt.shape if bt else BlockType.Shape.FULL
 
 # Resolved render geometry for a semantic, as a BlockModel. Same last-wins
 # palette-stack walk as color/shape: find the mapped block type, then return its
-# explicit model (model_id → library) or the built-in model for its `shape`.
-# Always returns a model so the view never special-cases geometry.
+# explicit model (model_id, resolved through the palette's library stack) or the
+# built-in model for its `shape`. Always returns a model so the view never
+# special-cases geometry.
 func get_model_for_semantic(semantic_name: String) -> BlockModel:
-	var bt := workspace.get_block_type(get_block_type_for_semantic(semantic_name))
+	var r := _resolve_semantic(semantic_name)
+	var bt: BlockType = r.get("bt")
+	var libs: Array = (r["palette"] as Palette).library_names if r.has("palette") else []
 	if bt and not bt.model_id.is_empty():
-		var explicit := workspace.get_block_model(bt.model_id)
+		var explicit := workspace.resolve_block_model(bt.model_id, libs)
 		if explicit:
 			return explicit
 	var shape_id := _builtin_model_id_for_shape(bt.shape if bt else BlockType.Shape.FULL)
-	var builtin := workspace.get_block_model(shape_id)
+	var builtin := workspace.resolve_block_model(shape_id, libs)
 	return builtin if builtin else BlockModel.builtin_by_id(shape_id)
 
 # Primary TextureAsset for a semantic (the model's "all"/"side"/first binding),
 # or null when the resolved model carries no textures — the color path. Resolves
-# texture ids through the workspace library, same stack walk as the others.
+# texture ids through the winning palette's library stack, same scope as the model.
 # (Per-face lookup by slice-plane normal is deferred; see the plan.)
 func get_texture_for_semantic(semantic_name: String) -> TextureAsset:
 	var model := get_model_for_semantic(semantic_name)
@@ -187,7 +178,7 @@ func get_texture_for_semantic(semantic_name: String) -> TextureAsset:
 	var key := "all"
 	if not model.textures.has(key):
 		key = "side" if model.textures.has("side") else model.textures.keys()[0]
-	return workspace.get_texture_asset(model.textures[key])
+	return workspace.resolve_texture_asset(model.textures[key], _libs_for_semantic(semantic_name))
 
 func _builtin_model_id_for_shape(shape: BlockType.Shape) -> String:
 	match shape:
@@ -285,7 +276,7 @@ func request_slice_view(axis: int, center: Vector3i, flipped: bool = false) -> v
 	slice_view_requested.emit(axis, center, flipped)
 
 func _populate_defaults() -> void:
-	_add_default_block_types()
+	_add_basic_library()
 	_add_default_palette()
 	var project := workspace.add_project("My First Build")
 	project.palette_names.append("Default")
@@ -307,58 +298,62 @@ func _add_default_blocks(project: VoxelProject) -> void:
 			for z in range(0, 10):
 				project.data.set_block(Vector3i(x, y, z), "Highlight")
 
-func _add_default_block_types() -> void:
-	# Names are lowercase, underscore-style ids that line up with Minecraft block ids
-	# (which the importer treats as the un-prefixed/default namespace). They're still
-	# generic descriptive names, not a `minecraft:` namespace, so the defaults don't
-	# depend on MC — but importing the real game makes `minecraft:dirt` resolve to the
-	# same "dirt" name and overwrite this placeholder in place.
-	var names := [
-		"stone", "cobblestone", "stone_bricks", "mossy_stone_bricks", "cracked_stone_bricks",
-		"gravel", "sand", "sandstone", "dirt", "grass_block", "clay", "mud",
-		"oak_log", "oak_planks", "spruce_log", "spruce_planks",
-		"birch_log", "birch_planks", "dark_oak_log", "dark_oak_planks",
-		"acacia_log", "acacia_planks", "jungle_log", "jungle_planks",
-		"mangrove_log", "mangrove_planks",
-		"bricks", "nether_bricks", "quartz_block", "smooth_quartz",
-		"prismarine", "dark_prismarine", "sea_lantern",
-		"iron_block", "gold_block", "copper_block", "cut_copper",
-		"glass", "glass_pane", "iron_bars",
-		"obsidian", "deepslate", "tuff", "calcite",
-		"glowstone", "shroomlight", "lantern",
-		"white_concrete", "gray_concrete", "black_concrete",
-		"white_terracotta", "orange_terracotta", "brown_terracotta",
-		"white_wool", "red_wool", "blue_wool", "green_wool", "yellow_wool",
-		"oak_leaves", "vine", "bamboo", "water", "lava",
+# Seed the code-built `basic` library (decision 5): a small set of generic +
+# natural block types, no `minecraft:` ids, so the default floor is voxel-agnostic
+# (Principle 4). It's flagged `builtin` — undeletable and re-seeded on launch — but
+# behaves like any normal library. Idempotent on re-seed: an edited block keeps its
+# edits, only missing baseline blocks are restored.
+func _add_basic_library() -> void:
+	var lib := workspace.basic_library()
+	lib.register_builtin_models()
+	# name, color, shape
+	var blocks := [
+		["base",      Color(0.55, 0.55, 0.55), BlockType.Shape.FULL],
+		["accent",    Color(0.75, 0.60, 0.35), BlockType.Shape.FULL],
+		["highlight", Color(0.72, 0.38, 0.28), BlockType.Shape.FULL],
+		["trim",      Color(0.42, 0.42, 0.40), BlockType.Shape.FULL],
+		["stone",     Color(0.50, 0.50, 0.52), BlockType.Shape.FULL],
+		["dirt",      Color(0.48, 0.35, 0.22), BlockType.Shape.FULL],
+		["grass",     Color(0.45, 0.62, 0.30), BlockType.Shape.FULL],
+		["sand",      Color(0.85, 0.80, 0.58), BlockType.Shape.FULL],
+		["wood",      Color(0.45, 0.33, 0.20), BlockType.Shape.FULL],
+		["plank",     Color(0.66, 0.50, 0.30), BlockType.Shape.FULL],
+		["glass",     Color(0.55, 0.78, 0.92), BlockType.Shape.FULL],
+		["metal",     Color(0.72, 0.72, 0.76), BlockType.Shape.FULL],
+		["leaves",    Color(0.35, 0.52, 0.25), BlockType.Shape.FULL],
+		["water",     Color(0.25, 0.46, 0.85), BlockType.Shape.FULL],
+		["slab",      Color(0.60, 0.60, 0.62), BlockType.Shape.SLAB],
+		["stairs",    Color(0.66, 0.50, 0.30), BlockType.Shape.STAIRS],
 	]
-	for n in names:
-		workspace.add_block_type(n)
-	# Shaped blocks — orientation only reads as something other than a cube once
-	# the mapped block type declares a non-full shape.
-	workspace.add_block_type("oak_stairs").shape = BlockType.Shape.STAIRS
-	workspace.add_block_type("stone_brick_stairs").shape = BlockType.Shape.STAIRS
-	workspace.add_block_type("stone_slab").shape = BlockType.Shape.SLAB
-	workspace.add_block_type("oak_slab").shape = BlockType.Shape.SLAB
+	for b in blocks:
+		var bt := lib.get_block_type(b[0])
+		if bt == null:
+			bt = lib.add_block_type(b[0])
+			bt.color = b[1]
+			bt.shape = b[2]
 
+# The built-in "Default" palette: maps the standard semantic names onto the basic
+# block types and subscribes to the `basic` library. Flagged `builtin` (undeletable),
+# but otherwise a normal palette. Idempotent — re-seeding leaves an existing one alone.
 func _add_default_palette() -> void:
+	if workspace.get_palette("Default") != null:
+		return
 	var p := workspace.add_palette("Default")
+	p.builtin = true
+	p.library_names = [VoxelWorkspace.BASIC_LIBRARY]
 	var slots := [
-		["Base",      "stone",         Color(0.55, 0.55, 0.55)],
-		["Accent",    "oak_planks",    Color(0.75, 0.60, 0.35)],
-		["Highlight", "bricks",        Color(0.72, 0.38, 0.28)],
-		["Detail",    "glass",         Color(0.55, 0.78, 0.92)],
-		["Trim",      "cobblestone",   Color(0.42, 0.42, 0.40)],
-		["Floor",     "dirt",          Color(0.48, 0.35, 0.22)],
-		["Roof",      "spruce_planks", Color(0.38, 0.28, 0.18)],
-		["Stairs",    "oak_stairs",    Color(0.74, 0.58, 0.33)],
-		["Slab",      "stone_slab",    Color(0.60, 0.60, 0.62)],
+		["Base",      "base"],
+		["Accent",    "accent"],
+		["Highlight", "highlight"],
+		["Detail",    "glass"],
+		["Trim",      "trim"],
+		["Floor",     "dirt"],
+		["Roof",      "plank"],
+		["Stairs",    "stairs"],
+		["Slab",      "slab"],
 	]
 	for s in slots:
 		var e := PaletteEntry.new()
 		e.semantic_name = s[0]
 		e.block_type_name = s[1]
 		p.entries.append(e)
-		# Color lives on the block type, not the palette entry.
-		var bt := workspace.get_block_type(s[1])
-		if bt:
-			bt.color = s[2]

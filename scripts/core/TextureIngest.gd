@@ -35,26 +35,27 @@ static func scan_image(img: Image) -> Dictionary:
 		transparency = TextureAsset.Transparency.CUTOUT
 	return {"average": average, "transparency": transparency}
 
-# Bring an arbitrary on-disk PNG into the library as a TextureAsset under `id`.
-# Loads the file, copies its pixels to library/pixels/custom/<id>.png, scans the
-# planning color + transparency, then creates the asset — or updates the existing one
-# with that id in place (so a "Replace…" call re-points the same id at new pixels).
-# Returns the asset, or null if the image can't be loaded/saved. Static textures only;
-# animation is an importer concern (.mcmeta), not a hand-picked file.
-static func ingest_file(workspace: VoxelWorkspace, fs_path: String, id: String) -> TextureAsset:
+# Bring an arbitrary on-disk PNG into `library` as a TextureAsset under `id`. Loads the
+# file, copies its pixels to <library>/pixels/custom/<id>.png, scans the planning color
+# + transparency, then creates the asset — or updates the existing one with that id in
+# place (so a "Replace…" call re-points the same id at new pixels). Returns the asset, or
+# null if the image can't be loaded/saved. Static textures only; animation is an importer
+# concern (.mcmeta), not a hand-picked file.
+static func ingest_file(library: BlockLibrary, fs_path: String, id: String) -> TextureAsset:
 	var img := Image.new()
 	if img.load(fs_path) != OK:
 		return null
-	var rel := "%s/custom/%s.png" % [AssetLibrary.PIXELS_DIR, id.validate_filename()]
+	var rel := AssetLibrary.in_library(library.name,
+		"%s/custom/%s.png" % [AssetLibrary.PIXELS_DIR, id.validate_filename()])
 	AssetLibrary.ensure_dir(rel.get_base_dir())
 	if img.save_png(AssetLibrary.path_for(rel)) != OK:
 		return null
 	var scan := scan_image(img)
-	var asset := workspace.get_texture_asset(id)
+	var asset := library.get_texture_asset(id)
 	if asset == null:
 		asset = TextureAsset.new()
 		asset.id = id
-		workspace.add_texture_asset(asset)
+		library.add_texture_asset(asset)
 	asset.image_path = rel
 	asset.average_color = scan["average"]
 	asset.transparency = scan["transparency"]

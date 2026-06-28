@@ -132,20 +132,23 @@ func _check_textured_render(v3d: Node) -> void:
 	Image.create_empty(16, 32, false, Image.FORMAT_RGBA8).save_png(AssetLibrary.path_for("pixels/a.png"))
 
 	var ws := VoxelWorld.workspace
+	# Author into the basic library; the temp palette's empty library stack resolves
+	# through the basic fallback.
+	var lib := ws.basic_library()
 	var s_tex := TextureAsset.new()
 	s_tex.id = "s_tex"; s_tex.image_path = "pixels/s.png"
-	ws.add_texture_asset(s_tex)
+	lib.add_texture_asset(s_tex)
 	var a_tex := TextureAsset.new()
 	a_tex.id = "a_tex"; a_tex.image_path = "pixels/a.png"
 	a_tex.frame_count = 2; a_tex.frame_time = 0.5
-	ws.add_texture_asset(a_tex)
+	lib.add_texture_asset(a_tex)
 	var s_model := BlockModel.builtin_full()
 	s_model.id = "s_model"; s_model.textures = {"all": "s_tex"}
 	var a_model := BlockModel.builtin_full()
 	a_model.id = "a_model"; a_model.textures = {"all": "a_tex"}
-	ws.add_block_model(s_model); ws.add_block_model(a_model)
-	ws.add_block_type("TexStaticBlock").model_id = "s_model"
-	ws.add_block_type("TexAnimBlock").model_id = "a_model"
+	lib.add_block_model(s_model); lib.add_block_model(a_model)
+	lib.add_block_type("TexStaticBlock").model_id = "s_model"
+	lib.add_block_type("TexAnimBlock").model_id = "a_model"
 	var pal := ws.add_palette("__tex_test__")
 	for pair in [["TexStatic", "TexStaticBlock"], ["TexAnim", "TexAnimBlock"]]:
 		var e := PaletteEntry.new()
@@ -179,9 +182,9 @@ func _check_textured_render(v3d: Node) -> void:
 	VoxelWorld.clear_block(Vector3i(0, 6, 0))
 	project.palette_names.erase("__tex_test__")
 	ws.remove_palette("__tex_test__")
-	ws.remove_block_type("TexStaticBlock"); ws.remove_block_type("TexAnimBlock")
-	ws.remove_block_model("s_model"); ws.remove_block_model("a_model")
-	ws.remove_texture_asset("s_tex"); ws.remove_texture_asset("a_tex")
+	lib.remove_block_type("TexStaticBlock"); lib.remove_block_type("TexAnimBlock")
+	lib.remove_block_model("s_model"); lib.remove_block_model("a_model")
+	lib.remove_texture_asset("s_tex"); lib.remove_texture_asset("a_tex")
 	v3d._rebuild()
 	_rm_rf(AssetLibrary.ROOT)
 	AssetLibrary.ROOT = saved_root
@@ -210,7 +213,8 @@ func _check_imported_render(v3d: Node) -> void:
 	img.save_png(assets + "/testmod/textures/block/imp_tex.png")
 
 	var ws := VoxelWorld.workspace
-	var imp := MCImporter.new(assets, ws)
+	var lib := ws.basic_library()
+	var imp := MCImporter.new(assets, lib)
 	imp.import_block("testmod", "imp_block")
 	var pal := ws.add_palette("__imp_test__")
 	var e := PaletteEntry.new()
@@ -232,9 +236,9 @@ func _check_imported_render(v3d: Node) -> void:
 	VoxelWorld.clear_block(Vector3i(0, 7, 0))
 	project.palette_names.erase("__imp_test__")
 	ws.remove_palette("__imp_test__")
-	ws.remove_block_type("imp_block")
-	ws.remove_block_model("testmod:block/imp_block")
-	ws.remove_texture_asset("testmod:block/imp_tex")
+	lib.remove_block_type("imp_block")
+	lib.remove_block_model("testmod:block/imp_block")
+	lib.remove_texture_asset("testmod:block/imp_tex")
 	v3d._rebuild()
 	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(src)
@@ -246,21 +250,22 @@ func _check_imported_render(v3d: Node) -> void:
 # the assertion is about the part/container structure the view builds, not textures.
 func _check_multipart_render(v3d: Node) -> void:
 	var ws := VoxelWorld.workspace
+	var lib := ws.basic_library()
 	var post := BlockModel.new()
 	post.id = "mp_post"
 	post.elements = [BlockModel.box_element(Vector3(0.375, 0, 0.375), Vector3(0.625, 1, 0.625))]
 	var side := BlockModel.new()
 	side.id = "mp_side"
 	side.elements = [BlockModel.box_element(Vector3(0.4375, 0.375, 0), Vector3(0.5625, 0.9375, 0.5))]
-	ws.add_block_model(post)
-	ws.add_block_model(side)
+	lib.add_block_model(post)
+	lib.add_block_model(side)
 	var sm := BlockStateMap.new()
 	sm.add_part([], "mp_post")              # always
 	sm.add_part([{0: true}], "mp_side", 0, 0)    # north
 	sm.add_part([{1: true}], "mp_side", 0, 90)   # east
 	sm.add_part([{2: true}], "mp_side", 0, 180)  # south
 	sm.add_part([{3: true}], "mp_side", 0, 270)  # west
-	var bt := ws.add_block_type("MPFenceBlock")
+	var bt := lib.add_block_type("MPFenceBlock")
 	bt.model_id = "mp_post"
 	bt.state_map = sm
 	var pal := ws.add_palette("__mp_test__")
@@ -296,9 +301,9 @@ func _check_multipart_render(v3d: Node) -> void:
 	VoxelWorld.clear_block(Vector3i(1, 8, 0))
 	project.palette_names.erase("__mp_test__")
 	ws.remove_palette("__mp_test__")
-	ws.remove_block_type("MPFenceBlock")
-	ws.remove_block_model("mp_post")
-	ws.remove_block_model("mp_side")
+	lib.remove_block_type("MPFenceBlock")
+	lib.remove_block_model("mp_post")
+	lib.remove_block_model("mp_side")
 	v3d._rebuild()
 
 # Phase 4: an imported block whose model faces carry a tintindex renders with the
@@ -326,7 +331,8 @@ func _check_tinted_render(v3d: Node) -> void:
 	img.save_png(assets + "/testmod/textures/block/tint_leaves_tex.png")
 
 	var ws := VoxelWorld.workspace
-	var imp := MCImporter.new(assets, ws)
+	var lib := ws.basic_library()
+	var imp := MCImporter.new(assets, lib)
 	imp.import_block("testmod", "tint_leaves")
 	var bt := ws.get_block_type("tint_leaves")
 	var pal := ws.add_palette("__tint_test__")
@@ -351,9 +357,9 @@ func _check_tinted_render(v3d: Node) -> void:
 	VoxelWorld.clear_block(Vector3i(0, 9, 0))
 	project.palette_names.erase("__tint_test__")
 	ws.remove_palette("__tint_test__")
-	ws.remove_block_type("tint_leaves")
-	ws.remove_block_model("testmod:block/tint_leaves")
-	ws.remove_texture_asset("testmod:block/tint_leaves_tex")
+	lib.remove_block_type("tint_leaves")
+	lib.remove_block_model("testmod:block/tint_leaves")
+	lib.remove_texture_asset("testmod:block/tint_leaves_tex")
 	v3d._rebuild()
 	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(src)
@@ -377,7 +383,8 @@ func _check_flat_render(v3d: Node) -> void:
 		img.save_png(blocks + "/" + face[0] + ".png")
 
 	var ws := VoxelWorld.workspace
-	var imp := MCFlatImporter.new(src + "/assets", ws)
+	var lib := ws.basic_library()
+	var imp := MCFlatImporter.new(src + "/assets", lib)
 	imp.import_block("testmod", "pillar")          # top + side → multi-face cube
 	var pal := ws.add_palette("__flat_test__")
 	var e := PaletteEntry.new()
@@ -401,10 +408,10 @@ func _check_flat_render(v3d: Node) -> void:
 	VoxelWorld.clear_block(Vector3i(0, 10, 0))
 	project.palette_names.erase("__flat_test__")
 	ws.remove_palette("__flat_test__")
-	ws.remove_block_type("pillar")
-	ws.remove_block_model("testmod:flat/pillar")
-	ws.remove_texture_asset("testmod:blocks/pillar_top")
-	ws.remove_texture_asset("testmod:blocks/pillar_side")
+	lib.remove_block_type("pillar")
+	lib.remove_block_model("testmod:flat/pillar")
+	lib.remove_texture_asset("testmod:blocks/pillar_top")
+	lib.remove_texture_asset("testmod:blocks/pillar_side")
 	v3d._rebuild()
 	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(src)
@@ -434,7 +441,7 @@ func _check_import_progress() -> void:
 		img.save_png("%s/minecraft/textures/block/%s.png" % [assets, id])
 
 	var ws := VoxelWorld.workspace
-	var svc := ImportService.new(ImportService.detect_sources(src), ws)
+	var svc := ImportService.new(ImportService.detect_sources(src), ws.get_or_add_library("__prog__"))
 	var sel := svc.available_blocks()
 
 	var dlg := ImportProgressDialog.new()
@@ -454,12 +461,7 @@ func _check_import_progress() -> void:
 		and not (dlg.get("_warn_box") as TextEdit).text.is_empty())
 
 	dlg.queue_free()
-	ws.remove_block_type("prog_a")
-	ws.remove_block_type("prog_b")
-	ws.remove_block_model("minecraft:block/prog_a")
-	ws.remove_block_model("minecraft:block/prog_b")
-	ws.remove_texture_asset("minecraft:block/prog_a")
-	ws.remove_texture_asset("minecraft:block/prog_b")
+	ws.remove_library("__prog__")
 	svc.close()
 	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(src)

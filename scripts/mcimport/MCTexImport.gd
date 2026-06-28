@@ -16,14 +16,14 @@ static func split_ref(ref: String) -> Dictionary:
 		return {"ns": ref.substr(0, colon), "path": ref.substr(colon + 1)}
 	return {"ns": "minecraft", "path": ref}
 
-# Ensure a TextureAsset exists for a texture ref, copying its PNG into the library
-# and parsing any `.mcmeta` animation. Deduped by id (qualified ref). Appends to
-# `warnings` and returns null when the source PNG is missing/unreadable.
-static func ensure_texture(workspace: VoxelWorkspace, source: MCAssetSource,
+# Ensure a TextureAsset exists in `library` for a texture ref, copying its PNG into the
+# library's pixel folder and parsing any `.mcmeta` animation. Deduped by id (qualified
+# ref). Appends to `warnings` and returns null when the source PNG is missing/unreadable.
+static func ensure_texture(library: BlockLibrary, source: MCAssetSource,
 		texture_ref: String, warnings: Array) -> TextureAsset:
 	var sr := split_ref(texture_ref)
 	var id: String = "%s:%s" % [sr["ns"], sr["path"]]
-	var existing := workspace.get_texture_asset(id)
+	var existing := library.get_texture_asset(id)
 	if existing != null:
 		return existing
 
@@ -33,9 +33,10 @@ static func ensure_texture(workspace: VoxelWorkspace, source: MCAssetSource,
 		warnings.append("texture image missing: %s" % texture_ref)
 		return null
 
-	# Copy pixels into the library (frame strips kept as-is). image_path is stored
-	# library-relative so AssetLibrary resolves it under whatever ROOT is current.
-	var rel := "%s/%s/%s.png" % [AssetLibrary.PIXELS_DIR, sr["ns"], sr["path"]]
+	# Copy pixels under the target library's pixel folder (frame strips kept as-is).
+	# image_path keeps the library segment so AssetLibrary resolves it ROOT-relative.
+	var rel := AssetLibrary.in_library(library.name,
+		"%s/%s/%s.png" % [AssetLibrary.PIXELS_DIR, sr["ns"], sr["path"]])
 	AssetLibrary.ensure_dir(rel.get_base_dir())
 	img.save_png(AssetLibrary.path_for(rel))
 
@@ -46,7 +47,7 @@ static func ensure_texture(workspace: VoxelWorkspace, source: MCAssetSource,
 	asset.average_color = scan["average"]
 	asset.transparency = scan["transparency"]
 	_apply_mcmeta(asset, source, src_rel + ".mcmeta", img)
-	workspace.add_texture_asset(asset)
+	library.add_texture_asset(asset)
 	return asset
 
 # The neutral pixel scan now lives in TextureIngest (core/), shared with the block

@@ -6,6 +6,8 @@ signal open_project_requested(project: VoxelProject)
 var _projects_container: VBoxContainer
 var _palettes_list: LibraryList
 var _palette_editor: Control
+var _library_rail: LibraryList
+var _selected_library: BlockLibrary
 var _block_grid: BlockGrid
 var _bt_detail: Control
 var _bt_preview: BlockPreview3D
@@ -223,6 +225,12 @@ func _on_palette_selected(palette_name: String) -> void:
 	var sep := HSeparator.new()
 	vbox.add_child(sep)
 
+	_editing_palette = palette
+	# Libraries this palette draws from (priority order) — the new subscription editor.
+	_build_palette_libraries(vbox, palette)
+
+	vbox.add_child(HSeparator.new())
+
 	# Column headers
 	var headers := HBoxContainer.new()
 	vbox.add_child(headers)
@@ -271,23 +279,28 @@ func _make_entry_row(entry: PaletteEntry) -> HBoxContainer:
 	swatch.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
+	# The picker lists block types from this palette's subscribed libraries (scoped, in
+	# priority order, basic-fallback included), not a global flat array.
+	var names := _scoped_block_type_names(_editing_palette)
+	if not entry.block_type_name.is_empty() and entry.block_type_name not in names:
+		names.push_front(entry.block_type_name)   # keep an off-scope mapping visible
 	var block_picker := OptionButton.new()
 	block_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var current_idx := 0
-	for i in VoxelWorld.workspace.block_types.size():
-		var btype := VoxelWorld.workspace.block_types[i]
-		block_picker.add_item(btype.name)
-		if btype.name == entry.block_type_name:
+	for i in names.size():
+		block_picker.add_item(names[i])
+		if names[i] == entry.block_type_name:
 			current_idx = i
 	block_picker.selected = current_idx
 	block_picker.item_selected.connect(func(idx):
-		entry.block_type_name = VoxelWorld.workspace.block_types[idx].name
-		var nb := VoxelWorld.workspace.get_block_type(entry.block_type_name)
+		entry.block_type_name = names[idx]
+		var nb := VoxelWorld.workspace.resolve_block_type(entry.block_type_name, _editing_palette.library_names)
 		swatch.color = nb.color if nb else Color(0.5, 0.5, 0.5)
+		_save_palettes()
 	)
 	row.add_child(block_picker)
 
-	var init_bt := VoxelWorld.workspace.get_block_type(entry.block_type_name)
+	var init_bt := VoxelWorld.workspace.resolve_block_type(entry.block_type_name, _editing_palette.library_names)
 	swatch.color = init_bt.color if init_bt else Color(0.5, 0.5, 0.5)
 	row.add_child(swatch)
 
@@ -296,6 +309,7 @@ func _make_entry_row(entry: PaletteEntry) -> HBoxContainer:
 	del_btn.flat = true
 	del_btn.pressed.connect(func():
 		_editing_palette.entries.erase(entry)
+		_save_palettes()
 		_refresh_palette_entries()
 	)
 	row.add_child(del_btn)
@@ -311,10 +325,11 @@ func _make_add_entry_row() -> HBoxContainer:
 	name_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(name_input)
 
+	var names := _scoped_block_type_names(_editing_palette)
 	var block_picker := OptionButton.new()
 	block_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	for bt in VoxelWorld.workspace.block_types:
-		block_picker.add_item(bt.name)
+	for n in names:
+		block_picker.add_item(n)
 	row.add_child(block_picker)
 
 	# Spacer to align with the swatch column in entry rows
@@ -332,22 +347,109 @@ func _make_add_entry_row() -> HBoxContainer:
 		var e := PaletteEntry.new()
 		e.semantic_name = n
 		var pidx := block_picker.selected
-		e.block_type_name = VoxelWorld.workspace.block_types[pidx].name if pidx >= 0 else ""
+		e.block_type_name = names[pidx] if pidx >= 0 and pidx < names.size() else ""
 		_editing_palette.entries.append(e)
 		name_input.text = ""
+		_save_palettes()
 		_refresh_palette_entries()
 	)
 	row.add_child(add_btn)
 
 	return row
 
+# The block-type names a palette can map to: every block in its subscribed libraries
+# (in priority order), then the basic-library fallback, de-duplicated.
+func _scoped_block_type_names(palette: Palette) -> Array:
+	var seen := {}
+	var names: Array = []
+	var libs := palette.library_names.duplicate()
+	if VoxelWorkspace.BASIC_LIBRARY not in libs:
+		libs.append(VoxelWorkspace.BASIC_LIBRARY)
+	for lib_name in libs:
+		var lib := VoxelWorld.workspace.get_library(lib_name)
+		if lib == null:
+			continue
+		for bt in lib.sorted_block_types():
+			if not seen.has(bt.name):
+				seen[bt.name] = true
+				names.append(bt.name)
+	return names
+
+# The palette's library-subscription editor: its ordered library_names (each with
+# move-up / remove) plus an "add" picker of libraries it doesn't yet subscribe to.
+# Editing it rescopes the entry pickers, so any change rebuilds the whole editor.
+func _build_palette_libraries(vbox: VBoxContainer, palette: Palette) -> void:
+	var lbl := Label.new()
+	lbl.text = "Libraries (priority order, basic always applies last)"
+	lbl.add_theme_font_size_override("font_size", 12)
+	vbox.add_child(lbl)
+
+	for i in palette.library_names.size():
+		var idx := i
+		var lib_name: String = palette.library_names[idx]
+		var lrow := HBoxContainer.new()
+		lrow.add_theme_constant_override("separation", 6)
+		var nlbl := Label.new()
+		nlbl.text = "%d. %s" % [idx + 1, lib_name]
+		nlbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lrow.add_child(nlbl)
+		var up := Button.new()
+		up.text = "↑"
+		up.flat = true
+		up.disabled = idx == 0
+		up.pressed.connect(func():
+			palette.library_names.remove_at(idx)
+			palette.library_names.insert(idx - 1, lib_name)
+			_save_palettes()
+			_on_palette_selected(palette.name))
+		lrow.add_child(up)
+		var rem := Button.new()
+		rem.text = "✕"
+		rem.flat = true
+		rem.pressed.connect(func():
+			palette.library_names.remove_at(idx)
+			_save_palettes()
+			_on_palette_selected(palette.name))
+		lrow.add_child(rem)
+		vbox.add_child(lrow)
+
+	# Add-library picker: libraries not already subscribed (basic is implicit, skip it).
+	var available: Array = []
+	for n in VoxelWorld.workspace.list_libraries():
+		if n != VoxelWorkspace.BASIC_LIBRARY and n not in palette.library_names:
+			available.append(n)
+	if available.is_empty():
+		return
+	var add_row := HBoxContainer.new()
+	add_row.add_theme_constant_override("separation", 6)
+	var picker := OptionButton.new()
+	picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for n in available:
+		picker.add_item(n)
+	add_row.add_child(picker)
+	var add_btn := Button.new()
+	add_btn.text = "Add library"
+	add_btn.pressed.connect(func():
+		if picker.selected < 0:
+			return
+		palette.library_names.append(available[picker.selected])
+		_save_palettes()
+		_on_palette_selected(palette.name))
+	add_row.add_child(add_btn)
+	vbox.add_child(add_row)
+
+func _save_palettes() -> void:
+	LibraryStore.save_palettes(VoxelWorld.workspace)
+
 func _on_add_palette(palette_name: String) -> void:
 	if not VoxelWorld.workspace.get_palette(palette_name):
 		VoxelWorld.workspace.add_palette(palette_name)
+		_save_palettes()
 		VoxelWorld.workspace_changed.emit()
 
 func _on_delete_palette(palette_name: String) -> void:
 	VoxelWorld.workspace.remove_palette(palette_name)
+	_save_palettes()
 	VoxelWorld.workspace_changed.emit()
 
 # ---------------------------------------------------------------------------
@@ -358,20 +460,39 @@ func _build_block_types_tab() -> Control:
 	var root := Control.new()
 	root.name = "Block Types"
 
+	# Library-scoped layout: [library rail | detail | grid]. Selecting a library in the
+	# rail is the management context — the grid + actions all act on that one library.
 	var split := HSplitContainer.new()
 	split.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.add_child(split)
 
-	# Left: detail / edit panel for the selected block (3D preview + fields).
+	# Far left: the library rail (create/delete; delete disabled for the basic floor).
+	var rail_box := _margin(12)
+	rail_box.custom_minimum_size.x = 180
+	split.add_child(rail_box)
+	_library_rail = LibraryList.new()
+	_library_rail.list_title = "Libraries"
+	_library_rail.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_library_rail.add_requested.connect(_on_add_library)
+	_library_rail.delete_requested.connect(_on_delete_library)
+	_library_rail.item_selected.connect(_on_library_selected)
+	rail_box.add_child(_library_rail)
+	split.split_offset = 180
+
+	var inner := HSplitContainer.new()
+	inner.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	split.add_child(inner)
+
+	# Middle: detail / edit panel for the selected block (3D preview + fields).
 	_bt_detail = _build_bt_detail()
-	split.add_child(_bt_detail)
+	inner.add_child(_bt_detail)
 	# Explicit initial divider position so it doesn't drift as blocks are selected.
-	split.split_offset = 340
+	inner.split_offset = 340
 
 	# Right (main): action header + the JEI-style icon grid.
 	var right := _margin(12)
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	split.add_child(right)
+	inner.add_child(right)
 
 	var rvbox := VBoxContainer.new()
 	rvbox.add_theme_constant_override("separation", 8)
@@ -402,6 +523,42 @@ func _build_block_types_tab() -> Control:
 	rvbox.add_child(_block_grid)
 
 	return root
+
+# ---------------------------------------------------------------------------
+# Library rail (Block Types tab)
+# ---------------------------------------------------------------------------
+
+func _on_add_library(library_name: String) -> void:
+	if VoxelWorld.workspace.get_library(library_name) != null:
+		return
+	VoxelWorld.workspace.get_or_add_library(library_name)
+	LibraryStore.save_library(VoxelWorld.workspace.get_library(library_name))
+	_selected_library = VoxelWorld.workspace.get_library(library_name)
+	_library_rail.selected = library_name
+	VoxelWorld.workspace_changed.emit()
+
+func _on_delete_library(library_name: String) -> void:
+	var lib := VoxelWorld.workspace.get_library(library_name)
+	if lib == null or lib.builtin:
+		return   # the basic floor is undeletable
+	VoxelWorld.workspace.remove_library(library_name)
+	if _selected_library == lib:
+		_selected_library = null
+	VoxelWorld.workspace_changed.emit()
+
+func _on_library_selected(library_name: String) -> void:
+	_selected_library = VoxelWorld.workspace.get_library(library_name)
+	_selected_block_type = ""
+	if _block_grid:
+		_block_grid.populate(_selected_library.sorted_block_types() if _selected_library else [])
+	_refresh_bt_detail()
+
+# Pick a sensible selected library after a refresh: keep the current one if it still
+# exists, else fall back to the first library (basic on a fresh install).
+func _ensure_selected_library() -> void:
+	if _selected_library != null and VoxelWorld.workspace.get_library(_selected_library.name) != null:
+		return
+	_selected_library = VoxelWorld.workspace.libraries[0] if not VoxelWorld.workspace.libraries.is_empty() else null
 
 # The left detail panel shell: a styled PanelContainer (its background makes the
 # split seam visible) at a fixed width, holding a scrollable vbox. The fixed width +
@@ -450,7 +607,7 @@ func _refresh_bt_detail() -> void:
 	_bt_preview = null
 	await get_tree().process_frame
 
-	var bt := VoxelWorld.workspace.get_block_type(_selected_block_type)
+	var bt := _selected_library.get_block_type(_selected_block_type) if _selected_library else null
 	if not bt:
 		var lbl := Label.new()
 		lbl.name = "Placeholder"
@@ -581,23 +738,26 @@ func _texture_swatch(asset_id: String) -> Control:
 	return rect
 
 # The block's own editable model (explicit model_id), or null for a built-in shape
-# (no model to edit yet — the "Set texture…" path creates one).
+# (no model to edit yet — the "Set texture…" path creates one). Scoped to the selected
+# library so editing acts on that library's model.
 func _editable_model(bt: BlockType) -> BlockModel:
-	if bt.model_id.is_empty():
+	if bt.model_id.is_empty() or _selected_library == null:
 		return null
-	return VoxelWorld.workspace.get_block_model(bt.model_id)
+	return _selected_library.get_block_model(bt.model_id)
 
 func _on_set_texture(bt: BlockType) -> void:
+	if _selected_library == null:
+		return
 	_pick_png(func(path: String):
-		var ws := VoxelWorld.workspace
-		var asset := TextureIngest.ingest_file(ws, path, "custom:%s/all" % bt.name)
+		var lib := _selected_library
+		var asset := TextureIngest.ingest_file(lib, path, "custom:%s/all" % bt.name)
 		if asset == null:
 			return
-		var model := ws.get_block_model("custom:%s" % bt.name)
+		var model := lib.get_block_model("custom:%s" % bt.name)
 		if model == null:
 			model = BlockModel.new()
 			model.id = "custom:%s" % bt.name
-			ws.add_block_model(model)
+			lib.add_block_model(model)
 		model.elements = [BlockModel.box_element(Vector3.ZERO, Vector3.ONE, "all")]
 		model.textures = {"all": asset.id}
 		bt.model_id = model.id
@@ -608,23 +768,26 @@ func _on_set_texture(bt: BlockType) -> void:
 # Rebind one texture key to a freshly ingested PNG. The new asset gets a per-block id
 # so replacing never clobbers a shared imported texture's pixels.
 func _on_replace_texture(bt: BlockType, model: BlockModel, key: String) -> void:
+	if _selected_library == null:
+		return
 	_pick_png(func(path: String):
-		var ws := VoxelWorld.workspace
-		var asset := TextureIngest.ingest_file(ws, path, "custom:%s/%s" % [bt.name, key])
+		var asset := TextureIngest.ingest_file(_selected_library, path, "custom:%s/%s" % [bt.name, key])
 		if asset == null:
 			return
 		model.textures[key] = asset.id
 		_after_block_edit(bt)
 		_refresh_bt_detail())
 
-# Common post-edit: notify views, refresh this block's preview + grid icon, persist.
+# Common post-edit: notify views, refresh this block's preview + grid icon, persist the
+# block's library.
 func _after_block_edit(bt: BlockType) -> void:
 	VoxelWorld.notify_block_type_changed()
 	if _bt_preview:
 		_bt_preview.set_block(bt)
 	if _block_grid:
 		_block_grid.refresh_icons(bt.name)
-	LibraryStore.save_all(VoxelWorld.workspace)
+	if _selected_library:
+		LibraryStore.save_library(_selected_library)
 
 func _on_new_block() -> void:
 	var dlg := NewBlockDialog.new()
@@ -636,13 +799,13 @@ func _on_new_block() -> void:
 # the block is a gray full cube (the "build before you decide" path); with an "all"
 # texture and optional Top/Bottom, a full-cube BlockModel is bound to those keys.
 func _create_block(block_name: String, all_path: String, top_path: String, bottom_path: String) -> void:
-	var ws := VoxelWorld.workspace
-	if ws.get_block_type(block_name) != null:
+	var lib := _selected_library
+	if lib == null or lib.get_block_type(block_name) != null:
 		return
-	var bt := ws.add_block_type(block_name)
-	var all_asset := _ingest_opt(ws, all_path, block_name, "all")
-	var top_asset := _ingest_opt(ws, top_path, block_name, "top")
-	var bottom_asset := _ingest_opt(ws, bottom_path, block_name, "bottom")
+	var bt := lib.add_block_type(block_name)
+	var all_asset := _ingest_opt(lib, all_path, block_name, "all")
+	var top_asset := _ingest_opt(lib, top_path, block_name, "top")
+	var bottom_asset := _ingest_opt(lib, bottom_path, block_name, "bottom")
 	if all_asset != null or top_asset != null or bottom_asset != null:
 		var model := BlockModel.new()
 		model.id = "custom:%s" % block_name
@@ -657,11 +820,11 @@ func _create_block(block_name: String, all_path: String, top_path: String, botto
 			model.textures["bottom"] = bottom_asset.id
 			elem["faces"][BlockModel.Dir.DOWN] = BlockModel.make_face("bottom")
 		model.elements = [elem]
-		ws.add_block_model(model)
+		lib.add_block_model(model)
 		bt.model_id = model.id
 		var primary := all_asset if all_asset != null else (top_asset if top_asset != null else bottom_asset)
 		bt.color = primary.average_color
-	LibraryStore.save_all(ws)
+	LibraryStore.save_library(lib)
 	VoxelWorld.workspace_changed.emit()
 	_selected_block_type = block_name
 	if _block_grid:
@@ -669,32 +832,42 @@ func _create_block(block_name: String, all_path: String, top_path: String, botto
 	_refresh_bt_detail()
 
 # Ingest an optional PNG under a per-block/key id; null when no path was chosen.
-func _ingest_opt(ws: VoxelWorkspace, path: String, block_name: String, key: String) -> TextureAsset:
+func _ingest_opt(lib: BlockLibrary, path: String, block_name: String, key: String) -> TextureAsset:
 	if path.is_empty():
 		return null
-	return TextureIngest.ingest_file(ws, path, "custom:%s/%s" % [block_name, key])
+	return TextureIngest.ingest_file(lib, path, "custom:%s/%s" % [block_name, key])
 
 func _on_import_blocks() -> void:
 	var panel := ImportPanel.new()
+	# Default the import target to the Block Types tab's selected library (never basic);
+	# the panel still lets the user pick or create another.
+	if _selected_library != null and not _selected_library.builtin:
+		panel.default_library = _selected_library.name
 	get_tree().root.add_child(panel)
 	panel.popup_centered()
 
 # Reveal the block's saved resource in the OS file browser. Persists first so the
-# .tres exists, then highlights it (falling back to the library root if needed).
+# .tres exists, then highlights it (falling back to the library root if needed). The
+# block lives under its library's folder.
 func _on_open_in_files(bt: BlockType) -> void:
-	LibraryStore.save_all(VoxelWorld.workspace)
-	var rel := AssetLibrary.BLOCK_TYPES_DIR.path_join(bt.name.validate_filename() + ".tres")
+	if _selected_library == null:
+		return
+	LibraryStore.save_library(_selected_library)
+	var rel := AssetLibrary.in_library(_selected_library.name, AssetLibrary.BLOCK_TYPES_DIR) \
+		.path_join(bt.name.validate_filename() + ".tres")
 	var abs_path := ProjectSettings.globalize_path(AssetLibrary.path_for(rel))
 	if FileAccess.file_exists(abs_path):
 		OS.shell_show_in_file_manager(abs_path)
 	else:
-		OS.shell_open(ProjectSettings.globalize_path(AssetLibrary.path_for()))
+		OS.shell_open(ProjectSettings.globalize_path(AssetLibrary.path_for(_selected_library.name)))
 
 func _on_delete_block_type(block_name: String) -> void:
-	VoxelWorld.workspace.remove_block_type(block_name)
+	if _selected_library == null:
+		return
+	_selected_library.remove_block_type(block_name)
 	if _selected_block_type == block_name:
 		_selected_block_type = ""
-	LibraryStore.save_all(VoxelWorld.workspace)
+	LibraryStore.save_library(_selected_library)
 	VoxelWorld.workspace_changed.emit()
 	_refresh_bt_detail()
 
@@ -721,8 +894,12 @@ func _refresh(_arg = null) -> void:
 		_rebuild_projects()
 	if _palettes_list:
 		_palettes_list.populate(VoxelWorld.workspace.palettes.map(func(p): return p.name))
+	_ensure_selected_library()
+	if _library_rail:
+		_library_rail.selected = _selected_library.name if _selected_library else ""
+		_library_rail.populate(VoxelWorld.workspace.list_libraries())
 	if _block_grid:
-		_block_grid.populate(VoxelWorld.workspace.block_types)
+		_block_grid.populate(_selected_library.sorted_block_types() if _selected_library else [])
 
 func _margin(px: int) -> MarginContainer:
 	var m := MarginContainer.new()

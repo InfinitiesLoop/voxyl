@@ -1,5 +1,9 @@
 # Named libraries + palette library-subscription — implementation plan
 
+> **Status: Implemented.** All six phases landed (data model → world resolution →
+> per-library persistence → import targeting → UI → migration). The old flat
+> `res://library` was deleted; `basic` re-seeds on launch. Smoke + shell tests pass.
+
 ## Context
 
 Today the block library is **flat**: `VoxelWorkspace` holds single arrays (`block_types`,

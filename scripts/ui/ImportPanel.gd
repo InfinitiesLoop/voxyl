@@ -14,11 +14,20 @@ extends Window
 const _NOTE := "Reads blocks from your own installed game, resource packs, or mods. Voxyl bundles no Minecraft content."
 const _FLAT_NOTE := "Pre-1.8 packs carry no model data — shapes are guessed from texture names (top/side/front…) and everything imports as a cube."
 
+# Set by the opener (HomeScreen) to the Block Types tab's selected library, so imports
+# default to the library the user is managing. "" → first existing non-basic library, or
+# a new "imported" library.
+var default_library := ""
+
 var _service: ImportService
 var _available: Array = []          # the full browse list; the ItemList shows a filtered view
 var _current_path := ""             # the last chosen source path (re-browsed on mode change)
+var _target_library_name := ""      # the resolved import target (created on first browse)
+
+const _NEW_LIBRARY_ITEM := "New library…"
 
 var _format: OptionButton
+var _target_picker: OptionButton
 var _locations: MenuButton
 var _loc_entries: Array = []        # MCInstallLocations.candidates() for this platform
 var _flat_note: Label
@@ -62,6 +71,21 @@ func _build() -> void:
 	_format.add_item("Older / pre-1.8 (textures only)", ImportService.Mode.FLAT)
 	_format.item_selected.connect(_on_format_changed)
 	fmt_row.add_child(_format)
+
+	# Target — which library the imported blocks land in. Imports never target the
+	# built-in `basic` floor; the user picks an existing library or creates one.
+	var tgt_row := HBoxContainer.new()
+	tgt_row.add_theme_constant_override("separation", 6)
+	vbox.add_child(tgt_row)
+	var tgt_lbl := Label.new()
+	tgt_lbl.text = "Add to library:"
+	tgt_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	tgt_row.add_child(tgt_lbl)
+	_target_picker = OptionButton.new()
+	_target_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_target_picker.item_selected.connect(_on_target_selected)
+	tgt_row.add_child(_target_picker)
+	_refresh_target_picker()
 
 	# Source pickers — file (archive) or folder (pack / assets / mods), plus a
 	# launcher-aware shortcut that jumps the picker to where installs usually live.
@@ -191,6 +215,69 @@ func _pick_dir() -> void:
 func _mode() -> ImportService.Mode:
 	return _format.get_selected_id() as ImportService.Mode
 
+# Populate the target picker with existing non-basic libraries + a "New library…" item,
+# resolving a default target (the opener's library, else the first one, else a new
+# "imported"). The resolved name is always present even if not yet created on disk.
+func _refresh_target_picker() -> void:
+	_target_picker.clear()
+	var libs: Array = []
+	for n in VoxelWorld.workspace.list_libraries():
+		if n != VoxelWorkspace.BASIC_LIBRARY:
+			libs.append(n)
+	if _target_library_name.is_empty():
+		if not default_library.is_empty() and default_library != VoxelWorkspace.BASIC_LIBRARY:
+			_target_library_name = default_library
+		elif not libs.is_empty():
+			_target_library_name = libs[0]
+		else:
+			_target_library_name = "imported"
+	if _target_library_name not in libs:
+		libs.append(_target_library_name)
+	var sel := 0
+	for i in libs.size():
+		_target_picker.add_item(libs[i])
+		if libs[i] == _target_library_name:
+			sel = i
+	_target_picker.add_item(_NEW_LIBRARY_ITEM)
+	_target_picker.selected = sel
+
+func _on_target_selected(idx: int) -> void:
+	var text := _target_picker.get_item_text(idx)
+	if text == _NEW_LIBRARY_ITEM:
+		_prompt_new_library()
+		return
+	_target_library_name = text
+	if not _current_path.is_empty():
+		_set_source(_current_path)   # rebind the service to the new target
+
+func _prompt_new_library() -> void:
+	var dlg := AcceptDialog.new()
+	dlg.title = "New Library"
+	var input := LineEdit.new()
+	input.placeholder_text = "Library name…"
+	input.custom_minimum_size = Vector2(260, 0)
+	dlg.add_child(input)
+	dlg.confirmed.connect(func():
+		var n := input.text.strip_edges()
+		if not n.is_empty() and n != VoxelWorkspace.BASIC_LIBRARY:
+			_target_library_name = n
+			_refresh_target_picker()
+			if not _current_path.is_empty():
+				_set_source(_current_path)
+		else:
+			_refresh_target_picker()
+		dlg.queue_free())
+	dlg.canceled.connect(func():
+		_refresh_target_picker()   # revert the selection off "New library…"
+		dlg.queue_free())
+	add_child(dlg)
+	dlg.popup_centered()
+	input.grab_focus()
+
+# The import target, created in the workspace catalog if it doesn't exist yet.
+func _resolve_target_library() -> BlockLibrary:
+	return VoxelWorld.workspace.get_or_add_library(_target_library_name)
+
 # Switching format: show/hide the caveat and re-browse the current source under it.
 func _on_format_changed(_idx: int) -> void:
 	_flat_note.visible = _mode() == ImportService.Mode.FLAT
@@ -203,7 +290,7 @@ func _set_source(path: String) -> void:
 		_service.close()
 	_current_path = path
 	var sources := ImportService.detect_sources(path)
-	_service = ImportService.new(sources, VoxelWorld.workspace, _mode())
+	_service = ImportService.new(sources, _resolve_target_library(), _mode())
 	_available = _service.available_blocks()
 	_path_label.text = path
 	_path_label.tooltip_text = path

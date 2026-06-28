@@ -10,6 +10,7 @@ func _ready() -> void:
 	_test_block_ops()
 	_test_palette_resolution()
 	_test_last_wins()
+	_test_named_libraries()
 	_test_orientation()
 	_test_cell_orientation_tags()
 	_test_hotbar()
@@ -43,8 +44,10 @@ func _check(label: String, condition: bool) -> void:
 func _test_workspace_init() -> void:
 	print("-- workspace init")
 	_check("workspace exists", VoxelWorld.workspace != null)
-	_check("block types populated", VoxelWorld.workspace.block_types.size() > 0)
+	_check("basic library populated", VoxelWorld.workspace.get_library("basic").block_types.size() > 0)
 	_check("default palette exists", VoxelWorld.workspace.get_palette("Default") != null)
+	_check("default palette subscribes to basic",
+		VoxelWorld.workspace.get_palette("Default").library_names == ["basic"])
 	var project := VoxelWorld.workspace.get_project("My First Build")
 	_check("default project exists", project != null)
 	_check("project has palette stack", project != null and not project.palette_names.is_empty())
@@ -80,9 +83,11 @@ func _test_last_wins() -> void:
 	print("-- last-wins palette layering")
 	var ws := VoxelWorld.workspace
 	var project := ws.get_project("My First Build")
-	var diamond := ws.add_block_type("Diamond Block")
+	var lib := ws.get_or_add_library("__test_lib__")
+	var diamond := lib.add_block_type("Diamond Block")
 	diamond.color = Color.CYAN
 	var override := ws.add_palette("__test_override__")
+	override.library_names = ["__test_lib__"]
 	var e := PaletteEntry.new()
 	e.semantic_name = "Base"
 	e.block_type_name = "Diamond Block"
@@ -94,7 +99,63 @@ func _test_last_wins() -> void:
 	_check("non-overridden entry still resolves", not VoxelWorld.get_block_type_for_semantic("Accent").is_empty())
 	project.palette_names.pop_back()
 	ws.remove_palette("__test_override__")
-	ws.remove_block_type("Diamond Block")
+	ws.remove_library("__test_lib__")
+
+# Named libraries: the 3-tier resolution (palette stack → palette's library stack,
+# first-hit, basic fallback), per-library order + stable sort, multi-library precedence,
+# and the undeletable + re-seeded built-in floor.
+func _test_named_libraries() -> void:
+	print("-- named libraries (3-tier resolution + order + builtin floor)")
+	VoxelWorld.reset_for_tests()
+	var ws := VoxelWorld.workspace
+
+	# Built-in floor: basic library + Default palette exist and resist deletion.
+	_check("basic library is builtin",
+		ws.get_library("basic") != null and ws.get_library("basic").builtin)
+	ws.remove_library("basic")
+	_check("basic library can't be removed", ws.get_library("basic") != null)
+	ws.remove_palette("Default")
+	_check("default palette can't be removed", ws.get_palette("Default") != null)
+
+	# Per-library order + stable sort by (order, name).
+	var lib := ws.get_or_add_library("ordered")
+	var b1 := lib.add_block_type("zeta")     # order 0
+	var b2 := lib.add_block_type("alpha")    # order 1
+	_check("next_order increments per library", b1.order == 0 and b2.order == 1)
+	var sorted := lib.sorted_block_types()
+	_check("sorted by (order, name) not just name",
+		sorted[0].name == "zeta" and sorted[1].name == "alpha")
+
+	# Two libraries both defining "stone" → palette library-stack precedence (first hit).
+	var lib_a := ws.get_or_add_library("A")
+	var lib_b := ws.get_or_add_library("B")
+	lib_a.add_block_type("stone").color = Color(1, 0, 0)
+	lib_b.add_block_type("stone").color = Color(0, 1, 0)
+	_check("first-hit wins in library stack [A,B]",
+		ws.resolve_block_type("stone", ["A", "B"]).color == Color(1, 0, 0))
+	_check("reordering the stack flips the winner [B,A]",
+		ws.resolve_block_type("stone", ["B", "A"]).color == Color(0, 1, 0))
+
+	# basic is the implicit final fallback so planning blocks always resolve.
+	_check("basic is the implicit fallback for a name only in basic",
+		ws.resolve_block_type("base", ["A"]) == ws.basic_library().get_block_type("base"))
+	_check("a name in no library resolves to null",
+		ws.resolve_block_type("__nope__", ["A"]) == null)
+
+	# End-to-end: project palette stack → palette's library subscription.
+	var project := ws.get_project("My First Build")
+	var pal := ws.add_palette("named")
+	pal.library_names = ["A"]
+	var e := PaletteEntry.new()
+	e.semantic_name = "Base"
+	e.block_type_name = "stone"
+	pal.entries.append(e)
+	project.palette_names.append("named")
+	VoxelWorld.open(project)
+	_check("project resolves a semantic through the palette's library subscription",
+		VoxelWorld.get_color_for_semantic("Base") == Color(1, 0, 0))
+
+	VoxelWorld.reset_for_tests()
 
 func _test_orientation() -> void:
 	print("-- orientation encoding")
@@ -182,13 +243,13 @@ func _test_models() -> void:
 	var custom := BlockModel.new()
 	custom.id = "__test_pillar__"
 	custom.elements = [BlockModel.box_element(Vector3(0.25, 0, 0.25), Vector3(0.75, 1, 0.75))]
-	ws.add_block_model(custom)
-	var bt := ws.get_block_type("stone")  # "Base" maps to stone, shape FULL
+	ws.basic_library().add_block_model(custom)
+	var bt := ws.basic_library().get_block_type("base")  # "Base" maps to base, shape FULL
 	bt.model_id = "__test_pillar__"
 	_check("explicit model_id overrides shape fallback",
 		VoxelWorld.get_model_for_semantic("Base").id == "__test_pillar__")
 	bt.model_id = ""
-	ws.remove_block_model("__test_pillar__")
+	ws.basic_library().remove_block_model("__test_pillar__")
 
 func _test_reorient() -> void:
 	print("-- reorient existing cells (R / Shift+R)")
@@ -234,29 +295,31 @@ func _test_library_serialization() -> void:
 	AssetLibrary.ROOT = "user://__voxyl_test_lib__"
 	_rm_rf(AssetLibrary.ROOT)
 
-	# Author a model + texture + block type by hand (the importer-agnostic path).
+	# Author a model + texture + block type by hand (the importer-agnostic path), in a
+	# named library.
 	var ws := VoxelWorkspace.new()
+	var lib := ws.get_or_add_library("authored")
 	var model := BlockModel.new()
 	model.id = "test_pillar"
 	model.elements = [BlockModel.box_element(Vector3(0.25, 0, 0.25), Vector3(0.75, 1, 0.75), "all")]
 	model.textures = {"all": "test_tex"}
-	ws.add_block_model(model)
+	lib.add_block_model(model)
 	var tex := TextureAsset.new()
 	tex.id = "test_tex"
-	tex.image_path = "pixels/test_tex.png"
+	tex.image_path = "authored/pixels/test_tex.png"
 	tex.frame_count = 4
 	tex.frame_time = 0.25
 	tex.transparency = TextureAsset.Transparency.CUTOUT
 	tex.average_color = Color(0.3, 0.7, 0.2)
-	ws.add_texture_asset(tex)
-	var bt := ws.add_block_type("Test Block")
+	lib.add_texture_asset(tex)
+	var bt := lib.add_block_type("Test Block")
 	bt.model_id = "test_pillar"
 
-	_check("save_all succeeds", LibraryStore.save_all(ws) == OK)
+	_check("save_library succeeds", LibraryStore.save_library(lib) == OK)
 
 	# Load into a fresh workspace and confirm every field survived the trip.
 	var ws2 := VoxelWorkspace.new()
-	LibraryStore.load_into(ws2)
+	LibraryStore.load_persisted(ws2)
 	var m2 := ws2.get_block_model("test_pillar")
 	_check("model round-trips", m2 != null and m2.id == "test_pillar")
 	_check("model elements (Vector3 geometry) survive",
@@ -343,7 +406,8 @@ func _test_mc_import() -> void:
 		"""{ "animation": { "frametime": 4, "interpolate": true } }""")
 
 	var ws := VoxelWorkspace.new()
-	var imp := MCImporter.new(assets, ws)
+	var lib := ws.get_or_add_library("mc")
+	var imp := MCImporter.new(assets, lib)
 	imp.import_namespace("testmod")
 
 	_check("all four blocks imported",
@@ -372,7 +436,7 @@ func _test_mc_import() -> void:
 	_check("texture pixels copied into the library + loadable",
 		t != null and AssetLibrary.load_image(t.image_path) != null)
 	_check("texture imported once (dedup across blocks)",
-		ws.texture_assets.size() == 2)
+		lib.texture_assets.size() == 2)
 	_check("opaque texture classified opaque",
 		t != null and t.transparency == TextureAsset.Transparency.OPAQUE)
 
@@ -478,7 +542,8 @@ func _test_mc_import_multipart() -> void:
 	_write_png(assets + "/testmod/textures/block/planks.png", planks)
 
 	var ws := VoxelWorkspace.new()
-	var imp := MCImporter.new(assets, ws)
+	var lib := ws.get_or_add_library("mp")
+	var imp := MCImporter.new(assets, lib)
 	imp.import_block("testmod", "test_fence")
 
 	var bt := ws.get_block_type("test_fence")
@@ -493,7 +558,7 @@ func _test_mc_import_multipart() -> void:
 	_check("post + side models imported",
 		ws.get_block_model("testmod:block/fence_post") != null
 		and ws.get_block_model("testmod:block/fence_side") != null)
-	_check("shared texture imported once", ws.texture_assets.size() == 1)
+	_check("shared texture imported once", lib.texture_assets.size() == 1)
 	# Connection resolution end-to-end: isolated → post; east neighbor → +y=90 side.
 	var sm := bt.state_map
 	_check("isolated fence resolves to the post only", sm.resolve_parts({}).size() == 1)
@@ -559,7 +624,8 @@ func _test_mc_import_tint() -> void:
 	_write_solid(assets + "/testmod/textures/block/test_plain_tex.png", plain)
 
 	var ws := VoxelWorkspace.new()
-	var imp := MCImporter.new(assets, ws)
+	var lib := ws.get_or_add_library("tint")
+	var imp := MCImporter.new(assets, lib)
 	imp.import_namespace("testmod")
 
 	# Leaves — fully tinted, color folded.
@@ -606,9 +672,11 @@ func _test_tint_resolver() -> void:
 	print("-- tint resolver (palette stack)")
 	var ws := VoxelWorld.workspace
 	var project := ws.get_project("My First Build")
-	var bt := ws.add_block_type("__TintBlock__")
+	var lib := ws.get_or_add_library("__tint_lib__")
+	var bt := lib.add_block_type("__TintBlock__")
 	bt.tint = Color(0.2, 0.6, 0.3)
 	var pal := ws.add_palette("__tint_pal__")
+	pal.library_names = ["__tint_lib__"]
 	var e := PaletteEntry.new()
 	e.semantic_name = "Base"
 	e.block_type_name = "__TintBlock__"
@@ -623,7 +691,7 @@ func _test_tint_resolver() -> void:
 		VoxelWorld.get_tint_for_semantic("__nope__") == Color.WHITE)
 	project.palette_names.pop_back()
 	ws.remove_palette("__tint_pal__")
-	ws.remove_block_type("__TintBlock__")
+	ws.remove_library("__tint_lib__")
 	VoxelWorld.open(project)
 
 # Phase 5: the asset-source abstraction. A directory tree and a .zip carrying the
@@ -671,7 +739,7 @@ func _test_asset_sources() -> void:
 
 	# The importer reads a zip source end-to-end, exactly like a directory.
 	var ws := VoxelWorkspace.new()
-	MCImporter.new(zsrc, ws).import_namespace("minecraft")
+	MCImporter.new(zsrc, ws.get_or_add_library("zip")).import_namespace("minecraft")
 	_check("importer translates a block straight out of a zip",
 		ws.get_block_type("stone") != null
 		and ws.get_block_model("minecraft:block/stone") != null)
@@ -707,10 +775,11 @@ func _test_import_service() -> void:
 	_check("detect finds one source for a pack root", sources.size() == 1)
 
 	var ws := VoxelWorkspace.new()
+	var target := ws.get_or_add_library("vanilla")
 	# A shipped-style default that a vanilla import should overwrite in place.
-	var placeholder := ws.add_block_type("stone")
+	var placeholder := target.add_block_type("stone")
 	placeholder.color = Color(0.99, 0.0, 0.99)   # sentinel: gets replaced by the import
-	var svc := ImportService.new(sources, ws)
+	var svc := ImportService.new(sources, target)
 	var avail := svc.available_blocks()
 	_check("browse lists every block across namespaces", avail.size() == 3)
 	_check("browse refs are namespaced and sorted",
@@ -732,14 +801,14 @@ func _test_import_service() -> void:
 		and not placeholder.model_id.is_empty()
 		and placeholder.color != Color(0.99, 0.0, 0.99))
 	var stone_count := 0
-	for bt in ws.block_types:
+	for bt in target.block_types:
 		if bt.name == "stone":
 			stone_count += 1
 	_check("overwrite did not duplicate the block type", stone_count == 1)
 
 	# Persisted to disk: a fresh workspace loads what was imported.
 	var ws2 := VoxelWorkspace.new()
-	LibraryStore.load_into(ws2)
+	LibraryStore.load_persisted(ws2)
 	_check("imported library persisted via LibraryStore",
 		ws2.get_block_type("stone") != null and ws2.get_block_type("othermod:widget") != null)
 
@@ -767,7 +836,7 @@ func _test_incremental_import() -> void:
 		_write_solid("%s/minecraft/textures/block/%s.png" % [assets, id], Color(0.3, 0.5, 0.7))
 
 	var ws := VoxelWorkspace.new()
-	var svc := ImportService.new(ImportService.detect_sources(src_root), ws)
+	var svc := ImportService.new(ImportService.detect_sources(src_root), ws.get_or_add_library("incr"))
 	var avail := svc.available_blocks()
 
 	var total := svc.begin_import(avail)
@@ -779,11 +848,11 @@ func _test_incremental_import() -> void:
 	_check("each step imports its block", stepped_ok == 2 and svc.imported_count == 2)
 	# Nothing is written to disk until end_import.
 	var mid := VoxelWorkspace.new()
-	LibraryStore.load_into(mid)
+	LibraryStore.load_persisted(mid)
 	_check("library not persisted until end_import", mid.get_block_type("alpha") == null)
 	svc.end_import()
 	var after := VoxelWorkspace.new()
-	LibraryStore.load_into(after)
+	LibraryStore.load_persisted(after)
 	_check("end_import persists the imported blocks",
 		after.get_block_type("alpha") != null and after.get_block_type("beta") != null)
 
@@ -832,7 +901,8 @@ func _test_flat_import() -> void:
 	_write_file(blocks + "/magma.png.mcmeta", '{"animation":{"frametime":2}}')
 
 	var ws := VoxelWorkspace.new()
-	var imp := MCFlatImporter.new(assets, ws)
+	var lib := ws.get_or_add_library("flat")
+	var imp := MCFlatImporter.new(assets, lib)
 
 	# Browse: 7 blocks — the four faced groups collapse to one each; stone, magma,
 	# treetop stand alone. (12 PNGs → 7 blocks.)
@@ -891,7 +961,7 @@ func _test_flat_import() -> void:
 
 	# The 1.8+ importer finds nothing in a pre-1.8 tree (no blockstates).
 	var ws2 := VoxelWorkspace.new()
-	var jimp := MCImporter.new(assets, ws2)
+	var jimp := MCImporter.new(assets, ws2.get_or_add_library("json"))
 	jimp.import_namespace("testmod")
 	_check("the 1.8+ importer imports nothing from a pre-1.8 tree",
 		jimp.imported_blocks.is_empty() and _warns_contain(jimp, "no blockstates"))
@@ -916,7 +986,7 @@ func _test_import_service_flat() -> void:
 
 	var sources := ImportService.detect_sources(src_root)
 	var ws := VoxelWorkspace.new()
-	var svc := ImportService.new(sources, ws, ImportService.Mode.FLAT)
+	var svc := ImportService.new(sources, ws.get_or_add_library("flatsvc"), ImportService.Mode.FLAT)
 	var avail := svc.available_blocks()
 	_check("FLAT browse synthesizes blocks (cobble + grouped machine)",
 		avail.size() == 2)
@@ -930,7 +1000,7 @@ func _test_import_service_flat() -> void:
 		and ws.get_block_model("testmod:flat/machine").has_textures())
 
 	var ws2 := VoxelWorkspace.new()
-	LibraryStore.load_into(ws2)
+	LibraryStore.load_persisted(ws2)
 	_check("FLAT-imported library persisted to disk",
 		ws2.get_block_type("testmod:machine") != null and ws2.get_block_type("testmod:cobble") != null)
 

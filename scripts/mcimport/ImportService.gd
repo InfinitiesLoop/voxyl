@@ -17,18 +17,22 @@ extends RefCounted
 enum Mode { JSON, FLAT }
 
 var _sources: Array[MCAssetSource] = []
-var _importers := {}     # source -> MCImporter | MCFlatImporter (lazy; share the workspace)
-var _workspace: VoxelWorkspace
+var _importers := {}     # source -> MCImporter | MCFlatImporter (lazy; share the library)
+var _library: BlockLibrary
 var _mode: Mode
 
 # Diagnostics from the last import_selected().
 var imported_count := 0
 var warnings: Array[String] = []
 
-func _init(sources: Array, workspace: VoxelWorkspace, mode := Mode.JSON) -> void:
+# `library` is the import target (decision: import targets a library). Block types,
+# models and textures land in it, `order` is assigned via its next_order(), and only
+# that library is persisted at the end. Pass the Block Types tab's selected library (or
+# a freshly created one) — never `basic`.
+func _init(sources: Array, library: BlockLibrary, mode := Mode.JSON) -> void:
 	for s in sources:
 		_sources.append(s)
-	_workspace = workspace
+	_library = library
 	_mode = mode
 
 # ---------------------------------------------------------------------------
@@ -124,12 +128,13 @@ func import_step(i: int) -> bool:
 		imported_count += 1
 	return ok
 
-# Gather every importer's warnings and persist the library (only if anything imported).
+# Gather every importer's warnings and persist the target library (only if anything
+# imported).
 func end_import() -> void:
 	for s in _sources:
 		warnings.append_array(_importer_for(s).warnings)
 	if imported_count > 0:
-		LibraryStore.save_all(_workspace)
+		LibraryStore.save_library(_library)
 
 # Release any held archive handles. Call when the panel closes.
 func close() -> void:
@@ -162,7 +167,7 @@ func _resolve_names(selection: Array) -> PackedStringArray:
 func _importer_for(source: MCAssetSource):
 	if not _importers.has(source):
 		if _mode == Mode.FLAT:
-			_importers[source] = MCFlatImporter.new(source, _workspace)
+			_importers[source] = MCFlatImporter.new(source, _library)
 		else:
-			_importers[source] = MCImporter.new(source, _workspace)
+			_importers[source] = MCImporter.new(source, _library)
 	return _importers[source]

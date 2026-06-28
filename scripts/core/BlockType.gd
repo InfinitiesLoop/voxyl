@@ -35,6 +35,10 @@ extends Resource
 enum Shape { FULL, SLAB, STAIRS }
 
 @export var name: String = ""
+# Per-library sort order for the Block Types grid (decision 4). Set by the owning
+# BlockLibrary on add/import (next_order); the grid shows one library at a time sorted
+# by (order, name). Purely a presentation hint — never touches voxel data.
+@export var order: int = 0
 @export var color: Color = Color(0.5, 0.5, 0.5)
 @export var shape: Shape = Shape.FULL
 @export var model_id: String = ""

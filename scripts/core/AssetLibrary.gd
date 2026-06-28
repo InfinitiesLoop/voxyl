@@ -25,9 +25,17 @@ const TEXTURES_DIR := "textures"
 const PIXELS_DIR := "pixels"
 const BLOCK_TYPES_DIR := "block_types"
 
-# Absolute, engine-resolvable path for a library-relative path ("" → the root).
+# Absolute, engine-resolvable path for a ROOT-relative path ("" → the root).
 static func path_for(relative := "") -> String:
 	return ROOT if relative.is_empty() else ROOT.path_join(relative)
+
+# Named libraries each live in their own folder under ROOT (decision: per-library
+# persistence). The library segment is embedded in the ROOT-relative paths callers
+# build — e.g. a texture's saved image_path is "<library>/pixels/<ns>/<path>.png" — so
+# load_image/load_texture below stay ROOT-relative and unchanged. This helper just
+# joins the segment for callers that want the library-relative prefix.
+static func in_library(library_name: String, relative := "") -> String:
+	return library_name if relative.is_empty() else library_name.path_join(relative)
 
 # Create the directory at a library-relative path (recursively). Safe to re-call.
 static func ensure_dir(relative := "") -> Error:
