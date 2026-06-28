@@ -1,170 +1,171 @@
-# Named, composable block libraries
+# Named libraries + palette library-subscription — implementation plan
 
-Status: **planned** (not started). Captures a design discussion from 2026-06-27 so a
-fresh session can pick it up. Sibling to `.plans/import-feature.md` (Phase 5 import).
+## Context
 
-## Goal
+Today the block library is **flat**: `VoxelWorkspace` holds single arrays (`block_types`,
+`block_models`, `texture_assets`); `LibraryStore` persists them as loose `.tres` under one
+`res://library/{models,textures,pixels,block_types}` root; `VoxelWorld` code-seeds ~65
+Minecraft-style block-type names that an import overwrites in place by `ns:id`. Separately, a
+**Palette** maps semantic names (`Base`, `Accent`, …) → block-type names, and a `VoxelProject` already
+holds an ordered **stack of palettes** (`palette_names`, last-wins resolution).
 
-Evolve the single, flat block library into **multiple named libraries** the user can
-manage and that **templates compose** (overlap with precedence). Concretely:
+This couples the built-in defaults to Minecraft (Principle 4) and gives no way to keep "vanilla MC"
+and "gtnh" as separate, swappable sets. This change introduces named **Libraries** and lets each
+**Palette** subscribe to a stack of them. The voxel data still stores only semantic intent —
+everything below is the material layer (Principles 1–3).
 
-- A **built-in default library** of basic block types that ships with voxyl and
-  **cannot be deleted** (the always-present floor — the "undecided"/planning blocks).
-- Importing MC assets creates/fills a **named** library (e.g. `vanilla-mc`, `gtnh`),
-  not a single global pile.
-- **Templates** pick a set of libraries and **overlap** them, so a build can draw on
-  "vanilla mc" + "gtnh" at once, with a defined precedence on name collisions.
-- A quick **reset/clear** action — under this design that's just "delete an imported
-  library"; the built-in default library always remains.
-- Block **ordering** within a library, assigned at import (see "Ordering" below).
-
-The user is fine **invalidating the current `res://library` and re-importing** once the
-new scheme lands. Do the stairs re-import (see `MCImporter._parse_variants` straight-only
-fix, already shipped) and ordering in that same re-import pass.
-
-## Background: there is no numeric/order "block ID" to import
-
-The user asked whether the importer can record a Minecraft block ID, and how modded MC
-does it. The accurate picture:
-
-- **Since the 1.13 "flattening," there are no numeric block IDs** — vanilla *or* modded.
-  Every block is keyed by a **string registry name** (`ResourceLocation`,
-  `namespace:path`: `minecraft:stone`, `create:cogwheel`). Mods just use their own
-  namespace. The old pre-1.13 numeric IDs (and the infamous mod "ID conflict" configs)
-  were save-format / registry state, **never stored in the resource assets**.
-- voxyl **already uses this string ID**: the importer names block types `ns:id`
-  (un-prefixed for `minecraft`) and ids models/textures by their qualified ref. So the
-  "block ID" the user remembers from modded MC is exactly what we already capture.
-- **Ordering is the only thing missing, and it isn't in the assets we read.** Creative
-  menu order lives in code (`CreativeModeTabs`) / mod registration order at runtime, not
-  in the unzipped jars' `blockstates/models/textures`. So voxyl must **assign its own**
-  order; it cannot read a canonical MC order.
-
-## Current architecture (what exists today)
-
-- `AssetLibrary` (`scripts/core/AssetLibrary.gd`) — single storage root
-  `ROOT = "res://library"`, with `models/ textures/ pixels/<ns>/ block_types/`
-  sub-areas. **Decision 3**: this is *the* one swap point for where assets live.
-- `LibraryStore` (`scripts/core/LibraryStore.gd`) — `save_all(workspace)` /
-  `load_into(workspace)` over loose `.tres`, keyed by id/name, into one flat set.
-- `VoxelWorkspace` — holds flat arrays: `block_models`, `texture_assets`, `block_types`
-  (plus palettes/projects). One global namespace; last-writer-wins by id/name.
-- `VoxelWorld._ready` seeds built-ins in code (`_add_default_block_types`, ~65 MC-style
-  names) then `LibraryStore.load_into` merges any imported library on top.
-- `ImportService` imports a selected subset into the workspace and calls
-  `LibraryStore.save_all`. Names dedupe via `ns:id` (`minecraft` == default namespace,
-  so vanilla overwrites a like-named default in place).
-- **Precedent to reuse:** VoxelWorld already has an ordered **palette stack** with
-  precedence (`add/remove/move_palette_in_stack`, `palette_stack_changed`). A library
-  stack should mirror this pattern so it feels consistent and stays a lens.
-
-## Proposed design
-
-### 1. A library is a named, self-contained set
-
-Introduce a `BlockLibrary` concept: a named bundle of `block_models` + `texture_assets`
-+ `block_types`. On disk, one folder per library under the storage root:
+### The model (no new top-level concept — Palette stays Palette)
 
 ```
-res://library/<library-name>/{models, textures, pixels/<ns>, block_types}/
+Project ──(ordered stack)──▶ Palette ──(ordered stack)──▶ Library ──▶ BlockType
+   │                           │  └─ semantic→block-type mapping (Base, Accent, …) — exists today
+   │                           └─ NEW: subscribes to an ordered stack of libraries it draws from
+   └─ voxel data stores semantic names only (unchanged)
 ```
 
-`AssetLibrary` stays the single swap point but gains a per-library path helper
-(`path_for(library, relative)`); keep `ROOT` as the only place the base path is defined.
-`LibraryStore` gains `save_library(name, lib)` / `load_library(name)` and a
-`list_libraries()` (the root's child folders).
+- **Library** *(new)* — a named bundle of block types (+ the models/textures they need). e.g. `basic`,
+  `vanilla-mc`, `gtnh`. This is the "named libraries" feature: the flat pile split into named sets.
+- **Palette** *(evolved, same class/name)* — its existing semantic→block-type mapping **plus** a new
+  ordered `library_names` stack naming the libraries it draws those block types from.
+- **Project** — its existing ordered **stack of palettes** (`palette_names`), unchanged.
 
-### 2. Built-in default library (undeletable)
+There is **no** "Template" concept and **no rename** of `Palette` / `palette_names` / `PaletteEntry` /
+`PalettePanel`. The only change to `Palette` is the added `library_names` (+ a `builtin` flag).
 
-- The code-seeded defaults become a real, named library — e.g. `"basic"` (or
-  `"built-in"`). It is **always present** and **cannot be deleted or cleared**; it is
-  rebuilt from code on launch (not persisted, or persisted but always re-seeded).
-- **Simplify it to just the really basic block types.** The current ~65-name list in
-  `VoxelWorld._add_default_block_types` is too much for a "basic" set. Trim to a small,
-  generic, voxel-agnostic palette — enough to build with before deciding materials.
-  Proposed starter set (decide exact list during impl): `base`, `accent`, `highlight`,
-  `trim`, `stone`, `dirt`, `wood`, `plank`, `glass`, `metal`, plus one each of
-  `slab` / `stairs` to exercise non-cube shapes. Keep names **generic** (not MC ids) so
-  the built-in library stays Minecraft-agnostic (Principle 4). Imported MC libraries are
-  where `minecraft:*` names live.
+### Resolution (a semantic name → rendered block, for the active project)
 
-### 3. Library stack + precedence (composition for templates)
+1. Walk the project's **palette stack** (`palette_names`, last-wins, exactly as today) to find the
+   palette entry mapping `semantic → block_type_name`.
+2. Resolve `block_type_name` → `BlockType` by walking **that palette's `library_names`** (first hit
+   wins), with the built-in `basic` library as an implicit final fallback so "undecided"/planning
+   blocks always render (Principle 5). Models/textures referenced by the block type resolve from the
+   same library set.
 
-- `VoxelWorkspace` holds an **ordered active library stack** instead of one flat set
-  (mirrors the palette stack). Resolution of a block-type/model/texture by id walks the
-  stack **top-first**; first hit wins, built-in `basic` sits at the bottom as the
-  floor. This is the "overlap" the user wants.
-- All current flat lookups (`get_block_type`, `get_block_model`, `get_texture_asset`,
-  and the iteration the Block Types grid uses) route through the stack resolver. Views
-  stay lenses — they ask the workspace, which composes libraries.
-- **Templates** (project/template concept) reference libraries **by name** + order, so a
-  template *is* a chosen, ordered library stack. Opening a template activates that stack.
-  Decide: does a template embed the stack, or just names that must exist?
+### Built-in floor
 
-### 4. Import targets a chosen library
+Code-seed a built-in **Library** (`basic`, generic + naturals) **and** keep the existing built-in
+**Palette** (`"Default"`) — now mapping its semantics onto the basic block types and subscribing to
+`["basic"]`. Both are special in code (seeded, undeletable) but **look and behave like any normal
+library/palette** in the UX — just sourced from code instead of disk. This is a reorganization of
+today's `_add_default_block_types` (→ basic library) and `_add_default_palette` (→ built-in palette).
 
-- `ImportService` gains a target library name (new or existing). Import fills that
-  library and `save_library` persists just it. The `minecraft == default namespace`
-  naming rule stays, but collisions are now **within a library**, not global — two packs
-  in two libraries can both define `oak_planks` and the stack decides which shows.
+User decisions locked: named libraries + palette library-subscription; built-in set is generic + a few
+naturals; **Block Types view is scoped to one library at a time**; per-library block `order`; built-in
+library + palette are code-seeded but behave normally.
 
-### 5. Reset / delete
+The existing flat `res://library` is **deleted** (user approved); MC assets get re-imported into named
+libraries (also picking up the straight-stairs importer fix + `order` assignment).
 
-- "Reset library to defaults" = **delete a named imported library** (remove its folder,
-  drop it from the stack). The built-in `basic` library can't be targeted.
-- A small management UI in the Block Types tab: list libraries, create/rename/delete,
-  reorder the stack (drag, like palettes), choose which is the import target.
+## Phase 1 — Data model
 
-### 6. Ordering
+**New `scripts/core/BlockLibrary.gd` (Resource):** `@export name`, `@export builtin := false`,
+`@export block_types/block_models/texture_assets: Array[...]`. Owns the per-array `add/get/remove`
+helpers (moved from `VoxelWorkspace`), `next_order()` (max `order` + 1), `sorted_block_types()` by
+`(order, name)`.
 
-- Add an integer `order` (sequence index) to `BlockType`, assigned at import as a
-  monotonic counter **within a library** (hand-authored "New block…" blocks append at
-  `max+1`). The Block Types grid sorts by `(order, name)` — a pure lens, no shape change.
-- This gives a **stable, intentional order** (import/registration sequence) without
-  pretending to be MC creative order. If a curated vanilla order is ever wanted, it can
-  seed `order` for known `minecraft:*` ids as an optional, MC-specific extension
-  (Principle 4) — not core.
-- Open: whether `order` is per-library (cleaner) and how cross-library stacks present
-  order in the grid (group by library, then order within).
+**`scripts/core/BlockType.gd`:** add `@export var order: int = 0`.
 
-## Affected files / touchpoints
+**`scripts/core/Palette.gd`:** add `@export var library_names: Array[String] = []` (the ordered
+library stack this palette draws from) and `@export var builtin := false`. Existing entries /
+`get_block_type_name(semantic)` unchanged.
 
-- `scripts/core/AssetLibrary.gd` — per-library path helper (keep single `ROOT`).
-- `scripts/core/LibraryStore.gd` — per-library save/load + `list_libraries`.
-- `scripts/core/VoxelWorkspace.gd` — library stack model + stack-aware resolvers.
-- `scripts/core/VoxelWorld.gd` — seed built-in `basic` library (simplified list); stack
-  signals (mirror `palette_stack_changed`); load imported libraries into the stack.
-- `scripts/core/BlockType.gd` — `order` field.
-- `scripts/mcimport/ImportService.gd` — target library + assign `order`.
-- `scripts/ui/HomeScreen.gd` / `BlockGrid.gd` — library management UI; grid sorts by
-  `order`; grid shows the active stack.
-- Templates/projects — reference libraries by name + order.
-- Tests: `SmokeTest`/`ShellTest` — library stack resolution, built-in undeletable,
-  import-into-named-library, ordering.
+**`scripts/core/VoxelWorkspace.gd`:** replace the three flat arrays with
+`@export var libraries: Array[BlockLibrary]` (the `palettes` and `projects` arrays stay).
+- Library catalog API: `get_or_add_library`, `get_library`, `remove_library` (no-op if `builtin`),
+  `list_libraries`.
+- `resolve_block_type(name, library_names) -> BlockType` — walk the named libraries first-hit, then
+  `basic` fallback. Plus `resolve_block_model` / `resolve_texture_asset` over the same scope.
+- `find_block_type(name)` — catalog-wide convenience (first hit across all libraries) for the few
+  context-free callers; prefer scoped resolution elsewhere.
+- `register_builtin_models()` seeds FULL/SLAB/STAIRS builtin models into the `basic` library.
 
-## Open questions / decisions
+## Phase 2 — VoxelWorld: built-ins + resolution
 
-1. Built-in library name + the exact simplified default block list.
-2. Does a template embed its library stack, or reference names that must resolve?
-3. Is `order` per-library or global? (per-library recommended)
-4. Cross-library name collisions in the grid: show only the winner, or show all with a
-   source badge?
-5. Persist the built-in library to disk (re-seeded) or keep it code-only?
+**`scripts/core/VoxelWorld.gd`:**
+- `_populate_defaults` seeds the built-in **`basic` library** (generic + naturals block types — decide
+  exact ~14-name list at impl: `base`, `accent`, `highlight`, `trim`, `stone`, `dirt`, `grass`, `sand`,
+  `wood`, `plank`, `glass`, `metal`, `leaves`, `water`, + one `slab` + one `stairs`; generic names, no
+  `minecraft:` ids), and the built-in **`"Default"` palette** mapping the existing semantic names onto
+  them and subscribing to `["basic"]`. Both flagged `builtin`.
+- Rewrite the per-semantic resolvers (`get_color/tint/shape/model/texture_for_semantic`,
+  `get_block_type_for_semantic`, `merged_semantic_names`) to walk `active_project.palette_names`
+  (last-wins, as today) → `palette.get_block_type_name(semantic)` →
+  `workspace.resolve_block_type(name, palette.library_names)`.
+- The palette-stack API + `palette_stack_changed` signal stay exactly as they are — no view/UI
+  subscriber changes.
+- `reset_for_tests()` rebuilds the built-in library + palette in memory (ignores disk), as today.
 
-## Migration
+## Phase 3 — Per-library persistence
 
-- Invalidate the existing flat `res://library` (user agreed). On first launch under the
-  new scheme: built-in `basic` library is seeded; the old flat library is either ignored
-  or one-shot migrated into a single `imported` library. User will **re-import** their MC
-  assets into named libraries — which also picks up the straight-stairs importer fix and
-  assigns `order`.
+**`scripts/core/AssetLibrary.gd`:** keep the single `ROOT`; add a library segment —
+`path_for(library_name, relative)` → `ROOT/<library>/<relative>`; pixels at `<library>/pixels/<ns>/`.
+Keep `load_image/load_texture(relative)` ROOT-relative; **store the library segment inside the saved
+`image_path`** (e.g. `vanilla-mc/pixels/minecraft/block/stone.png`) so `BlockTextureCache` and the
+loaders keep working unchanged.
 
-## Verification
+**`scripts/core/LibraryStore.gd`:** per-library `save_library(library)`, `load_library(name) -> BlockLibrary`,
+`list_libraries()` (root child folders). Persist palettes too (they now carry `library_names`).
+`VoxelWorld._ready`: seed built-ins, then load on-disk libraries into the catalog + load saved
+palettes. `basic` is **persisted but re-seeded** — any missing baseline block is restored on launch, so
+it can't be emptied/deleted while edits still stick.
 
-- Headless: workspace stack resolution (top wins), built-in can't be deleted, import
-  into a named library, ordering assigned and grid sort stable.
-- Visual (windowed bake-to-PNG harness — computer-use can't drive the Godot window):
-  Block Types grid shows libraries composed in stack order with correct ordering; the
-  simplified built-in set renders.
-- Run `tools/validate-scripts.sh` + `tests/run_tests.sh` (with `GODOT=/c/godot.exe`).
-  New `class_name` scripts need `/c/godot.exe --headless --import --path .` once first.
+## Phase 4 — Import targets a library
+
+**`scripts/mcimport/ImportService.gd`:** take a **target `BlockLibrary`** (existing or new). Import
+writes block types/models/textures into it, assigns `order` via `library.next_order()`, writes pixels
+under the library's path, and `save_library(target)` persists just it. The `minecraft == default ns`
+naming rule stays; collisions are now **within the target library**.
+
+## Phase 5 — UI
+
+- **Block Types tab (`scripts/ui/HomeScreen.gd`, `scripts/ui/BlockGrid.gd`) — library-scoped:** add a
+  left **library rail** (selectable list; create/delete, disabled for `basic`). Selecting a library is
+  the management context; the grid shows only that library's `sorted_block_types()`. New layout
+  `[library rail | detail | grid]`. "New block…" / "Add blocks…" act on the selected library;
+  detail-panel edits/deletes call `save_library(selected)`.
+- **Palettes tab (`HomeScreen`):** keep the semantic→block-type entry editor; add a **Libraries
+  subsection** to pick/order the palette's `library_names`. Entry block-type pickers list block types
+  from the palette's subscribed libraries (scoped), not a global flat array.
+- **Import (`scripts/ui/ImportPanel.gd`):** add a **target-library picker** (existing libraries +
+  "New library…"); pass the resolved `BlockLibrary` to `ImportService`. Default target = the Block
+  Types tab's selected library (never `basic`).
+- `PalettePanel` (per-project palette-stack editor) is unchanged.
+
+## Phase 6 — Migration, tests, verification
+
+- **Migration:** delete the existing `res://library` folder (user approved). `basic` seeds on first
+  launch; user re-imports MC assets into named libraries.
+- **Tests (`tests/SmokeTest.gd`, `tests/ShellTest.gd`):** update assertions touching
+  `workspace.block_types`/`block_models`/`texture_assets` to the new library APIs; add coverage for:
+  3-tier resolution (palette stack → palette's library stack, with `basic` fallback), built-in
+  library + palette undeletable + re-seeded, import into a named library, per-library `order` + stable
+  grid sort, a palette subscribing to multiple libraries with correct precedence.
+- **Validate + test:** `bash tools/validate-scripts.sh` and `GODOT=/c/godot.exe bash tests/run_tests.sh`.
+  The new `class_name BlockLibrary` script needs `/c/godot.exe --headless --import --path .` once first.
+- **Visual (windowed bake-to-PNG harness — computer-use can't drive the Godot window):** Block Types
+  tab shows one library at a time with correct `order`; the simplified `basic` set renders; a
+  re-imported MC library composes under a palette that subscribes to both it and `basic`.
+
+## Affected files (representative)
+
+- New: `scripts/core/BlockLibrary.gd`.
+- `scripts/core/BlockType.gd` (`order`), `scripts/core/Palette.gd` (`library_names` + `builtin`),
+  `scripts/core/VoxelWorkspace.gd` (libraries catalog + resolvers), `scripts/core/VoxelWorld.gd`
+  (built-in library + palette, resolution), `scripts/core/AssetLibrary.gd` + `LibraryStore.gd`
+  (per-library paths/save/load), `scripts/mcimport/ImportService.gd` (target library + order),
+  `scripts/ui/HomeScreen.gd` + `BlockGrid.gd` + `ImportPanel.gd` (library rail, scoped grid, palette
+  library-subscription, import target).
+- `tests/SmokeTest.gd`, `tests/ShellTest.gd`.
+- **Plan doc dropped at the repo root** (per request); `.plans/named-libraries.md` marked resolved.
+
+## Decisions locked
+
+1. **3-tier:** Project → stack of Palettes → each Palette subscribes to a stack of Libraries →
+   Libraries hold BlockTypes. Resolution: palette stack (last-wins) → palette's library stack
+   (first-hit) → `basic` library fallback.
+2. **No new concept, no rename.** `Palette` stays `Palette`; it just gains `library_names` (+ `builtin`).
+   `palette_names`, `PaletteEntry`, `PalettePanel`, `palette_stack_changed` all unchanged.
+3. Built-in **Library + Palette**, code-seeded, undeletable, behaving like normal instances. `basic`
+   library persisted-but-re-seeded.
+4. `order` is **per-library**; Block Types view shows **one library at a time**.
+5. Built-in set = small generic + naturals (Phase 2 list), no `minecraft:` ids.
