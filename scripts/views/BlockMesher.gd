@@ -19,15 +19,20 @@ const DIR_NORMALS := {
 # Color-path mesh: one BoxMesh per element, centered on the cell origin so an
 # Orientation basis rotates about the cell center and a uniform scale shrinks it.
 # BoxMesh carries clean normals/UVs/winding, so append_from gives well-lit geometry.
+# A per-element model rotation (MC `rotation`: tilted planes like coral fans, crossed
+# plants) is applied about its origin before centering, so a tilted element reads as
+# tilted instead of lying flat.
 static func color_mesh(model: BlockModel) -> Mesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var center := Transform3D(Basis(), -Vector3(0.5, 0.5, 0.5))
 	for element in model.elements:
 		var from: Vector3 = element["from"]
 		var to: Vector3 = element["to"]
 		var box := BoxMesh.new()
 		box.size = to - from
-		st.append_from(box, 0, Transform3D(Basis(), (from + to) * 0.5 - Vector3(0.5, 0.5, 0.5)))
+		var place := Transform3D(Basis(), (from + to) * 0.5)
+		st.append_from(box, 0, center * element_xform(element) * place)
 	return st.commit()
 
 # Per-face geometry for a textured model: one surface per distinct texture_key, with
@@ -47,6 +52,11 @@ static func textured_mesh(model: BlockModel) -> Dictionary:
 		var from: Vector3 = element["from"]
 		var to: Vector3 = element["to"]
 		var faces: Dictionary = element["faces"]
+		# A per-element rotation (tilted coral fans, crossed plants) applied about its
+		# origin; its normal basis (inverse-transpose, so a rescale doesn't skew normals)
+		# re-aims face shading. Identity when the element carries no rotation.
+		var xform := element_xform(element)
+		var nbasis := xform.basis.inverse().transposed()
 		for dir in faces:
 			var face: Dictionary = faces[dir]
 			var key := str(face.get("texture_key", "all"))
@@ -58,7 +68,7 @@ static func textured_mesh(model: BlockModel) -> Dictionary:
 				key_tinted[key] = false
 			if int(face.get("tint_index", -1)) >= 0:
 				key_tinted[key] = true
-			add_face(tools[key], int(dir), from, to, face.get("uv", Rect2(0, 0, 1, 1)))
+			add_face(tools[key], int(dir), from, to, face.get("uv", Rect2(0, 0, 1, 1)), xform, nbasis)
 	var mesh := ArrayMesh.new()
 	var keys: Array[String] = []
 	var tinted: Array[bool] = []
@@ -70,10 +80,14 @@ static func textured_mesh(model: BlockModel) -> Dictionary:
 	return {"mesh": mesh, "keys": keys, "tinted": tinted}
 
 # Append one textured quad (two triangles) for a box face. Vertices are centered
-# (corner - 0.5) to match the color mesh. Winding is self-correcting: Godot's front
-# faces wind so the geometric cross product points *opposite* the surface normal, so
-# flip the perimeter when our chosen order came out the other way.
-static func add_face(st: SurfaceTool, dir: int, from: Vector3, to: Vector3, uv: Rect2) -> void:
+# (corner - 0.5) to match the color mesh. `xform` is the element's 0–1-space rotation
+# (identity for an axis-aligned element) applied before centering; `nbasis` re-aims the
+# shading normal to match. Winding is self-correcting: Godot's front faces wind so the
+# geometric cross product points *opposite* the surface normal, so flip the perimeter
+# when our chosen order came out the other way. The winding check uses the un-rotated
+# corners + normal — a rotation preserves orientation, so the same flip applies.
+static func add_face(st: SurfaceTool, dir: int, from: Vector3, to: Vector3, uv: Rect2,
+		xform := Transform3D(), nbasis := Basis()) -> void:
 	var n: Vector3 = DIR_NORMALS[dir]
 	var corners := face_corners(dir, from, to)
 	# UVs parallel to the perimeter corners (top-left, bottom-left, bottom-right, top-right).
@@ -86,11 +100,12 @@ static func add_face(st: SurfaceTool, dir: int, from: Vector3, to: Vector3, uv: 
 	if (corners[1] - corners[0]).cross(corners[2] - corners[0]).dot(n) > 0.0:
 		corners = [corners[0], corners[3], corners[2], corners[1]]
 		uvs = [uvs[0], uvs[3], uvs[2], uvs[1]]
+	var tn := (nbasis * n).normalized()
 	for tri in [[0, 1, 2], [0, 2, 3]]:
 		for i in tri:
-			st.set_normal(n)
+			st.set_normal(tn)
 			st.set_uv(uvs[i])
-			st.add_vertex(corners[i] - Vector3(0.5, 0.5, 0.5))
+			st.add_vertex(xform * corners[i] - Vector3(0.5, 0.5, 0.5))
 
 # Four perimeter corners of a box face in [0,1] box space (centering happens in
 # add_face). Order is consistent per face; add_face fixes winding for Godot.
@@ -108,3 +123,24 @@ static func face_corners(dir: int, a: Vector3, b: Vector3) -> Array:
 			return [Vector3(a.x, b.y, a.z), Vector3(a.x, b.y, b.z), Vector3(b.x, b.y, b.z), Vector3(b.x, b.y, a.z)]
 		_:  # DOWN (-Y)
 			return [Vector3(a.x, a.y, b.z), Vector3(a.x, a.y, a.z), Vector3(b.x, a.y, a.z), Vector3(b.x, a.y, b.z)]
+
+# The element's rotation as a 0–1-space affine transform about its origin, or identity
+# when it has none. An element's optional `rotation` is the neutral form of MC's tilted
+# elements (coral fans' lifted planes, the crossed planes of plants):
+#   { origin: Vector3 (0–1), axis: Vector3 (unit), angle: float (radians), rescale: bool }
+# `rescale` stretches the two axes perpendicular to `axis` by 1/cos(angle) so the tilted
+# element still spans the cell — MC's "rescale" flag, applied before the rotation.
+static func element_xform(element: Dictionary) -> Transform3D:
+	var rot = element.get("rotation", null)
+	if rot == null:
+		return Transform3D()
+	var axis: Vector3 = (rot["axis"] as Vector3).normalized()
+	var angle: float = rot["angle"]
+	var basis := Basis(axis, angle)
+	if bool(rot.get("rescale", false)) and not is_zero_approx(angle) and not is_zero_approx(cos(angle)):
+		var s := 1.0 / absf(cos(angle))
+		var ax := axis.abs()
+		# 1.0 along the rotation axis, s on the two perpendicular axes (scale-before-rotate).
+		basis = basis.scaled(Vector3(lerpf(s, 1.0, ax.x), lerpf(s, 1.0, ax.y), lerpf(s, 1.0, ax.z)))
+	var origin: Vector3 = rot["origin"]
+	return Transform3D(basis, origin - basis * origin)

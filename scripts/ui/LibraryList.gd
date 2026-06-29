@@ -4,8 +4,11 @@ extends VBoxContainer
 signal item_selected(item_name: String)
 signal add_requested(item_name: String)
 signal delete_requested(item_name: String)
+signal rename_requested(item_name: String)
 
 @export var list_title: String = "Items"
+# When true each row gets a rename (✎) affordance; the owner handles the prompt.
+@export var allow_rename: bool = false
 
 var selected: String = ""
 
@@ -65,6 +68,14 @@ func _add_row(item_name: String) -> void:
 		item_selected.emit(captured)
 	)
 	row.add_child(btn)
+
+	if allow_rename:
+		var ren := Button.new()
+		ren.text = "✎"
+		ren.flat = true
+		ren.tooltip_text = "Rename"
+		ren.pressed.connect(func(): rename_requested.emit(captured))
+		row.add_child(ren)
 
 	var del := Button.new()
 	del.text = "✕"

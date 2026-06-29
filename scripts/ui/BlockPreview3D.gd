@@ -9,8 +9,11 @@ extends Control
 # It resolves model + textures straight from the BlockType (library blocks aren't in
 # any project/palette), staying a lens on the material layer — no voxel data involved.
 
-# Look direction the camera sits along (normalized); zoom scales the distance.
-const _CAM_DIR := Vector3(0.9, 0.7, 1.2)
+# Look direction the camera sits along (normalized); zoom scales the distance. Kept in
+# sync with BlockIconBaker so the live preview and the baked grid icon read the same: a
+# raised 3/4 view from the -X/-Z side, so MC stairs (default model opens toward -X) show
+# their stepped face toward the camera, not their solid back.
+const _CAM_DIR := Vector3(-0.9, 1.0, -1.2)
 const _AUTO_SPIN := 0.6   # radians/sec idle rotation
 
 # Selectable layouts, shown so a block can be judged in context (a lone block, a 1×3
@@ -52,7 +55,8 @@ func _ready() -> void:
 	# Shared lighting rig (kept identical to the baked grid icons via BlockLightRig) so
 	# the rotatable preview and the grid swatch read the same. Lower ambient + a stronger
 	# key give shaded, saturated faces instead of the flat, washed-out look of heavy fill.
-	BlockLightRig.apply(_viewport)
+	# The key light follows the camera direction so the faces in view stay lit.
+	BlockLightRig.apply(_viewport, _CAM_DIR)
 
 	_camera = Camera3D.new()
 	_viewport.add_child(_camera)

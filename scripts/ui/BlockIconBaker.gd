@@ -20,7 +20,11 @@ signal icon_ready(block_name: String)
 
 const RES := 128                          # bake resolution (square); drawn down into the cell
 const BATCH := 50                         # blocks baked per frame (one viewport each)
-const _CAM_DIR := Vector3(0.9, 0.7, 1.2)  # 3/4 angle: shows top + two sides
+# 3/4 angle from the -X/-Z (WEST+NORTH) side, raised: shows top + two sides, and shows
+# the STEPPED face of MC stairs (whose default model opens toward -X/WEST) facing the
+# camera instead of its solid back. The higher vantage drops the near top corner toward
+# the icon's center. Kept in sync with BlockPreview3D so live preview and icon match.
+const _CAM_DIR := Vector3(-0.9, 1.0, -1.2)
 # A narrow FOV pulled back reads almost isometric — the block fills the icon with
 # minimal perspective distortion, rather than a small head-on cube.
 const _CAM_FOV := 30.0
@@ -28,7 +32,7 @@ const _CAM_DIST := 3.2
 const _CACHE_DIR := "user://icon_cache/"
 # Bump when the render setup (camera/lights/RES) changes, to invalidate every disk
 # icon — a block's signature embeds this, so stale-look icons can't survive an upgrade.
-const _BAKE_VERSION := 3
+const _BAKE_VERSION := 5
 
 var _cache := {}        # block_name -> ImageTexture (in-memory)
 var _queue: Array = []  # BlockType, FIFO of pending bakes
@@ -61,8 +65,9 @@ func _make_viewport() -> SubViewport:
 	vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	add_child(vp)
 
-	# Shared lighting rig (see BlockLightRig) so a baked icon matches the live preview.
-	BlockLightRig.apply(vp)
+	# Shared lighting rig (see BlockLightRig) so a baked icon matches the live preview;
+	# its key light is aimed from the camera direction so visible faces stay lit.
+	BlockLightRig.apply(vp, _CAM_DIR)
 
 	# Add to the tree BEFORE aiming it: look_at() no-ops on a node that isn't inside
 	# the tree, which would leave the camera pointing straight down -Z (block off to

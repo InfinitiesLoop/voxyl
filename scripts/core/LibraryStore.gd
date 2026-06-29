@@ -60,6 +60,80 @@ static func save_all(workspace: VoxelWorkspace) -> Error:
 			return err
 	return save_palettes(workspace)
 
+# --- Rename -----------------------------------------------------------------
+
+# Rename a library across both memory and disk: move its ROOT/<old> folder to
+# ROOT/<new>, repoint every texture's image_path (which embeds the library segment),
+# update any palette subscriptions naming it, then re-persist. No-op (returns false)
+# for an empty/duplicate/basic name or a missing/builtin library. The library's block
+# types/models/textures keep their ids, so palette entries and model refs stay intact;
+# only the on-disk pixel paths and folder change.
+static func rename_library(workspace: VoxelWorkspace, old_name: String, new_name: String) -> bool:
+	new_name = new_name.strip_edges()
+	if new_name.is_empty() or new_name == old_name or new_name == VoxelWorkspace.BASIC_LIBRARY:
+		return false
+	if workspace.get_library(new_name) != null:
+		return false
+	var lib := workspace.get_library(old_name)
+	if lib == null or lib.builtin:
+		return false
+
+	var from_dir := AssetLibrary.path_for(old_name)
+	var to_dir := AssetLibrary.path_for(new_name)
+	if DirAccess.dir_exists_absolute(from_dir):
+		var err := DirAccess.rename_absolute(from_dir, to_dir)
+		if err != OK:
+			return false
+
+	# Repoint pixel paths: "<old>/pixels/..." → "<new>/pixels/...".
+	var old_prefix := old_name + "/"
+	for texture in lib.texture_assets:
+		if texture.image_path.begins_with(old_prefix):
+			texture.image_path = new_name + "/" + texture.image_path.substr(old_prefix.length())
+
+	lib.name = new_name
+	# Re-point any palette that subscribed to the old name.
+	for palette in workspace.palettes:
+		for i in palette.library_names.size():
+			if palette.library_names[i] == old_name:
+				palette.library_names[i] = new_name
+
+	save_library(lib)
+	save_palettes(workspace)
+	return true
+
+# --- Delete -----------------------------------------------------------------
+
+# Remove a library's on-disk folder (ROOT/<name>) entirely, so it doesn't resurrect on
+# the next launch (load_persisted scans ROOT for folders and reloads whatever it finds —
+# a memory-only remove_library left the folder behind, and an empty/partial folder, such
+# as a stray import target, reappeared as a ghost library). The built-in `basic` floor is
+# never deleted (it re-seeds anyway). Pairs with VoxelWorkspace.remove_library. Missing
+# folder → OK (already gone).
+static func delete_library(library_name: String) -> Error:
+	if library_name == VoxelWorkspace.BASIC_LIBRARY:
+		return ERR_UNAUTHORIZED
+	var dir := AssetLibrary.path_for(library_name)
+	if not DirAccess.dir_exists_absolute(dir):
+		return OK
+	return _rm_rf(dir)
+
+# Recursively delete an absolute directory and everything under it.
+static func _rm_rf(abs_path: String) -> Error:
+	var d := DirAccess.open(abs_path)
+	if d == null:
+		return ERR_CANT_OPEN
+	d.include_hidden = true
+	for sub in d.get_directories():
+		var err := _rm_rf(abs_path.path_join(sub))
+		if err != OK:
+			return err
+	for f in d.get_files():
+		var err := d.remove(f)
+		if err != OK:
+			return err
+	return DirAccess.remove_absolute(abs_path)
+
 # --- Load -------------------------------------------------------------------
 
 # The library folder names present under ROOT (every child dir except the reserved
@@ -118,6 +192,9 @@ static func _merge_library(target: BlockLibrary, loaded: BlockLibrary) -> void:
 	for block_type in loaded.block_types:
 		target.remove_block_type(block_type.name)
 		target.block_types.append(block_type)
+	# The loops above append straight to the arrays, bypassing the add helpers, so the
+	# library's name/id indexes are now stale — rebuild on next access.
+	target.invalidate_index()
 
 # Replace a palette by name (or append). Bypasses remove_palette's builtin guard so a
 # saved Default (carrying the user's edited library subscriptions) overrides the seeded one.

@@ -188,7 +188,9 @@ func _make_dialog(dialog_mode: FileDialog.FileMode) -> FileDialog:
 # stay listed (disabled, "(not found)") so the user still sees where to look.
 func _build_locations_menu() -> void:
 	_locations = MenuButton.new()
-	_locations.text = "Common locations"
+	_locations.text = "Common locations  ▾"
+	# Non-flat + a drop-arrow so it reads as a real selector, not a bare label.
+	_locations.flat = false
 	_locations.tooltip_text = "Jump to where Minecraft installs usually live"
 	_loc_entries = MCInstallLocations.candidates()
 	var pm := _locations.get_popup()

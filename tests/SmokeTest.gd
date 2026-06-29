@@ -16,6 +16,7 @@ func _ready() -> void:
 	_test_hotbar()
 	_test_shapes()
 	_test_models()
+	_test_element_rotation()
 	_test_reorient()
 	_test_asset_library()
 	_test_library_serialization()
@@ -251,6 +252,34 @@ func _test_models() -> void:
 	bt.model_id = ""
 	ws.basic_library().remove_block_model("__test_pillar__")
 
+func _test_element_rotation() -> void:
+	print("-- element rotation (coral fans / crossed plants stand up, not flat)")
+	# A horizontal plane at y=0 with a 45° rotation about Z must tilt up off the y=0
+	# plane (the coral-fan bug: dropped rotation left fans lying flat).
+	var flat := {
+		"from": Vector3(0, 0, 0), "to": Vector3(1, 0, 1),
+		"faces": {4: BlockModel.make_face("all"), 5: BlockModel.make_face("all")},
+	}
+	_check("axis-aligned element → identity transform",
+		BlockMesher.element_xform(flat).is_equal_approx(Transform3D()))
+	var rotated := flat.duplicate()
+	rotated["rotation"] = {
+		"origin": Vector3(0.5, 0.5, 0.5), "axis": Vector3(0, 0, 1),
+		"angle": deg_to_rad(45.0), "rescale": false,
+	}
+	var xform := BlockMesher.element_xform(rotated)
+	_check("rotated element transform is non-identity",
+		not xform.is_equal_approx(Transform3D()))
+	# A corner that sits at y=0 (below the block center) lifts above y=0 once tilted.
+	var lifted: Vector3 = xform * Vector3(1, 0, 0.5)
+	_check("a y=0 corner lifts off the floor when the element is tilted", lifted.y > 0.01)
+	# The mesh actually built from the rotated model spans a real vertical extent.
+	var model := BlockModel.new()
+	model.id = "__rot_fan__"
+	model.elements = [rotated]
+	var aabb := BlockMesher.color_mesh(model).get_aabb()
+	_check("tilted element has vertical thickness in the built mesh", aabb.size.y > 0.1)
+
 func _test_reorient() -> void:
 	print("-- reorient existing cells (R / Shift+R)")
 	var project := VoxelWorld.workspace.get_project("My First Build")
@@ -336,6 +365,21 @@ func _test_library_serialization() -> void:
 	var bt2 := ws2.get_block_type("Test Block")
 	_check("block type round-trips with its model_id", bt2 != null and bt2.model_id == "test_pillar")
 
+	# delete_library removes the on-disk folder so a deleted library stays gone across a
+	# reload (the "ghost library that won't delete" bug: a memory-only remove left the
+	# folder, and load_persisted re-found it on the next launch).
+	_check("authored folder exists before delete",
+		DirAccess.dir_exists_absolute(AssetLibrary.path_for("authored")))
+	_check("delete_library succeeds", LibraryStore.delete_library("authored") == OK)
+	_check("authored folder is gone after delete",
+		not DirAccess.dir_exists_absolute(AssetLibrary.path_for("authored")))
+	var ws3 := VoxelWorkspace.new()
+	LibraryStore.load_persisted(ws3)
+	_check("deleted library does not resurrect on reload", ws3.get_library("authored") == null)
+	_check("delete_library refuses to remove the basic floor",
+		LibraryStore.delete_library(VoxelWorkspace.BASIC_LIBRARY) != OK)
+	_check("delete_library on a missing folder is OK", LibraryStore.delete_library("never_existed") == OK)
+
 	_rm_rf(AssetLibrary.ROOT)
 	AssetLibrary.ROOT = saved_root
 
@@ -380,6 +424,16 @@ func _test_mc_import() -> void:
 	"north": {"texture":"#all"}, "south": {"texture":"#all"},
 	"west": {"texture":"#all"}, "east": {"texture":"#all"} } } ] }
 """)
+	# A flat plane (faces up/down at y=0) carrying an MC element `rotation` — the coral-fan
+	# shape: dropping the rotation left it lying flat instead of standing up.
+	_write_file(assets + "/testmod/models/block/test_fan.json", """
+{ "parent": "minecraft:block/cube_all", "textures": {"all":"testmod:block/test_tex"},
+  "elements": [ { "from": [0,0,0], "to": [16,0,16],
+	"rotation": {"origin":[8,8,8],"axis":"z","angle":45,"rescale":true},
+	"faces": { "up": {"texture":"#all"}, "down": {"texture":"#all"} } } ] }
+""")
+	_write_file(assets + "/testmod/blockstates/test_fan.json",
+		"""{ "variants": { "": { "model": "testmod:block/test_fan" } } }""")
 	_write_file(assets + "/testmod/blockstates/test_block.json",
 		"""{ "variants": { "": { "model": "testmod:block/test_block" } } }""")
 	_write_file(assets + "/testmod/blockstates/test_anim.json",
@@ -410,9 +464,9 @@ func _test_mc_import() -> void:
 	var imp := MCImporter.new(assets, lib)
 	imp.import_namespace("testmod")
 
-	_check("all four blocks imported",
-		imp.imported_blocks.size() == 4 and imp.imported_blocks.has("test_block")
-		and imp.imported_blocks.has("test_stairs"))
+	_check("all five blocks imported",
+		imp.imported_blocks.size() == 5 and imp.imported_blocks.has("test_block")
+		and imp.imported_blocks.has("test_stairs") and imp.imported_blocks.has("test_fan"))
 
 	# Block type + primary model.
 	var bt := ws.get_block_type("test_block")
@@ -450,6 +504,17 @@ func _test_mc_import() -> void:
 	var slab := ws.get_block_model("testmod:block/test_slab")
 	_check("partial element converts 16→1 units",
 		slab != null and slab.elements[0]["to"] == Vector3(1.0, 0.5, 1.0))
+
+	# Element rotation: converted to BlockMesher's neutral form (origin 0–1, unit axis,
+	# radians) and actually tilts the flat fan plane off the floor.
+	var fan := ws.get_block_model("testmod:block/test_fan")
+	var fan_rot = fan.elements[0].get("rotation", null) if fan != null else null
+	_check("element rotation preserved on import",
+		fan_rot != null and (fan_rot["origin"] as Vector3).is_equal_approx(Vector3(0.5, 0.5, 0.5))
+		and (fan_rot["axis"] as Vector3).is_equal_approx(Vector3(0, 0, 1))
+		and is_equal_approx(fan_rot["angle"], deg_to_rad(45.0)) and fan_rot["rescale"])
+	_check("imported fan stands up (mesh has vertical extent)",
+		fan != null and BlockMesher.color_mesh(fan).get_aabb().size.y > 0.1)
 
 	# Animation: .mcmeta frames + ticks→seconds.
 	var at := ws.get_texture_asset("testmod:block/test_anim")

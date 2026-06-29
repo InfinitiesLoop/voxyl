@@ -50,6 +50,7 @@ func _run() -> void:
 	_check_tinted_render(v3d)
 	_check_flat_render(v3d)
 	await _check_import_progress()
+	_check_library_rename()
 
 	var tb := (_panes(shell)[0] as ViewPane).get_tab_bar()
 	_check("tab bar enables cross-pane drag",
@@ -465,6 +466,54 @@ func _check_import_progress() -> void:
 	svc.close()
 	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(src)
+	AssetLibrary.ROOT = saved_root
+
+# Renaming a library moves its folder on disk, repoints its textures' embedded library
+# segment, and updates any palette that subscribed to it — while keeping the basic floor
+# and builtin guards intact.
+func _check_library_rename() -> void:
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_shelltest_renlib__"
+	_rm_rf(AssetLibrary.ROOT)
+
+	var ws := VoxelWorld.workspace
+	var lib := ws.get_or_add_library("ren_old")
+	var bt := lib.add_block_type("ren_block")
+	var tex := TextureAsset.new()
+	tex.id = "ren:tex"
+	tex.image_path = AssetLibrary.in_library("ren_old", "pixels/ren/tex.png")
+	lib.add_texture_asset(tex)
+	var img := Image.create_empty(16, 16, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0.3, 0.4, 0.5))
+	DirAccess.make_dir_recursive_absolute(AssetLibrary.path_for(tex.image_path).get_base_dir())
+	img.save_png(AssetLibrary.path_for(tex.image_path))
+
+	var pal := ws.add_palette("ren_pal")
+	pal.library_names = ["ren_old"]
+	LibraryStore.save_library(lib)
+	LibraryStore.save_palettes(ws)
+
+	var ok := LibraryStore.rename_library(ws, "ren_old", "ren_new")
+	_check("rename_library reports success", ok)
+	_check("renamed library replaces the old name in the catalog",
+		ws.get_library("ren_old") == null and ws.get_library("ren_new") != null)
+	_check("renamed library keeps its block types", bt.name == "ren_block"
+		and ws.get_library("ren_new").get_block_type("ren_block") != null)
+	_check("texture image_path is repointed to the new library segment",
+		tex.image_path.begins_with("ren_new/"))
+	_check("the new library folder exists on disk, the old one is gone",
+		DirAccess.dir_exists_absolute(AssetLibrary.path_for("ren_new"))
+		and not DirAccess.dir_exists_absolute(AssetLibrary.path_for("ren_old")))
+	_check("subscribing palette is repointed to the new name",
+		pal.library_names == ["ren_new"])
+	_check("rename to the basic floor name is refused",
+		not LibraryStore.rename_library(ws, "ren_new", VoxelWorkspace.BASIC_LIBRARY))
+	_check("the builtin basic library can't be renamed",
+		not LibraryStore.rename_library(ws, VoxelWorkspace.BASIC_LIBRARY, "whatever"))
+
+	ws.remove_palette("ren_pal")
+	ws.remove_library("ren_new")
+	_rm_rf(AssetLibrary.ROOT)
 	AssetLibrary.ROOT = saved_root
 
 func _color_near(a: Color, b: Color, tol: float) -> bool:

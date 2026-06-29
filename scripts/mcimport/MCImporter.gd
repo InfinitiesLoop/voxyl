@@ -388,11 +388,36 @@ func _convert_elements(mc_elements, textures_map: Dictionary) -> Dictionary:
 				"tint_index": int(mface.get("tintindex", -1)),
 			}
 		if not faces.is_empty():
-			out_elements.append({"from": from, "to": to, "faces": faces})
+			var el := {"from": from, "to": to, "faces": faces}
+			var rotation := _convert_rotation(me.get("rotation", null))
+			if not rotation.is_empty():
+				el["rotation"] = rotation
+			out_elements.append(el)
 	var textures := {}
 	for tid in used:
 		textures[tid] = tid
 	return {"elements": out_elements, "textures": textures}
+
+# Convert an MC element `rotation` ({ origin:[0–16]×3, axis:"x"|"y"|"z", angle:deg,
+# rescale:bool }) into BlockMesher's neutral form (origin in 0–1, axis as a unit vector,
+# angle in radians). MC only ever rotates about one cardinal axis at ±22.5/±45°. Returns
+# {} when the element has no usable rotation, so axis-aligned elements stay plain.
+func _convert_rotation(rot) -> Dictionary:
+	if not (rot is Dictionary) or not rot.has("axis"):
+		return {}
+	var axis: Vector3
+	match str(rot["axis"]):
+		"x": axis = Vector3(1, 0, 0)
+		"y": axis = Vector3(0, 1, 0)
+		"z": axis = Vector3(0, 0, 1)
+		_: return {}
+	var o = rot.get("origin", [8, 8, 8])
+	return {
+		"origin": Vector3(o[0], o[1], o[2]) / 16.0,
+		"axis": axis,
+		"angle": deg_to_rad(float(rot.get("angle", 0))),
+		"rescale": bool(rot.get("rescale", false)),
+	}
 
 # Follow a face's "#var" through the textures map to a concrete texture ref. A value
 # that doesn't start with "#" is already a ref (possibly bare, qualified later).

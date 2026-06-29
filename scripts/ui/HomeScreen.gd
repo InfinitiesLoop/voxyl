@@ -15,6 +15,11 @@ var _selected_block_type: String = ""
 var _editing_palette: Palette
 var _entry_list: VBoxContainer
 
+# Shared column widths for the palette entry editor, so the header row and every entry/
+# add row line up (the two leading columns expand equally; these two are fixed).
+const _PAL_PREVIEW_W := 56
+const _PAL_ACTION_W := 28
+
 func _ready() -> void:
 	var tabs := TabContainer.new()
 	tabs.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -231,14 +236,27 @@ func _on_palette_selected(palette_name: String) -> void:
 
 	vbox.add_child(HSeparator.new())
 
-	# Column headers
+	# Column headers — aligned with the entry rows below: two expanding label columns,
+	# then the fixed-width preview + action columns.
 	var headers := HBoxContainer.new()
+	headers.add_theme_constant_override("separation", 6)
 	vbox.add_child(headers)
-	for h in ["Semantic Name", "Block Type", "Preview", ""]:
-		var lbl := Label.new()
-		lbl.text = h
-		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL if h != "" else 0
-		headers.add_child(lbl)
+	var sem_h := Label.new()
+	sem_h.text = "Semantic Name"
+	sem_h.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	headers.add_child(sem_h)
+	var bt_h := Label.new()
+	bt_h.text = "Block Type"
+	bt_h.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	headers.add_child(bt_h)
+	var prev_h := Label.new()
+	prev_h.text = "Preview"
+	prev_h.clip_text = true
+	prev_h.custom_minimum_size = Vector2(_PAL_PREVIEW_W, 0)
+	headers.add_child(prev_h)
+	var act_h := Control.new()
+	act_h.custom_minimum_size = Vector2(_PAL_ACTION_W, 0)
+	headers.add_child(act_h)
 
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -275,7 +293,7 @@ func _make_entry_row(entry: PaletteEntry) -> HBoxContainer:
 	row.add_child(name_edit)
 
 	var swatch := ColorRect.new()
-	swatch.custom_minimum_size = Vector2(20, 0)
+	swatch.custom_minimum_size = Vector2(_PAL_PREVIEW_W, 0)
 	swatch.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
@@ -307,6 +325,7 @@ func _make_entry_row(entry: PaletteEntry) -> HBoxContainer:
 	var del_btn := Button.new()
 	del_btn.text = "✕"
 	del_btn.flat = true
+	del_btn.custom_minimum_size = Vector2(_PAL_ACTION_W, 0)
 	del_btn.pressed.connect(func():
 		_editing_palette.entries.erase(entry)
 		_save_palettes()
@@ -332,14 +351,15 @@ func _make_add_entry_row() -> HBoxContainer:
 		block_picker.add_item(n)
 	row.add_child(block_picker)
 
-	# Spacer to align with the swatch column in entry rows
+	# Spacer to align with the preview column in entry rows
 	var gap := Control.new()
-	gap.custom_minimum_size = Vector2(20, 0)
+	gap.custom_minimum_size = Vector2(_PAL_PREVIEW_W, 0)
 	gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(gap)
 
 	var add_btn := Button.new()
 	add_btn.text = "+"
+	add_btn.custom_minimum_size = Vector2(_PAL_ACTION_W, 0)
 	add_btn.pressed.connect(func():
 		var n := name_input.text.strip_edges()
 		if n.is_empty() or not _editing_palette:
@@ -458,23 +478,25 @@ func _on_delete_palette(palette_name: String) -> void:
 
 func _build_block_types_tab() -> Control:
 	var root := Control.new()
-	root.name = "Block Types"
+	root.name = "Libraries"
 
-	# Library-scoped layout: [library rail | detail | grid]. Selecting a library in the
+	# Library-scoped layout: [library rail | grid | detail]. Selecting a library in the
 	# rail is the management context — the grid + actions all act on that one library.
 	var split := HSplitContainer.new()
 	split.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.add_child(split)
 
-	# Far left: the library rail (create/delete; delete disabled for the basic floor).
+	# Far left: the library rail (create/rename/delete; rename+delete no-op for basic).
 	var rail_box := _margin(12)
 	rail_box.custom_minimum_size.x = 180
 	split.add_child(rail_box)
 	_library_rail = LibraryList.new()
 	_library_rail.list_title = "Libraries"
+	_library_rail.allow_rename = true
 	_library_rail.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_library_rail.add_requested.connect(_on_add_library)
 	_library_rail.delete_requested.connect(_on_delete_library)
+	_library_rail.rename_requested.connect(_on_rename_library)
 	_library_rail.item_selected.connect(_on_library_selected)
 	rail_box.add_child(_library_rail)
 	split.split_offset = 180
@@ -483,13 +505,7 @@ func _build_block_types_tab() -> Control:
 	inner.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	split.add_child(inner)
 
-	# Middle: detail / edit panel for the selected block (3D preview + fields).
-	_bt_detail = _build_bt_detail()
-	inner.add_child(_bt_detail)
-	# Explicit initial divider position so it doesn't drift as blocks are selected.
-	inner.split_offset = 340
-
-	# Right (main): action header + the JEI-style icon grid.
+	# Middle (main): action header + the JEI-style icon grid.
 	var right := _margin(12)
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	inner.add_child(right)
@@ -507,20 +523,34 @@ func _build_block_types_tab() -> Control:
 	new_btn.pressed.connect(_on_new_block)
 	header.add_child(new_btn)
 
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	header.add_child(spacer)
-
 	# Import blocks from the user's own MC assets — they land in this same grid.
 	var import_btn := Button.new()
 	import_btn.text = "Add blocks…"
 	import_btn.pressed.connect(_on_import_blocks)
 	header.add_child(import_btn)
 
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(spacer)
+
+	# Jump to the selected library's folder on disk.
+	var folder_btn := Button.new()
+	folder_btn.text = "Open folder"
+	folder_btn.tooltip_text = "Reveal this library's folder in your file browser"
+	folder_btn.pressed.connect(_on_open_library_folder)
+	header.add_child(folder_btn)
+
 	_block_grid = BlockGrid.new()
 	_block_grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_block_grid.block_selected.connect(_on_block_type_selected)
 	rvbox.add_child(_block_grid)
+
+	# Right: detail / edit panel for the selected block (3D preview + fields). Pinned to
+	# a fixed width on the right so the divider doesn't drift as blocks are selected; the
+	# resized hook keeps it there as the window (or the rail divider) resizes.
+	_bt_detail = _build_bt_detail()
+	inner.add_child(_bt_detail)
+	inner.resized.connect(func(): inner.split_offset = maxi(0, int(inner.size.x) - 352))
 
 	return root
 
@@ -542,6 +572,9 @@ func _on_delete_library(library_name: String) -> void:
 	if lib == null or lib.builtin:
 		return   # the basic floor is undeletable
 	VoxelWorld.workspace.remove_library(library_name)
+	# Also remove the on-disk folder, or load_persisted re-finds it on the next launch and
+	# the library comes back (the "ghost library that won't delete" bug).
+	LibraryStore.delete_library(library_name)
 	if _selected_library == lib:
 		_selected_library = null
 	VoxelWorld.workspace_changed.emit()
@@ -552,6 +585,39 @@ func _on_library_selected(library_name: String) -> void:
 	if _block_grid:
 		_block_grid.populate(_selected_library.sorted_block_types() if _selected_library else [])
 	_refresh_bt_detail()
+
+# Rename a library: prompt for a new name, then move it on disk + repoint palettes via
+# LibraryStore. The basic floor is undeletable/unrenamable, so its ✎ no-ops.
+func _on_rename_library(library_name: String) -> void:
+	var lib := VoxelWorld.workspace.get_library(library_name)
+	if lib == null or lib.builtin:
+		return
+	var dialog := AcceptDialog.new()
+	dialog.title = "Rename Library"
+	var input := LineEdit.new()
+	input.text = library_name
+	input.placeholder_text = "Library name…"
+	input.custom_minimum_size = Vector2(260, 0)
+	dialog.add_child(input)
+	dialog.confirmed.connect(func():
+		if LibraryStore.rename_library(VoxelWorld.workspace, library_name, input.text):
+			if _selected_library == lib:
+				_selected_library = lib   # same instance, new name
+			VoxelWorld.workspace_changed.emit()
+		dialog.queue_free())
+	dialog.canceled.connect(func(): dialog.queue_free())
+	get_tree().root.add_child(dialog)
+	dialog.popup_centered()
+	input.grab_focus()
+	input.select_all()
+
+# Reveal the selected library's folder in the OS file browser. Persist first so the
+# folder exists even for a library that's only been created in memory.
+func _on_open_library_folder() -> void:
+	if _selected_library == null:
+		return
+	LibraryStore.save_library(_selected_library)
+	OS.shell_open(ProjectSettings.globalize_path(AssetLibrary.path_for(_selected_library.name)))
 
 # Pick a sensible selected library after a refresh: keep the current one if it still
 # exists, else fall back to the first library (basic on a fresh install).
