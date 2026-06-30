@@ -191,7 +191,7 @@ func _test_hotbar() -> void:
 	print("-- hotbar")
 	var project := VoxelWorld.workspace.get_project("My First Build")
 	VoxelWorld.open(project)
-	_check("hotbar has 9 slots", VoxelWorld.hotbar.size() == VoxelWorld.HOTBAR_SIZE)
+	_check("hotbar has 12 slots", VoxelWorld.hotbar.size() == VoxelWorld.HOTBAR_SIZE)
 	_check("hotbar seeded from palette", not VoxelWorld.hotbar[0].is_empty())
 	VoxelWorld.set_hotbar_slot(2, "Trim")
 	VoxelWorld.select_slot(2)

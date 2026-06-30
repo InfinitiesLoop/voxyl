@@ -41,6 +41,12 @@ var _fly_mode := false
 # otherwise all react to the same keys/mouse.)
 var _active := true
 
+# Set true while a modal overlay (the inventory screen) is up: input is ignored
+# and any captured cursor is released, but the prior fly state is remembered so
+# editing resumes exactly where it left off when the overlay closes.
+var _suspended := false
+var _fly_before_suspend := false
+
 # Drag-to-look state (used in non-captured mode)
 var _drag_looking := false
 var _drag_last := Vector2.ZERO
@@ -484,7 +490,7 @@ func _process(delta: float) -> void:
 # ---------------------------------------------------------------------------
 
 func _input(event: InputEvent) -> void:
-	if not _active or not is_visible_in_tree():
+	if not _active or _suspended or not is_visible_in_tree():
 		return
 
 	# Slice-select is modal — it consumes keyboard input until confirmed/cancelled.
@@ -518,6 +524,10 @@ func _input(event: InputEvent) -> void:
 				var kc := key.keycode
 				if kc >= KEY_1 and kc <= KEY_9:
 					_select_palette_slot(kc - KEY_1)
+					get_viewport().set_input_as_handled()
+					return
+				if kc == KEY_0:
+					_select_palette_slot(9)  # the tenth slot
 					get_viewport().set_input_as_handled()
 					return
 				if kc == KEY_R:
@@ -556,6 +566,8 @@ func _input(event: InputEvent) -> void:
 
 # Non-captured mouse: drag-to-look + scroll-to-dolly
 func _on_svc_input(event: InputEvent) -> void:
+	if _suspended:
+		return
 	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed and not _active:
 		focus_requested.emit()
 		get_viewport().set_input_as_handled()
@@ -626,6 +638,21 @@ func set_active(active: bool) -> void:
 			_release_cursor()
 		if _slice_active:
 			_exit_slice_select()
+
+# Suspend/resume for a modal overlay (the inventory screen). Suspending releases a
+# captured cursor but remembers that we were flying; resuming re-captures it so the
+# user drops straight back into edit mode where they left off. View-agnostic chrome
+# drives this through the shell — the view never knows what overlay is up.
+func set_input_suspended(s: bool) -> void:
+	if _suspended == s:
+		return
+	_suspended = s
+	if s:
+		_fly_before_suspend = _fly_mode
+		if _fly_mode:
+			_release_cursor()
+	elif _fly_before_suspend and _active and is_visible_in_tree():
+		_capture_cursor()
 
 # Show another view's active 2D slice as a translucent reference plane (or hide
 # it when there's no guide / this view is the active one).
@@ -1539,7 +1566,7 @@ func _vec_max(a: Vector3i, b: Vector3i) -> Vector3i:
 # Palette cycling
 # ---------------------------------------------------------------------------
 
-# Wheel scrubs the shared hotbar, MC-style (wrapping across the 9 slots).
+# Wheel scrubs the shared hotbar, MC-style (wrapping across all the slots).
 func _cycle_palette(delta: int) -> void:
 	var n := VoxelWorld.HOTBAR_SIZE
 	VoxelWorld.select_slot((VoxelWorld.active_slot + delta % n + n) % n)
@@ -1564,6 +1591,6 @@ func _draw_overlay() -> void:
 		var sky_name: String = _skyboxes[_current_sky]["name"]
 		_overlay.draw_string(font, Vector2(_overlay.size.x * 0.5, 32.0),
 			"Sky: " + sky_name, HORIZONTAL_ALIGNMENT_CENTER, -1, 16, Color(1,1,1,0.85))
-	var hint := "WASD move  ·  Space/RCtrl up · Shift// down  ·  LMB erase · RMB place · MMB pick  ·  R rotate (look at face)  ·  Tab slice · 1–9 slot · Esc"
+	var hint := "WASD move  ·  Space/RCtrl up · Shift// down  ·  LMB erase · RMB place · MMB pick  ·  R rotate (look at face)  ·  Tab slice · 1–0 slot · E inventory · Esc"
 	_overlay.draw_string(font, Vector2(10.0, _overlay.size.y - 10.0),
 		hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1,1,1,0.45))

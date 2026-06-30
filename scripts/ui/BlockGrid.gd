@@ -38,6 +38,7 @@ var cell_size := Vector2(50, 50)
 var show_captions := false
 
 var _flow: HFlowContainer
+var _scroll: ScrollContainer
 var _search: LineEdit
 var _baker: BlockIconBaker
 var _items: Array = []               # Array[Item], as handed to populate_items()
@@ -52,22 +53,26 @@ func _ready() -> void:
 	add_child(_baker)
 	_baker.icon_ready.connect(_on_icon_ready)
 
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_horizontal = SIZE_EXPAND_FILL
-	scroll.size_flags_vertical = SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	add_child(scroll)
+	_scroll = ScrollContainer.new()
+	_scroll.size_flags_horizontal = SIZE_EXPAND_FILL
+	_scroll.size_flags_vertical = SIZE_EXPAND_FILL
+	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	add_child(_scroll)
 
 	_flow = HFlowContainer.new()
 	_flow.size_flags_horizontal = SIZE_EXPAND_FILL
 	_flow.add_theme_constant_override("h_separation", 3)
 	_flow.add_theme_constant_override("v_separation", 3)
-	scroll.add_child(_flow)
+	_scroll.add_child(_flow)
 
 	_search = LineEdit.new()
 	_search.placeholder_text = "Search blocks…"
 	_search.clear_button_enabled = true
 	_search.text_changed.connect(_apply_filter)
+	# Right-click selects everything so a fresh search just types over the old one
+	# (instead of popping the native context menu).
+	_search.context_menu_enabled = false
+	_search.gui_input.connect(_on_search_input)
 	add_child(_search)
 
 	if not _items.is_empty():
@@ -114,6 +119,25 @@ func set_selected(key: String) -> void:
 
 func _apply_filter(text: String) -> void:
 	_rebuild_cells(text)
+
+# Whether a global point falls inside the scrollable icon area — lets a host screen
+# decide if the mouse wheel should scroll the grid or do something else.
+func is_in_scroll_area(global_pos: Vector2) -> bool:
+	return _scroll != null and _scroll.get_global_rect().has_point(global_pos)
+
+# Focus the search box and select its contents — driven by Tab from a host screen
+# so the user can start typing a query immediately.
+func focus_search() -> void:
+	if _search:
+		_search.grab_focus()
+		_search.select_all()
+
+func _on_search_input(ev: InputEvent) -> void:
+	if ev is InputEventMouseButton and (ev as InputEventMouseButton).pressed \
+			and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_RIGHT:
+		_search.grab_focus()
+		_search.select_all()
+		_search.accept_event()
 
 func _rebuild_cells(filter: String) -> void:
 	for c in _flow.get_children():

@@ -3,31 +3,50 @@ extends Control
 
 # The single, view-agnostic toolbar. It lives in the editor chrome (not inside any
 # view) and drives VoxelWorld's shared hotbar state, so 2D and 3D edits all place
-# the same selected block. Nine slots; each holds a semantic name ("" = empty).
+# the same selected block. Twelve slots; each holds a semantic name ("" = empty) and
+# shows a baked preview of the block it resolves to plus that semantic's name.
 #
 # Interactions:
 #   • Left-click a slot          → make it the active (selected) slot
 #   • Right-click a slot         → clear it
-#   • 1–9                        → select that slot
-#   • Drag a palette block onto  → assign it to that slot (see PalettePanel)
-# The 3D and 2D views feed this too (e.g. 3D middle-click "pick block"). Block
-# orientation is not a global mode — it's chosen per placement in the edit views.
+#   • 1–9, 0                     → select that slot (slots 11+ via wheel / click)
+#   • E / Del                    → open the inventory to load slots (see InventoryScreen)
+# Blocks are loaded into slots from the inventory screen (Minecraft-style), not from a
+# palette list. This same control is embedded in that screen so the active-slot
+# highlight stays in sync. The 3D and 2D views feed it too (e.g. 3D middle-click "pick
+# block"). Block orientation is not a global mode — it's chosen per placement.
+# A generic palette_block drop is still accepted so a future drag source can feed it.
 
-const SLOT := 48.0
+const SLOT := 58.0
 const GAP := 6.0
+const CAPTION_H := 16.0  # name strip drawn beneath each slot
 
 var _hover_drop := -1  # slot currently under a palette-block drag, or -1
+var _baker: BlockIconBaker  # bakes the real 3D icon for each slot's block
 
 func _ready() -> void:
-	custom_minimum_size = Vector2(0, SLOT + 18.0)
+	custom_minimum_size = Vector2(0, SLOT + CAPTION_H + 14.0)
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	# Baked icons are pixel art when textured; keep them crisp when scaled into a slot.
+	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	_baker = BlockIconBaker.new()
+	_baker.batch = VoxelWorld.HOTBAR_SIZE  # only ever a dozen slots to bake
+	add_child(_baker)
+	_baker.icon_ready.connect(func(_n): queue_redraw())
 	VoxelWorld.hotbar_changed.connect(queue_redraw)
 	VoxelWorld.active_slot_changed.connect(func(_s): queue_redraw())
 	VoxelWorld.selection_changed.connect(func(_s): queue_redraw())
-	VoxelWorld.palette_stack_changed.connect(queue_redraw)
-	VoxelWorld.block_type_changed.connect(queue_redraw)
+	VoxelWorld.palette_stack_changed.connect(_on_appearance_changed)
+	VoxelWorld.block_type_changed.connect(_on_appearance_changed)
 	VoxelWorld.project_opened.connect(func(_p): queue_redraw())
 	gui_input.connect(_on_gui_input)
+
+# A palette/block-type edit can change what a slot's semantic resolves to, so drop the
+# baked icons and re-bake on the next draw.
+func _on_appearance_changed() -> void:
+	if _baker:
+		_baker.invalidate_all()
+	queue_redraw()
 
 # ---------------------------------------------------------------------------
 # Layout
@@ -35,7 +54,8 @@ func _ready() -> void:
 
 func _row_origin() -> Vector2:
 	var total := VoxelWorld.HOTBAR_SIZE * SLOT + (VoxelWorld.HOTBAR_SIZE - 1) * GAP
-	return Vector2((size.x - total) * 0.5, (size.y - SLOT) * 0.5)
+	# Center the slot+caption block vertically so the name strip has room below.
+	return Vector2((size.x - total) * 0.5, (size.y - (SLOT + CAPTION_H)) * 0.5)
 
 func _slot_rect(i: int) -> Rect2:
 	var o := _row_origin()
@@ -75,6 +95,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if kc >= KEY_1 and kc <= KEY_9:
 		VoxelWorld.select_slot(kc - KEY_1)
 		get_viewport().set_input_as_handled()
+	elif kc == KEY_0:
+		VoxelWorld.select_slot(9)  # the tenth slot
+		get_viewport().set_input_as_handled()
 
 # ---------------------------------------------------------------------------
 # Drag & drop from the palette
@@ -113,23 +136,48 @@ func _draw() -> void:
 		var rect := _slot_rect(i)
 		var semantic := VoxelWorld.hotbar[i] if has_project and i < VoxelWorld.hotbar.size() else ""
 		var is_active := i == VoxelWorld.active_slot
+		# Dark recessed slot background under everything.
+		draw_rect(rect, Color(0.16, 0.16, 0.18))
 		if semantic.is_empty():
-			draw_rect(rect, Color(0.16, 0.16, 0.18))
 			draw_string(font, rect.position + Vector2(SLOT * 0.5 - 4.0, SLOT * 0.5 + 6.0),
 				"+", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color(1, 1, 1, 0.18))
 		else:
-			var color := VoxelWorld.get_color_for_semantic(semantic)
-			draw_rect(rect, color.darkened(0.45))
-			draw_rect(rect.grow(-5), color)
-			_draw_shape_hint(rect, VoxelWorld.get_shape_for_semantic(semantic))
+			var bt := VoxelWorld.get_block_type_object_for_semantic(semantic)
+			var icon := _baker.icon_for(bt) if bt else null
+			if icon != null:
+				draw_texture_rect(icon, rect.grow(-3), false)
+			else:
+				# Until the icon bakes (or for an unmapped semantic): the planning color
+				# plus a shape silhouette, so the slot still reads at a glance.
+				var color := VoxelWorld.get_color_for_semantic(semantic)
+				draw_rect(rect.grow(-5), color)
+				_draw_shape_hint(rect, VoxelWorld.get_shape_for_semantic(semantic))
+			_draw_caption(font, rect, semantic, is_active)
 		# Selection / hover-drop frame.
 		if i == _hover_drop:
 			draw_rect(rect.grow(1), Color(1.0, 0.85, 0.3, 0.95), false, 2.5)
 		else:
 			draw_rect(rect, Color(1, 1, 1, 0.85 if is_active else 0.2), false,
 				2.5 if is_active else 1.0)
-		draw_string(font, rect.position + Vector2(4.0, 13.0), str(i + 1),
-			HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1, 1, 1, 0.65))
+		var key_hint := _key_hint(i)
+		if not key_hint.is_empty():
+			draw_string(font, rect.position + Vector2(4.0, 13.0), key_hint,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1, 1, 1, 0.65))
+
+# The semantic name assigned to a slot, drawn (and clipped) in the strip below it.
+func _draw_caption(font: Font, rect: Rect2, semantic: String, is_active: bool) -> void:
+	var col := Color(1, 1, 1, 0.95 if is_active else 0.6)
+	draw_string(font, Vector2(rect.position.x - GAP * 0.5, rect.end.y + 12.0), semantic,
+		HORIZONTAL_ALIGNMENT_CENTER, SLOT + GAP, 10, col)
+
+# The number-key label for a slot: 1–9 for the first nine, 0 for the tenth, and
+# nothing for any extra slots (reachable only by scroll wheel or click).
+func _key_hint(i: int) -> String:
+	if i < 9:
+		return str(i + 1)
+	if i == 9:
+		return "0"
+	return ""
 
 # A small monochrome silhouette so slabs/stairs read differently from cubes.
 func _draw_shape_hint(rect: Rect2, shape: BlockType.Shape) -> void:

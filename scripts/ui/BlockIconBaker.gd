@@ -19,7 +19,10 @@ extends Node
 signal icon_ready(block_name: String)
 
 const RES := 128                          # bake resolution (square); drawn down into the cell
-const BATCH := 50                         # blocks baked per frame (one viewport each)
+# Blocks baked per frame (one off-screen viewport each, allocated up front). A grid
+# browses the whole library, so it keeps the default; small consumers like the hotbar
+# set a lower pool before adding the baker to the tree to avoid 50 idle viewports.
+var batch: int = 50
 # 3/4 angle from the -X/-Z (WEST+NORTH) side, raised: shows top + two sides, and shows
 # the STEPPED face of MC stairs (whose default model opens toward -X/WEST) facing the
 # camera instead of its solid back. The higher vantage drops the near top corner toward
@@ -46,7 +49,7 @@ var _meshes: Array[MeshInstance3D] = []
 
 func _ready() -> void:
 	DirAccess.make_dir_recursive_absolute(_CACHE_DIR)
-	for i in BATCH:
+	for i in batch:
 		_viewports.append(_make_viewport())
 		_meshes.append(null)
 	# Structural changes (import/reimport, delete, new block) can alter a block's
@@ -122,7 +125,7 @@ func _bake_next() -> void:
 		_baking = false
 		return
 	var jobs: Array = []  # [BlockType, slot_index]
-	var n: int = mini(BATCH, _queue.size())
+	var n: int = mini(batch, _queue.size())
 	for i in n:
 		var bt: BlockType = _queue.pop_front()
 		_queued.erase(bt.name)

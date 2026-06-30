@@ -6,13 +6,27 @@ extends Control
 @onready var _bar: HBoxContainer = $Editor/VBoxContainer/EditorBar
 @onready var _shell: MultiViewShell = $Editor/VBoxContainer/ContentArea/ViewShell
 
+var _inventory: InventoryScreen
+
 func _ready() -> void:
 	($HomeScreen as HomeScreen).open_project_requested.connect(_open_editor)
 	($Editor/VBoxContainer/EditorBar/BackBtn as Button).pressed.connect(_go_home)
 	_build_layout_controls()
+	_build_inventory()
 	_go_home()
 
+# The inventory overlay is editor chrome that sits above everything (incl. the
+# hotbar). Opening it suspends the active view's input — and any 3D fly capture —
+# restoring it on close so editing resumes in place.
+func _build_inventory() -> void:
+	_inventory = InventoryScreen.new()
+	add_child(_inventory)
+	_inventory.opened.connect(func(): _shell.set_views_suspended(true))
+	_inventory.closed.connect(func(): _shell.set_views_suspended(false))
+
 func _go_home() -> void:
+	if _inventory:
+		_inventory.set_armed(false)  # also closes it if open
 	_home.visible = true
 	_editor.visible = false
 
@@ -21,6 +35,7 @@ func _open_editor(project: VoxelProject) -> void:
 	_project_label.text = project.name
 	_home.visible = false
 	_editor.visible = true
+	_inventory.set_armed(true)
 
 # Pane + tiling commands live in the EditorBar and act on the focused pane.
 func _build_layout_controls() -> void:

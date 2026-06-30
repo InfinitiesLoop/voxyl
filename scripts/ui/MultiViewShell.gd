@@ -124,6 +124,14 @@ func add_3d_view_to_focused() -> void:
 		_attach_view(pane, _make_3d_view())
 		_set_focus(pane)
 
+# Gate every view's input while a modal overlay (the inventory screen) is up.
+# Driven by Main when the inventory opens/closes; the active 3D view remembers and
+# restores its fly state so editing resumes seamlessly.
+func set_views_suspended(suspended: bool) -> void:
+	for v in _all_views():
+		if v.has_method("set_input_suspended"):
+			v.set_input_suspended(suspended)
+
 func apply_preset(preset: Preset) -> void:
 	var views := _all_views()
 	for v in views:

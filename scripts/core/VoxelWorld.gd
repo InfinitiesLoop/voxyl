@@ -15,7 +15,7 @@ signal block_type_changed()
 signal hotbar_changed()
 signal active_slot_changed(slot: int)
 
-const HOTBAR_SIZE := 9
+const HOTBAR_SIZE := 12
 
 var workspace: VoxelWorkspace
 var active_project: VoxelProject

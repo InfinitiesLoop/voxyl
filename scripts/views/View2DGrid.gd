@@ -40,6 +40,9 @@ var _pan_last := Vector2.ZERO
 # Set by the shell (focus).
 var _active := true
 
+# Set true while the inventory overlay is up, gating this view's input.
+var _suspended := false
+
 # In-plane view orientation.
 # _rotation (0–3) rotates the grid 90° CW per step (like turning a map).
 # _mirror_h flips left/right within the current rotation, toggled with F.
@@ -391,6 +394,8 @@ func _zoom_at(anchor: Vector2, factor: float) -> void:
 	_grid_area.queue_redraw()
 
 func _on_grid_input(event: InputEvent) -> void:
+	if _suspended:
+		return
 	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed and not _active:
 		focus_requested.emit()
 		_grid_area.accept_event()
@@ -535,7 +540,7 @@ func _do_fill(start: Vector2i) -> void:
 # Keyboard goes through _unhandled_input (the grid Control can't hold focus), so
 # only the focused pane's active view acts.
 func _unhandled_input(event: InputEvent) -> void:
-	if not _active or not is_visible_in_tree() or not VoxelWorld.active_project:
+	if not _active or _suspended or not is_visible_in_tree() or not VoxelWorld.active_project:
 		return
 	if not (event is InputEventKey) or not (event as InputEventKey).pressed:
 		return
@@ -619,6 +624,11 @@ func _rotate_hovered(flip: bool) -> void:
 
 func set_active(active: bool) -> void:
 	_active = active
+
+# Suspend/resume while a modal overlay (the inventory screen) is up. The 2D view
+# has no captured cursor, so this just gates its input; the overlay sits on top.
+func set_input_suspended(s: bool) -> void:
+	_suspended = s
 
 func set_guide(desc: Dictionary) -> void:
 	if desc == _guide:
