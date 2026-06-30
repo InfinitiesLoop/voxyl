@@ -5,7 +5,6 @@ signal open_project_requested(project: VoxelProject)
 
 var _projects_container: VBoxContainer
 var _palettes_list: LibraryList
-var _palette_editor: Control
 var _library_rail: LibraryList
 var _selected_library: BlockLibrary
 var _block_grid: BlockGrid
@@ -13,12 +12,13 @@ var _bt_detail: Control
 var _bt_preview: BlockPreview3D
 var _selected_block_type: String = ""
 var _editing_palette: Palette
-var _entry_list: VBoxContainer
-
-# Shared column widths for the palette entry editor, so the header row and every entry/
-# add row line up (the two leading columns expand equally; these two are fixed).
-const _PAL_PREVIEW_W := 56
-const _PAL_ACTION_W := 28
+# Palettes tab: an icon grid of entries (like the Block Types tab) + a right-hand detail
+# panel. _palette_header is rebuilt per palette (title + collapsible library subscriptions +
+# entries header); _palette_grid + _entry_detail persist and are re-populated.
+var _palette_grid: BlockGrid
+var _palette_header: VBoxContainer
+var _entry_detail: Control
+var _selected_entry_semantic: String = ""
 
 func _ready() -> void:
 	var tabs := TabContainer.new()
@@ -192,190 +192,292 @@ func _build_palettes_tab() -> Control:
 	_palettes_list.item_selected.connect(_on_palette_selected)
 	left.add_child(_palettes_list)
 
-	# Right: palette entry editor
-	_palette_editor = _build_palette_editor()
-	split.add_child(_palette_editor)
+	# Middle + right: entry grid and a detail panel for the selected entry — mirrors the
+	# Block Types tab layout (grid + pinned-width detail).
+	var inner := HSplitContainer.new()
+	inner.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	split.add_child(inner)
+
+	inner.add_child(_build_palette_middle())
+
+	_entry_detail = _build_entry_detail()
+	inner.add_child(_entry_detail)
+	inner.resized.connect(func(): inner.split_offset = maxi(0, int(inner.size.x) - 332))
 
 	return root
 
-func _build_palette_editor() -> Control:
-	var root := _margin(16)
+# Middle pane: a rebuilt header (title + collapsible library subscriptions + entries header)
+# above a persistent icon grid of entries. The grid persists so switching palettes
+# re-populates rather than recreating the icon baker.
+func _build_palette_middle() -> Control:
+	var root := _margin(12)
 	root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 8)
 	root.add_child(vbox)
 
+	_palette_header = VBoxContainer.new()
+	_palette_header.add_theme_constant_override("separation", 8)
+	vbox.add_child(_palette_header)
+
 	var placeholder := Label.new()
 	placeholder.name = "Placeholder"
 	placeholder.text = "Select a palette to edit it."
+	_palette_header.add_child(placeholder)
+
+	_palette_grid = BlockGrid.new()
+	_palette_grid.show_captions = true
+	_palette_grid.cell_size = Vector2(60, 60)
+	_palette_grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_palette_grid.item_selected.connect(_on_entry_selected)
+	vbox.add_child(_palette_grid)
+
+	return root
+
+# The right detail panel for the selected entry: same styled fixed-width shell as the Block
+# Types tab's _build_bt_detail, holding a scrollable vbox filled by _refresh_entry_detail.
+func _build_entry_detail() -> Control:
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size.x = 320
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.13, 0.13, 0.15)
+	sb.content_margin_left = 16
+	sb.content_margin_right = 16
+	sb.content_margin_top = 16
+	sb.content_margin_bottom = 16
+	panel.add_theme_stylebox_override("panel", sb)
+
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	panel.add_child(scroll)
+
+	var vbox := VBoxContainer.new()
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_theme_constant_override("separation", 10)
+	scroll.add_child(vbox)
+
+	var placeholder := Label.new()
+	placeholder.name = "Placeholder"
+	placeholder.text = "Select an entry to edit it."
 	vbox.add_child(placeholder)
 
-	root.set_meta("vbox", vbox)
-	return root
+	panel.set_meta("vbox", vbox)
+	return panel
 
 func _on_palette_selected(palette_name: String) -> void:
 	var palette := VoxelWorld.workspace.get_palette(palette_name)
 	if not palette:
 		return
-	var vbox: VBoxContainer = _palette_editor.get_meta("vbox")
+	_editing_palette = palette
+	_selected_entry_semantic = ""
+	_rebuild_palette_header()
+	_refresh_palette_grid()
+	_refresh_entry_detail()
+
+# Rebuild the middle pane's header: title, the collapsible library-subscription section, and
+# the "Entries" header with an add button. Kept separate from the grid so the grid persists.
+func _rebuild_palette_header() -> void:
+	if not _palette_header:
+		return
+	for c in _palette_header.get_children():
+		c.queue_free()
+	if not _editing_palette:
+		var ph := Label.new()
+		ph.name = "Placeholder"
+		ph.text = "Select a palette to edit it."
+		_palette_header.add_child(ph)
+		return
+
+	var title := Label.new()
+	title.text = _editing_palette.name
+	title.add_theme_font_size_override("font_size", 16)
+	_palette_header.add_child(title)
+
+	# Collapsible "Libraries" section: a toggle button shows/hides the subscription editor,
+	# which is rebuilt by the existing _build_palette_libraries.
+	var lib_body := VBoxContainer.new()
+	lib_body.add_theme_constant_override("separation", 6)
+	lib_body.visible = false
+	var toggle := Button.new()
+	toggle.toggle_mode = true
+	toggle.flat = true
+	toggle.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	toggle.text = "▸ Libraries"
+	toggle.toggled.connect(func(on: bool):
+		lib_body.visible = on
+		toggle.text = ("▾ " if on else "▸ ") + "Libraries")
+	_palette_header.add_child(toggle)
+	_build_palette_libraries(lib_body, _editing_palette)
+	_palette_header.add_child(lib_body)
+
+	_palette_header.add_child(HSeparator.new())
+
+	var entries_row := HBoxContainer.new()
+	var entries_lbl := Label.new()
+	entries_lbl.text = "Entries"
+	entries_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	entries_row.add_child(entries_lbl)
+	var add_btn := Button.new()
+	add_btn.text = "Add entry"
+	add_btn.pressed.connect(_on_add_entry)
+	entries_row.add_child(add_btn)
+	_palette_header.add_child(entries_row)
+
+# Populate the entry grid: one cell per entry, its icon baked from the resolved block type
+# (null → undecided placeholder) and its caption the semantic name.
+func _refresh_palette_grid() -> void:
+	if not _palette_grid:
+		return
+	if not _editing_palette:
+		_palette_grid.populate_items([])
+		return
+	var items: Array = []
+	for entry in _editing_palette.entries:
+		var bt := VoxelWorld.workspace.resolve_block_type(entry.block_type_name, _editing_palette.library_names)
+		var it := BlockGrid.Item.new()
+		it.key = entry.semantic_name
+		it.label = entry.semantic_name
+		it.caption = entry.semantic_name
+		it.block_type = bt
+		it.placeholder_color = bt.color if bt else Color(0.35, 0.35, 0.35)
+		items.append(it)
+	_palette_grid.populate_items(items)
+	_palette_grid.set_selected(_selected_entry_semantic)
+
+func _on_entry_selected(key: String) -> void:
+	_selected_entry_semantic = key
+	if _palette_grid:
+		_palette_grid.set_selected(key)
+	_refresh_entry_detail()
+
+# The detail panel for the selected entry: rename its semantic name + reassign its block type
+# (via the reusable BlockPicker popup) + delete it.
+func _refresh_entry_detail() -> void:
+	if not _entry_detail:
+		return
+	var vbox: VBoxContainer = _entry_detail.get_meta("vbox")
 	for c in vbox.get_children():
 		c.queue_free()
 	await get_tree().process_frame
 
-	var title := Label.new()
-	title.text = palette.name
-	vbox.add_child(title)
-
-	var sep := HSeparator.new()
-	vbox.add_child(sep)
-
-	_editing_palette = palette
-	# Libraries this palette draws from (priority order) — the new subscription editor.
-	_build_palette_libraries(vbox, palette)
-
-	vbox.add_child(HSeparator.new())
-
-	# Column headers — aligned with the entry rows below: two expanding label columns,
-	# then the fixed-width preview + action columns.
-	var headers := HBoxContainer.new()
-	headers.add_theme_constant_override("separation", 6)
-	vbox.add_child(headers)
-	var sem_h := Label.new()
-	sem_h.text = "Semantic Name"
-	sem_h.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	headers.add_child(sem_h)
-	var bt_h := Label.new()
-	bt_h.text = "Block Type"
-	bt_h.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	headers.add_child(bt_h)
-	var prev_h := Label.new()
-	prev_h.text = "Preview"
-	prev_h.clip_text = true
-	prev_h.custom_minimum_size = Vector2(_PAL_PREVIEW_W, 0)
-	headers.add_child(prev_h)
-	var act_h := Control.new()
-	act_h.custom_minimum_size = Vector2(_PAL_ACTION_W, 0)
-	headers.add_child(act_h)
-
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	vbox.add_child(scroll)
-
-	_entry_list = VBoxContainer.new()
-	_entry_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_entry_list.add_theme_constant_override("separation", 4)
-	scroll.add_child(_entry_list)
-
-	_editing_palette = palette
-	_refresh_palette_entries()
-
-func _refresh_palette_entries() -> void:
-	if not _entry_list or not _editing_palette:
+	var entry := _editing_palette.get_entry(_selected_entry_semantic) if _editing_palette else null
+	if not entry:
+		var lbl := Label.new()
+		lbl.name = "Placeholder"
+		lbl.text = "Select an entry to edit it."
+		vbox.add_child(lbl)
 		return
-	for c in _entry_list.get_children():
-		c.queue_free()
-	await get_tree().process_frame
-	for entry in _editing_palette.entries:
-		_entry_list.add_child(_make_entry_row(entry))
-	_entry_list.add_child(_make_add_entry_row())
 
-func _make_entry_row(entry: PaletteEntry) -> HBoxContainer:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
-
+	var name_lbl := Label.new()
+	name_lbl.text = "Semantic name"
+	vbox.add_child(name_lbl)
 	var name_edit := LineEdit.new()
 	name_edit.text = entry.semantic_name
 	name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	name_edit.text_submitted.connect(func(t): entry.semantic_name = t.strip_edges())
-	name_edit.focus_exited.connect(func(): entry.semantic_name = name_edit.text.strip_edges())
-	row.add_child(name_edit)
+	name_edit.text_submitted.connect(func(t): _rename_entry(entry, t))
+	name_edit.focus_exited.connect(func(): _rename_entry(entry, name_edit.text))
+	vbox.add_child(name_edit)
 
+	vbox.add_child(HSeparator.new())
+
+	var bt_lbl := Label.new()
+	bt_lbl.text = "Block type"
+	vbox.add_child(bt_lbl)
+
+	var bt := VoxelWorld.workspace.resolve_block_type(entry.block_type_name, _editing_palette.library_names)
+	var bt_row := HBoxContainer.new()
+	bt_row.add_theme_constant_override("separation", 8)
 	var swatch := ColorRect.new()
-	swatch.custom_minimum_size = Vector2(_PAL_PREVIEW_W, 0)
-	swatch.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	swatch.custom_minimum_size = Vector2(28, 28)
+	swatch.color = bt.color if bt else Color(0.35, 0.35, 0.35)
+	swatch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	bt_row.add_child(swatch)
+	var bt_name := Label.new()
+	bt_name.text = entry.block_type_name if not entry.block_type_name.is_empty() else "(undecided)"
+	bt_name.clip_text = true
+	bt_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bt_name.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	bt_row.add_child(bt_name)
+	var change_btn := Button.new()
+	change_btn.text = "Change…"
+	change_btn.pressed.connect(func(): _open_block_picker(entry))
+	bt_row.add_child(change_btn)
+	vbox.add_child(bt_row)
 
-	# The picker lists block types from this palette's subscribed libraries (scoped, in
-	# priority order, basic-fallback included), not a global flat array.
-	var names := _scoped_block_type_names(_editing_palette)
-	if not entry.block_type_name.is_empty() and entry.block_type_name not in names:
-		names.push_front(entry.block_type_name)   # keep an off-scope mapping visible
-	var block_picker := OptionButton.new()
-	block_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var current_idx := 0
-	for i in names.size():
-		block_picker.add_item(names[i])
-		if names[i] == entry.block_type_name:
-			current_idx = i
-	block_picker.selected = current_idx
-	block_picker.item_selected.connect(func(idx):
-		entry.block_type_name = names[idx]
-		var nb := VoxelWorld.workspace.resolve_block_type(entry.block_type_name, _editing_palette.library_names)
-		swatch.color = nb.color if nb else Color(0.5, 0.5, 0.5)
-		_save_palettes()
-	)
-	row.add_child(block_picker)
-
-	var init_bt := VoxelWorld.workspace.resolve_block_type(entry.block_type_name, _editing_palette.library_names)
-	swatch.color = init_bt.color if init_bt else Color(0.5, 0.5, 0.5)
-	row.add_child(swatch)
+	vbox.add_child(HSeparator.new())
 
 	var del_btn := Button.new()
-	del_btn.text = "✕"
-	del_btn.flat = true
-	del_btn.custom_minimum_size = Vector2(_PAL_ACTION_W, 0)
+	del_btn.text = "Delete entry"
 	del_btn.pressed.connect(func():
 		_editing_palette.entries.erase(entry)
+		_selected_entry_semantic = ""
 		_save_palettes()
-		_refresh_palette_entries()
-	)
-	row.add_child(del_btn)
+		_refresh_palette_grid()
+		_refresh_entry_detail())
+	vbox.add_child(del_btn)
 
-	return row
+# Rename an entry's semantic name, guarding empty / collision with another entry. Keeps the
+# grid selection on the new name.
+func _rename_entry(entry: PaletteEntry, new_name: String) -> void:
+	var n := new_name.strip_edges()
+	if n.is_empty() or n == entry.semantic_name:
+		return
+	if _editing_palette.get_entry(n) != null:
+		return   # another entry already owns this name
+	entry.semantic_name = n
+	_selected_entry_semantic = n
+	_save_palettes()
+	_refresh_palette_grid()
+	_refresh_entry_detail()
 
-func _make_add_entry_row() -> HBoxContainer:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
-
-	var name_input := LineEdit.new()
-	name_input.placeholder_text = "New semantic name..."
-	name_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(name_input)
-
-	var names := _scoped_block_type_names(_editing_palette)
-	var block_picker := OptionButton.new()
-	block_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	for n in names:
-		block_picker.add_item(n)
-	row.add_child(block_picker)
-
-	# Spacer to align with the preview column in entry rows
-	var gap := Control.new()
-	gap.custom_minimum_size = Vector2(_PAL_PREVIEW_W, 0)
-	gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_child(gap)
-
-	var add_btn := Button.new()
-	add_btn.text = "+"
-	add_btn.custom_minimum_size = Vector2(_PAL_ACTION_W, 0)
-	add_btn.pressed.connect(func():
-		var n := name_input.text.strip_edges()
-		if n.is_empty() or not _editing_palette:
-			return
-		var e := PaletteEntry.new()
-		e.semantic_name = n
-		var pidx := block_picker.selected
-		e.block_type_name = names[pidx] if pidx >= 0 and pidx < names.size() else ""
-		_editing_palette.entries.append(e)
-		name_input.text = ""
+# Open the reusable block picker scoped to this palette's libraries; the pick reassigns the
+# entry's block type. Built from BlockGrid items so the picker stays generic.
+func _open_block_picker(entry: PaletteEntry) -> void:
+	var items: Array = []
+	for n in _scoped_block_type_names(_editing_palette):
+		var bt := VoxelWorld.workspace.resolve_block_type(n, _editing_palette.library_names)
+		items.append(BlockGrid.block_item(bt) if bt else _unmapped_item(n))
+	var picker := BlockPicker.new()
+	picker.picked.connect(func(key: String):
+		entry.block_type_name = key
+		VoxelWorld.notify_block_type_changed()
 		_save_palettes()
-		_refresh_palette_entries()
-	)
-	row.add_child(add_btn)
+		_refresh_palette_grid()
+		_refresh_entry_detail())
+	get_tree().root.add_child(picker)
+	picker.set_items(items, "Assign block type")
+	picker.popup_centered()
 
-	return row
+# A picker item for a block-type name that doesn't resolve in scope (planning placeholder).
+func _unmapped_item(bt_name: String) -> BlockGrid.Item:
+	var it := BlockGrid.Item.new()
+	it.key = bt_name
+	it.label = bt_name
+	it.caption = bt_name
+	return it
+
+# Append a new entry with a unique default name + empty block type, then select it so the
+# user renames / assigns it in the detail panel.
+func _on_add_entry() -> void:
+	if not _editing_palette:
+		return
+	var e := PaletteEntry.new()
+	e.semantic_name = _unique_semantic_name("New")
+	_editing_palette.entries.append(e)
+	_selected_entry_semantic = e.semantic_name
+	_save_palettes()
+	_refresh_palette_grid()
+	_refresh_entry_detail()
+
+# "New", "New 2", "New 3", … — the first that no existing entry uses.
+func _unique_semantic_name(base: String) -> String:
+	var candidate := base
+	var i := 2
+	while _editing_palette.get_entry(candidate) != null:
+		candidate = "%s %d" % [base, i]
+		i += 1
+	return candidate
 
 # The block-type names a palette can map to: every block in its subscribed libraries
 # (in priority order), then the basic-library fallback, de-duplicated.

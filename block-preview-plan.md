@@ -50,9 +50,19 @@ faked 2D icon.
 - In-memory invalidation: `invalidate(name)` after a single-block edit (driven by
   `HomeScreen._after_block_edit → BlockGrid.refresh_icons(name)`); `invalidate_all()` on
   `VoxelWorld.workspace_changed`. The disk signature decides what actually re-bakes.
-- `scripts/ui/BlockGrid.gd` — draws each cell's baked icon (or a faint planning-color
-  placeholder while a bake is pending), redraws the one cell on `icon_ready`, sets the
-  block name as the cell tooltip, and emits `block_selected(name)` on click.
+- `scripts/ui/BlockGrid.gd` — an **item-based** icon grid (not bespoke to block types). Each
+  `BlockGrid.Item` carries a key (emitted on click), a search label, an optional caption drawn
+  under the icon, and the `BlockType` used to bake the icon (or null → a planning-color
+  placeholder). `populate_items(items)` is the general entry point; `populate(block_types)` is a
+  thin adapter (`block_item(bt)`) so the Block Types tab is unchanged. It draws each cell's baked
+  icon (or placeholder while a bake is pending), redraws affected cells on `icon_ready`, and emits
+  both `item_selected(key)` and the back-compat `block_selected(key)` on click. `show_captions` +
+  `cell_size` configure the look. Used for the Block Types grid, the Palettes-tab entry grid, and
+  inside `BlockPicker`.
+- `scripts/ui/BlockPicker.gd` — a reusable "pick a block" popup (`AcceptDialog`) wrapping a
+  `BlockGrid` of items + search; a click picks (emits `picked(key)`) and closes. Generic over any
+  block collection via `set_items(items, title)`. The Palettes tab uses it to reassign an entry's
+  block type (scoped to the palette's libraries) instead of a flat `OptionButton`.
 - `scripts/ui/BlockPreview3D.gd` — the detail panel's rotatable live preview; calls the
   same `BlockRender3D.build_into`, so preview and baked icon are identical.
 
