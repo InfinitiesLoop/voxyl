@@ -77,9 +77,9 @@ func _test_palette_resolution() -> void:
 	VoxelWorld.open(project)
 	_check("merged semantic names non-empty", VoxelWorld.merged_semantic_names().size() > 0)
 	var fallback := Color(0.35, 0.35, 0.35)
-	_check("known semantic resolves color", VoxelWorld.get_color_for_semantic("Base") != fallback)
+	_check("known semantic resolves color", VoxelWorld.get_color_for_semantic("Wall") != fallback)
 	_check("unknown semantic gets fallback", VoxelWorld.get_color_for_semantic("__nope__") == fallback)
-	_check("block type resolved", not VoxelWorld.get_block_type_for_semantic("Base").is_empty())
+	_check("block type resolved", not VoxelWorld.get_block_type_for_semantic("Wall").is_empty())
 	_check("unknown block type is empty", VoxelWorld.get_block_type_for_semantic("__nope__") == "")
 
 func _test_last_wins() -> void:
@@ -217,7 +217,7 @@ func _test_shapes() -> void:
 	_check("slab semantic resolves to SLAB",
 		VoxelWorld.get_shape_for_semantic("Slab") == BlockType.Shape.SLAB)
 	_check("plain semantic resolves to FULL",
-		VoxelWorld.get_shape_for_semantic("Base") == BlockType.Shape.FULL)
+		VoxelWorld.get_shape_for_semantic("Wall") == BlockType.Shape.FULL)
 
 func _test_models() -> void:
 	print("-- model resolution (Phase 0 material layer)")
@@ -228,7 +228,7 @@ func _test_models() -> void:
 		and ws.get_block_model(BlockModel.BUILTIN_SLAB) != null
 		and ws.get_block_model(BlockModel.BUILTIN_STAIRS) != null)
 	# A semantic resolves to the built-in model matching its block type's shape.
-	var base_model := VoxelWorld.get_model_for_semantic("Base")
+	var base_model := VoxelWorld.get_model_for_semantic("Wall")
 	_check("plain semantic resolves to full model",
 		base_model != null and base_model.id == BlockModel.BUILTIN_FULL)
 	_check("slab semantic resolves to slab model",
@@ -241,16 +241,16 @@ func _test_models() -> void:
 		and base_model.elements[0]["to"] == Vector3.ONE)
 	# No textures imported yet → color path; texture resolver returns null.
 	_check("no texture for semantic in the color path",
-		VoxelWorld.get_texture_for_semantic("Base") == null)
+		VoxelWorld.get_texture_for_semantic("Wall") == null)
 	# An explicit model_id overrides the shape fallback (the additive path).
 	var custom := BlockModel.new()
 	custom.id = "__test_pillar__"
 	custom.elements = [BlockModel.box_element(Vector3(0.25, 0, 0.25), Vector3(0.75, 1, 0.75))]
 	ws.basic_library().add_block_model(custom)
-	var bt := ws.basic_library().get_block_type("base")  # "Base" maps to base, shape FULL
+	var bt := ws.basic_library().get_block_type("base")  # "Wall" maps to base, shape FULL
 	bt.model_id = "__test_pillar__"
 	_check("explicit model_id overrides shape fallback",
-		VoxelWorld.get_model_for_semantic("Base").id == "__test_pillar__")
+		VoxelWorld.get_model_for_semantic("Wall").id == "__test_pillar__")
 	bt.model_id = ""
 	ws.basic_library().remove_block_model("__test_pillar__")
 

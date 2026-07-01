@@ -322,6 +322,16 @@ func _ensure_model(model_ref: String) -> BlockModel:
 	_library.add_block_model(model)
 	return model
 
+# A model's `textures` entry is normally a bare "ns:path" (or "#var") string, but
+# newer MC versions allow an object form ({ "sprite": "ns:path", "force_translucent":
+# true, … }) to attach render hints alongside the ref. voxyl has no use for those
+# hints (transparency is auto-detected from the PNG's own alpha), so unwrap to the
+# sprite ref and drop the rest.
+func _texture_ref_str(v) -> String:
+	if v is Dictionary:
+		return str(v.get("sprite", ""))
+	return str(v)
+
 # Resolve a model file and its parent chain into merged { textures, elements, ao }.
 # MC merge rules: textures accumulate child-wins; elements are inherited wholesale
 # unless the child defines its own (then they replace). Missing parents (builtin/*,
@@ -344,7 +354,7 @@ func _resolve_model_json(model_ref: String, depth: int):
 			base["ao"] = p["ao"]
 	if j.has("textures"):
 		for k in j["textures"]:
-			base["textures"][k] = str(j["textures"][k])
+			base["textures"][k] = _texture_ref_str(j["textures"][k])
 	if j.has("elements"):
 		base["elements"] = j["elements"]
 	if j.has("ambientocclusion"):

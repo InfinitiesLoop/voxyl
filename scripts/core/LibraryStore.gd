@@ -39,12 +39,17 @@ static func save_library(library: BlockLibrary) -> Error:
 			return err
 	return OK
 
-# Persist every palette (they carry library_names + builtin) under ROOT/palettes/.
+# Persist every non-builtin palette (they carry library_names + builtin) under
+# ROOT/palettes/. Builtin palettes (the code-seeded "Default") are never written: they're
+# a code-owned floor, always rebuilt fresh on launch, so a code change to the seed always
+# takes effect. Durable customization belongs in a separate named palette layered on top.
 static func save_palettes(workspace: VoxelWorkspace) -> Error:
 	var err := AssetLibrary.ensure_dir(PALETTES_DIR)
 	if err != OK:
 		return err
 	for palette in workspace.palettes:
+		if palette.builtin:
+			continue
 		err = _save(palette, PALETTES_DIR, palette.name)
 		if err != OK:
 			return err
@@ -165,8 +170,10 @@ static func load_library(name: String) -> BlockLibrary:
 # Load every on-disk library + saved palette into `workspace`, over the code-seeded
 # defaults. Libraries merge by id/name (disk wins for an edited block; a missing
 # baseline block stays seeded — so `basic` is persisted-but-re-seeded and can't be
-# emptied). Palettes replace by name (the saved Default carries the user's library
-# subscriptions). Projects are not persisted — they stay code-seeded each launch.
+# emptied). Palettes replace by name, except any flagged builtin (the code-seeded
+# Default): those are skipped even if a stale copy exists on disk from before this
+# palette was excluded from save_palettes, so Default always matches the running code.
+# Projects are not persisted — they stay code-seeded each launch.
 static func load_persisted(workspace: VoxelWorkspace) -> void:
 	for name in list_libraries():
 		var target := workspace.get_or_add_library(name)
@@ -176,6 +183,8 @@ static func load_persisted(workspace: VoxelWorkspace) -> void:
 	# Keep the built-in shape models present even if an old on-disk basic lacked them.
 	workspace.register_builtin_models()
 	for palette in _load_dir(PALETTES_DIR):
+		if palette.builtin:
+			continue
 		_replace_palette(workspace, palette)
 
 # --- Internals --------------------------------------------------------------

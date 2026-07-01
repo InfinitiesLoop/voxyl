@@ -389,6 +389,10 @@ func _add_basic_library() -> void:
 		["water",     Color(0.25, 0.46, 0.85), BlockType.Shape.FULL],
 		["slab",      Color(0.60, 0.60, 0.62), BlockType.Shape.SLAB],
 		["stairs",    Color(0.66, 0.50, 0.30), BlockType.Shape.STAIRS],
+		["shingle",   Color(0.35, 0.18, 0.15), BlockType.Shape.FULL],
+		["pane",      Color(0.85, 0.85, 0.88), BlockType.Shape.FULL],
+		["glow",      Color(0.95, 0.85, 0.45), BlockType.Shape.FULL],
+		["lantern",   Color(0.90, 0.55, 0.20), BlockType.Shape.FULL],
 	]
 	for b in blocks:
 		var bt := lib.get_block_type(b[0])
@@ -407,15 +411,18 @@ func _add_default_palette() -> void:
 	p.builtin = true
 	p.library_names = [VoxelWorkspace.BASIC_LIBRARY]
 	var slots := [
-		["Base",      "base"],
-		["Accent",    "accent"],
-		["Highlight", "highlight"],
-		["Detail",    "glass"],
-		["Trim",      "trim"],
-		["Floor",     "dirt"],
-		["Roof",      "plank"],
-		["Stairs",    "stairs"],
-		["Slab",      "slab"],
+		["Floor1",       "stone"],
+		["Floor2",       "plank"],
+		["Wall",         "base"],
+		["Trim",         "trim"],
+		["Accent",       "accent"],
+		["Window",       "glass"],
+		["Window Pane",  "pane"],
+		["Roof",         "shingle"],
+		["Stairs",       "stairs"],
+		["Slab",         "slab"],
+		["Light Block",  "glow"],
+		["Light Fixture","lantern"],
 	]
 	for s in slots:
 		var e := PaletteEntry.new()
