@@ -6,6 +6,13 @@ extends Resource
 # Ordered palette references. Resolution is last-wins across the stack.
 @export var palette_names: Array[String] = []
 
+# Lifecycle timestamps (Unix seconds). created_at is stamped once at add_project;
+# modified_at is re-stamped on every ProjectStore.save_project. Both persist. Legacy
+# projects saved before these existed load as 0 → shown as "unknown" / sorted last
+# until their next save. These are metadata about the build, not part of the voxel data.
+@export var created_at: int = 0
+@export var modified_at: int = 0
+
 # Project-tied editor state (persisted alongside the voxel data). These are NOT the
 # voxel data — they're the workspace arrangement for this build, kept here so they
 # belong to the project (all views) rather than any single view (Principle 2):
@@ -30,3 +37,11 @@ func used_semantic_names() -> Array[String]:
 	var result: Array[String] = []
 	result.assign(seen.keys())
 	return result
+
+# Semantic name → placed-cell count, for the project details breakdown. Reads the live
+# cells dictionary (already unpacked in memory), so it's cheap to call at listing time.
+func semantic_counts() -> Dictionary:
+	var counts := {}
+	for cell: BlockCell in data.cells.values():
+		counts[cell.type_id] = counts.get(cell.type_id, 0) + 1
+	return counts

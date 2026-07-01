@@ -160,6 +160,11 @@ func remove_palette(palette_name: String) -> void:
 func add_project(project_name: String) -> VoxelProject:
 	var p := VoxelProject.new()
 	p.name = project_name
+	# Stamp both timestamps at creation so a brand-new project sorts correctly by
+	# last-edited before its first real save (which re-stamps modified_at).
+	var now := int(Time.get_unix_time_from_system())
+	p.created_at = now
+	p.modified_at = now
 	projects.append(p)
 	return p
 

@@ -21,6 +21,7 @@ func _ready() -> void:
 	_test_asset_library()
 	_test_library_serialization()
 	_test_project_persistence()
+	_test_project_rename_and_timestamps()
 	_test_mc_import()
 	_test_statemap_multipart()
 	_test_mc_import_multipart()
@@ -428,6 +429,51 @@ func _test_project_persistence() -> void:
 	_check("has_saved_projects sees the file", ProjectStore.has_saved_projects())
 	_check("delete removes the file", ProjectStore.delete_project("Round Trip") == OK)
 	_check("no saved projects after delete", not ProjectStore.has_saved_projects())
+
+	_rm_rf(ProjectStore.ROOT)
+	ProjectStore.ROOT = saved_root
+
+# save_project stamps modified_at; rename_project moves the .tres on disk, guards
+# collisions, and its thumbnail sidecar follows the rename. Backs the home-screen
+# details/rename/last-edited-sort feature.
+func _test_project_rename_and_timestamps() -> void:
+	print("-- project rename + timestamps")
+	var saved_root := ProjectStore.ROOT
+	ProjectStore.ROOT = "user://__voxyl_renametest__"
+	_rm_rf(ProjectStore.ROOT)
+
+	var ws := VoxelWorkspace.new()
+	var p := ws.add_project("Alpha")
+	_check("add_project stamps created_at", p.created_at > 0)
+	p.modified_at = 0
+	_check("save project ok", ProjectStore.save_project(p) == OK)
+	_check("save_project stamps modified_at", p.modified_at > 0)
+
+	# A stand-in thumbnail so we can prove the sidecar follows a rename.
+	var img := Image.create(4, 4, false, Image.FORMAT_RGB8)
+	img.fill(Color.RED)
+	_check("save_thumbnail ok", ProjectStore.save_thumbnail("Alpha", img) == OK)
+	_check("thumbnail exists", ProjectStore.has_thumbnail("Alpha"))
+
+	# Collision guard: renaming onto an existing name fails and changes nothing.
+	ws.add_project("Beta")
+	_check("rename onto existing name refused",
+		not ProjectStore.rename_project(ws, "Alpha", "Beta"))
+	_check("refused rename kept old name", ws.get_project("Alpha") != null)
+
+	_check("rename ok", ProjectStore.rename_project(ws, "Alpha", "Gamma"))
+	_check("workspace sees new name", ws.get_project("Gamma") != null)
+	_check("old name gone from workspace", ws.get_project("Alpha") == null)
+
+	var ws2 := VoxelWorkspace.new()
+	ProjectStore.load_persisted(ws2)
+	_check("renamed project loads from disk", ws2.get_project("Gamma") != null)
+	_check("old .tres removed", ws2.get_project("Alpha") == null)
+	_check("thumbnail followed the rename", ProjectStore.has_thumbnail("Gamma"))
+	_check("old thumbnail gone", not ProjectStore.has_thumbnail("Alpha"))
+
+	_check("delete drops the thumbnail too",
+		ProjectStore.delete_project("Gamma") == OK and not ProjectStore.has_thumbnail("Gamma"))
 
 	_rm_rf(ProjectStore.ROOT)
 	ProjectStore.ROOT = saved_root

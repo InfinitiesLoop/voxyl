@@ -4,6 +4,12 @@ extends Control
 signal open_project_requested(project: VoxelProject)
 
 var _projects_container: VBoxContainer
+# Projects tab (accordion) state: which card is expanded (selected), the current filter
+# substring, and a mtime-keyed cache of loaded thumbnail textures so _refresh doesn't
+# reload PNGs from disk on every rebuild.
+var _expanded_project_name: String = ""
+var _project_filter: String = ""
+var _thumb_cache: Dictionary = {}
 var _palettes_list: LibraryList
 var _library_rail: LibraryList
 var _selected_library: BlockLibrary
@@ -30,6 +36,12 @@ func _ready() -> void:
 	tabs.add_child(_build_block_types_tab())
 
 	VoxelWorld.workspace_changed.connect(_refresh)
+	# Returning from the editor bakes a fresh thumbnail during save_active_project but
+	# fires no workspace_changed, so rebuild the project cards on show to pick up the new
+	# preview (and any last-edited re-sort).
+	visibility_changed.connect(func():
+		if visible and _projects_container:
+			_rebuild_projects())
 	_refresh()
 
 # ---------------------------------------------------------------------------
@@ -52,6 +64,15 @@ func _build_projects_tab() -> Control:
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title)
 
+	var filter_edit := LineEdit.new()
+	filter_edit.placeholder_text = "Filter projects…"
+	filter_edit.clear_button_enabled = true
+	filter_edit.custom_minimum_size = Vector2(200, 0)
+	filter_edit.text_changed.connect(func(t: String):
+		_project_filter = t
+		_rebuild_projects())
+	header.add_child(filter_edit)
+
 	var new_btn := Button.new()
 	new_btn.text = "New Project"
 	new_btn.pressed.connect(_on_new_project)
@@ -69,47 +90,84 @@ func _build_projects_tab() -> Control:
 
 	return root
 
+# Rebuild the accordion list: filter by the current substring, sort by last-edited
+# descending (tie-break name), one card each. Sorts a copy — the canonical
+# workspace.projects order is never touched.
 func _rebuild_projects() -> void:
 	for c in _projects_container.get_children():
 		c.queue_free()
-	for project in VoxelWorld.workspace.projects:
+	var shown: Array = _visible_projects()
+	if shown.is_empty():
+		var empty := Label.new()
+		empty.text = "No projects match your filter." if not _project_filter.strip_edges().is_empty() else "No projects yet — create one to get started."
+		empty.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+		_projects_container.add_child(empty)
+		return
+	for project in shown:
 		_projects_container.add_child(_make_project_row(project))
 
-func _make_project_row(project: VoxelProject) -> Control:
-	var style_n := StyleBoxFlat.new()
-	style_n.bg_color = Color(0.18, 0.18, 0.20)
-	style_n.set_corner_radius_all(6)
-	style_n.content_margin_left = 10; style_n.content_margin_right = 10
-	style_n.content_margin_top = 10;  style_n.content_margin_bottom = 10
+# Projects matching the filter, sorted by modified_at desc then name.
+func _visible_projects() -> Array:
+	var needle := _project_filter.strip_edges().to_lower()
+	var shown: Array = []
+	for project in VoxelWorld.workspace.projects:
+		if needle.is_empty() or project.name.to_lower().contains(needle):
+			shown.append(project)
+	shown.sort_custom(func(a, b):
+		if a.modified_at != b.modified_at:
+			return a.modified_at > b.modified_at
+		return a.name.naturalnocasecmp_to(b.name) < 0)
+	return shown
 
-	var style_h := StyleBoxFlat.new()
-	style_h.bg_color = Color(0.26, 0.26, 0.30)
-	style_h.set_corner_radius_all(6)
-	style_h.content_margin_left = 10; style_h.content_margin_right = 10
-	style_h.content_margin_top = 10;  style_h.content_margin_bottom = 10
+# An accordion card: an always-visible header (thumbnail + name + edited-relative) that
+# toggles expansion, and — when expanded — a detail body (larger preview, stats, rename,
+# Open, Delete). One card is expanded at a time; the expanded one is styled as selected.
+func _make_project_row(project: VoxelProject) -> Control:
+	var expanded := project.name == _expanded_project_name
+
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.22, 0.24, 0.30) if expanded else Color(0.18, 0.18, 0.20)
+	style.set_corner_radius_all(6)
+	style.set_content_margin_all(10)
+	if expanded:
+		style.set_border_width_all(2)
+		style.border_color = Color(0.42, 0.56, 0.85)
 
 	var card := PanelContainer.new()
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	card.add_theme_stylebox_override("panel", style_n)
-	card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	card.mouse_entered.connect(func(): card.add_theme_stylebox_override("panel", style_h))
-	card.mouse_exited.connect(func(): card.add_theme_stylebox_override("panel", style_n))
-	card.gui_input.connect(func(ev: InputEvent):
+	card.add_theme_stylebox_override("panel", style)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 10)
+	card.add_child(vbox)
+
+	vbox.add_child(_make_project_header(project, expanded))
+	if expanded:
+		vbox.add_child(HSeparator.new())
+		vbox.add_child(_make_project_detail(project))
+	return card
+
+# The clickable header row. Single click toggles expansion (selecting this card and
+# collapsing any other); double-click opens the project.
+func _make_project_header(project: VoxelProject, expanded: bool) -> Control:
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 14)
+	header.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	header.gui_input.connect(func(ev: InputEvent):
 		if ev is InputEventMouseButton and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT and (ev as InputEventMouseButton).pressed:
-			open_project_requested.emit(project)
-	)
+			if (ev as InputEventMouseButton).double_click:
+				open_project_requested.emit(project)
+			else:
+				_toggle_project(project.name))
 
-	var hbox := HBoxContainer.new()
-	hbox.add_theme_constant_override("separation", 14)
-	hbox.mouse_filter = Control.MOUSE_FILTER_PASS
-	card.add_child(hbox)
+	header.add_child(_thumb_control(project, Vector2(60, 60)))
 
-	var thumb := Control.new()
-	thumb.custom_minimum_size = Vector2(60, 60)
-	thumb.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	thumb.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	thumb.draw.connect(func(): _draw_voxyl_logo(thumb))
-	hbox.add_child(thumb)
+	var caret := Label.new()
+	caret.text = "▾" if expanded else "▸"
+	caret.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	caret.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	caret.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	header.add_child(caret)
 
 	var name_lbl := Label.new()
 	name_lbl.text = project.name
@@ -117,20 +175,191 @@ func _make_project_row(project: VoxelProject) -> Control:
 	name_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	name_lbl.add_theme_font_size_override("font_size", 15)
 	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	hbox.add_child(name_lbl)
+	header.add_child(name_lbl)
 
+	var edited_lbl := Label.new()
+	edited_lbl.text = "edited " + _relative_time(project.modified_at)
+	edited_lbl.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+	edited_lbl.add_theme_font_size_override("font_size", 12)
+	edited_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	edited_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	header.add_child(edited_lbl)
+	return header
+
+# The expanded detail body: metadata/stats, rename field, Open + Delete. The preview
+# lives in the header thumbnail — no second copy here.
+func _make_project_detail(project: VoxelProject) -> Control:
+	var info := VBoxContainer.new()
+	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	info.add_theme_constant_override("separation", 6)
+
+	info.add_child(_kv("Created", _format_date(project.created_at)))
+	info.add_child(_kv("Last edited", _format_date(project.modified_at)))
+	var palettes := ", ".join(project.palette_names) if not project.palette_names.is_empty() else "(none)"
+	info.add_child(_kv("Palettes", palettes))
+	var total := project.data.cells.size() if project.data else 0
+	info.add_child(_kv("Blocks", str(total)))
+	info.add_child(_kv("Dimensions", _dimensions_text(project)))
+
+	# Per-semantic breakdown, most-used first.
+	var counts := project.semantic_counts() if project.data else {}
+	if not counts.is_empty():
+		var pairs: Array = counts.keys()
+		pairs.sort_custom(func(a, b): return counts[a] > counts[b])
+		var breakdown := PackedStringArray()
+		for k in pairs:
+			breakdown.append("%s ×%d" % [k, counts[k]])
+		info.add_child(_kv("By type", ", ".join(breakdown)))
+
+	info.add_child(HSeparator.new())
+
+	# Rename field.
+	var rename_lbl := Label.new()
+	rename_lbl.text = "Name"
+	rename_lbl.add_theme_font_size_override("font_size", 12)
+	info.add_child(rename_lbl)
+	var rename_edit := LineEdit.new()
+	rename_edit.text = project.name
+	rename_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rename_edit.text_submitted.connect(func(t: String): _rename_project(project, t))
+	rename_edit.focus_exited.connect(func(): _rename_project(project, rename_edit.text))
+	info.add_child(rename_edit)
+
+	# Actions.
+	var actions := HBoxContainer.new()
+	actions.add_theme_constant_override("separation", 8)
+	var open_btn := Button.new()
+	open_btn.text = "Open"
+	open_btn.pressed.connect(func(): open_project_requested.emit(project))
+	actions.add_child(open_btn)
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	actions.add_child(spacer)
 	var del_btn := Button.new()
-	del_btn.text = "✕"
-	del_btn.flat = true
-	del_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	del_btn.pressed.connect(func():
-		VoxelWorld.workspace.remove_project(project.name)
-		ProjectStore.delete_project(project.name)  # also drop the on-disk file, or it reloads next launch
-		VoxelWorld.workspace_changed.emit()
-	)
-	hbox.add_child(del_btn)
+	del_btn.text = "Delete"
+	del_btn.pressed.connect(func(): _confirm_delete_project(project))
+	actions.add_child(del_btn)
+	info.add_child(actions)
 
-	return card
+	return info
+
+# A "label: value" row for the detail panel. Value wraps so long lists stay readable.
+func _kv(key: String, value: String) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var k := Label.new()
+	k.text = key
+	k.custom_minimum_size.x = 90
+	k.add_theme_color_override("font_color", Color(0.65, 0.65, 0.65))
+	k.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	row.add_child(k)
+	var v := Label.new()
+	v.text = value
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	row.add_child(v)
+	return row
+
+# Toggle which card is expanded — collapse if this one was already open, else select it.
+func _toggle_project(project_name: String) -> void:
+	_expanded_project_name = "" if _expanded_project_name == project_name else project_name
+	_rebuild_projects()
+
+# Rename via ProjectStore (moves the .tres + thumbnail on disk). No-op on
+# empty/unchanged/collision. Keeps this card expanded under the new name.
+func _rename_project(project: VoxelProject, new_name: String) -> void:
+	var n := new_name.strip_edges()
+	if n.is_empty() or n == project.name:
+		return
+	if ProjectStore.rename_project(VoxelWorld.workspace, project.name, n):
+		_expanded_project_name = n
+		VoxelWorld.workspace_changed.emit()
+
+# Confirm-then-delete, replacing the old inline ✕. Drops the in-memory project + its
+# on-disk file and thumbnail.
+func _confirm_delete_project(project: VoxelProject) -> void:
+	var dialog := ConfirmationDialog.new()
+	dialog.title = "Delete Project"
+	dialog.dialog_text = "Delete \"%s\"? This can't be undone." % project.name
+	dialog.confirmed.connect(func():
+		VoxelWorld.workspace.remove_project(project.name)
+		ProjectStore.delete_project(project.name)  # also drop the on-disk file + thumbnail
+		if _expanded_project_name == project.name:
+			_expanded_project_name = ""
+		VoxelWorld.workspace_changed.emit()
+		dialog.queue_free())
+	dialog.canceled.connect(func(): dialog.queue_free())
+	get_tree().root.add_child(dialog)
+	dialog.popup_centered()
+
+# A fixed-size preview: the baked thumbnail texture when present, else the drawn voxyl
+# logo. mouse_filter IGNORE so clicks fall through to the header toggle.
+func _thumb_control(project: VoxelProject, dims: Vector2) -> Control:
+	var tex := _card_thumb(project)
+	if tex != null:
+		var rect := TextureRect.new()
+		rect.texture = tex
+		rect.custom_minimum_size = dims
+		rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		rect.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		return rect
+	var logo := Control.new()
+	logo.custom_minimum_size = dims
+	logo.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	logo.draw.connect(func(): _draw_voxyl_logo(logo))
+	return logo
+
+# Load (and cache) a project's thumbnail texture, or null when none is baked yet. Keyed
+# by path+mtime so a re-saved preview refreshes but repeated _refresh calls don't reload.
+func _card_thumb(project: VoxelProject) -> Texture2D:
+	var path := ProjectStore.thumbnail_path_for(project.name)
+	if not FileAccess.file_exists(path):
+		return null
+	var mtime := FileAccess.get_modified_time(path)
+	var cached: Dictionary = _thumb_cache.get(path, {})
+	if cached.get("mtime", -1) == mtime:
+		return cached["tex"]
+	var img := Image.load_from_file(path)
+	if img == null or img.is_empty():
+		return null
+	var tex := ImageTexture.create_from_image(img)
+	_thumb_cache[path] = {"mtime": mtime, "tex": tex}
+	return tex
+
+# Absolute date/time, or "unknown" for legacy projects that predate timestamps.
+func _format_date(unix: int) -> String:
+	if unix <= 0:
+		return "unknown"
+	var d := Time.get_datetime_dict_from_unix_time(unix)
+	return "%04d-%02d-%02d %02d:%02d" % [d.year, d.month, d.day, d.hour, d.minute]
+
+# Coarse relative time for the header ("just now", "5m ago", "3d ago", or a date).
+func _relative_time(unix: int) -> String:
+	if unix <= 0:
+		return "never"
+	var secs := int(Time.get_unix_time_from_system()) - unix
+	if secs < 60:
+		return "just now"
+	if secs < 3600:
+		return "%dm ago" % floori(secs / 60.0)
+	if secs < 86400:
+		return "%dh ago" % floori(secs / 3600.0)
+	if secs < 86400 * 7:
+		return "%dd ago" % floori(secs / 86400.0)
+	var d := Time.get_datetime_dict_from_unix_time(unix)
+	return "%04d-%02d-%02d" % [d.year, d.month, d.day]
+
+# "W × H × D" of the build's occupied bounds, or "empty" when nothing is placed.
+func _dimensions_text(project: VoxelProject) -> String:
+	if project.data == null:
+		return "empty"
+	var aabb := project.data.get_used_aabb()
+	if aabb.is_empty():
+		return "empty"
+	var dim: Vector3i = aabb[1] - aabb[0] + Vector3i.ONE
+	return "%d × %d × %d" % [dim.x, dim.y, dim.z]
 
 func _draw_voxyl_logo(ctl: Control) -> void:
 	var s: float = minf(ctl.size.x, ctl.size.y) / 14.0
@@ -162,6 +391,7 @@ func _on_new_project() -> void:
 			var project := VoxelWorld.workspace.add_project(n)
 			project.palette_names.append("Default")  # start subscribed to the built-in palette
 			ProjectStore.save_project(project)  # persist immediately so it survives a restart
+			_expanded_project_name = n  # select the new project so its detail is open
 			VoxelWorld.workspace_changed.emit()
 		dialog.queue_free()
 	)

@@ -134,6 +134,7 @@ func _ready() -> void:
 	_setup_viewport()
 	_setup_overlay()
 	VoxelWorld.project_opened.connect(_on_project_opened)
+	VoxelWorld.about_to_save.connect(_on_about_to_save)
 	VoxelWorld.block_changed.connect(func(_p, _s): _mark_dirty())
 	VoxelWorld.palette_stack_changed.connect(func(): _mark_dirty(); if _fly_mode: _overlay.queue_redraw())
 	VoxelWorld.block_type_changed.connect(func(): _mark_dirty(); if _fly_mode: _overlay.queue_redraw())
@@ -153,6 +154,26 @@ func _on_visibility_changed() -> void:
 		_release_cursor()
 	if _slice_active:
 		_exit_slice_select()
+
+# Bake a preview thumbnail from the live 3D viewport just before the project is saved, so
+# the home-screen card shows the build from the perspective the camera was last in — with
+# no render cost at listing time. Only the active project is saved, so only its thumbnail
+# refreshes. get_texture().get_image() returns the last drawn frame (current while this
+# view is rendering); ProjectStore.save_thumbnail skips empty images so a blank capture
+# never clobbers a good preview.
+const THUMB_MAX_SIDE := 320
+
+func _on_about_to_save(project: VoxelProject) -> void:
+	if project == null or _viewport == null:
+		return
+	var img := _viewport.get_texture().get_image()
+	if img == null or img.is_empty():
+		return
+	var longest := maxi(img.get_width(), img.get_height())
+	if longest > THUMB_MAX_SIDE:
+		var factor := float(THUMB_MAX_SIDE) / float(longest)
+		img.resize(int(img.get_width() * factor), int(img.get_height() * factor), Image.INTERPOLATE_BILINEAR)
+	ProjectStore.save_thumbnail(project.name, img)
 
 func _on_project_opened(_p: VoxelProject) -> void:
 	_mark_dirty()
