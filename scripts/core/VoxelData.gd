@@ -10,6 +10,56 @@ extends Resource
 # that only care about "what kind of block is here"; get_cell() exposes the rest.
 var cells: Dictionary = {}
 
+# --- Persisted mirror of `cells` --------------------------------------------
+# `cells` is the runtime structure (a live Dictionary of BlockCell objects). For
+# on-disk storage we don't embed one BlockCell sub-resource per voxel — a big build
+# would explode into thousands of inline SubResources. Instead pack() flattens the
+# grid into parallel Packed arrays (compact + fast to (de)serialize), and unpack()
+# rebuilds `cells` from them. These @export fields are the ONLY thing ProjectStore
+# writes; they carry the same intent (semantic ids + orientation), never materials.
+@export var _packed_positions: PackedInt32Array = PackedInt32Array()  # x,y,z triples
+@export var _packed_type_ids: PackedStringArray = PackedStringArray()
+@export var _packed_orientations: PackedInt32Array = PackedInt32Array()
+# Sparse tag side-channel: most cells carry no tags, so we only store the ones that
+# do — the cell's index into the arrays above, paired with its tags dictionary.
+@export var _packed_tag_indices: PackedInt32Array = PackedInt32Array()
+@export var _packed_tags: Array = []
+
+# Flatten `cells` into the @export packed mirror. Called by ProjectStore just before
+# saving so the written resource reflects the current grid.
+func pack() -> void:
+	_packed_positions = PackedInt32Array()
+	_packed_type_ids = PackedStringArray()
+	_packed_orientations = PackedInt32Array()
+	_packed_tag_indices = PackedInt32Array()
+	_packed_tags = []
+	var i := 0
+	for pos: Vector3i in cells:
+		var cell: BlockCell = cells[pos]
+		_packed_positions.append(pos.x)
+		_packed_positions.append(pos.y)
+		_packed_positions.append(pos.z)
+		_packed_type_ids.append(cell.type_id)
+		_packed_orientations.append(cell.orientation)
+		if not cell.tags.is_empty():
+			_packed_tag_indices.append(i)
+			_packed_tags.append(cell.tags.duplicate(true))
+		i += 1
+
+# Rebuild `cells` from the packed mirror. Called by ProjectStore after loading.
+func unpack() -> void:
+	cells = {}
+	var tags_by_index := {}
+	for j in _packed_tag_indices.size():
+		tags_by_index[_packed_tag_indices[j]] = _packed_tags[j]
+	var count := _packed_type_ids.size()
+	for i in count:
+		var pos := Vector3i(
+			_packed_positions[i * 3], _packed_positions[i * 3 + 1], _packed_positions[i * 3 + 2])
+		var orientation := _packed_orientations[i] if i < _packed_orientations.size() else 0
+		var tags: Dictionary = tags_by_index.get(i, {})
+		cells[pos] = BlockCell.new(_packed_type_ids[i], orientation, tags)
+
 # Set (or update) the block at pos. An empty type_id erases. Orientation/tags
 # default to "plain" unless supplied — callers that care pass them explicitly.
 func set_block(pos: Vector3i, type_id: String, orientation: int = 0, tags: Dictionary = {}) -> void:

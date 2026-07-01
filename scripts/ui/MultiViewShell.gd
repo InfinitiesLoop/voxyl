@@ -19,6 +19,9 @@ var _last_overlay_rect := Rect2()
 var _drop_layer: PaneDropLayer
 var _last_guide: Dictionary = {}
 var _last_active_id := 0
+# Set during apply_layout: the pane flagged as focused in the saved descriptor, so the
+# rebuild can restore focus to it once the whole tree is built.
+var _focus_from_layout: ViewPane = null
 
 func _ready() -> void:
 	_focus_overlay = Control.new()
@@ -42,9 +45,33 @@ func _ready() -> void:
 	_set_focus(pane)
 
 	VoxelWorld.slice_view_requested.connect(_on_slice_requested)
+	# Restore this project's saved layout when it opens; write the live layout back into
+	# the project just before it's persisted. The shell owns the live view instances but
+	# not their persisted form — the project is the canonical home for that (Principle 2).
+	VoxelWorld.project_opened.connect(_on_project_opened)
+	VoxelWorld.about_to_save.connect(_on_about_to_save)
 	set_process(true)
 
-	apply_preset(Preset.GRID)
+	apply_preset(Preset.SINGLE)
+
+# ---------------------------------------------------------------------------
+# Project layout persistence
+# ---------------------------------------------------------------------------
+
+func _on_project_opened(project: VoxelProject) -> void:
+	# Restore the saved arrangement, or fall back to a single pane for a project that
+	# has never had a layout saved (a fresh build, or one made before layouts persisted).
+	if not apply_layout(project.layout):
+		apply_preset(Preset.SINGLE)
+
+func _on_about_to_save(project: VoxelProject) -> void:
+	project.layout = serialize_layout()
+
+# Structure/tab/offset/camera changed → the project's saved layout is stale. Cheap
+# debounce restart; VoxelWorld ignores it when no project is active (e.g. the initial
+# GRID built in _ready before anything is open).
+func _mark_layout_dirty() -> void:
+	VoxelWorld.mark_dirty()
 
 func _notification(what: int) -> void:
 	# Fast cleanup on drag end. NOTIFICATION_DRAG_BEGIN is NOT used here because
@@ -115,6 +142,7 @@ func close_focused_pane() -> void:
 		pane.remove_child(c)
 		c.queue_free()
 	collapse_if_empty(pane)  # explicit so an already-empty pane collapses too
+	_mark_layout_dirty()
 
 func add_3d_view_to_focused() -> void:
 	var pane := _first_empty_pane()
@@ -123,6 +151,7 @@ func add_3d_view_to_focused() -> void:
 	if pane:
 		_attach_view(pane, _make_3d_view())
 		_set_focus(pane)
+		_mark_layout_dirty()
 
 # Gate every view's input while a modal overlay (the inventory screen) is up.
 # Driven by Main when the inventory opens/closes; the active 3D view remembers and
@@ -148,6 +177,118 @@ func apply_preset(preset: Preset) -> void:
 		if p.get_tab_count() > 0:
 			p.current_tab = 0
 	_set_focus(panes[0])
+	_mark_layout_dirty()
+
+# ---------------------------------------------------------------------------
+# Layout (de)serialization — a plain-data descriptor of the split tree + panes +
+# each view's persisted state. Consumed by _on_project_opened / _on_about_to_save so
+# a project reopens with the exact arrangement (and framing) it was saved with.
+# ---------------------------------------------------------------------------
+
+# Snapshot the whole document area as a nested Dictionary/Array descriptor.
+func serialize_layout() -> Dictionary:
+	var root := _structural_root()
+	if root == null:
+		return {}
+	return {"tree": _serialize_node(root)}
+
+func _serialize_node(node: Control) -> Dictionary:
+	if node is SplitContainer:
+		var children: Array = []
+		for c in node.get_children():
+			if c is ViewPane or c is SplitContainer:
+				children.append(_serialize_node(c))
+		return {
+			"type": "split",
+			"vertical": node is VSplitContainer,
+			"offset": (node as SplitContainer).split_offset,
+			"children": children,
+		}
+	var pane := node as ViewPane
+	var views: Array = []
+	for i in pane.get_tab_count():
+		views.append(_serialize_view(pane.get_tab_control(i)))
+	return {
+		"type": "pane",
+		"current": pane.current_tab,
+		"focused": pane == focused_pane,
+		"views": views,
+	}
+
+# A view descriptor: its kind plus whatever state the view chooses to persist
+# (camera/pan/zoom/slice), merged flat so apply_view_state can read it straight back.
+func _serialize_view(view: Node) -> Dictionary:
+	var desc := {"kind": view.view_kind() if view.has_method("view_kind") else "3d"}
+	if view.has_method("get_view_state"):
+		desc.merge(view.get_view_state())
+	return desc
+
+# Rebuild the document area from a descriptor. Returns false (and changes nothing) for
+# an empty/absent descriptor so the caller can apply a default preset instead.
+func apply_layout(layout: Dictionary) -> bool:
+	var tree: Variant = layout.get("tree", null)
+	if not (tree is Dictionary) or (tree as Dictionary).is_empty():
+		return false
+	_clear_structure()
+	_focus_from_layout = null
+	var root := _build_node(tree)
+	add_child(root)
+	_normalize_children()
+	_set_focus(_focus_from_layout if is_instance_valid(_focus_from_layout) else _first_pane())
+	return true
+
+# Tear down the current split tree + all views (mirrors the top of apply_preset).
+func _clear_structure() -> void:
+	for v in _all_views():
+		v.get_parent().remove_child(v)
+		v.queue_free()
+	for c in get_children():
+		if c != _focus_overlay and c != _drop_layer:
+			remove_child(c)
+			c.queue_free()
+
+# Recursively build a split or a pane (with its views) from a descriptor. Views are
+# attached and their state applied here; the pane need not be in the shell tree yet
+# (2D grids self-center from _user_pan on their first draw once shown).
+func _build_node(desc: Dictionary) -> Control:
+	if desc.get("type", "") == "split":
+		var sc: SplitContainer
+		if bool(desc.get("vertical", false)):
+			sc = _v()
+		else:
+			sc = _h()
+		for child in desc.get("children", []):
+			if child is Dictionary:
+				sc.add_child(_build_node(child))
+		if desc.has("offset"):
+			sc.split_offset = int(desc["offset"])
+		return sc
+	var pane := _make_pane()
+	for vd in desc.get("views", []):
+		if not (vd is Dictionary):
+			continue
+		var view := _make_view_from_desc(vd)
+		_attach_view(pane, view, false)
+		if view.has_method("apply_view_state"):
+			view.apply_view_state(vd)
+	if pane.get_tab_count() > 0:
+		pane.current_tab = clampi(int(desc.get("current", 0)), 0, pane.get_tab_count() - 1)
+	if bool(desc.get("focused", false)):
+		_focus_from_layout = pane
+	return pane
+
+func _make_view_from_desc(desc: Dictionary) -> Control:
+	if desc.get("kind", "3d") == "slice":
+		return _make_slice_view(int(desc.get("axis", 1)), desc.get("center", Vector3i.ZERO))
+	return _make_3d_view()
+
+# The single structural child of the shell (the split-tree root or lone pane), i.e.
+# everything that isn't the focus overlay or the drop layer.
+func _structural_root() -> Control:
+	for c in get_children():
+		if c != _focus_overlay and c != _drop_layer:
+			return c as Control
+	return null
 
 # ---------------------------------------------------------------------------
 # Structural operations
@@ -165,6 +306,7 @@ func _split(pane: ViewPane, vertical: bool) -> void:
 	sc.add_child(new_pane)
 	_normalize_children()
 	_set_focus(new_pane)
+	_mark_layout_dirty()
 
 func collapse_if_empty(pane: ViewPane) -> void:
 	call_deferred("_do_collapse", pane)
@@ -188,6 +330,7 @@ func _do_collapse(pane: ViewPane) -> void:
 	_normalize_children()
 	if not is_instance_valid(focused_pane):
 		_set_focus(_first_pane())
+	_mark_layout_dirty()
 
 # Swap `old` for `new` in old's parent, preserving the child slot.
 func _replace_node(old: Control, new: Control) -> void:
@@ -245,6 +388,7 @@ func _make_pane() -> ViewPane:
 func _on_pane_tab_changed(_tab: int, pane: ViewPane) -> void:
 	if pane == focused_pane:
 		_update_active_views()
+	_mark_layout_dirty()
 
 func _make_3d_view() -> Control:
 	var v := View3DScene.instantiate()
@@ -287,6 +431,7 @@ func _on_slice_requested(axis: int, center: Vector3i, flipped: bool = false) -> 
 	_attach_view(pane, view)
 	view.configure(axis, center, flipped)  # now in-tree, so the 2D view centers itself
 	_set_focus(pane)
+	_mark_layout_dirty()
 
 func _slice_title(axis: int, c: Vector3i) -> String:
 	var label: String = (["X", "Y", "Z"] as Array)[axis]
@@ -358,6 +503,7 @@ func drop_tab(data: Variant, global_pos: Vector2) -> void:
 	view.get_parent().remove_child(view)
 	_attach_view(pane, view)
 	_set_focus(pane)
+	_mark_layout_dirty()
 
 func _view_from_drag(data: Variant) -> Control:
 	var path: NodePath = data.get("from_path", NodePath())
@@ -418,10 +564,12 @@ func _h() -> HSplitContainer:
 	var s := HSplitContainer.new()
 	s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	s.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	s.dragged.connect(func(_offset): _mark_layout_dirty())
 	return s
 
 func _v() -> VSplitContainer:
 	var s := VSplitContainer.new()
 	s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	s.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	s.dragged.connect(func(_offset): _mark_layout_dirty())
 	return s

@@ -53,6 +53,10 @@ var _mirror_h := false
 # Another view's active slice, broadcast by the shell: {axis, offset} or {}.
 var _guide: Dictionary = {}
 
+# True only while apply_view_state restores a saved transform, so the pan/zoom/rotate
+# sites don't mistake the restore for a user gesture and reschedule an autosave.
+var _applying_state := false
+
 @onready var _layer_label: Label = $Toolbar/LayerBar/LayerLabel
 @onready var _grid_area: Control = $GridArea
 
@@ -392,6 +396,7 @@ func _zoom_at(anchor: Vector2, factor: float) -> void:
 	_cell_px = new_px
 	_user_pan += anchor - (_draw_origin() + grid_point * _cell_px)
 	_grid_area.queue_redraw()
+	_mark_view_dirty()
 
 func _on_grid_input(event: InputEvent) -> void:
 	if _suspended:
@@ -447,6 +452,7 @@ func _on_grid_input(event: InputEvent) -> void:
 				_user_pan += event.position - _pan_last
 				_pan_last = event.position
 				_grid_area.queue_redraw()
+				_mark_view_dirty()
 			else:
 				_panning = false
 		elif _is_placing or _is_erasing:
@@ -552,6 +558,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_F:
 			_mirror_h = not _mirror_h
 			_grid_area.queue_redraw()
+			_mark_view_dirty()
 			get_viewport().set_input_as_handled()
 
 func _cycle_hotbar(delta: int) -> void:
@@ -639,24 +646,72 @@ func set_guide(desc: Dictionary) -> void:
 func get_guide_descriptor() -> Dictionary:
 	return {"axis": axis, "offset": slice_pos}
 
+# ---------------------------------------------------------------------------
+# Persisted view state (the shell reads/writes this to save layout with a project)
+# ---------------------------------------------------------------------------
+
+func view_kind() -> String:
+	return "slice"
+
+# The slice this view shows (axis/center/flipped — how the shell re-creates it) plus
+# its in-plane transform (pan/zoom/rotation), so a reopened project restores the exact
+# framing.
+func get_view_state() -> Dictionary:
+	return {
+		"axis": axis,
+		"center": _center,
+		"slice_pos": slice_pos,
+		"flipped": _mirror_h,
+		"rotation": _rotation,
+		"cell_px": _cell_px,
+		"user_pan": _user_pan,
+	}
+
+func apply_view_state(state: Dictionary) -> void:
+	_applying_state = true
+	axis = int(state.get("axis", axis))
+	_center = state.get("center", _center)
+	slice_pos = int(state.get("slice_pos", slice_pos))
+	_mirror_h = bool(state.get("flipped", _mirror_h))
+	_rotation = int(state.get("rotation", _rotation))
+	_cell_px = float(state.get("cell_px", _cell_px))
+	_user_pan = state.get("user_pan", _user_pan)
+	# The label/grid are @onready — null until this view enters the tree. When state is
+	# applied pre-attach (layout rebuild), _ready refreshes the label from these members,
+	# so just skip the update here rather than dereferencing a null node.
+	if _layer_label != null:
+		_update_slice_label()
+	if _grid_area != null:
+		_grid_area.queue_redraw()
+	_applying_state = false
+
+# Camera-equivalent for the 2D grid: pan/zoom/rotation changed, so reschedule an
+# autosave. No-op while restoring a saved transform.
+func _mark_view_dirty() -> void:
+	if not _applying_state:
+		VoxelWorld.mark_dirty()
+
 func set_slice(value: int) -> void:
 	if not VoxelWorld.active_project:
 		return
 	slice_pos = value
 	_update_slice_label()
 	_grid_area.queue_redraw()
+	_mark_view_dirty()
 
 # Rotate the 2D view 90° clockwise (↻). Resets pan so the center stays visible.
 func rotate_cw() -> void:
 	_rotation = (_rotation + 1) % 4
 	_user_pan = Vector2.ZERO
 	_grid_area.queue_redraw()
+	_mark_view_dirty()
 
 # Rotate the 2D view 90° counter-clockwise (↺).
 func rotate_ccw() -> void:
 	_rotation = (_rotation + 3) % 4
 	_user_pan = Vector2.ZERO
 	_grid_area.queue_redraw()
+	_mark_view_dirty()
 
 func _on_layer_down_pressed() -> void:
 	set_slice(slice_pos - 1)

@@ -30,7 +30,7 @@ func _run() -> void:
 	add_child(shell)
 	await get_tree().process_frame
 
-	_check("starts with four panes (default 2×2)", _panes(shell).size() == 4)
+	_check("starts with one pane (default single)", _panes(shell).size() == 1)
 	_check("starts with one (3D) view", _views(shell).size() == 1)
 
 	# Oriented + shaped cells must rebuild in 3D without error (stairs/slab meshes).
@@ -118,7 +118,59 @@ func _run() -> void:
 	_check("emptied source pane collapses after drop", _panes(shell).size() == 1)
 	_check("no views lost in the move", _views(shell).size() == 3)
 
+	await _check_layout_roundtrip(shell)
+
 	shell.queue_free()
+
+# A serialized layout must rebuild the same structure — pane/view counts, split
+# orientation + offset, and each slice view's axis/transform. This is what ties a
+# project's arrangement to disk (MultiViewShell.serialize_layout ↔ apply_layout).
+func _check_layout_roundtrip(shell: MultiViewShell) -> void:
+	# Build a known structure: a horizontal split, its right pane split vertically,
+	# with a couple of slices carrying distinct transforms.
+	shell.apply_preset(MultiViewShell.Preset.COLUMNS)
+	await get_tree().process_frame
+	VoxelWorld.request_slice_view(2, Vector3i(1, 2, 3))
+	await get_tree().process_frame
+	# Give the fresh slice a non-default framing so we can prove it round-trips.
+	var a_slice: Node = null
+	for v in _views(shell):
+		if v.has_method("view_kind") and v.view_kind() == "slice":
+			a_slice = v
+			break
+	_check("a slice view exists to round-trip", a_slice != null)
+	if a_slice != null:
+		a_slice.apply_view_state({"axis": 2, "center": Vector3i(1, 2, 3),
+			"slice_pos": 3, "rotation": 1, "cell_px": 48.0, "user_pan": Vector2(12, -7)})
+
+	var before_panes := _panes(shell).size()
+	var before_views := _views(shell).size()
+	var layout := shell.serialize_layout()
+	_check("serialize_layout produces a tree", layout.has("tree"))
+
+	# Scramble the layout, then restore it from the descriptor.
+	shell.apply_preset(MultiViewShell.Preset.SINGLE)
+	await get_tree().process_frame
+	_check("apply_layout accepts a real descriptor", shell.apply_layout(layout))
+	await get_tree().process_frame
+
+	_check("round-trip restores pane count", _panes(shell).size() == before_panes)
+	_check("round-trip restores view count", _views(shell).size() == before_views)
+
+	var restored_slice: Node = null
+	for v in _views(shell):
+		if v.has_method("view_kind") and v.view_kind() == "slice":
+			restored_slice = v
+			break
+	_check("round-trip restores a slice view", restored_slice != null)
+	if restored_slice != null:
+		var st: Dictionary = restored_slice.get_view_state()
+		_check("slice axis survives round-trip", int(st.get("axis", -1)) == 2)
+		_check("slice zoom survives round-trip", is_equal_approx(st.get("cell_px", 0.0), 48.0))
+		_check("slice rotation survives round-trip", int(st.get("rotation", -1)) == 1)
+
+	# apply_layout rejects an empty/absent descriptor (caller falls back to a preset).
+	_check("apply_layout rejects an empty descriptor", not shell.apply_layout({}))
 
 # Phase 1: a textured/animated block must render through the new per-face texture
 # path — a real PNG on disk, resolved via the workspace library into per-surface

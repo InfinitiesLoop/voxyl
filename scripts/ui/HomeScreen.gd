@@ -125,6 +125,7 @@ func _make_project_row(project: VoxelProject) -> Control:
 	del_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	del_btn.pressed.connect(func():
 		VoxelWorld.workspace.remove_project(project.name)
+		ProjectStore.delete_project(project.name)  # also drop the on-disk file, or it reloads next launch
 		VoxelWorld.workspace_changed.emit()
 	)
 	hbox.add_child(del_btn)
@@ -158,7 +159,9 @@ func _on_new_project() -> void:
 	dialog.confirmed.connect(func():
 		var n := input.text.strip_edges()
 		if not n.is_empty() and not VoxelWorld.workspace.get_project(n):
-			VoxelWorld.workspace.add_project(n)
+			var project := VoxelWorld.workspace.add_project(n)
+			project.palette_names.append("Default")  # start subscribed to the built-in palette
+			ProjectStore.save_project(project)  # persist immediately so it survives a restart
 			VoxelWorld.workspace_changed.emit()
 		dialog.queue_free()
 	)

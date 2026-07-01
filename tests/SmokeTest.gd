@@ -20,6 +20,7 @@ func _ready() -> void:
 	_test_reorient()
 	_test_asset_library()
 	_test_library_serialization()
+	_test_project_persistence()
 	_test_mc_import()
 	_test_statemap_multipart()
 	_test_mc_import_multipart()
@@ -382,6 +383,54 @@ func _test_library_serialization() -> void:
 
 	_rm_rf(AssetLibrary.ROOT)
 	AssetLibrary.ROOT = saved_root
+
+# Projects persist to disk: voxel data (positions/semantics/orientation/tags), the
+# palette stack, the saved view layout, and the hotbar — all surviving a save + a
+# reload into a fresh workspace. This is the whole point of ProjectStore.
+func _test_project_persistence() -> void:
+	print("-- project persistence round-trip")
+	var saved_root := ProjectStore.ROOT
+	ProjectStore.ROOT = "user://__voxyl_projtest__"
+	_rm_rf(ProjectStore.ROOT)
+
+	var ws := VoxelWorkspace.new()
+	var p := ws.add_project("Round Trip")
+	p.palette_names = ["Default", "Extra"]
+	p.data.set_block(Vector3i(1, 2, 3), "Base", 5)
+	p.data.set_block(Vector3i(-4, 0, 7), "Accent")            # negative coords are valid
+	p.data.set_block(Vector3i(0, 0, 0), "Trim", 0, {"note": "hi"})  # a tagged cell
+	p.hotbar = ["Base", "", "Accent"]
+	p.active_slot = 2
+	p.layout = {"tree": {"type": "pane", "current": 0, "focused": true,
+		"views": [{"kind": "3d", "yaw": 12.5}]}}
+	_check("save project ok", ProjectStore.save_project(p) == OK)
+
+	# Reload into a pristine workspace (proves nothing rides in memory).
+	var ws2 := VoxelWorkspace.new()
+	ProjectStore.load_persisted(ws2)
+	var q := ws2.get_project("Round Trip")
+	_check("project reloaded from disk", q != null)
+	if q != null:
+		var expected_stack: Array[String] = ["Default", "Extra"]
+		_check("palette stack round-trips", q.palette_names == expected_stack)
+		_check("cell count round-trips", q.data.cells.size() == 3)
+		_check("cell semantic round-trips", q.data.get_block(Vector3i(1, 2, 3)) == "Base")
+		_check("cell orientation round-trips", q.data.get_orientation(Vector3i(1, 2, 3)) == 5)
+		_check("negative-coord cell round-trips", q.data.get_block(Vector3i(-4, 0, 7)) == "Accent")
+		var tagged := q.data.get_cell(Vector3i(0, 0, 0))
+		_check("cell tags round-trip", tagged != null and tagged.tags.get("note", "") == "hi")
+		_check("hotbar round-trips",
+			q.hotbar.size() == 3 and q.hotbar[0] == "Base" and q.hotbar[2] == "Accent")
+		_check("active slot round-trips", q.active_slot == 2)
+		_check("layout round-trips",
+			((q.layout.get("tree", {}) as Dictionary).get("type", "")) == "pane")
+
+	_check("has_saved_projects sees the file", ProjectStore.has_saved_projects())
+	_check("delete removes the file", ProjectStore.delete_project("Round Trip") == OK)
+	_check("no saved projects after delete", not ProjectStore.has_saved_projects())
+
+	_rm_rf(ProjectStore.ROOT)
+	ProjectStore.ROOT = saved_root
 
 # Phase 2: the MC importer translates a synthetic `assets/<ns>/...` tree (we never
 # bundle real MC assets — decision 4) into voxyl's neutral material layer. Exercises

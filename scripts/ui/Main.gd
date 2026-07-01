@@ -25,10 +25,18 @@ func _build_inventory() -> void:
 	_inventory.closed.connect(func(): _shell.set_views_suspended(false))
 
 func _go_home() -> void:
+	# Flush the build (voxels, layout, hotbar) before leaving the editor so nothing is
+	# lost when returning to the home screen.
+	VoxelWorld.save_active_project()
 	if _inventory:
 		_inventory.set_armed(false)  # also closes it if open
 	_home.visible = true
 	_editor.visible = false
+
+# Persist the open project on app close (the debounce timer may not have fired yet).
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		VoxelWorld.save_active_project()
 
 func _open_editor(project: VoxelProject) -> void:
 	VoxelWorld.open(project)

@@ -14,8 +14,15 @@ signal block_type_changed()
 # slot reassignment; active_slot_changed when the highlighted slot moves.
 signal hotbar_changed()
 signal active_slot_changed(slot: int)
+# Fired right before the active project is persisted, so owners of project-tied state
+# that VoxelWorld doesn't hold itself (the view layout, owned by MultiViewShell) can
+# write their current snapshot into the project first. See _flush_save.
+signal about_to_save(project: VoxelProject)
 
 const HOTBAR_SIZE := 12
+# Debounce window for autosave: a burst of edits (a paint drag, an orbit) collapses
+# into a single write this long after the last change.
+const AUTOSAVE_DELAY := 1.0
 
 var workspace: VoxelWorkspace
 var active_project: VoxelProject
@@ -27,17 +34,57 @@ var active_tool: Tool = Tool.PAINT
 var hotbar: Array[String] = []
 var active_slot: int = 0
 
+# One-shot timer backing the debounced autosave (created in _ready).
+var _save_timer: Timer
+
 func _ready() -> void:
 	workspace = VoxelWorkspace.new()
 	hotbar.resize(HOTBAR_SIZE)
 	hotbar.fill("")
-	# Seed the built-in floor (basic library + Default palette + first project), then
-	# load any on-disk named libraries and saved palettes over it. `basic` is re-seeded
-	# here so a missing baseline block is always restored (it can't be emptied). A fresh
-	# install with nothing imported just keeps the code-seeded defaults.
-	_populate_defaults()
+	# Seed the built-in material floor (basic library + Default palette), then load any
+	# on-disk named libraries and saved palettes over it. `basic` is re-seeded here so a
+	# missing baseline block is always restored (it can't be emptied).
+	_seed_material_defaults()
 	LibraryStore.load_persisted(workspace)
+	# Load saved projects (the builds themselves). Only seed the code-built "first build"
+	# when nothing has ever been saved — a returning user gets their own projects, not a
+	# fresh demo over the top of them.
+	ProjectStore.load_persisted(workspace)
+	if workspace.projects.is_empty():
+		_seed_default_project()
+	_setup_autosave()
 	workspace_changed.emit()
+
+func _setup_autosave() -> void:
+	_save_timer = Timer.new()
+	_save_timer.one_shot = true
+	_save_timer.wait_time = AUTOSAVE_DELAY
+	_save_timer.timeout.connect(_flush_save)
+	add_child(_save_timer)
+
+# Schedule an autosave of the active project. Cheap to call on every mutation — it just
+# (re)starts the debounce timer, so a burst of edits writes once when it settles.
+func mark_dirty() -> void:
+	if active_project != null and _save_timer != null:
+		_save_timer.start()
+
+# Persist the active project now (used on debounce timeout, and synchronously on
+# go-home / app quit). Copies VoxelWorld-owned project state (the hotbar) into the
+# project and lets other owners (the view layout) fill theirs via about_to_save first.
+func save_active_project() -> void:
+	if active_project == null:
+		return
+	if _save_timer != null:
+		_save_timer.stop()
+	_flush_save()
+
+func _flush_save() -> void:
+	if active_project == null:
+		return
+	active_project.hotbar = hotbar.duplicate()
+	active_project.active_slot = active_slot
+	about_to_save.emit(active_project)
+	ProjectStore.save_project(active_project)
 
 # Rebuild a pristine workspace from code alone. Tests call this first so they run
 # against the code-seeded defaults regardless of whatever LibraryStore loaded at
@@ -53,13 +100,24 @@ func reset_for_tests() -> void:
 
 func open(project: VoxelProject) -> void:
 	active_project = project
-	_seed_hotbar_from_palette()
+	_load_hotbar_from_project()
 	var names := merged_semantic_names()
 	selected_semantic = hotbar[active_slot] if not hotbar[active_slot].is_empty() \
 		else (names[0] if not names.is_empty() else "")
 	project_opened.emit(project)
 	hotbar_changed.emit()
 	active_slot_changed.emit(active_slot)
+
+# Restore this project's saved hotbar into the shared live hotbar, then fill any still-
+# empty slots from the palette so a project saved before it had a full bar is still
+# usable. active_slot is clamped in case HOTBAR_SIZE ever shrinks.
+func _load_hotbar_from_project() -> void:
+	hotbar.fill("")
+	var saved := active_project.hotbar
+	for i in mini(saved.size(), HOTBAR_SIZE):
+		hotbar[i] = saved[i]
+	active_slot = clampi(active_project.active_slot, 0, HOTBAR_SIZE - 1)
+	_seed_hotbar_from_palette()
 
 # Place a block. Orientation is decided by the edit view at placement time
 # (2D: the clicked quadrant; 3D: how you place it), so it's always explicit here.
@@ -68,6 +126,7 @@ func set_block(pos: Vector3i, semantic_name: String, orientation: int = 0) -> vo
 		return
 	active_project.data.set_block(pos, semantic_name, orientation)
 	block_changed.emit(pos, semantic_name)
+	mark_dirty()
 
 # Re-orient an existing cell in place (the R / Shift+R rotate tools). No-op if the
 # cell is empty; emits block_changed so every view repaints.
@@ -79,12 +138,14 @@ func reorient_block(pos: Vector3i, orientation: int) -> void:
 		return
 	cell.orientation = orientation
 	block_changed.emit(pos, cell.type_id)
+	mark_dirty()
 
 func clear_block(pos: Vector3i) -> void:
 	if not active_project:
 		return
 	active_project.data.clear_block(pos)
 	block_changed.emit(pos, "")
+	mark_dirty()
 
 func get_block(pos: Vector3i) -> String:
 	return active_project.data.get_block(pos) if active_project else ""
@@ -203,18 +264,25 @@ func merged_semantic_names() -> Array[String]:
 
 func add_palette_to_stack(project: VoxelProject, palette_name: String) -> void:
 	project.palette_names.append(palette_name)
-	if project == active_project:
-		palette_stack_changed.emit()
+	_after_stack_change(project)
 
 func remove_palette_from_stack(project: VoxelProject, index: int) -> void:
 	project.palette_names.remove_at(index)
-	if project == active_project:
-		palette_stack_changed.emit()
+	_after_stack_change(project)
 
 func move_palette_in_stack(project: VoxelProject, from_idx: int, to_idx: int) -> void:
 	project.palette_names.insert(to_idx, project.palette_names.pop_at(from_idx))
+	_after_stack_change(project)
+
+# Shared tail for the palette-stack mutators: repaint the active project's views and
+# persist the change. A stack edit on a non-active project is written straight through
+# (it won't ride the active project's debounce timer).
+func _after_stack_change(project: VoxelProject) -> void:
 	if project == active_project:
 		palette_stack_changed.emit()
+		mark_dirty()
+	else:
+		ProjectStore.save_project(project)
 
 func select_semantic(semantic_name: String) -> void:
 	selected_semantic = semantic_name
@@ -231,6 +299,7 @@ func select_slot(slot: int) -> void:
 	active_slot = slot
 	active_slot_changed.emit(slot)
 	select_semantic(hotbar[slot])
+	mark_dirty()
 
 # Assign a semantic to a slot (does not change which slot is active).
 func set_hotbar_slot(slot: int, semantic_name: String) -> void:
@@ -240,6 +309,7 @@ func set_hotbar_slot(slot: int, semantic_name: String) -> void:
 	hotbar_changed.emit()
 	if slot == active_slot:
 		select_semantic(semantic_name)
+	mark_dirty()
 
 # Put a semantic "in hand": if it's already on the hotbar, just jump to that
 # slot; otherwise drop it into the active slot. This is MC creative "pick block".
@@ -253,6 +323,7 @@ func pick_block(semantic_name: String) -> void:
 		hotbar[active_slot] = semantic_name
 		hotbar_changed.emit()
 		select_semantic(semantic_name)
+		mark_dirty()
 
 # Fill empty hotbar slots from the palette so a freshly opened project is usable.
 # Existing assignments are preserved; only blanks get filled, in palette order.
@@ -275,28 +346,22 @@ func set_active_tool(tool: Tool) -> void:
 func request_slice_view(axis: int, center: Vector3i, flipped: bool = false) -> void:
 	slice_view_requested.emit(axis, center, flipped)
 
+# Full code-built defaults: the material floor + the demo project. Used by
+# reset_for_tests so tests run against a pristine, disk-independent workspace.
 func _populate_defaults() -> void:
+	_seed_material_defaults()
+	_seed_default_project()
+
+# The always-present material layer: the basic library + the Default palette.
+func _seed_material_defaults() -> void:
 	_add_basic_library()
 	_add_default_palette()
+
+# The "first build" — only seeded on a truly fresh install (no saved projects). Starts
+# empty so the user opens onto a blank canvas rather than a pre-made shape.
+func _seed_default_project() -> void:
 	var project := workspace.add_project("My First Build")
 	project.palette_names.append("Default")
-	_add_default_blocks(project)
-
-func _add_default_blocks(project: VoxelProject) -> void:
-	# 3D plus: three 2-cell-wide bars along each world axis, roughly 10×10×10.
-	# Each arm uses a different semantic so the palette is immediately visible.
-	for x in range(0, 10):  # X arm
-		for y in range(4, 6):
-			for z in range(4, 6):
-				project.data.set_block(Vector3i(x, y, z), "Base")
-	for x in range(4, 6):  # Y arm (overwrites center)
-		for y in range(0, 10):
-			for z in range(4, 6):
-				project.data.set_block(Vector3i(x, y, z), "Accent")
-	for x in range(4, 6):  # Z arm (overwrites center again)
-		for y in range(4, 6):
-			for z in range(0, 10):
-				project.data.set_block(Vector3i(x, y, z), "Highlight")
 
 # Seed the code-built `basic` library (decision 5): a small set of generic +
 # natural block types, no `minecraft:` ids, so the default floor is voxel-agnostic

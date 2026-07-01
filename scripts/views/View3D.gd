@@ -85,6 +85,10 @@ var _sky_label_timer: float = 0.0
 # --- Dirty flag ---
 var _dirty := false
 
+# True only while apply_view_state is restoring a saved camera, so _update_camera
+# doesn't mistake the restore for a user move and reschedule an autosave.
+var _applying_state := false
+
 # --- Slice-select mode ---
 # A transient modal state for choosing a 2D slice. All of this is view-local:
 # the chosen axis/center are handed to a fresh View2DGrid instance on confirm.
@@ -136,6 +140,11 @@ func _ready() -> void:
 	VoxelWorld.selection_changed.connect(func(_s): if _fly_mode: _overlay.queue_redraw())
 	visibility_changed.connect(_on_visibility_changed)
 	set_process(true)
+	# A view created while a project is already open (e.g. spawned during a layout
+	# restore, after project_opened has already fired) must render the current build
+	# itself — otherwise it stays blank until the next block_changed signal.
+	if VoxelWorld.active_project:
+		_mark_dirty()
 
 func _on_visibility_changed() -> void:
 	if visible:
@@ -629,6 +638,36 @@ func _release_cursor() -> void:
 
 # Called by the shell when focus changes. Losing focus drops any captured
 # cursor and exits slice-select so a background view can't keep grabbing input.
+# ---------------------------------------------------------------------------
+# Persisted view state (the shell reads/writes this to save layout with a project)
+# ---------------------------------------------------------------------------
+
+func view_kind() -> String:
+	return "3d"
+
+# Snapshot the camera (position + look angles) and current skybox, so a reopened
+# project restores the exact viewpoint. Fly/drag/slice-select are transient and not
+# saved.
+func get_view_state() -> Dictionary:
+	return {
+		"camera_pos": _camera_pos,
+		"yaw": _yaw,
+		"pitch": _pitch,
+		"sky": _current_sky,
+	}
+
+func apply_view_state(state: Dictionary) -> void:
+	_camera_pos = state.get("camera_pos", _camera_pos)
+	_yaw = state.get("yaw", _yaw)
+	_pitch = state.get("pitch", _pitch)
+	_current_sky = int(state.get("sky", _current_sky))
+	_applying_state = true
+	if _world_env != null:
+		_apply_sky()
+	if _camera != null:
+		_update_camera()
+	_applying_state = false
+
 func set_active(active: bool) -> void:
 	if _active == active:
 		return
@@ -705,6 +744,10 @@ func _update_camera() -> void:
 		_grid_plane.position.z = _camera_pos.z
 	if _sky_sphere:
 		_sky_sphere.position = _camera_pos
+	# Camera moved → the project's saved viewpoint is stale. Cheap debounce restart;
+	# skipped while we're applying a loaded state (that's not a user change).
+	if not _applying_state:
+		VoxelWorld.mark_dirty()
 
 func _get_look_dir() -> Vector3:
 	var yaw_rad := deg_to_rad(_yaw)
