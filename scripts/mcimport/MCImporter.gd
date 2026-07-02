@@ -123,17 +123,33 @@ func import_block(ns: String, block_id: String, name_override := "") -> BlockTyp
 	# path resolve; sample its dominant texture for the planning color (decision 1).
 	return _emit_block_type(bt_name, state_map.default_model_id(), state_map)
 
-# Translate an MC `multipart` blockstate (fences, panes, bars) into a multipart
-# BlockStateMap. Each rule is { when?, apply }: `apply` names the model (+ optional
-# x/y rotation), `when` the connection condition. Boolean direction conditions
-# (north/east/…=true/false) are translated; multi-value vocabularies (walls'
-# low/tall, redstone's side/up) are out of this phase — those parts are skipped
-# (warned), so the block still imports with whatever parts we can render (at least
-# the always-on post).
+# Translate an MC `when` connection value ("side"/"up"/etc.) into voxyl's neutral
+# vocabulary. Only the importer (this file) ever sees MC's own words — core files
+# (BlockStateMap, VoxelWorld, View3D) only ever deal in "none"/"low"/"tall". A key
+# NOT in this table passes through unchanged (see _parse_direction_value) so a
+# modded block's own vocabulary still round-trips instead of being dropped, even
+# though it won't match anything _cell_connections produces yet.
+const _CONNECT_ALIAS := {
+	"true": true, "false": false,
+	"none": "none", "low": "low", "tall": "tall",
+	"side": "low", "up": "tall",   # redstone wire's flat-vs-climbing states
+}
+
+# Translate an MC `multipart` blockstate (fences, panes, bars, walls, redstone-style
+# wiring) into a multipart BlockStateMap. Each rule is { when?, apply }: `apply`
+# names the model (+ optional x/y rotation), `when` the connection condition.
+# Handles boolean direction conditions (north/east/…=true/false), multi-value
+# direction vocabularies (walls' low/tall, redstone's side/up, pipe-shorthand ORs
+# like "side|up"), non-direction properties flattened to a chosen default (age,
+# flower_amount, slot_N_occupied — see _collect_when_defaults), and top-level `AND`
+# (see _parse_and). The one remaining unhandled shape is a nested OR *inside* an AND
+# that itself combines with another OR (vanilla doesn't use this); such parts are
+# still skipped (warned), so the block imports with whatever parts we can render.
 func _import_multipart(ns: String, block_id: String, bt_name: String, multipart) -> BlockType:
 	if not (multipart is Array):
 		_warn("malformed multipart: %s:%s" % [ns, block_id])
 		return null
+	var defaults := _collect_when_defaults(multipart)
 	var state_map := BlockStateMap.new()
 	for rule in multipart:
 		if not (rule is Dictionary):
@@ -146,7 +162,7 @@ func _import_multipart(ns: String, block_id: String, bt_name: String, multipart)
 		var model_ref := _canonical(str(apply.get("model", "")))
 		if _ensure_model(model_ref) == null:
 			continue
-		var clauses = _parse_when(rule.get("when", null))
+		var clauses = _parse_when(rule.get("when", null), defaults)
 		if clauses == null:
 			_warn("multipart part skipped (unhandled 'when'): %s:%s" % [ns, block_id])
 			continue
@@ -157,10 +173,39 @@ func _import_multipart(ns: String, block_id: String, bt_name: String, multipart)
 		return null
 	return _emit_block_type(bt_name, state_map.default_part_model_id(), state_map)
 
+# First pass over a block's whole `multipart` array: pick the first-seen value for
+# each non-direction property (age, flower_amount, slot_N_occupied, …) so the second
+# pass (_parse_clause) can flatten every rule down to that one chosen default —
+# mirrors `_parse_variants`' shape=straight precedent, just at the multipart-rule
+# granularity instead of the variant-state-string granularity. Pure data collection;
+# never rejects anything, so it can run ahead of any actual parsing/skipping.
+func _collect_when_defaults(multipart: Array) -> Dictionary:
+	var defaults := {}
+	for rule in multipart:
+		if rule is Dictionary:
+			_collect_defaults_from_when(rule.get("when", null), defaults)
+	return defaults
+
+func _collect_defaults_from_when(when, defaults: Dictionary) -> void:
+	if not (when is Dictionary):
+		return
+	if when.has("OR"):
+		for sub in when["OR"]:
+			_collect_defaults_from_when(sub, defaults)
+		return
+	if when.has("AND"):
+		for sub in when["AND"]:
+			_collect_defaults_from_when(sub, defaults)
+		return
+	for k in when.keys():
+		if _DIR6.get(str(k), -1) < 0 and not defaults.has(str(k)):
+			defaults[str(k)] = str(when[k]).to_lower()
+
 # Translate an MC `when` condition into the neutral OR-of-clauses form. Returns the
 # clause Array ([] when the rule has no `when` → always applies), or null when the
-# condition can't be expressed with boolean direction flags (caller skips the part).
-func _parse_when(when):
+# condition can't be expressed at all (caller skips the part). `defaults` is the
+# non-direction property flattening table from _collect_when_defaults.
+func _parse_when(when, defaults: Dictionary = {}):
 	if when == null:
 		return []                          # no condition → always
 	if not (when is Dictionary):
@@ -168,34 +213,116 @@ func _parse_when(when):
 	if when.has("OR"):
 		var clauses: Array = []
 		for sub in when["OR"]:
-			var c = _parse_clause(sub)
+			var c = _parse_clause(sub, defaults)
 			if c != null:                  # drop sub-clauses we can't translate
 				clauses.append(c)
 		if clauses.is_empty():
 			return null
 		return clauses
 	if when.has("AND"):
-		return null                        # nested AND-of-conditions not handled yet
-	var clause = _parse_clause(when)
+		return _parse_and(when["AND"], defaults)
+	var clause = _parse_clause(when, defaults)
 	if clause == null:
 		return null
 	return [clause]
 
-# One MC `when` clause (a dict of property=value) → { dir:int -> bool }, or null if
-# any property isn't a boolean direction connection (e.g. shape=, or walls' low/tall).
-func _parse_clause(d):
+# Top-level {"AND": [...]} — vanilla combines a placement property with a content
+# property (e.g. chiseled_bookshelf's facing + slot_N_occupied), occasionally with
+# one member itself an `OR` (a slot-state alternative). Plain (non-OR) members merge
+# into one clause (AND-of-plain-dicts is just their union, since keys never collide
+# in real data); a single OR member distributes (AND distributes over OR: each OR
+# branch becomes its own merged clause). Two OR members ANDed together, or a nested
+# AND-of-AND, aren't a shape vanilla actually uses — declined (returns null) rather
+# than guessed at.
+func _parse_and(members, defaults: Dictionary):
+	if not (members is Array) or members.is_empty():
+		return null
+	var plain: Array = []       # plain (non-OR/AND) member dicts
+	var or_members: Array = []  # each OR member's own sub-clause array
+	for m in members:
+		if not (m is Dictionary):
+			return null
+		if m.has("OR"):
+			or_members.append(m["OR"])
+		elif m.has("AND"):
+			return null
+		else:
+			plain.append(m)
+	var base := {}
+	for m in plain:
+		base = _merge_dicts(base, m)
+	if or_members.is_empty():
+		var clause = _parse_clause(base, defaults)
+		if clause == null:
+			return null
+		return [clause]
+	if or_members.size() > 1:
+		return null
+	var clauses: Array = []
+	for sub in or_members[0]:
+		if sub is Dictionary:
+			var c = _parse_clause(_merge_dicts(base, sub), defaults)
+			if c != null:
+				clauses.append(c)
+	if clauses.is_empty():
+		return null
+	return clauses
+
+func _merge_dicts(a: Dictionary, b: Dictionary) -> Dictionary:
+	var out := a.duplicate()
+	for k in b:
+		if not out.has(k):
+			out[k] = b[k]
+	return out
+
+# One MC `when` clause (a dict of property=value) → { dir:int -> required }, where
+# `required` is a bool (plain true/false occupancy), a String ("none"/"low"/"tall"
+# exact match), or an Array of Strings (pipe-shorthand OR) — see BlockStateMap's doc
+# comment. Non-direction keys (age, flower_amount, slot_N_occupied, …) aren't real
+# connections: a clause matching `defaults`' chosen value for that property just
+# drops the key (it contributes no connection info); one that disagrees fails this
+# clause only (the caller's OR loop drops just that sub-clause, not the whole rule).
+func _parse_clause(d, defaults: Dictionary = {}):
 	if not (d is Dictionary):
 		return null
 	var clause := {}
 	for k in d.keys():
 		var dir: int = _DIR6.get(str(k), -1)
-		if dir < 0:
-			return null
-		var v := str(d[k]).to_lower()
-		if v != "true" and v != "false":
-			return null
-		clause[dir] = (v == "true")
+		if dir >= 0:
+			var value = _parse_direction_value(str(d[k]))
+			if value == null:
+				return null
+			clause[dir] = value
+		else:
+			var actual := str(d[k]).to_lower()
+			var default_v: String = defaults.get(str(k), actual)
+			if actual != default_v:
+				return null
 	return clause
+
+# One direction's raw MC value → voxyl's neutral clause requirement. Splits MC's
+# pipe-shorthand ("side|up") into pieces, maps each through _CONNECT_ALIAS (an
+# unrecognized piece passes through as its own lowercased String — inert until
+# VoxelWorld.get_connect_height_for_semantic is taught that vocabulary, but at least
+# the block still imports). One distinct mapped value → stored directly (bool or
+# String); more than one → an Array (OR across states).
+func _parse_direction_value(raw: String):
+	var mapped: Array = []
+	for piece in raw.split("|"):
+		var key := piece.strip_edges().to_lower()
+		if key.is_empty():
+			continue
+		var v = _CONNECT_ALIAS.get(key, key)
+		if not mapped.has(v):
+			mapped.append(v)
+	if mapped.is_empty():
+		return null
+	if mapped.size() == 1:
+		return mapped[0]
+	var out: Array = []
+	for v in mapped:
+		out.append(("true" if v else "false") if v is bool else v)
+	return out
 
 # Create/update the BlockType for an imported block: bind its primary model, nest
 # the state map, and mirror the dominant texture's average into the planning color.
@@ -460,10 +587,13 @@ func _ensure_texture(texture_ref: String) -> TextureAsset:
 # a faithful sub-rect for partial ones — e.g. a bottom slab samples the lower half).
 func _face_uv(mface, dir: int, from16, to16) -> Rect2:
 	if mface.has("uv"):
+		# Keep MC's [x1,y1,x2,y2] direction as-is (don't sort into a normalized rect):
+		# a reversed pair (e.g. a glass pane's mirrored west/east faces) is how MC
+		# encodes a horizontally/vertically flipped texture, and add_face maps
+		# uv.position/uv.end straight onto the two opposite geometric corners, so a
+		# negative-size Rect2 here faithfully reproduces that mirroring.
 		var u = mface["uv"]
-		var x1: float = minf(u[0], u[2]); var x2: float = maxf(u[0], u[2])
-		var y1: float = minf(u[1], u[3]); var y2: float = maxf(u[1], u[3])
-		return Rect2(x1 / 16.0, y1 / 16.0, (x2 - x1) / 16.0, (y2 - y1) / 16.0)
+		return Rect2(u[0] / 16.0, u[1] / 16.0, (u[2] - u[0]) / 16.0, (u[3] - u[1]) / 16.0)
 	var x1f := float(from16[0]); var y1f := float(from16[1]); var z1f := float(from16[2])
 	var x2f := float(to16[0]); var y2f := float(to16[1]); var z2f := float(to16[2])
 	match dir:

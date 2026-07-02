@@ -873,7 +873,7 @@ func _resolve_cell_parts(pos: Vector3i, cell: BlockCell, semantic: String) -> Ar
 		for part in sm.resolve_parts(conns):
 			var m := VoxelWorld.workspace.get_block_model(str(part.get("model_id", "")))
 			if m != null:
-				out.append({"model": m, "basis": _rotation_basis(int(part.get("x_rot", 0)), int(part.get("y_rot", 0)))})
+				out.append({"model": m, "basis": BlockMesher.rotation_basis(int(part.get("x_rot", 0)), int(part.get("y_rot", 0)))})
 		if not out.is_empty():
 			return out
 	# Orientation variant: pick this facing's model + its baked rotation. We apply
@@ -884,30 +884,26 @@ func _resolve_cell_parts(pos: Vector3i, cell: BlockCell, semantic: String) -> Ar
 		if not entry.is_empty():
 			var m := VoxelWorld.workspace.get_block_model(str(entry.get("model_id", "")))
 			if m != null:
-				return [{"model": m, "basis": _rotation_basis(int(entry.get("x_rot", 0)), int(entry.get("y_rot", 0)))}]
+				return [{"model": m, "basis": BlockMesher.rotation_basis(int(entry.get("x_rot", 0)), int(entry.get("y_rot", 0)))}]
 	# Plain block (and the safety net if a state_map's model went missing): the
 	# resolved model rotated by the cell's own orientation.
 	return [{"model": VoxelWorld.get_model_for_semantic(semantic), "basis": Orientation.basis_of(cell.orientation)}]
 
-# Boolean connection flags for a cell: a direction connects when its neighbor cell
-# is occupied. Keyed by BlockModel.Dir (0..5), matching the dirs the importer wrote
-# into a part's `when` clauses. A deliberately simple, intent-only rule — refine it
-# later (solidity / same-type) without touching the data layer.
+# Connection state per direction for a cell: "none" when the neighbor cell is empty,
+# else the neighbor's connect-height classification ("low"/"tall", derived from its
+# resolved model's geometry via VoxelWorld.get_connect_height_for_semantic). Keyed by
+# BlockModel.Dir (0..5), matching the dirs the importer wrote into a part's `when`
+# clauses. Computed fresh every rebuild from neighbor occupancy + shape — nothing
+# about connections is ever stored on the cell (data stores intent only).
 func _cell_connections(pos: Vector3i) -> Dictionary:
 	var data := VoxelWorld.active_project.data
 	var conns := {}
 	for dir in BlockMesher.DIR_NORMALS:
 		var npos := pos + Vector3i(BlockMesher.DIR_NORMALS[dir])
-		conns[dir] = not data.get_block(npos).is_empty()
+		var neighbor_semantic := data.get_block(npos)
+		conns[dir] = "none" if neighbor_semantic.is_empty() \
+			else VoxelWorld.get_connect_height_for_semantic(neighbor_semantic)
 	return conns
-
-# Model rotation for a state_map-driven part, in voxyl's convention. y degrees turn
-# the model clockwise seen from above (NORTH→EAST→SOUTH→WEST), x degrees tilt about
-# the world X axis; MC bakes x then y, so y is on the left. Verified against the
-# horizontal facings: a NORTH-pointing arm with y=90 lands EAST, matching how MC
-# rotates fence sides and stairs.
-func _rotation_basis(x_deg: int, y_deg: int) -> Basis:
-	return Basis(Vector3.UP, deg_to_rad(-y_deg)) * Basis(Vector3.RIGHT, deg_to_rad(-x_deg))
 
 # Per-model-id cache around BlockMesher.color_mesh (the shared geometry builder).
 # Orientation.basis_of() rotates the centered box about the cell center and

@@ -241,6 +241,28 @@ func get_texture_for_semantic(semantic_name: String) -> TextureAsset:
 		key = "side" if model.textures.has("side") else model.textures.keys()[0]
 	return workspace.resolve_texture_asset(model.textures[key], _libs_for_semantic(semantic_name))
 
+# A block's connection-height classification ("low" or "tall") for a neighbor in a
+# multipart connection (walls, redstone-style wiring): derived at render time from
+# the resolved model's own geometry — never a stored/authored property — so it stays
+# in step with whatever the palette currently maps the semantic to (same decoupling
+# as color/shape/model). "tall" means the model's silhouette reaches (near) full
+# block height; "low" covers everything shorter (slabs, thin connectors). Callers
+# supply "none" themselves for an empty neighbor — this never returns it.
+#
+# This is deliberately generic (a semantic -> String classification), not MC-specific,
+# so a future stair-corner feature can reuse it without rework; only MCImporter.gd
+# knows MC's own vocabulary (low/tall/side/up) and maps it to "low"/"tall" at import
+# time. The height threshold is a tunable heuristic, not a law of nature — a non-MC
+# voxel game's notion of "tall" could differ.
+const _TALL_HEIGHT_THRESHOLD := 0.8
+
+func get_connect_height_for_semantic(semantic_name: String) -> String:
+	var bt: BlockType = _resolve_semantic(semantic_name).get("bt")
+	if bt and bt.shape == BlockType.Shape.SLAB and bt.model_id.is_empty():
+		return "low"   # cheap, clarifying fast-path for the un-imported planning case
+	var model := get_model_for_semantic(semantic_name)
+	return "tall" if model != null and model.max_height() >= _TALL_HEIGHT_THRESHOLD else "low"
+
 func _builtin_model_id_for_shape(shape: BlockType.Shape) -> String:
 	match shape:
 		BlockType.Shape.SLAB: return BlockModel.BUILTIN_SLAB
@@ -283,6 +305,114 @@ func _after_stack_change(project: VoxelProject) -> void:
 		mark_dirty()
 	else:
 		ProjectStore.save_project(project)
+
+# ---------------------------------------------------------------------------
+# Palette editing (contents of a palette, not the per-project subscription
+# stack above). Every mutator here is a no-op on a builtin palette (the
+# code-seeded "Default") except duplicate_palette — that's the intended way
+# to fork it into something editable. Centralizing here (rather than letting
+# callers poke palette.entries/library_names directly) means the read-only
+# guard can't be bypassed by a future UI control that forgets to check it.
+# ---------------------------------------------------------------------------
+
+func add_palette(palette_name: String) -> Palette:
+	var p := workspace.add_palette(palette_name)
+	_save_palettes()
+	workspace_changed.emit()
+	return p
+
+func duplicate_palette(source: Palette, new_name: String) -> Palette:
+	var p := workspace.duplicate_palette(source.name, new_name)
+	if p != null:
+		_save_palettes()
+		workspace_changed.emit()
+	return p
+
+func rename_palette(palette: Palette, new_name: String) -> bool:
+	if palette.builtin:
+		return false
+	var n := new_name.strip_edges()
+	if n.is_empty() or n == palette.name or workspace.get_palette(n) != null:
+		return false
+	# Palette subscriptions are stored by name, so a rename must repoint every
+	# project's palette_names stack to keep it resolving.
+	var old_name := palette.name
+	palette.name = n
+	for project in workspace.projects:
+		for i in project.palette_names.size():
+			if project.palette_names[i] == old_name:
+				project.palette_names[i] = n
+	_save_palettes()
+	workspace_changed.emit()
+	return true
+
+func remove_palette(palette: Palette) -> void:
+	if palette.builtin:
+		return
+	workspace.remove_palette(palette.name)
+	LibraryStore.delete_palette(palette.name)
+	_save_palettes()
+	workspace_changed.emit()
+
+func add_palette_entry(palette: Palette, semantic_name: String) -> PaletteEntry:
+	if palette.builtin:
+		return null
+	var e := PaletteEntry.new()
+	e.semantic_name = semantic_name
+	palette.entries.append(e)
+	_save_palettes()
+	workspace_changed.emit()
+	return e
+
+func rename_palette_entry(palette: Palette, entry: PaletteEntry, new_name: String) -> bool:
+	if palette.builtin:
+		return false
+	var n := new_name.strip_edges()
+	if n.is_empty() or n == entry.semantic_name or palette.get_entry(n) != null:
+		return false
+	entry.semantic_name = n
+	_save_palettes()
+	workspace_changed.emit()
+	return true
+
+func assign_palette_entry_block(palette: Palette, entry: PaletteEntry, block_type_name: String) -> void:
+	if palette.builtin:
+		return
+	entry.block_type_name = block_type_name
+	notify_block_type_changed()
+	_save_palettes()
+	workspace_changed.emit()
+
+func remove_palette_entry(palette: Palette, entry: PaletteEntry) -> void:
+	if palette.builtin:
+		return
+	palette.entries.erase(entry)
+	_save_palettes()
+	workspace_changed.emit()
+
+func add_palette_library(palette: Palette, library_name: String) -> void:
+	if palette.builtin:
+		return
+	palette.library_names.append(library_name)
+	_save_palettes()
+	workspace_changed.emit()
+
+func remove_palette_library(palette: Palette, index: int) -> void:
+	if palette.builtin:
+		return
+	palette.library_names.remove_at(index)
+	_save_palettes()
+	workspace_changed.emit()
+
+func move_palette_library(palette: Palette, from_idx: int, to_idx: int) -> void:
+	if palette.builtin:
+		return
+	palette.library_names.insert(to_idx, palette.library_names.pop_at(from_idx))
+	_save_palettes()
+	workspace_changed.emit()
+
+func _save_palettes() -> void:
+	LibraryStore.save_palettes(workspace)
 
 func select_semantic(semantic_name: String) -> void:
 	selected_semantic = semantic_name

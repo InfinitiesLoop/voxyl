@@ -22,6 +22,18 @@ class Item extends RefCounted:
 	var caption: String = ""              # optional text drawn under the icon
 	var block_type: BlockType = null      # baked for the icon; null → placeholder
 	var placeholder_color := Color(0.5, 0.5, 0.5)
+	var is_add: bool = false              # draws a "+" glyph instead of an icon
+
+# A trailing "add new" tile the caller appends last. Always emits ADD_KEY on click and is
+# excluded from search filtering (it's chrome, not content).
+const ADD_KEY := "__add__"
+static func add_item(caption_text := "") -> Item:
+	var it := Item.new()
+	it.key = ADD_KEY
+	it.label = ""
+	it.caption = caption_text
+	it.is_add = true
+	return it
 
 # Build an item that displays a block type directly (key/label = its name).
 static func block_item(bt: BlockType) -> Item:
@@ -144,7 +156,7 @@ func _rebuild_cells(filter: String) -> void:
 		c.queue_free()
 	var needle := filter.strip_edges().to_lower()
 	for item in _items:
-		if needle.is_empty() or item.label.to_lower().contains(needle) or item.caption.to_lower().contains(needle):
+		if item.is_add or needle.is_empty() or item.label.to_lower().contains(needle) or item.caption.to_lower().contains(needle):
 			_flow.add_child(_make_cell(item))
 
 func _make_cell(item: Item) -> Control:
@@ -168,11 +180,14 @@ func _draw_cell(cell: Control, item: Item) -> void:
 	var off := (icon_area.size - Vector2(side, side)) * 0.5
 	var icon_rect := Rect2(off, Vector2(side, side))
 
-	var icon := _baker.icon_for(item.block_type) if item.block_type != null else null
-	if icon != null:
-		cell.draw_texture_rect(icon, icon_rect, false)
+	if item.is_add:
+		_draw_add_glyph(cell, icon_rect)
 	else:
-		_draw_placeholder(cell, item, icon_rect)
+		var icon := _baker.icon_for(item.block_type) if item.block_type != null else null
+		if icon != null:
+			cell.draw_texture_rect(icon, icon_rect, false)
+		else:
+			_draw_placeholder(cell, item, icon_rect)
 
 	if item.key == _selected:
 		cell.draw_rect(icon_area, Color(0.40, 0.80, 1.0, 0.18))
@@ -183,6 +198,17 @@ func _draw_cell(cell: Control, item: Item) -> void:
 		var baseline := cell.size.y - caption_h * 0.5 + 5.0
 		cell.draw_string(font, Vector2(2, baseline), item.caption,
 			HORIZONTAL_ALIGNMENT_CENTER, cell.size.x - 4, 11)
+
+# The trailing "add new" tile: a dashed-ish outlined square with a centered "+".
+func _draw_add_glyph(cell: Control, area: Rect2) -> void:
+	var inset := area.size * 0.15
+	var rect := Rect2(area.position + inset, area.size - inset * 2.0)
+	cell.draw_rect(rect, Color(1, 1, 1, 0.08))
+	cell.draw_rect(rect, Color(1, 1, 1, 0.35), false, 1.5)
+	var font := get_theme_default_font()
+	var plus_size := 28
+	cell.draw_string(font, area.position + area.size * 0.5 - Vector2(plus_size * 0.28, -plus_size * 0.32),
+		"+", HORIZONTAL_ALIGNMENT_CENTER, -1, plus_size, Color(1, 1, 1, 0.7))
 
 # Shown while a bake is pending (or for an unmapped item): a faint centered swatch of the
 # item's planning color, so the cell hints at the block without flashing.

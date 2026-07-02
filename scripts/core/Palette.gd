@@ -2,6 +2,10 @@ class_name Palette
 extends Resource
 
 @export var name: String = ""
+# Auto-incremented at creation (see VoxelWorkspace.add_palette); higher = newer. Used to
+# order the palette list newest-first. Palettes saved before this field existed default
+# to 0 and simply sort to the bottom.
+@export var id: int = 0
 @export var entries: Array[PaletteEntry] = []
 # The ordered stack of libraries this palette draws its block types from (first-hit
 # wins, with the built-in `basic` library as an implicit final fallback). Names a

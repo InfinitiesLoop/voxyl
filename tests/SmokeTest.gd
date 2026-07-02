@@ -25,6 +25,8 @@ func _ready() -> void:
 	_test_mc_import()
 	_test_statemap_multipart()
 	_test_mc_import_multipart()
+	_test_mc_import_wall_tristate()
+	_test_mc_import_nondirection_flatten()
 	_test_mc_import_tint()
 	_test_tint_resolver()
 	_test_asset_sources()
@@ -662,8 +664,9 @@ func _test_statemap_multipart() -> void:
 		and not _part_ids(sm.resolve_parts({0: true})).has("cap"))
 
 # Phase 3: the importer translates an MC `multipart` blockstate (a fence) into the
-# neutral multipart map — boolean direction conditions become connection clauses,
-# multi-value conditions (wall/redstone style) are skipped, not fatal.
+# neutral multipart map — boolean direction conditions become connection clauses; a
+# genuinely unsupported shape (an AND combining two ORs — not a shape vanilla
+# actually uses) is skipped, not fatal.
 func _test_mc_import_multipart() -> void:
 	print("-- mc importer multipart (fences/panes/bars)")
 	var saved_root := AssetLibrary.ROOT
@@ -674,8 +677,9 @@ func _test_mc_import_multipart() -> void:
 	var assets := src + "/assets"
 
 	# A fence: a post (always) + a side arm per connected horizontal neighbor, the
-	# same model rotated by y. One stray part uses a non-boolean (wall-style) value
-	# to prove unhandled conditions are skipped rather than aborting the import.
+	# same model rotated by y. One stray part ANDs two ORs together — not a shape
+	# vanilla actually uses, and still declined by design — to prove a genuinely
+	# unsupported shape is skipped rather than aborting the import.
 	_write_file(assets + "/testmod/blockstates/test_fence.json", """
 { "multipart": [
 	{ "apply": { "model": "testmod:block/fence_post" } },
@@ -683,7 +687,9 @@ func _test_mc_import_multipart() -> void:
 	{ "when": { "east":  "true" }, "apply": { "model": "testmod:block/fence_side", "y": 90 } },
 	{ "when": { "south": "true" }, "apply": { "model": "testmod:block/fence_side", "y": 180 } },
 	{ "when": { "west":  "true" }, "apply": { "model": "testmod:block/fence_side", "y": 270 } },
-	{ "when": { "up": "tall" }, "apply": { "model": "testmod:block/fence_side" } } ] }
+	{ "when": { "AND": [ { "OR": [ {"north":"true"}, {"east":"true"} ] },
+	                     { "OR": [ {"south":"true"}, {"west":"true"} ] } ] },
+	  "apply": { "model": "testmod:block/fence_side" } } ] }
 """)
 	_write_file(assets + "/testmod/models/block/fence_post.json", """
 { "textures": {"all":"testmod:block/planks"}, "elements": [ { "from": [6,0,6], "to": [10,16,10], "faces": {
@@ -711,9 +717,9 @@ func _test_mc_import_multipart() -> void:
 		bt != null and bt.state_map != null and bt.state_map.is_multipart())
 	_check("fence model_id points at the always-on post",
 		bt != null and bt.model_id == "testmod:block/fence_post")
-	_check("post + 4 boolean sides translated; non-boolean part skipped",
+	_check("post + 4 boolean sides translated; AND-of-two-ORs part skipped",
 		bt != null and bt.state_map.parts.size() == 5)
-	_check("the non-boolean 'when' part was warned + skipped",
+	_check("the unsupported 'when' part was warned + skipped",
 		_warns_contain(imp, "unhandled 'when'"))
 	_check("post + side models imported",
 		ws.get_block_model("testmod:block/fence_post") != null
@@ -725,6 +731,141 @@ func _test_mc_import_multipart() -> void:
 	var east_parts := sm.resolve_parts({1: true})   # EAST connected (dir 1)
 	_check("east connection adds the y=90 side",
 		east_parts.size() == 2 and int(east_parts[1].get("y_rot", -1)) == 90)
+
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	AssetLibrary.ROOT = saved_root
+
+# Multipart tri-state connections (walls) + pipe-shorthand OR (redstone-style wiring):
+# the importer now translates non-boolean direction values ("low"/"tall") and
+# pipe-separated alternatives ("side|up", aliased to low/tall) instead of dropping
+# them, and BlockStateMap.resolve_parts matches the resulting String/Array clauses
+# against the neutral "none"/"low"/"tall" connection states View3D derives from
+# neighbor geometry at render time.
+func _test_mc_import_wall_tristate() -> void:
+	print("-- mc importer tri-state + pipe-OR connections (walls/redstone-style)")
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_walllib__"
+	var src := "user://__voxyl_wallsrc__"
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	var assets := src + "/assets"
+
+	# A wall-like connector: always-on post, a "low" side and a "tall" side on north
+	# (the actual wall vocabulary), plus an east side that fires on either of two
+	# states via pipe-shorthand (redstone wire's "side|up" shape, generalized).
+	_write_file(assets + "/testmod/blockstates/test_wall.json", """
+{ "multipart": [
+	{ "apply": { "model": "testmod:block/wall_post" } },
+	{ "when": { "north": "low" },    "apply": { "model": "testmod:block/wall_low" } },
+	{ "when": { "north": "tall" },   "apply": { "model": "testmod:block/wall_tall" } },
+	{ "when": { "east": "side|up" }, "apply": { "model": "testmod:block/wall_pipe", "y": 90 } } ] }
+""")
+	for m in ["wall_post", "wall_low", "wall_tall", "wall_pipe"]:
+		_write_file(assets + "/testmod/models/block/%s.json" % m, """
+{ "textures": {"all":"testmod:block/wall_tex"}, "elements": [ { "from": [0,0,0], "to": [16,16,16], "faces": {
+	"down": {"texture":"#all"}, "up": {"texture":"#all"},
+	"north": {"texture":"#all"}, "south": {"texture":"#all"},
+	"west": {"texture":"#all"}, "east": {"texture":"#all"} } } ] }
+""")
+	_write_solid(assets + "/testmod/textures/block/wall_tex.png", Color(0.5, 0.5, 0.5))
+
+	var ws := VoxelWorkspace.new()
+	var lib := ws.get_or_add_library("wall")
+	var imp := MCImporter.new(assets, lib)
+	imp.import_block("testmod", "test_wall")
+
+	var bt := ws.get_block_type("test_wall")
+	_check("wall imported with all 4 parts (post + low + tall + pipe)",
+		bt != null and bt.state_map.parts.size() == 4)
+	_check("no 'when' warnings — every shape here is now handled",
+		not _warns_contain(imp, "unhandled 'when'"))
+
+	# Raw parsed clause shapes: "low"/"tall" store as an exact String; the pipe value
+	# stores as an Array covering both aliased states.
+	var low_when := {}; var tall_when := {}; var pipe_when := {}
+	for p in bt.state_map.parts:
+		match str(p.get("model_id", "")):
+			"testmod:block/wall_low": low_when = p["when"][0]
+			"testmod:block/wall_tall": tall_when = p["when"][0]
+			"testmod:block/wall_pipe": pipe_when = p["when"][0]
+	_check("north-low clause stores the exact 'low' string", low_when.get(0) == "low")
+	_check("north-tall clause stores the exact 'tall' string", tall_when.get(0) == "tall")
+	_check("east pipe-OR clause aliases side/up into an array covering low+tall",
+		(pipe_when.get(1) as Array) != null
+		and (pipe_when[1] as Array).has("low") and (pipe_when[1] as Array).has("tall"))
+
+	# Render-time matching: resolve_parts against the neutral tri-state connections.
+	var sm := bt.state_map
+	_check("a 'low' north neighbor selects the low side, not the tall one",
+		_part_ids(sm.resolve_parts({0: "low"})) == ["testmod:block/wall_post", "testmod:block/wall_low"])
+	_check("a 'tall' north neighbor selects the tall side, not the low one",
+		_part_ids(sm.resolve_parts({0: "tall"})) == ["testmod:block/wall_post", "testmod:block/wall_tall"])
+	_check("no north neighbor selects neither side",
+		_part_ids(sm.resolve_parts({0: "none"})) == ["testmod:block/wall_post"])
+	_check("the east pipe-OR matches a 'low' neighbor",
+		_part_ids(sm.resolve_parts({1: "low"})).has("testmod:block/wall_pipe"))
+	_check("the east pipe-OR matches a 'tall' neighbor",
+		_part_ids(sm.resolve_parts({1: "tall"})).has("testmod:block/wall_pipe"))
+	_check("the east pipe-OR does not match no neighbor",
+		not _part_ids(sm.resolve_parts({1: "none"})).has("testmod:block/wall_pipe"))
+
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	AssetLibrary.ROOT = saved_root
+
+# Non-direction property flattening (age/flower_amount/slot_N_occupied-style state
+# voxyl has no data for) + top-level AND: the importer picks the first-seen value per
+# non-direction property as the chosen default (mirroring _parse_variants'
+# shape=straight precedent) and drops only the rules that disagree with it, whether
+# they're bare clauses or ANDed with a real direction condition.
+func _test_mc_import_nondirection_flatten() -> void:
+	print("-- mc importer non-direction property flattening + top-level AND")
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_flattenlib__"
+	var src := "user://__voxyl_flattensrc__"
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	var assets := src + "/assets"
+
+	# "age" first appears as "0" (in the AND rule below) — that becomes the chosen
+	# default. The age=1 AND rule and the bare age=5 rule disagree with it and are
+	# dropped; the age=0 AND rule and the bare age=0 rule survive.
+	_write_file(assets + "/testmod/blockstates/test_flatten.json", """
+{ "multipart": [
+	{ "apply": { "model": "testmod:block/base_post" } },
+	{ "when": { "AND": [ {"north":"true"}, {"age":"0"} ] }, "apply": { "model": "testmod:block/age0_side" } },
+	{ "when": { "AND": [ {"north":"true"}, {"age":"1"} ] }, "apply": { "model": "testmod:block/age1_side" } },
+	{ "when": { "age": "0" }, "apply": { "model": "testmod:block/age0_bare" } },
+	{ "when": { "age": "5" }, "apply": { "model": "testmod:block/age5_bare" } } ] }
+""")
+	for m in ["base_post", "age0_side", "age1_side", "age0_bare", "age5_bare"]:
+		_write_file(assets + "/testmod/models/block/%s.json" % m, """
+{ "textures": {"all":"testmod:block/flatten_tex"}, "elements": [ { "from": [0,0,0], "to": [16,16,16], "faces": {
+	"down": {"texture":"#all"}, "up": {"texture":"#all"},
+	"north": {"texture":"#all"}, "south": {"texture":"#all"},
+	"west": {"texture":"#all"}, "east": {"texture":"#all"} } } ] }
+""")
+	_write_solid(assets + "/testmod/textures/block/flatten_tex.png", Color(0.4, 0.4, 0.4))
+
+	var ws := VoxelWorkspace.new()
+	var lib := ws.get_or_add_library("flatten")
+	var imp := MCImporter.new(assets, lib)
+	imp.import_block("testmod", "test_flatten")
+
+	var bt := ws.get_block_type("test_flatten")
+	_check("only the default-matching rules survive (age1/age5 dropped)",
+		bt != null and _part_ids(bt.state_map.parts) == [
+			"testmod:block/base_post", "testmod:block/age0_side", "testmod:block/age0_bare"])
+	_check("the disagreeing rules were warned + skipped",
+		_warns_contain(imp, "unhandled 'when'"))
+
+	var sm := bt.state_map
+	_check("the AND-merged part still requires its real (north) connection",
+		_part_ids(sm.resolve_parts({0: "tall"})).has("testmod:block/age0_side")
+		and not _part_ids(sm.resolve_parts({0: "none"})).has("testmod:block/age0_side"))
+	_check("the bare flattened-default part is unconditional",
+		_part_ids(sm.resolve_parts({})).has("testmod:block/age0_bare"))
 
 	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(src)

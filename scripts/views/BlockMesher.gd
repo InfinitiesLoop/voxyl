@@ -144,3 +144,13 @@ static func element_xform(element: Dictionary) -> Transform3D:
 		basis = basis.scaled(Vector3(lerpf(s, 1.0, ax.x), lerpf(s, 1.0, ax.y), lerpf(s, 1.0, ax.z)))
 	var origin: Vector3 = rot["origin"]
 	return Transform3D(basis, origin - basis * origin)
+
+# Model rotation for a state_map-driven part (a variant's baked x/y, or a multipart
+# part's), in voxyl's convention. y degrees turn the model clockwise seen from above
+# (NORTH→EAST→SOUTH→WEST), x degrees tilt about the world X axis; MC bakes x then y,
+# so y is on the left. Verified against the horizontal facings: a NORTH-pointing arm
+# with y=90 lands EAST, matching how MC rotates fence sides and stairs. Shared by
+# View3D (real cells) and BlockRender3D (the library preview/icon), since both place
+# the same state_map-resolved parts.
+static func rotation_basis(x_deg: int, y_deg: int) -> Basis:
+	return Basis(Vector3.UP, deg_to_rad(-y_deg)) * Basis(Vector3.RIGHT, deg_to_rad(-x_deg))

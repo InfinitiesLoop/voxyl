@@ -47,6 +47,7 @@ func _run() -> void:
 	_check_textured_render(v3d)
 	_check_imported_render(v3d)
 	_check_multipart_render(v3d)
+	_check_block_render3d_multipart()
 	_check_tinted_render(v3d)
 	_check_flat_render(v3d)
 	await _check_import_progress()
@@ -358,6 +359,63 @@ func _check_multipart_render(v3d: Node) -> void:
 	lib.remove_block_model("mp_post")
 	lib.remove_block_model("mp_side")
 	v3d._rebuild()
+
+# The library preview/icon (BlockRender3D.build_into, shared by BlockIconBaker and
+# BlockPreview3D) renders a multipart block in its PREVIEW state — a straight
+# EAST+WEST run (BlockRender3D.preview_parts) — as child MeshInstance3Ds, so a pane
+# reads as a full face-on pane and a fence/wall as a straight section, not the lonely
+# isolated post. A plain (non-multipart) block keeps the single-mesh-on-mi behavior.
+func _check_block_render3d_multipart() -> void:
+	var ws := VoxelWorld.workspace
+	var lib := ws.basic_library()
+	for id in ["rd_post", "rd_side", "rd_noside"]:
+		var m := BlockModel.new()
+		m.id = id
+		m.elements = [BlockModel.box_element(Vector3(0.4375, 0, 0.4375), Vector3(0.5625, 1, 0.5625))]
+		lib.add_block_model(m)
+	var sm := BlockStateMap.new()
+	sm.add_part([], "rd_post")                # always (the post)
+	sm.add_part([{1: true}], "rd_side")       # side arm when EAST connects
+	sm.add_part([{1: false}], "rd_noside")    # filler when EAST does NOT connect
+	var bt := lib.add_block_type("RDPaneBlock")
+	bt.model_id = "rd_post"
+	bt.state_map = sm
+
+	# Preview connects EAST+WEST: the east-side arm resolves and the "no east" filler
+	# does not — a straight run, not the isolated form. Check the shared data helper
+	# that both the icon baker and the live builder use.
+	var preview_ids: Array = []
+	for part in BlockRender3D.preview_parts(sm):
+		preview_ids.append(str(part.get("model_id", "")))
+	_check("multipart preview resolves the connected (east-side) run",
+		preview_ids == ["rd_post", "rd_side"])
+	_check("preview omits the isolated 'no east' filler part",
+		not preview_ids.has("rd_noside"))
+
+	# And build_into turns those parts into one child MeshInstance3D each (no mesh on mi).
+	var mi := MeshInstance3D.new()
+	add_child(mi)
+	BlockRender3D.build_into(mi, bt)
+	var child_meshes := 0
+	for c in mi.get_children():
+		if c is MeshInstance3D and (c as MeshInstance3D).mesh != null:
+			child_meshes += 1
+	_check("multipart preview builds one child mesh per resolved part",
+		mi.mesh == null and child_meshes == 2)
+	mi.queue_free()
+
+	# A plain (non-multipart) block is unaffected: mesh set directly on mi, no children.
+	var plain_mi := MeshInstance3D.new()
+	add_child(plain_mi)
+	var plain_bt := lib.get_block_type("base")
+	BlockRender3D.build_into(plain_mi, plain_bt)
+	_check("plain block still renders directly on mi (no children)",
+		plain_mi.mesh != null and plain_mi.get_child_count() == 0)
+	plain_mi.queue_free()
+
+	lib.remove_block_type("RDPaneBlock")
+	for id in ["rd_post", "rd_side", "rd_noside"]:
+		lib.remove_block_model(id)
 
 # Phase 4: an imported block whose model faces carry a tintindex renders with the
 # block's biome tint multiplied into the surface — the importer bakes the plains

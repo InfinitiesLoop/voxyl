@@ -123,6 +123,18 @@ static func delete_library(library_name: String) -> Error:
 		return OK
 	return _rm_rf(dir)
 
+# Remove a palette's on-disk .tres file (ROOT/palettes/<name>.tres), so it doesn't
+# resurrect on the next launch — save_palettes() only re-saves whatever is currently in
+# workspace.palettes, it never prunes a file whose in-memory palette is gone. Pairs with
+# VoxelWorkspace.remove_palette. The built-in Default is never saved in the first place
+# (see save_palettes), so this is a no-op for it either way. Missing file → OK.
+static func delete_palette(palette_name: String) -> Error:
+	var rel := PALETTES_DIR.path_join(palette_name.validate_filename() + ".tres")
+	var abs_path := AssetLibrary.path_for(rel)
+	if not FileAccess.file_exists(abs_path):
+		return OK
+	return DirAccess.remove_absolute(abs_path)
+
 # Recursively delete an absolute directory and everything under it.
 static func _rm_rf(abs_path: String) -> Error:
 	var d := DirAccess.open(abs_path)

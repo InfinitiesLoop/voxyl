@@ -35,7 +35,7 @@ const _CAM_DIST := 3.2
 const _CACHE_DIR := "user://icon_cache/"
 # Bump when the render setup (camera/lights/RES) changes, to invalidate every disk
 # icon — a block's signature embeds this, so stale-look icons can't survive an upgrade.
-const _BAKE_VERSION := 5
+const _BAKE_VERSION := 8
 
 var _cache := {}        # block_name -> ImageTexture (in-memory)
 var _queue: Array = []  # BlockType, FIFO of pending bakes
@@ -173,6 +173,11 @@ func _disk_path(bt: BlockType) -> String:
 # shape + color + tint, plus each bound texture's id, path and file mtime (so a
 # reimport that overwrites the same PNG still invalidates). Bump _BAKE_VERSION to
 # invalidate every icon at once. Only computed on a cache miss, never per redraw.
+#
+# A multipart block's rendered look is its whole preview-state part list (see
+# BlockRender3D.preview_parts), not just the always-on post named by bt.model_id, so
+# every part's model + textures are folded in — otherwise a texture-only change to a
+# non-post part (e.g. a pane's side filler) would never invalidate the cached icon.
 func _signature(bt: BlockType) -> String:
 	var parts := PackedStringArray()
 	parts.append(str(_BAKE_VERSION))
@@ -180,18 +185,29 @@ func _signature(bt: BlockType) -> String:
 	parts.append(str(bt.shape))
 	parts.append(bt.color.to_html(true))
 	parts.append(bt.tint.to_html(true))
-	var model := BlockRender3D.model_for(bt)
-	if model != null and model.has_textures():
-		var keys: Array = model.textures.keys()
-		keys.sort()
-		for k in keys:
-			var aid = model.textures[k]
-			parts.append(str(k) + "=" + str(aid))
-			var asset := VoxelWorld.workspace.get_texture_asset(aid)
-			if asset != null and not asset.image_path.is_empty():
-				parts.append(asset.image_path)
-				parts.append(str(FileAccess.get_modified_time(AssetLibrary.path_for(asset.image_path))))
+	var sm := bt.state_map
+	if sm != null and sm.is_multipart():
+		for part in BlockRender3D.preview_parts(sm):
+			var model := VoxelWorld.workspace.get_block_model(str(part.get("model_id", "")))
+			parts.append_array(_model_signature_parts(model))
+	else:
+		parts.append_array(_model_signature_parts(BlockRender3D.model_for(bt)))
 	return "|".join(parts).sha256_text().substr(0, 16)
+
+func _model_signature_parts(model: BlockModel) -> PackedStringArray:
+	var out := PackedStringArray()
+	if model == null or not model.has_textures():
+		return out
+	var keys: Array = model.textures.keys()
+	keys.sort()
+	for k in keys:
+		var aid = model.textures[k]
+		out.append(str(k) + "=" + str(aid))
+		var asset := VoxelWorld.workspace.get_texture_asset(aid)
+		if asset != null and not asset.image_path.is_empty():
+			out.append(asset.image_path)
+			out.append(str(FileAccess.get_modified_time(AssetLibrary.path_for(asset.image_path))))
+	return out
 
 func _safe(s: String) -> String:
 	var out := ""

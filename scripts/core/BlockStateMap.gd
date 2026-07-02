@@ -24,15 +24,29 @@ extends Resource
 #     map rotates by these instead of deriving a basis from `facing` (which would
 #     double-rotate).
 #
-#   `parts` (multipart) — a connecting block (fence, pane, bars): a list of model
-#     parts, each shown when its connection condition matches. A part is:
+#   `parts` (multipart) — a connecting block (fence, pane, bars, wall, redstone-style
+#     wiring): a list of model parts, each shown when its connection condition
+#     matches. A part is:
 #       { when: Array, model_id: String, x_rot: int, y_rot: int, uvlock: bool }
 #     `when` is the neutral connection condition: an Array of clauses with OR
 #     semantics (the part shows if ANY clause holds); each clause is a Dictionary
-#     mapping a direction (BlockModel.Dir, 0..5) to a required bool, ANDed together.
+#     mapping a direction (BlockModel.Dir, 0..5) to a required value, ANDed together.
+#     A direction's *actual* connection state (computed by the view at render time,
+#     see `resolve_parts`) is one of three neutral Strings: "none" (no neighbor),
+#     "low" (a neighbor present with a short/thin profile), "tall" (a neighbor
+#     present with a full-height profile) — the vocabulary walls already use in MC,
+#     generalized to any connecting block. A clause's required value per direction is
+#     one of:
+#       bool     — legacy/simple occupancy ("true"/"false" in MC): matches whenever
+#                   the direction is occupied at all (actual != "none"), regardless
+#                   of low/tall. This is what every existing fence/pane/bars/vine part
+#                   already stores, so old saved data keeps matching unchanged.
+#       String   — exact match against the actual state (e.g. "low" or "tall").
+#       Array    — OR across the listed states (MC's pipe-shorthand, e.g. "side|up"
+#                  on redstone wire, translated to e.g. ["low","tall"]).
 #     An empty `when` ([]) means "always show" — the post/core part. Connection
-#     flags themselves are DERIVED at render time from neighbor occupancy; nothing
-#     about connections is ever stored on the voxel data (same as MC).
+#     states themselves are DERIVED at render time from neighbor occupancy + shape;
+#     nothing about connections is ever stored on the voxel data (same as MC).
 #
 # A block is one or the other: `parts` non-empty → multipart; else `entries`.
 
@@ -95,7 +109,9 @@ func default_model_id() -> String:
 # --- Multipart (connecting blocks) -----------------------------------------
 
 # Add one multipart part. `when` is the OR-of-clauses condition ([] = always);
-# each clause is a Dictionary { dir:int -> required:bool }.
+# each clause is a Dictionary { dir:int -> required }, where `required` is a bool
+# (occupancy-only match), a String ("none"/"low"/"tall" exact match), or an Array of
+# Strings (OR across states) — see the class doc comment above.
 func add_part(when_clauses: Array, model_id: String,
 		x_rot: int = 0, y_rot: int = 0, uvlock: bool = false) -> void:
 	parts.append({
@@ -103,10 +119,10 @@ func add_part(when_clauses: Array, model_id: String,
 		"x_rot": x_rot, "y_rot": y_rot, "uvlock": uvlock,
 	})
 
-# Parts to render for a set of derived connection flags (dir:int -> bool). A part
-# applies when its `when` is empty, or any clause matches (every dir requirement in
-# the clause equals the connection flag). Returns them in declaration order so the
-# always-on post draws first.
+# Parts to render for a set of derived connection states (dir:int -> "none"/"low"/
+# "tall", see the class doc comment). A part applies when its `when` is empty, or any
+# clause matches (every dir requirement in the clause is satisfied by that direction's
+# actual state). Returns them in declaration order so the always-on post draws first.
 func resolve_parts(connections: Dictionary) -> Array:
 	var out: Array = []
 	for p in parts:
@@ -121,7 +137,29 @@ func _part_applies(part: Dictionary, connections: Dictionary) -> bool:
 	for clause in clauses:           # OR across clauses
 		var matched := true
 		for dir in clause:           # AND within a clause
-			if bool(connections.get(int(dir), false)) != bool(clause[dir]):
+			var raw = connections.get(int(dir), "none")
+			# Normalize to a canonical String so a legacy bool connection value
+			# (still passed directly in a couple of data-layer tests) can't
+			# stringify to "false"/"true" and accidentally dodge/satisfy a "none"
+			# comparison: false always means "none", true is a distinct non-"none"
+			# sentinel (never equal to "low"/"tall"). Checked by type (`is`), not
+			# `==`, since GDScript errors comparing a bool to a String directly.
+			var actual: String
+			if raw is bool:
+				actual = "true" if raw else "none"
+			else:
+				actual = str(raw)
+			var required = clause[dir]
+			var dir_matched: bool
+			if required is bool:
+				dir_matched = (actual != "none") == required
+			elif required is String:
+				dir_matched = actual == required
+			elif required is Array:
+				dir_matched = required.has(actual)
+			else:
+				dir_matched = false
+			if not dir_matched:
 				matched = false
 				break
 		if matched:

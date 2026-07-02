@@ -40,6 +40,17 @@ const BUILTIN_STAIRS := "stairs"
 func has_textures() -> bool:
 	return not textures.is_empty()
 
+# The tallest element's top (max `to.y` across all elements), 0.0 if there are none.
+# A pure geometry query — no MC/semantic knowledge — used by callers that classify a
+# block's silhouette (e.g. "does this neighbor read as full-height or short") without
+# hardcoding a single-element assumption (a model can have several boxes, and the
+# tallest one determines the overall profile).
+func max_height() -> float:
+	var h := 0.0
+	for el in elements:
+		h = maxf(h, (el.get("to", Vector3.ZERO) as Vector3).y)
+	return h
+
 # --- Construction helpers ---------------------------------------------------
 
 # A face bound to `texture_key`, full-face UVs by default. cullface/rotation/

@@ -138,7 +138,33 @@ func get_texture_asset(texture_id: String) -> TextureAsset:
 func add_palette(palette_name: String) -> Palette:
 	var p := Palette.new()
 	p.name = palette_name
+	p.id = _next_palette_id()
 	palettes.append(p)
+	return p
+
+# One higher than the largest id currently in memory (including anything just loaded from
+# disk) — computed live rather than persisted, since load_persisted() replaces/appends
+# palettes directly without going through add_palette, so on-disk ids are never disturbed.
+func _next_palette_id() -> int:
+	var max_id := 0
+	for p in palettes:
+		max_id = maxi(max_id, p.id)
+	return max_id + 1
+
+# Deep-copy a palette's entries + library subscriptions into a new, always-editable
+# (builtin = false) palette — the escape hatch for forking the read-only Default palette.
+# null if the source doesn't exist.
+func duplicate_palette(source_name: String, new_name: String) -> Palette:
+	var src := get_palette(source_name)
+	if src == null:
+		return null
+	var p := add_palette(new_name)
+	p.library_names = src.library_names.duplicate()
+	for e in src.entries:
+		var copy := PaletteEntry.new()
+		copy.semantic_name = e.semantic_name
+		copy.block_type_name = e.block_type_name
+		p.entries.append(copy)
 	return p
 
 func get_palette(palette_name: String) -> Palette:

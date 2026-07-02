@@ -1,10 +1,42 @@
 # Multipart `when` Clauses — Planning Notes
 
-Status: **Not started — this is a planning doc for a future session**, written after the
-[glass import fix](import-feature.md) surfaced how big this gap actually is on a real
-vanilla install. Goal of *this* doc: capture (1) exactly how to reproduce/inspect the
-problem with a disposable harness, and (2) what we already know about its shape, so the
-planning session doesn't have to re-derive it from scratch.
+Status: **Phase A implemented** (tri-state direction values, pipe-shorthand OR,
+non-direction property flattening, top-level `AND`) — see below. Originally written
+after the [glass import fix](import-feature.md) surfaced how big this gap actually is
+on a real vanilla install, to capture (1) exactly how to reproduce/inspect the problem
+with a disposable harness, and (2) what we already know about its shape, so the
+planning session wouldn't have to re-derive it from scratch.
+
+## Phase A — implemented
+
+Multipart `when` clauses now support tri-state direction values (walls' `low`/`tall`),
+pipe-shorthand ORs (redstone-style `side|up`, aliased to `low`/`tall`), non-direction
+property flattening (age/flower_amount/slot_N_occupied — first-seen value wins, same
+move as `_parse_variants`' `shape=straight`), and top-level `AND` (merged, with
+AND-distributes-over-a-single-nested-OR). The mechanism: a neutral 3-value connection
+state ("none"/"low"/"tall") computed at render time from a neighbor's resolved model
+geometry (`BlockModel.max_height()` → `VoxelWorld.get_connect_height_for_semantic()`),
+matched against widened `BlockStateMap` clause values (bool for legacy occupancy-only
+data, String or Array[String] for the new tri-state/OR cases). Old saved bool clauses
+keep matching unchanged — no migration.
+
+Known remaining gaps (by design, not urgent): an AND combining *two* nested ORs, or a
+nested AND-of-AND, still isn't parsed (declined, warned) — vanilla doesn't actually use
+either shape outside speculative cases. Unrecognized non-alias direction vocabulary
+(a modded block's own words) passes through inert but unmatched rather than being
+dropped. See `scripts/mcimport/MCImporter.gd`'s `_parse_when`/`_parse_clause`/
+`_parse_and`/`_collect_when_defaults` doc comments for the exact contracts, and
+`tests/SmokeTest.gd`'s `_test_mc_import_wall_tristate` /
+`_test_mc_import_nondirection_flatten` for coverage.
+
+## Phase B — not started (stairs corners, deeper fidelity)
+
+Stairs corner rendering (a different code path — `BlockStateMap.entries`/`resolve()`,
+not `parts`/`resolve_parts()`) is still untouched; `get_connect_height_for_semantic` was
+deliberately kept generic (a semantic → String classification, not multipart-specific)
+so that work can reuse it without rework. Full redstone fidelity (the actual
+up-the-wall climb visual) and bookshelf slot overlays remain flattened approximations,
+per the project's voxel-agnostic mandate — not planned to be modeled precisely.
 
 ## The problem, in one line
 

@@ -14,14 +14,57 @@ extends RefCounted
 # material layer — no voxel data involved. The caller passes a FRESH MeshInstance3D
 # (so stale per-surface overrides never linger across blocks).
 
+# A preview's connection state for a multipart/connecting block: connected on the
+# two opposite horizontal sides (EAST+WEST), nothing else. Rendering a connector as a
+# straight run rather than in isolation is how MC shows these in the inventory — a
+# glass pane reads as a full face-on pane, a fence/wall/bars as a clean straight
+# section — instead of the lonely post/nub a truly-isolated cell resolves to. Keyed
+# purely off is_multipart(), so no block ever needs special-casing. "tall" is the
+# strongest connection value, so it satisfies boolean (fence/pane) and multi-value
+# (wall low/tall) `when` clauses alike.
+const _PREVIEW_CONNECTIONS := {
+	BlockModel.Dir.NORTH: "none", BlockModel.Dir.EAST: "tall",
+	BlockModel.Dir.SOUTH: "none", BlockModel.Dir.WEST: "tall",
+	BlockModel.Dir.UP: "none", BlockModel.Dir.DOWN: "none",
+}
+
+# The parts a multipart block shows in a preview (icon / detail panel). Shared with
+# BlockIconBaker's cache signature so the cached icon and the live render always agree.
+static func preview_parts(sm: BlockStateMap) -> Array:
+	return sm.resolve_parts(_PREVIEW_CONNECTIONS)
+
 # Configure `mi` to render `bt`. Pass a freshly created MeshInstance3D. A null block
 # (or a block whose model is missing) leaves the instance empty.
+#
+# A connecting/multipart block (fence, pane, wall, …) renders its PREVIEW state — a
+# straight EAST+WEST run (see _PREVIEW_CONNECTIONS) — as one child MeshInstance3D per
+# resolved part, rather than just `bt.model_id`'s bare post. This is deliberately not
+# a per-block special case: the parts come straight from the block's own imported
+# blockstate, so a glass pane reads as a full face-on pane and a fence/wall as a clean
+# straight section, with zero pane-specific code.
 static func build_into(mi: MeshInstance3D, bt: BlockType) -> void:
 	if bt == null:
+		return
+	var sm := bt.state_map
+	if sm != null and sm.is_multipart():
+		for part in preview_parts(sm):
+			var part_model := VoxelWorld.workspace.get_block_model(str(part.get("model_id", "")))
+			if part_model == null:
+				continue
+			var child := MeshInstance3D.new()
+			mi.add_child(child)
+			child.transform = Transform3D(
+				BlockMesher.rotation_basis(int(part.get("x_rot", 0)), int(part.get("y_rot", 0))), Vector3.ZERO)
+			_build_model_into(child, part_model, bt)
 		return
 	var model := model_for(bt)
 	if model == null:
 		return
+	_build_model_into(mi, model, bt)
+
+# The mesh + materials for one already-resolved model, shared by the plain-block path
+# and each multipart child above.
+static func _build_model_into(mi: MeshInstance3D, model: BlockModel, bt: BlockType) -> void:
 	var resolved := _resolve_textures(model)
 	if resolved.is_empty():
 		mi.mesh = BlockMesher.color_mesh(model)

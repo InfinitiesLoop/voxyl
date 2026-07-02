@@ -23,6 +23,11 @@ var _service: ImportService
 var _available: Array = []          # the full browse list; the ItemList shows a filtered view
 var _current_path := ""             # the last chosen source path (re-browsed on mode change)
 var _target_library_name := ""      # the resolved import target (created on first browse)
+# Library names this panel created fresh (didn't already exist in the workspace) just by
+# picking/typing them or browsing a source — before any block was actually imported. If
+# the panel closes with one of these still empty, it's cleaned up so a canceled/failed
+# import doesn't leave a visible, empty library lying around (see _close()).
+var _created_library_names: Array[String] = []
 
 const _NEW_LIBRARY_ITEM := "New library…"
 
@@ -276,8 +281,12 @@ func _prompt_new_library() -> void:
 	dlg.popup_centered()
 	input.grab_focus()
 
-# The import target, created in the workspace catalog if it doesn't exist yet.
+# The import target, created in the workspace catalog if it doesn't exist yet. Remembers
+# any name that didn't already exist, so _close() can clean it up if nothing landed in it.
 func _resolve_target_library() -> BlockLibrary:
+	if VoxelWorld.workspace.get_library(_target_library_name) == null \
+			and _target_library_name not in _created_library_names:
+		_created_library_names.append(_target_library_name)
 	return VoxelWorld.workspace.get_or_add_library(_target_library_name)
 
 # Switching format: show/hide the caveat and re-browse the current source under it.
@@ -354,4 +363,12 @@ func _import() -> void:
 func _close() -> void:
 	if _service != null:
 		_service.close()
+	# Drop any library this panel eagerly created (just by picking/typing a name or
+	# browsing a source) that never actually received an import — otherwise a
+	# canceled/failed import leaves a visible, empty library behind.
+	for lib_name in _created_library_names:
+		var lib := VoxelWorld.workspace.get_library(lib_name)
+		if lib != null and lib.block_types.is_empty() and lib.block_models.is_empty() \
+				and lib.texture_assets.is_empty():
+			VoxelWorld.workspace.remove_library(lib_name)
 	queue_free()
