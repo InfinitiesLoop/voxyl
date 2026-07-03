@@ -158,10 +158,14 @@ func import_block(ns: String, block_id: String, name_override := "") -> BlockTyp
 func _plans(ns: String) -> Dictionary:
 	if _plan_cache.has(ns):
 		return _plan_cache[ns]
+	# Recursive: many mods (e.g. Ztones) sort their block textures into subfolders under
+	# textures/blocks/; a flat listing would find only the handful sitting at the top.
+	# Names come back with their subpath ("agon/0.png"), which flows through the block id
+	# and texture ref unchanged, so a nested texture imports as its own cube like any other.
 	var subdir := "blocks"
-	var files := _source.list_files("%s/textures/blocks" % ns)
+	var files := _source.list_files_recursive("%s/textures/blocks" % ns)
 	if files.is_empty():
-		files = _source.list_files("%s/textures/block" % ns)   # rare 1.7.10 variant
+		files = _source.list_files_recursive("%s/textures/block" % ns)   # rare 1.7.10 variant
 		subdir = "block"
 	var plan := {"subdir": subdir, "blocks": _build_blocks(files)}
 	_plan_cache[ns] = plan

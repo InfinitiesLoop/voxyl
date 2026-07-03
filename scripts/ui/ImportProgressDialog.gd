@@ -80,6 +80,27 @@ func run(service: ImportService, selection: Array) -> void:
 	await get_tree().process_frame
 	service.end_import()
 
+	# Pre-bake the fresh blocks' preview icons into the shared disk cache so the block
+	# grid shows them instantly instead of popping in lazily. The bar tracks it as a
+	# second phase; the icons themselves are still resolved lazily elsewhere — this only
+	# warms the cache. Baking needs the scene tree + a frame per batch, which this modal
+	# (already in the tree, already pumping frames) provides.
+	# Skip with no real display (headless tests): baking renders through off-screen
+	# viewports, and RenderingServer.frame_post_draw never fires under the dummy driver, so
+	# there'd be nothing to await and no grid to warm anyway.
+	var imported := service.imported_block_types()
+	if not imported.is_empty() and DisplayServer.get_name() != "headless":
+		_status.text = "Baking previews…"
+		_bar.value = 0
+		var baker := BlockIconBaker.new()
+		add_child(baker)
+		await baker.prebake(imported, func(baked: int, count: int) -> void:
+			_bar.max_value = maxi(count, 1)
+			_bar.value = baked
+			_status.text = "Baking previews… %d / %d" % [baked, count])
+		baker.free()
+		_bar.value = _bar.max_value
+
 	var w := service.warnings.size()
 	_status.text = "Imported %d block(s)%s." % [
 		service.imported_count, ("  (%d warning(s))" % w) if w > 0 else ""]

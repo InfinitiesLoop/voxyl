@@ -136,6 +136,22 @@ func end_import() -> void:
 	if imported_count > 0:
 		LibraryStore.save_library(_library)
 
+# The BlockTypes imported so far (deduped across sources), read back out of the target
+# library by each importer's final names. Lets a caller act on the fresh blocks — the
+# import UI uses it to pre-bake their previews so the grid has no lazy pop-in.
+func imported_block_types() -> Array:
+	var out: Array = []
+	var seen := {}
+	for imp in _importers.values():
+		for bt_name in imp.imported_blocks:
+			if seen.has(bt_name):
+				continue
+			seen[bt_name] = true
+			var bt := _library.get_block_type(bt_name)
+			if bt != null:
+				out.append(bt)
+	return out
+
 # Release any held archive handles. Call when the panel closes.
 func close() -> void:
 	for s in _sources:

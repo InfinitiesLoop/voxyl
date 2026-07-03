@@ -38,6 +38,10 @@ const _CACHE_DIR := "user://icon_cache/"
 const _BAKE_VERSION := 8
 
 var _cache := {}        # block_name -> ImageTexture (in-memory)
+# Texture path -> file mtime, memoized across a run so a bulk prebake doesn't re-stat the
+# same shared texture once per block that binds it. Cleared with the icon cache on
+# workspace_changed (the only time a reimport could actually change a file's mtime).
+var _mtime_cache := {}
 var _queue: Array = []  # BlockType, FIFO of pending bakes
 var _queued := {}       # block_name -> true (queue membership, for dedup)
 var _baking := false
@@ -105,6 +109,41 @@ func invalidate(block_name: String) -> void:
 
 func invalidate_all() -> void:
 	_cache.clear()
+	_mtime_cache.clear()
+
+# Pre-bake a set of blocks into the disk cache, returning once they're all done (or the
+# baker leaves the tree). The import flow calls this so freshly imported blocks are warm
+# before the grid is ever shown — the same disk cache every UI baker reads, so this is a
+# pure pre-cache, not a replacement for the lazy icon_for() path. Blocks already cached
+# on disk are skipped, so a re-import only bakes what actually changed.
+func prebake(block_types: Array, on_progress := Callable()) -> void:
+	var pending := {}   # names actually enqueued this run, for progress accounting
+	for bt in block_types:
+		if bt == null or _cache.has(bt.name):
+			continue
+		if FileAccess.file_exists(_disk_path(bt)):
+			continue
+		pending[bt.name] = true
+		_enqueue(bt)
+	var total := pending.size()
+	if total == 0:
+		return
+	# Drive the caller's progress bar off icon_ready (fires per baked block, on the main
+	# thread inside _bake_next), so the bar advances each batch instead of sitting at 0
+	# until the whole prebake finishes. The await-loop below yields a frame between batches,
+	# giving the bar a chance to actually repaint.
+	var done := [0]
+	var cb := func(block_name: String) -> void:
+		if pending.has(block_name):
+			done[0] += 1
+			if on_progress.is_valid():
+				on_progress.call(done[0], total)
+	icon_ready.connect(cb)
+	if on_progress.is_valid():
+		on_progress.call(0, total)
+	while (_baking or not _queue.is_empty()) and is_inside_tree():
+		await get_tree().process_frame
+	icon_ready.disconnect(cb)
 
 # --- Internals --------------------------------------------------------------
 
@@ -206,8 +245,18 @@ func _model_signature_parts(model: BlockModel) -> PackedStringArray:
 		var asset := VoxelWorld.workspace.get_texture_asset(aid)
 		if asset != null and not asset.image_path.is_empty():
 			out.append(asset.image_path)
-			out.append(str(FileAccess.get_modified_time(AssetLibrary.path_for(asset.image_path))))
+			out.append(str(_mtime_for(AssetLibrary.path_for(asset.image_path))))
 	return out
+
+# File mtime, memoized for this baker's lifetime (see _mtime_cache). A bulk prebake asks
+# for the same shared texture's mtime once per binding block; without this that's a stat
+# syscall each time.
+func _mtime_for(path: String) -> int:
+	if _mtime_cache.has(path):
+		return _mtime_cache[path]
+	var t := int(FileAccess.get_modified_time(path))
+	_mtime_cache[path] = t
+	return t
 
 func _safe(s: String) -> String:
 	var out := ""

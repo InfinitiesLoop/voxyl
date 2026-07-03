@@ -116,8 +116,18 @@ func import_block(ns: String, block_id: String, name_override := "") -> BlockTyp
 			continue
 		state_map.add_variant(v["facing"], v["top"], v["model_ref"], v["x"], v["y"], v["uvlock"])
 	if state_map.is_empty():
-		_warn("all variant models failed to import: %s:%s" % [ns, block_id])
-		return null
+		# Every variant model was bodiless (parent builtin/entity): this is a block
+		# ENTITY (chest, sign, bed…) whose shape Java draws, not the assets. Synthesize a
+		# stand-in rather than drop a legitimate semantic block type — see _emit_block_entity.
+		var be_ref := ""
+		for v in variants:
+			if not str(v["model_ref"]).is_empty():
+				be_ref = v["model_ref"]
+				break
+		if be_ref.is_empty():
+			_warn("no model referenced: %s:%s" % [ns, block_id])
+			return null
+		return _emit_block_entity(bt_name, be_ref)
 
 	# The resting-orientation model is what BlockType.model_id and the current 3D
 	# path resolve; sample its dominant texture for the planning color (decision 1).
@@ -341,6 +351,142 @@ func _emit_block_type(bt_name: String, primary_ref: String, state_map: BlockStat
 	if not imported_blocks.has(bt_name):
 		imported_blocks.append(bt_name)
 	return bt
+
+# ---------------------------------------------------------------------------
+# Block entities (chests, signs, beds, banners, shulker boxes…)
+#
+# A block whose every variant model is bodiless (parent `builtin/entity`) is a block
+# ENTITY: Minecraft renders its shape in Java code (a BlockEntityRenderer), so nothing
+# in the assets describes the geometry and _ensure_model finds none. Dropping it would
+# lose a legitimate semantic block type (principle 1) and a block the user may well want
+# to place (principle 5), so we synthesize a stand-in here instead. For the few we model
+# precisely (chests) a hand-authored template mirrors what the Java renderer draws;
+# everything else becomes an approximate unit cube skinned with the model's own particle
+# texture. Either way it stays a reader of the user's assets (decision 4) and every
+# MC-ism lives here in the plugin, never in core.
+# ---------------------------------------------------------------------------
+
+# Emit a BlockType for a block entity: a precise template when we have one for the
+# block's (bodiless) primary model, otherwise an approximate particle-skinned cube. Only
+# a model that *resolves but carries no geometry* is a block entity (a bodiless
+# builtin/entity model); a model that couldn't be read at all is genuinely broken — skip
+# it as before rather than invent a cube for an asset that isn't there.
+func _emit_block_entity(bt_name: String, primary_ref: String) -> BlockType:
+	if _resolve_model_json(primary_ref, 0) == null:
+		_warn("all variant models failed to import: %s" % bt_name)
+		return null
+	var tmpl := _build_entity_template(primary_ref)
+	if tmpl != null:
+		_library.add_block_model(tmpl)
+		return _emit_block_type(bt_name, tmpl.id, null)
+	return _emit_approximate_cube(bt_name, primary_ref)
+
+# Known block-entity primary model → the entity atlas its Java renderer samples. Keyed
+# by canonical model ref so only the precise vanilla blocks match; a modded chest with
+# its own model falls through to the approximate cube.
+const _CHEST_TEMPLATES := {
+	"minecraft:block/chest": "minecraft:entity/chest/normal",
+	"minecraft:block/trapped_chest": "minecraft:entity/chest/trapped",
+	"minecraft:block/ender_chest": "minecraft:entity/chest/ender",
+}
+
+# The single-chest entity texture is a 64×64 atlas; UVs below are in its pixels.
+const _CHEST_ATLAS := 64.0
+
+# A hand-authored BlockModel mirroring the block, or null when we have no template for
+# `primary_ref` (or its atlas is missing — the caller then approximates).
+func _build_entity_template(primary_ref: String) -> BlockModel:
+	if _CHEST_TEMPLATES.has(primary_ref):
+		return _build_chest_model(primary_ref, _CHEST_TEMPLATES[primary_ref])
+	return null
+
+# Recreate Minecraft's ModelChest as neutral geometry: a base box, a lid box, and the
+# front latch, each face UV-mapped into the chest entity atlas the same way the Java
+# renderer unwraps them. Resting facing is NORTH (-Z), so the latch/front sits on -Z and
+# the view rotates the whole model to the placed cell's orientation (state_map stays null).
+func _build_chest_model(model_id: String, atlas_ref: String) -> BlockModel:
+	var asset := _ensure_texture(atlas_ref)
+	if asset == null:
+		return null   # atlas not in the user's assets → fall back to approximate cube
+	var tex := asset.id
+	var model := BlockModel.new()
+	model.id = model_id
+	model.textures = {tex: tex}
+	# from/to in voxyl units (MC 0–16 ÷ 16); atlas offset (u,v) + box dims (dx,dy,dz) per
+	# Minecraft's box unwrap. Base occupies y 0–10, lid 10–14, latch protrudes at -Z.
+	model.elements = [
+		_entity_box(Vector3(1, 0, 1) / 16.0, Vector3(15, 10, 15) / 16.0, tex, 0, 19, 14, 10, 14),
+		_entity_box(Vector3(1, 10, 1) / 16.0, Vector3(15, 14, 15) / 16.0, tex, 0, 0, 14, 5, 14),
+		_entity_box(Vector3(7, 7, 0) / 16.0, Vector3(9, 11, 1) / 16.0, tex, 0, 0, 2, 4, 1),
+	]
+	return model
+
+# One box element with all six faces UV-mapped into the atlas via Minecraft's standard
+# box unwrap (top row: top|bottom; second row: left|front|right|back — offset by depth).
+func _entity_box(from: Vector3, to: Vector3, tex: String,
+		u: float, v: float, dx: float, dy: float, dz: float) -> Dictionary:
+	var uv := {
+		BlockModel.Dir.UP:    _atlas_uv(u + dz, v, dx, dz),
+		BlockModel.Dir.DOWN:  _atlas_uv(u + dz + dx, v, dx, dz),
+		BlockModel.Dir.WEST:  _atlas_uv(u, v + dz, dz, dy),
+		BlockModel.Dir.NORTH: _atlas_uv(u + dz, v + dz, dx, dy),
+		BlockModel.Dir.EAST:  _atlas_uv(u + dz + dx, v + dz, dz, dy),
+		BlockModel.Dir.SOUTH: _atlas_uv(u + dz + dx + dz, v + dz, dx, dy),
+	}
+	var faces := {}
+	for d in uv:
+		faces[d] = BlockModel.make_face(tex, uv[d])
+	return {"from": from, "to": to, "faces": faces}
+
+# Atlas pixel rect → normalized [0,1] Rect2 (V from the texture top, matching _face_uv).
+func _atlas_uv(x: float, y: float, w: float, h: float) -> Rect2:
+	return Rect2(x / _CHEST_ATLAS, y / _CHEST_ATLAS, w / _CHEST_ATLAS, h / _CHEST_ATLAS)
+
+# Approximate a block entity we have no template for as a unit cube skinned with the
+# model's own particle texture (oak planks for signs, obsidian for an unknown chest, …)
+# — the best neutral stand-in the assets offer. No particle → a plain colored cube so the
+# block still exists in the "undecided" state (principle 5). Flagged in warnings.
+func _emit_approximate_cube(bt_name: String, primary_ref: String) -> BlockType:
+	var particle := _particle_texture(primary_ref)
+	var model_id := _approx_model_id(primary_ref)
+	var model := _library.get_block_model(model_id)
+	if model == null:
+		model = BlockModel.new()
+		model.id = model_id
+		_library.add_block_model(model)
+	var asset: TextureAsset = null
+	if not particle.is_empty():
+		asset = _ensure_texture(particle)
+	if asset != null:
+		var faces := {}
+		for d in BlockModel.ALL_DIRS:
+			faces[d] = BlockModel.make_face(asset.id)
+		model.elements = [{"from": Vector3.ZERO, "to": Vector3.ONE, "faces": faces}]
+		model.textures = {asset.id: asset.id}
+	else:
+		model.elements = [BlockModel.box_element(Vector3.ZERO, Vector3.ONE)]
+		model.textures = {}
+	_warn("approximate cube (block entity, no asset geometry): %s" % bt_name)
+	return _emit_block_type(bt_name, model_id, null)
+
+# The particle texture ref declared by a (bodiless) model, canonicalized, or "". This is
+# the one visual hint a builtin/entity model carries, so it seeds the approximate cube.
+func _particle_texture(primary_ref: String) -> String:
+	var resolved = _resolve_model_json(primary_ref, 0)
+	if resolved == null:
+		return ""
+	var textures_map: Dictionary = resolved["textures"]
+	var raw := str(textures_map.get("particle", ""))
+	if raw.is_empty():
+		return ""
+	var ref := _resolve_texture_var(textures_map, raw, 0) if raw.begins_with("#") else raw
+	return _canonical(ref) if not ref.is_empty() else ""
+
+# A distinct model id for an approximate cube, so it never collides with the real
+# `block/…` model (which stays bodiless) it stands in for.
+func _approx_model_id(primary_ref: String) -> String:
+	var sr := _split_ref(primary_ref)
+	return "%s:approx/%s" % [sr["ns"], str(sr["path"]).get_file()]
 
 # ---------------------------------------------------------------------------
 # Blockstate variants

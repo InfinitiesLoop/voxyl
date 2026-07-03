@@ -11,23 +11,34 @@ extends RefCounted
 # color toward black. Partial alpha anywhere → TRANSLUCENT; only hard 0/1 alpha with
 # some fully-transparent pixels → CUTOUT; otherwise OPAQUE.
 static func scan_image(img: Image) -> Dictionary:
-	var w := img.get_width()
-	var h := img.get_height()
+	# Walk the raw byte buffer rather than get_pixel(x, y): per-pixel Color dispatch is
+	# one of the slowest GDScript↔engine calls, and this runs once per imported texture
+	# (animated ones are tall multi-frame strips). Convert a copy to RGBA8 so every pixel
+	# is a fixed 4-byte stride; the C++ convert is far cheaper than the pixel loop it saves.
+	var src := img
+	if src.get_format() != Image.FORMAT_RGBA8:
+		src = img.duplicate()
+		src.convert(Image.FORMAT_RGBA8)
+	var data := src.get_data()
+	var count := data.size()
+	# Byte thresholds equivalent to the old 0.05 / 0.95 alpha cutoffs: 0.05*255 = 12.75
+	# (a < 13 ⇔ a ≤ 12) and 0.95*255 = 242.25 (a < 243 ⇔ a ≤ 242).
 	var r := 0.0; var g := 0.0; var b := 0.0; var n := 0
 	var has_transparent := false
 	var has_partial := false
-	for y in h:
-		for x in w:
-			var c := img.get_pixel(x, y)
-			if c.a < 0.05:
-				has_transparent = true
-				continue
-			if c.a < 0.95:
+	var i := 0
+	while i < count:
+		var a := data[i + 3]
+		if a < 13:
+			has_transparent = true
+		else:
+			if a < 243:
 				has_partial = true
-			r += c.r; g += c.g; b += c.b; n += 1
+			r += data[i]; g += data[i + 1]; b += data[i + 2]; n += 1
+		i += 4
 	var average := Color(0.5, 0.5, 0.5)
 	if n > 0:
-		average = Color(r / n, g / n, b / n)
+		average = Color(r / n / 255.0, g / n / 255.0, b / n / 255.0)
 	var transparency := TextureAsset.Transparency.OPAQUE
 	if has_partial:
 		transparency = TextureAsset.Transparency.TRANSLUCENT

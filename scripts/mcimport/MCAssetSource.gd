@@ -23,6 +23,12 @@ func list_namespaces() -> PackedStringArray:
 func list_files(_rel_dir: String) -> PackedStringArray:
 	return PackedStringArray()
 
+# Like list_files but recursing into subdirectories, each result RELATIVE to `rel_dir`
+# (e.g. "agon/0.png"). The flat importer uses this so mods that sort their block textures
+# into subfolders under `textures/blocks/` aren't half-missed. Default: none.
+func list_files_recursive(_rel_dir: String) -> PackedStringArray:
+	return PackedStringArray()
+
 func has_file(_rel: String) -> bool:
 	return false
 
@@ -33,6 +39,12 @@ func read_text(_rel: String) -> String:
 # Decoded image, or null when missing/unreadable.
 func read_image(_rel: String) -> Image:
 	return null
+
+# Raw file bytes, or an empty PackedByteArray when missing/unreadable. Lets a caller
+# copy a PNG verbatim (no decode/re-encode round trip) while still decoding it once for
+# a pixel scan — see MCTexImport.ensure_texture.
+func read_bytes(_rel: String) -> PackedByteArray:
+	return PackedByteArray()
 
 # Release any held handles (zip readers). Safe to call more than once.
 func close() -> void:

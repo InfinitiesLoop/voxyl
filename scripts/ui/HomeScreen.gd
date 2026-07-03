@@ -717,15 +717,16 @@ func _build_palette_editor_view() -> Control:
 
 	_entry_detail = _build_entry_detail()
 	split.add_child(_entry_detail)
-	split.resized.connect(func(): split.split_offset = maxi(0, int(split.size.x) - 332))
+	split.resized.connect(func(): split.split_offset = maxi(0, int(split.size.x) - 452))
 
 	return root
 
 # The right detail panel for the selected entry: same styled fixed-width shell as the Block
-# Types tab's _build_bt_detail, holding a scrollable vbox filled by _refresh_entry_detail.
+# Types tab's _build_bt_detail, holding a vertically-expanding vbox filled by
+# _refresh_entry_detail (the block-type chooser grid scrolls internally and grows to fill it).
 func _build_entry_detail() -> Control:
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size.x = 320
+	panel.custom_minimum_size.x = 440
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.13, 0.13, 0.15)
 	sb.content_margin_left = 16
@@ -734,14 +735,11 @@ func _build_entry_detail() -> Control:
 	sb.content_margin_bottom = 16
 	panel.add_theme_stylebox_override("panel", sb)
 
-	var scroll := ScrollContainer.new()
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	panel.add_child(scroll)
-
 	var vbox := VBoxContainer.new()
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	vbox.add_theme_constant_override("separation", 10)
-	scroll.add_child(vbox)
+	panel.add_child(vbox)
 
 	var placeholder := Label.new()
 	placeholder.name = "Placeholder"
@@ -919,7 +917,8 @@ func _refresh_entry_detail() -> void:
 		var assign_grid := BlockGrid.new()
 		assign_grid.show_captions = true
 		assign_grid.cell_size = Vector2(48, 48)
-		assign_grid.custom_minimum_size = Vector2(0, 260)
+		assign_grid.custom_minimum_size = Vector2(0, 200)
+		assign_grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		var items: Array = []
 		for n in _scoped_block_type_names(_editing_palette):
 			var bt := VoxelWorld.workspace.resolve_block_type(n, _editing_palette.library_names)
@@ -1558,7 +1557,11 @@ func _refresh(_arg = null) -> void:
 	_ensure_selected_library()
 	if _library_rail:
 		_library_rail.selected = _selected_library.name if _selected_library else ""
-		_library_rail.populate(VoxelWorld.workspace.list_libraries())
+		var rail_libs: Array = []
+		for n in VoxelWorld.workspace.list_libraries():
+			if n != VoxelWorkspace.BASIC_LIBRARY:
+				rail_libs.append(n)
+		_library_rail.populate(rail_libs)
 	if _block_grid:
 		_block_grid.populate(_selected_library.sorted_block_types() if _selected_library else [])
 

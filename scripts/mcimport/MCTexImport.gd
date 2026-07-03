@@ -28,17 +28,32 @@ static func ensure_texture(library: BlockLibrary, source: MCAssetSource,
 		return existing
 
 	var src_rel := "%s/textures/%s.png" % [sr["ns"], sr["path"]]
-	var img := source.read_image(src_rel)
-	if img == null:
+	# Read the source PNG's raw bytes once: we copy them verbatim to the library (below)
+	# AND decode them here for the pixel scan. This avoids the decode→re-encode round trip
+	# a save_png() would cost per texture — the single biggest import expense, redundant
+	# since the pixels are copied unchanged.
+	var bytes := source.read_bytes(src_rel)
+	if bytes.is_empty():
 		warnings.append("texture image missing: %s" % texture_ref)
 		return null
+	var img := Image.new()
+	if img.load_png_from_buffer(bytes) != OK:
+		warnings.append("texture image unreadable: %s" % texture_ref)
+		return null
 
-	# Copy pixels under the target library's pixel folder (frame strips kept as-is).
-	# image_path keeps the library segment so AssetLibrary resolves it ROOT-relative.
+	# Copy pixels under the target library's pixel folder (frame strips kept as-is) by
+	# writing the source PNG bytes verbatim — no re-encode. image_path keeps the library
+	# segment so AssetLibrary resolves it ROOT-relative.
 	var rel := AssetLibrary.in_library(library.name,
 		"%s/%s/%s.png" % [AssetLibrary.PIXELS_DIR, sr["ns"], sr["path"]])
 	AssetLibrary.ensure_dir(rel.get_base_dir())
-	img.save_png(AssetLibrary.path_for(rel))
+	var out := FileAccess.open(AssetLibrary.path_for(rel), FileAccess.WRITE)
+	if out != null:
+		out.store_buffer(bytes)
+		out.close()
+	else:
+		warnings.append("texture copy failed: %s" % texture_ref)
+		return null
 
 	var asset := TextureAsset.new()
 	asset.id = id

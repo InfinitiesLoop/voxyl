@@ -23,6 +23,7 @@ func _ready() -> void:
 	_test_project_persistence()
 	_test_project_rename_and_timestamps()
 	_test_mc_import()
+	_test_mc_import_block_entities()
 	_test_statemap_multipart()
 	_test_mc_import_multipart()
 	_test_mc_import_wall_tristate()
@@ -635,6 +636,96 @@ func _test_mc_import() -> void:
 	_rm_rf(src)
 	AssetLibrary.ROOT = saved_root
 
+# Block entities (chests, signs, …) reference bodiless `builtin/entity` models — Java
+# draws their shape, so the assets carry no geometry. Rather than drop them, the importer
+# synthesizes a stand-in: a hand-authored chest template for the vanilla chests, and an
+# approximate particle-skinned cube for everything else (a plain cube when even a particle
+# texture is missing). Nothing MC-specific leaks past the importer.
+func _test_mc_import_block_entities() -> void:
+	print("-- mc importer block entities (chest template + approximate cube)")
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_beimport__"
+	var src := "user://__voxyl_besrc__"
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	var assets := src + "/assets"
+
+	# A vanilla-shaped chest: blockstate → a bodiless builtin/entity model, geometry
+	# supplied only by the Java renderer + the 64×64 entity atlas.
+	_write_file(assets + "/minecraft/blockstates/chest.json",
+		'{ "variants": { "": { "model": "minecraft:block/chest" } } }')
+	_write_file(assets + "/minecraft/models/block/chest.json",
+		'{ "parent": "builtin/entity", "textures": { "particle": "minecraft:block/oak_planks" } }')
+	var atlas_color := Color(0.55, 0.4, 0.2)
+	var atlas := Image.create_empty(64, 64, false, Image.FORMAT_RGBA8)
+	atlas.fill(atlas_color)
+	_write_png(assets + "/minecraft/textures/entity/chest/normal.png", atlas)
+	_write_solid(assets + "/minecraft/textures/block/oak_planks.png", Color(0.6, 0.45, 0.25))
+
+	# A block entity we have NO template for, but whose model declares a particle texture.
+	_write_file(assets + "/testmod/blockstates/test_sign.json",
+		'{ "variants": { "": { "model": "testmod:block/test_sign" } } }')
+	_write_file(assets + "/testmod/models/block/test_sign.json",
+		'{ "parent": "builtin/entity", "textures": { "particle": "testmod:block/oak" } }')
+	var sign_color := Color(0.7, 0.3, 0.2)
+	_write_solid(assets + "/testmod/textures/block/oak.png", sign_color)
+
+	# A bodiless block with no particle at all → a plain colored cube (undecided state).
+	_write_file(assets + "/testmod/blockstates/test_void.json",
+		'{ "variants": { "": { "model": "testmod:block/test_void" } } }')
+	_write_file(assets + "/testmod/models/block/test_void.json",
+		'{ "parent": "builtin/entity" }')
+
+	var ws := VoxelWorkspace.new()
+	var lib := ws.get_or_add_library("be")
+	var imp := MCImporter.new(assets, lib)
+
+	# --- Chest template: precise geometry mirroring ModelChest ---
+	var chest_bt := imp.import_block("minecraft", "chest")
+	var chest_m := ws.get_block_model("minecraft:block/chest")
+	_check("chest imported (not dropped) with its template model",
+		chest_bt != null and chest_bt.model_id == "minecraft:block/chest" and chest_m != null)
+	_check("chest template has base + lid + latch boxes",
+		chest_m != null and chest_m.elements.size() == 3)
+	_check("chest faces bind the entity atlas texture",
+		chest_m != null and chest_m.has_textures()
+		and chest_m.textures.has("minecraft:entity/chest/normal"))
+	var atlas_asset := ws.get_texture_asset("minecraft:entity/chest/normal")
+	_check("chest entity atlas copied into the library + loadable",
+		atlas_asset != null and AssetLibrary.load_image(atlas_asset.image_path) != null)
+	# Base box (element 0) NORTH face unwraps to atlas px (14,33)..(28,43) of 64.
+	var base_north: Rect2 = chest_m.elements[0]["faces"][BlockModel.Dir.NORTH]["uv"]
+	_check("chest base front face UV-mapped into the atlas",
+		base_north.is_equal_approx(Rect2(14.0 / 64.0, 33.0 / 64.0, 14.0 / 64.0, 10.0 / 64.0)))
+	_check("chest state_map stays null (view rotates the single model by facing)",
+		chest_bt != null and chest_bt.state_map == null)
+
+	# --- Approximate cube: no template, but a particle texture to skin it ---
+	var sign_bt := imp.import_block("testmod", "test_sign")
+	var sign_m := ws.get_block_model("testmod:approx/test_sign")
+	_check("untemplated block entity becomes an approximate cube",
+		sign_bt != null and sign_bt.model_id == "testmod:approx/test_sign" and sign_m != null)
+	_check("approximate cube is a full unit cube",
+		sign_m != null and sign_m.elements.size() == 1
+		and sign_m.elements[0]["from"] == Vector3.ZERO and sign_m.elements[0]["to"] == Vector3.ONE)
+	_check("approximate cube skinned with the particle texture",
+		sign_m != null and sign_m.has_textures() and sign_m.textures.has("testmod:block/oak"))
+	_check("approximate cube planning color from the particle texture",
+		sign_bt != null and _color_near(sign_bt.color, sign_color, 0.02))
+	_check("approximate cube flagged in warnings", _warns_contain(imp, "approximate cube"))
+
+	# --- No particle → plain colored cube, still a first-class (undecided) block ---
+	var void_bt := imp.import_block("testmod", "test_void")
+	var void_m := ws.get_block_model("testmod:approx/test_void")
+	_check("particle-less block entity still emits a block type",
+		void_bt != null and void_bt.model_id == "testmod:approx/test_void")
+	_check("particle-less approximate cube carries no texture (color path)",
+		void_m != null and not void_m.has_textures())
+
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	AssetLibrary.ROOT = saved_root
+
 # Phase 3: the neutral multipart map on its own — OR/AND clause matching and part
 # selection from derived connection flags, with no importer or view involved.
 func _test_statemap_multipart() -> void:
@@ -1088,6 +1179,12 @@ func _test_import_service() -> void:
 
 	var n := svc.import_selected(avail)
 	_check("all selected blocks import", n == 3)
+	# The imported-block-types accessor (drives the import UI's preview pre-bake) reports
+	# exactly the fresh block types, deduped.
+	var fresh := svc.imported_block_types()
+	_check("imported_block_types reports the fresh blocks",
+		fresh.size() == 3 and fresh.has(ws.get_block_type("stone"))
+		and fresh.has(ws.get_block_type("othermod:widget")))
 	# minecraft == default namespace → vanilla blocks get clean, un-prefixed names.
 	_check("vanilla blocks keep clean un-prefixed names",
 		ws.get_block_type("stone") != null and ws.get_block_type("widget") != null)
@@ -1195,6 +1292,10 @@ func _test_flat_import() -> void:
 	_write_solid(blocks + "/arcanetop.png", c_top)
 	# A lone face texture with no siblings → stays standalone, not a fake block.
 	_write_solid(blocks + "/treetop.png", Color(0.3, 0.5, 0.2))
+	# Textures sorted into a subfolder (the Ztones pattern): must be found recursively,
+	# each carrying its subpath so it imports as its own cube.
+	_write_solid(blocks + "/agon/0.png", Color(0.4, 0.3, 0.6))
+	_write_solid(blocks + "/agon/1.png", Color(0.5, 0.3, 0.6))
 	# An animated texture (2-frame vertical strip + .mcmeta), as in 1.7.10.
 	var anim := Image.create_empty(16, 32, false, Image.FORMAT_RGBA8)
 	anim.fill(Color(0.7, 0.3, 0.1))
@@ -1205,16 +1306,23 @@ func _test_flat_import() -> void:
 	var lib := ws.get_or_add_library("flat")
 	var imp := MCFlatImporter.new(assets, lib)
 
-	# Browse: 7 blocks — the four faced groups collapse to one each; stone, magma,
-	# treetop stand alone. (12 PNGs → 7 blocks.)
+	# Browse: 9 blocks — the four faced groups collapse to one each; stone, magma,
+	# treetop stand alone; the two nested agon variants each stand alone. (14 PNGs → 9.)
 	var listed := imp.list_blocks("testmod")
 	_check("flat browse groups faces into blocks",
-		listed.size() == 7
+		listed.size() == 9
 		and Array(listed).has("furnace") and Array(listed).has("signal_lamp")
 		and Array(listed).has("solar_panel") and Array(listed).has("arcane")
 		and Array(listed).has("stone") and Array(listed).has("treetop"))
 	_check("lone suffix texture stays standalone (no fake 'tree' block)",
 		Array(listed).has("treetop") and not Array(listed).has("tree"))
+	_check("subfolder textures found recursively (Ztones-style sets)",
+		Array(listed).has("agon/0") and Array(listed).has("agon/1"))
+	# A nested block imports end-to-end: its texture ref keeps the subpath.
+	var agon_bt := imp.import_block("testmod", "agon/0")
+	_check("nested block imports as its own cube with the right texture",
+		agon_bt != null and ws.get_block_model("testmod:flat/agon/0") != null
+		and ws.get_texture_asset("testmod:blocks/agon/0") != null)
 
 	# Uniform block: a single texture on all six faces.
 	var stone_bt := imp.import_block("testmod", "stone")
