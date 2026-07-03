@@ -387,9 +387,20 @@ func _test_library_serialization() -> void:
 	_check("delete_library succeeds", LibraryStore.delete_library("authored") == OK)
 	_check("authored folder is gone after delete",
 		not DirAccess.dir_exists_absolute(AssetLibrary.path_for("authored")))
+	# The fast delete stages the folder under .trash (an instant rename) rather than unlinking
+	# it inline — but .trash must never surface as a library.
+	_check("deleted library is staged under .trash",
+		DirAccess.dir_exists_absolute(AssetLibrary.path_for(LibraryStore.TRASH_DIR)))
+	_check(".trash is not listed as a library",
+		not LibraryStore.list_libraries().has(LibraryStore.TRASH_DIR))
 	var ws3 := VoxelWorkspace.new()
 	LibraryStore.load_persisted(ws3)
 	_check("deleted library does not resurrect on reload", ws3.get_library("authored") == null)
+	# purge_worker (the off-thread body of purge_trash) does the real unlink of staged folders.
+	LibraryStore._purge_worker(AssetLibrary.path_for(LibraryStore.TRASH_DIR))
+	var trash_dir := DirAccess.open(AssetLibrary.path_for(LibraryStore.TRASH_DIR))
+	_check("purge_trash unlinks the staged folder",
+		trash_dir != null and trash_dir.get_directories().is_empty())
 	_check("delete_library refuses to remove the basic floor",
 		LibraryStore.delete_library(VoxelWorkspace.BASIC_LIBRARY) != OK)
 	_check("delete_library on a missing folder is OK", LibraryStore.delete_library("never_existed") == OK)

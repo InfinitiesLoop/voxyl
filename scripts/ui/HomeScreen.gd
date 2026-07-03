@@ -1175,8 +1175,11 @@ func _on_delete_library(library_name: String) -> void:
 		return   # the basic floor is undeletable
 	VoxelWorld.workspace.remove_library(library_name)
 	# Also remove the on-disk folder, or load_persisted re-finds it on the next launch and
-	# the library comes back (the "ghost library that won't delete" bug).
+	# the library comes back (the "ghost library that won't delete" bug). delete_library only
+	# moves the folder aside (instant); purge_trash then unlinks it off the UI thread so a
+	# huge library doesn't freeze the app on delete.
 	LibraryStore.delete_library(library_name)
+	LibraryStore.purge_trash()
 	if _selected_library == lib:
 		_selected_library = null
 	VoxelWorld.workspace_changed.emit()

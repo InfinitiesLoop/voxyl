@@ -17,6 +17,11 @@ extends RefCounted
 # Reserved root child folder for palettes (so list_libraries can exclude it).
 const PALETTES_DIR := "palettes"
 
+# Reserved root child folder holding libraries that have been deleted but not yet unlinked
+# from disk (see delete_library / purge_trash). Excluded from list_libraries so a folder
+# staged here is never seen as a live library.
+const TRASH_DIR := ".trash"
+
 # Consolidated per-library load cache: ROOT/<library>/index.dat. It holds the whole material
 # layer as one FileAccess.store_var(full_objects) blob, NOT a .tres/.res of sub-resources —
 # because the cost of opening a big library was never file I/O, it was materializing tens of
@@ -123,19 +128,48 @@ static func rename_library(workspace: VoxelWorkspace, old_name: String, new_name
 
 # --- Delete -----------------------------------------------------------------
 
-# Remove a library's on-disk folder (ROOT/<name>) entirely, so it doesn't resurrect on
-# the next launch (load_persisted scans ROOT for folders and reloads whatever it finds —
-# a memory-only remove_library left the folder behind, and an empty/partial folder, such
-# as a stray import target, reappeared as a ghost library). The built-in `basic` floor is
-# never deleted (it re-seeds anyway). Pairs with VoxelWorkspace.remove_library. Missing
-# folder → OK (already gone).
+# Remove a library's on-disk folder (ROOT/<name>) so it doesn't resurrect on the next launch
+# (load_persisted scans ROOT for folders and reloads whatever it finds — a memory-only
+# remove_library left the folder behind, and an empty/partial folder, such as a stray import
+# target, reappeared as a ghost library). The built-in `basic` floor is never deleted (it
+# re-seeds anyway). Pairs with VoxelWorkspace.remove_library. Missing folder → OK.
+#
+# A big imported library is tens of thousands of files, and DirAccess has no delete-tree
+# primitive — _rm_rf must unlink each one, slow enough to visibly hang the UI. So make delete
+# *feel* instant: move the folder aside into the reserved .trash dir (an O(1) same-volume
+# rename) and let purge_trash() do the real unlink off the UI thread. list_libraries skips
+# .trash, so the library is already gone as far as the app is concerned. If the rename can't
+# happen (e.g. a cross-volume ROOT), fall back to the synchronous recursive delete.
 static func delete_library(library_name: String) -> Error:
 	if library_name == VoxelWorkspace.BASIC_LIBRARY:
 		return ERR_UNAUTHORIZED
 	var dir := AssetLibrary.path_for(library_name)
 	if not DirAccess.dir_exists_absolute(dir):
 		return OK
+	if AssetLibrary.ensure_dir(TRASH_DIR) == OK:
+		var staged := AssetLibrary.path_for(TRASH_DIR).path_join(
+			library_name.validate_filename() + "_" + str(Time.get_ticks_usec()))
+		if DirAccess.rename_absolute(dir, staged) == OK:
+			return OK
 	return _rm_rf(dir)
+
+# Reclaim disk from libraries deleted this session (or a prior one whose purge didn't finish):
+# unlink everything staged under .trash on a WorkerThreadPool thread, so the slow per-file
+# delete never blocks the UI. Fire-and-forget — an interrupted purge is just finished by the
+# next call. The trash path is resolved here (main thread) and handed to the worker, so the
+# worker never reads the shared AssetLibrary.ROOT (which tests mutate).
+static func purge_trash() -> void:
+	var trash := AssetLibrary.path_for(TRASH_DIR)
+	if not DirAccess.dir_exists_absolute(trash):
+		return
+	WorkerThreadPool.add_task(_purge_worker.bind(trash))
+
+static func _purge_worker(trash_abs: String) -> void:
+	var d := DirAccess.open(trash_abs)
+	if d == null:
+		return
+	for sub in d.get_directories():
+		_rm_rf(trash_abs.path_join(sub))
 
 # Remove a palette's on-disk .tres file (ROOT/palettes/<name>.tres), so it doesn't
 # resurrect on the next launch — save_palettes() only re-saves whatever is currently in
@@ -175,7 +209,7 @@ static func list_libraries() -> PackedStringArray:
 	if dir == null:
 		return out
 	for d in dir.get_directories():
-		if d != PALETTES_DIR:
+		if d != PALETTES_DIR and d != TRASH_DIR:
 			out.append(d)
 	return out
 

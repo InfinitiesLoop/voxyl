@@ -46,6 +46,9 @@ func _ready() -> void:
 	# missing baseline block is always restored (it can't be emptied).
 	_seed_material_defaults()
 	LibraryStore.load_persisted(workspace)
+	# Finish unlinking any library a prior session deleted but didn't get to purge (delete only
+	# moves the folder into .trash; the slow per-file unlink happens off-thread here).
+	LibraryStore.purge_trash()
 	# Load saved projects (the builds themselves). Only seed the code-built "first build"
 	# when nothing has ever been saved — a returning user gets their own projects, not a
 	# fresh demo over the top of them.
