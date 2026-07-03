@@ -1127,6 +1127,14 @@ func _build_block_types_tab() -> Control:
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(spacer)
 
+	# Force-rebake every icon in the grid (experimental threaded bake path); handy for
+	# eyeballing correctness and timing a full regen. Prints elapsed ms to the console.
+	var regen_btn := Button.new()
+	regen_btn.text = "Regenerate previews"
+	regen_btn.tooltip_text = "Re-bake all block icons in this library from scratch"
+	regen_btn.pressed.connect(_on_regenerate_previews.bind(regen_btn))
+	header.add_child(regen_btn)
+
 	# Jump to the selected library's folder on disk.
 	var folder_btn := Button.new()
 	folder_btn.text = "Open folder"
@@ -1204,6 +1212,21 @@ func _on_rename_library(library_name: String) -> void:
 	dialog.popup_centered()
 	input.grab_focus()
 	input.select_all()
+
+# Force-rebake all icons in the current grid and report how long it took. The bake path
+# is BlockIconBaker's (experimentally threaded) pipeline; disabling the button while it
+# runs keeps a second regen from racing the first.
+func _on_regenerate_previews(btn: Button) -> void:
+	if _block_grid == null:
+		return
+	var label := btn.text
+	btn.disabled = true
+	btn.text = "Regenerating…"
+	var t0 := Time.get_ticks_msec()
+	await _block_grid.force_rebake_all()
+	print("[regen] previews rebaked in %d ms" % (Time.get_ticks_msec() - t0))
+	btn.text = label
+	btn.disabled = false
 
 # Reveal the selected library's folder in the OS file browser. Persist first so the
 # folder exists even for a library that's only been created in memory.

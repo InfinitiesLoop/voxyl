@@ -18,11 +18,17 @@ extends Node
 # Emitted when a block's icon finishes baking (its grid cell should redraw).
 signal icon_ready(block_name: String)
 
-const RES := 128                          # bake resolution (square); drawn down into the cell
-# Blocks baked per frame (one off-screen viewport each, allocated up front). A grid
-# browses the whole library, so it keeps the default; small consumers like the hotbar
-# set a lower pool before adding the baker to the tree to avoid 50 idle viewports.
-var batch: int = 50
+const RES := 64                           # bake resolution (square); drawn down into the cell.
+										  # Cells display at ~48–64px, so 64 is 1:1-ish — 128
+										  # was ~4× the pixels shown, wasting bake time + VRAM.
+# Blocks baked per frame (one off-screen viewport each, allocated up front). Each frame
+# does `batch` renders + GPU readbacks on the main thread — the unavoidable, can't-be-
+# threaded cost — so this is THE lever on per-frame time and thus app responsiveness while
+# baking. Measured on a large library: batch=50 ran the app at ~16fps (≈60ms/frame, very
+# sluggish); batch=8 holds ~60fps (≈17ms/frame, p95 under the 33ms jank line) for only
+# ~40% more total wall time. 8 is the sweet spot; raise it to favor throughput over a
+# smooth UI (e.g. behind a modal). Small consumers like the hotbar set a lower pool still.
+var batch: int = 8
 # 3/4 angle from the -X/-Z (WEST+NORTH) side, raised: shows top + two sides, and shows
 # the STEPPED face of MC stairs (whose default model opens toward -X/WEST) facing the
 # camera instead of its solid back. The higher vantage drops the near top corner toward
@@ -32,10 +38,13 @@ const _CAM_DIR := Vector3(-0.9, 1.0, -1.2)
 # minimal perspective distortion, rather than a small head-on cube.
 const _CAM_FOV := 30.0
 const _CAM_DIST := 3.2
-const _CACHE_DIR := "user://icon_cache/"
+# On-disk icon cache location. A var (not const) so a throwaway consumer — the perf
+# bench — can redirect it to a scratch dir and not clobber the shared cache; set it
+# before adding the baker to the tree (its _ready creates the dir), like `batch`.
+var cache_dir := "user://icon_cache/"
 # Bump when the render setup (camera/lights/RES) changes, to invalidate every disk
 # icon — a block's signature embeds this, so stale-look icons can't survive an upgrade.
-const _BAKE_VERSION := 8
+const _BAKE_VERSION := 9   # 9: RES 128 → 64
 
 var _cache := {}        # block_name -> ImageTexture (in-memory)
 # Texture path -> file mtime, memoized across a run so a bulk prebake doesn't re-stat the
@@ -51,8 +60,26 @@ var _baking := false
 var _viewports: Array[SubViewport] = []
 var _meshes: Array[MeshInstance3D] = []
 
+# EXPERIMENTAL: offload each baked icon's PNG encode + disk write to a WorkerThreadPool
+# thread. The render + GPU readback can't leave the main thread (they're driven by the
+# RenderingServer), but the deflate-heavy save_png on an Image we own exclusively can —
+# so the main thread stops stalling on compression between batches. Flip to false to
+# compare against the fully-synchronous path.
+var use_threads := true
+var _save_tasks: Array[int] = []   # outstanding WorkerThreadPool task ids (disk writes)
+
+# Bulk mode (set for the duration of a prebake): warm the DISK cache only. The lazy
+# icon_for() path retains each baked icon as an in-memory ImageTexture and emits
+# icon_ready so a visible cell repaints immediately — right for a handful of on-screen
+# blocks, but for a mass bake (import / regenerate of thousands) it would upload every
+# icon to the GPU and pin ~all of them in memory (a full modpack is >1GB of textures),
+# which is itself a big source of the sluggishness. In bulk mode we skip create_from_image
+# and retention entirely; the caller reloads only the visible cells from disk afterward.
+var _bulk := false
+var _bulk_done := 0     # blocks finished this prebake run (drives progress without icon_ready)
+
 func _ready() -> void:
-	DirAccess.make_dir_recursive_absolute(_CACHE_DIR)
+	DirAccess.make_dir_recursive_absolute(cache_dir)
 	for i in batch:
 		_viewports.append(_make_viewport())
 		_meshes.append(null)
@@ -116,34 +143,37 @@ func invalidate_all() -> void:
 # before the grid is ever shown — the same disk cache every UI baker reads, so this is a
 # pure pre-cache, not a replacement for the lazy icon_for() path. Blocks already cached
 # on disk are skipped, so a re-import only bakes what actually changed.
-func prebake(block_types: Array, on_progress := Callable()) -> void:
+func prebake(block_types: Array, on_progress := Callable(), force := false) -> void:
 	var pending := {}   # names actually enqueued this run, for progress accounting
 	for bt in block_types:
-		if bt == null or _cache.has(bt.name):
+		if bt == null:
 			continue
-		if FileAccess.file_exists(_disk_path(bt)):
+		# `force` re-bakes every block (the "Regenerate previews" path / perf timing),
+		# overwriting both caches; otherwise skip anything already warm in memory or on disk.
+		if not force and (_cache.has(bt.name) or FileAccess.file_exists(_disk_path(bt))):
 			continue
 		pending[bt.name] = true
 		_enqueue(bt)
 	var total := pending.size()
 	if total == 0:
 		return
-	# Drive the caller's progress bar off icon_ready (fires per baked block, on the main
-	# thread inside _bake_next), so the bar advances each batch instead of sitting at 0
-	# until the whole prebake finishes. The await-loop below yields a frame between batches,
-	# giving the bar a chance to actually repaint.
-	var done := [0]
-	var cb := func(block_name: String) -> void:
-		if pending.has(block_name):
-			done[0] += 1
-			if on_progress.is_valid():
-				on_progress.call(done[0], total)
-	icon_ready.connect(cb)
+	# Warm the disk cache only (see _bulk): no per-icon GPU upload, no retained textures.
+	_bulk = true
+	_bulk_done = 0
+	# Progress is driven by the _bulk_done counter (bumped in _bake_next), not icon_ready,
+	# so the bar advances per batch while the await-loop yields a frame between batches.
+	var last := -1
 	if on_progress.is_valid():
 		on_progress.call(0, total)
 	while (_baking or not _queue.is_empty()) and is_inside_tree():
 		await get_tree().process_frame
-	icon_ready.disconnect(cb)
+		if on_progress.is_valid() and _bulk_done != last:
+			last = _bulk_done
+			on_progress.call(mini(_bulk_done, total), total)
+	_bulk = false
+	# The last batch's disk writes may still be in flight on worker threads; block until
+	# they land so a caller that awaited prebake() can rely on the PNGs being on disk.
+	_drain_save_tasks()
 
 # --- Internals --------------------------------------------------------------
 
@@ -185,9 +215,24 @@ func _bake_next() -> void:
 		var bt: BlockType = job[0]
 		var img := _viewports[job[1]].get_texture().get_image()
 		if img != null and not img.is_empty():
-			_cache[bt.name] = ImageTexture.create_from_image(img)
-			_save_to_disk(bt, img)
-			icon_ready.emit(bt.name)
+			# Lazy path: keep the icon in memory + tell the cell to repaint now. Bulk path:
+			# disk only — skip the GPU upload + retention, just bump the progress counter.
+			if not _bulk:
+				_cache[bt.name] = ImageTexture.create_from_image(img)
+			else:
+				_bulk_done += 1
+			# create_from_image() (when used) has already copied the pixels it needs, so
+			# `img` is now ours alone — hand the encode + write to a worker (see use_threads)
+			# instead of blocking the bake loop on save_png. _disk_path/_safe are computed
+			# here on the main thread (they read the workspace); the worker only touches the
+			# Image + disk.
+			if use_threads:
+				_save_tasks.append(WorkerThreadPool.add_task(
+					_save_image_worker.bind(img, _disk_path(bt), _safe(bt.name) + "__")))
+			else:
+				_save_to_disk(bt, img)
+			if not _bulk:
+				icon_ready.emit(bt.name)
 	_bake_next.call_deferred()
 
 # --- Disk cache -------------------------------------------------------------
@@ -195,18 +240,35 @@ func _bake_next() -> void:
 # Persist the baked icon, pruning any older-signature file for the same block so the
 # cache holds exactly one PNG per block (latest look only).
 func _save_to_disk(bt: BlockType, img: Image) -> void:
-	var path := _disk_path(bt)
+	_write_icon(img, _disk_path(bt), _safe(bt.name) + "__")
+
+# The threaded half of _save_to_disk: prune older-signature files for this block, then
+# encode + write the PNG. Runs on a WorkerThreadPool thread when use_threads is on, so it
+# must touch only the (exclusively-owned) Image + file I/O — never the workspace or the
+# RenderingServer. The path + prefix are resolved by the caller on the main thread.
+func _save_image_worker(img: Image, path: String, prefix: String) -> void:
+	_write_icon(img, path, prefix)
+
+# Shared prune-then-write used by both the sync and threaded paths.
+func _write_icon(img: Image, path: String, prefix: String) -> void:
 	var keep := path.get_file()
-	var prefix := _safe(bt.name) + "__"
-	var dir := DirAccess.open(_CACHE_DIR)
+	var dir := DirAccess.open(cache_dir)
 	if dir != null:
 		for f in dir.get_files():
 			if f.begins_with(prefix) and f != keep:
 				dir.remove(f)
 	img.save_png(path)
 
+# Block until every dispatched disk-write task has completed, so a caller (prebake) can
+# rely on the PNGs being on disk before it returns. Cheap when use_threads is off (no
+# tasks are ever queued).
+func _drain_save_tasks() -> void:
+	for tid in _save_tasks:
+		WorkerThreadPool.wait_for_task_completion(tid)
+	_save_tasks.clear()
+
 func _disk_path(bt: BlockType) -> String:
-	return _CACHE_DIR + _safe(bt.name) + "__" + _signature(bt) + ".png"
+	return cache_dir + _safe(bt.name) + "__" + _signature(bt) + ".png"
 
 # A short hash of everything that determines a block's rendered look: its model +
 # shape + color + tint, plus each bound texture's id, path and file mtime (so a

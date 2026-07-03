@@ -348,6 +348,12 @@ func _test_library_serialization() -> void:
 	lib.add_texture_asset(tex)
 	var bt := lib.add_block_type("Test Block")
 	bt.model_id = "test_pillar"
+	# A nested multipart state map — the riskiest thing for the store_var index blob to
+	# serialize (a Resource inside the block type), so round-trip it explicitly.
+	var sm := BlockStateMap.new()
+	sm.add_part([], "post")
+	sm.add_part([{0: true}], "side", 0, 0)
+	bt.state_map = sm
 
 	_check("save_library succeeds", LibraryStore.save_library(lib) == OK)
 
@@ -369,6 +375,9 @@ func _test_library_serialization() -> void:
 		and t2.average_color.is_equal_approx(Color(0.3, 0.7, 0.2)))
 	var bt2 := ws2.get_block_type("Test Block")
 	_check("block type round-trips with its model_id", bt2 != null and bt2.model_id == "test_pillar")
+	_check("block type multipart state_map survives the index round-trip",
+		bt2 != null and bt2.state_map != null and bt2.state_map.is_multipart()
+		and bt2.state_map.default_part_model_id() == "post")
 
 	# delete_library removes the on-disk folder so a deleted library stays gone across a
 	# reload (the "ghost library that won't delete" bug: a memory-only remove left the

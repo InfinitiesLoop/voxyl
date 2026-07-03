@@ -9,6 +9,31 @@ extends RefCounted
 # (+ `.mcmeta`) convention, the one thing both formats share; all the format-specific
 # layout knowledge stays in the two importers.
 
+# EXPERIMENTAL: when on, the verbatim pixel copy is written on a WorkerThreadPool thread
+# instead of inline. Off by default so direct-importer callers (the tests) stay fully
+# synchronous and can never read a copied file before it exists; ImportService flips it on
+# for the duration of a UI import and calls flush_writes() before the files are read (the
+# preview prebake reads them). The decode + scan always run on the calling thread.
+static var use_threads := false
+static var _write_tasks: Array[int] = []   # outstanding write task ids
+
+# Write `bytes` to `path`, returning success. Runs on a worker thread when use_threads is
+# on; touches only the (unshared) destination file, so it's safe off the main thread.
+static func _write_file(bytes: PackedByteArray, path: String) -> bool:
+	var out := FileAccess.open(path, FileAccess.WRITE)
+	if out == null:
+		return false
+	out.store_buffer(bytes)
+	out.close()
+	return true
+
+# Block until every dispatched texture-copy write has finished. ImportService calls this
+# at the end of an import so the copied PNGs are all on disk before the previews bake.
+static func flush_writes() -> void:
+	for tid in _write_tasks:
+		WorkerThreadPool.wait_for_task_completion(tid)
+	_write_tasks.clear()
+
 # Split "ns:path" → {ns, path}; a bare ref defaults to the "minecraft" namespace.
 static func split_ref(ref: String) -> Dictionary:
 	var colon := ref.find(":")
@@ -47,11 +72,14 @@ static func ensure_texture(library: BlockLibrary, source: MCAssetSource,
 	var rel := AssetLibrary.in_library(library.name,
 		"%s/%s/%s.png" % [AssetLibrary.PIXELS_DIR, sr["ns"], sr["path"]])
 	AssetLibrary.ensure_dir(rel.get_base_dir())
-	var out := FileAccess.open(AssetLibrary.path_for(rel), FileAccess.WRITE)
-	if out != null:
-		out.store_buffer(bytes)
-		out.close()
-	else:
+	var dest := AssetLibrary.path_for(rel)
+	# The write is pure I/O on a fresh, unshared file — offload it to a worker (when
+	# enabled) so many texture copies overlap instead of serializing on the main thread.
+	# The decode + scan above stay on the main thread (they feed the asset's planning color
+	# synchronously). flush_writes() must run before anything reads these files.
+	if use_threads:
+		_write_tasks.append(WorkerThreadPool.add_task(_write_file.bind(bytes, dest)))
+	elif not _write_file(bytes, dest):
 		warnings.append("texture copy failed: %s" % texture_ref)
 		return null
 

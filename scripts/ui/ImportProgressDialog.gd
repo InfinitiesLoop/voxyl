@@ -93,6 +93,9 @@ func run(service: ImportService, selection: Array) -> void:
 		_status.text = "Baking previews…"
 		_bar.value = 0
 		var baker := BlockIconBaker.new()
+		# This runs behind our modal, so favor bake throughput over UI smoothness with a
+		# larger per-frame batch than the interactive default (see BlockIconBaker.batch).
+		baker.batch = 24
 		add_child(baker)
 		await baker.prebake(imported, func(baked: int, count: int) -> void:
 			_bar.max_value = maxi(count, 1)

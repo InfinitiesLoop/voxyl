@@ -17,6 +17,15 @@ extends RefCounted
 # Reserved root child folder for palettes (so list_libraries can exclude it).
 const PALETTES_DIR := "palettes"
 
+# Consolidated per-library load cache: ROOT/<library>/index.dat. It holds the whole material
+# layer as one FileAccess.store_var(full_objects) blob, NOT a .tres/.res of sub-resources —
+# because the cost of opening a big library was never file I/O, it was materializing tens of
+# thousands of Resource objects through ResourceLoader (UID lookups, cache, import checks). The
+# raw variant (de)serializer skips all that: gtnh's ~65k objects load in ~0.8s this way vs ~37s
+# via ResourceLoader, whether from 65k loose files or one .res. Bump INDEX_FORMAT to invalidate.
+const INDEX_FILE := "index.dat"
+const INDEX_FORMAT := 2
+
 # --- Save -------------------------------------------------------------------
 
 # Persist one library: its models, textures, and block types under ROOT/<library>/.
@@ -37,6 +46,11 @@ static func save_library(library: BlockLibrary) -> Error:
 		err = _save(block_type, AssetLibrary.in_library(library.name, AssetLibrary.BLOCK_TYPES_DIR), block_type.name)
 		if err != OK:
 			return err
+	# Refresh the load cache from the state we just persisted, so the next launch reads one
+	# file instead of every loose .tres. Written here (not deleted for a rebuild-on-load)
+	# because we already hold the whole library in memory and every save_library caller is
+	# already doing bulk per-file writes — piggybacking one more keeps startup always fast.
+	_write_index(library)
 	return OK
 
 # Persist every non-builtin palette (they carry library_names + builtin) under
@@ -166,9 +180,13 @@ static func list_libraries() -> PackedStringArray:
 	return out
 
 # Read one library folder into a fresh BlockLibrary. `basic` is flagged builtin so it
-# stays undeletable after a reload.
+# stays undeletable after a reload. Prefers the consolidated index.res (one read); on a
+# miss/stale/corrupt index, falls back to the loose .tres files and rebuilds the index.
 static func load_library(name: String) -> BlockLibrary:
-	var lib := BlockLibrary.new()
+	var lib := _load_from_index(name)
+	if lib != null:
+		return lib
+	lib = BlockLibrary.new()
 	lib.name = name
 	lib.builtin = name == VoxelWorkspace.BASIC_LIBRARY
 	for model in _load_dir(AssetLibrary.in_library(name, AssetLibrary.MODELS_DIR)):
@@ -177,7 +195,60 @@ static func load_library(name: String) -> BlockLibrary:
 		lib.texture_assets.append(texture)
 	for block_type in _load_dir(AssetLibrary.in_library(name, AssetLibrary.BLOCK_TYPES_DIR)):
 		lib.block_types.append(block_type)
+	lib.invalidate_index()
+	# Warm the cache for next time (the slow path we just took is exactly what it avoids).
+	_write_index(lib)
 	return lib
+
+# Absolute path of a library's consolidated index file (ROOT/<name>/index.res).
+static func _index_path(library_name: String) -> String:
+	return AssetLibrary.path_for(library_name).path_join(INDEX_FILE)
+
+# Build a BlockLibrary from the consolidated index, or null if there's no usable index (so
+# the caller falls back to the loose files). Any failure — missing file, unreadable blob,
+# older format — returns null rather than raising, keeping the loose .tres the safety net.
+static func _load_from_index(name: String) -> BlockLibrary:
+	var path := _index_path(name)
+	if not FileAccess.file_exists(path):
+		return null
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return null
+	var data = f.get_var(true)   # allow_objects: reconstruct the BlockType/Model/Texture objects
+	f.close()
+	if typeof(data) != TYPE_DICTIONARY or data.get("format") != INDEX_FORMAT:
+		return null
+	var lib := BlockLibrary.new()
+	lib.name = name
+	lib.builtin = name == VoxelWorkspace.BASIC_LIBRARY
+	# Type-check each element: a corrupt blob shouldn't smuggle wrong objects into the library.
+	for model in data.get("block_models", []):
+		if model is BlockModel:
+			lib.block_models.append(model)
+	for texture in data.get("texture_assets", []):
+		if texture is TextureAsset:
+			lib.texture_assets.append(texture)
+	for block_type in data.get("block_types", []):
+		if block_type is BlockType:
+			lib.block_types.append(block_type)
+	lib.invalidate_index()
+	return lib
+
+# Persist the library's consolidated index as one store_var blob. Best-effort: a failure just
+# means the next load takes the slow loose-file path (and tries to write it again). Assumes the
+# library folder already exists (save_library / load_library have both ensured or read it).
+static func _write_index(library: BlockLibrary) -> void:
+	var f := FileAccess.open(_index_path(library.name), FileAccess.WRITE)
+	if f == null:
+		return
+	f.store_var({
+		"format": INDEX_FORMAT,
+		"name": library.name,
+		"block_models": library.block_models,
+		"texture_assets": library.texture_assets,
+		"block_types": library.block_types,
+	}, true)   # full_objects: serialize the resources by value, not by path
+	f.close()
 
 # Load every on-disk library + saved palette into `workspace`, over the code-seeded
 # defaults. Libraries merge by id/name (disk wins for an edited block; a missing

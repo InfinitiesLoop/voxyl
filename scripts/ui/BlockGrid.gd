@@ -10,6 +10,15 @@ extends VBoxContainer
 # search label, an optional caption drawn under the icon, and the BlockType used to bake the
 # icon (or null → a planning-color placeholder). So the same grid shows raw block types
 # (block_item) or palette entries (caller-built items mapping to a resolved block type).
+#
+# VIRTUALIZED: the cells are a uniform grid, so we never build a Control per item — that
+# would create tens of thousands of nodes and, worse, force every icon to load from disk +
+# upload to the GPU on the first layout (Godot records draw commands for every in-tree
+# Control, clipped or not). A full modpack library (~22k blocks) did that in ~30s and pinned
+# >1GB of VRAM. Instead a single fixed-height canvas gives the scrollbar its range, and only
+# the rows within the viewport (plus a buffer) are realized as real cells — so only their
+# icons load. Because the buffer rows are realized before they scroll into view and warm
+# icons load synchronously from disk, nothing shows as an uninitialized placeholder mid-scroll.
 
 signal item_selected(key: String)
 # Back-compat: the Block Types tab listens to this; it fires alongside item_selected.
@@ -49,14 +58,26 @@ static func block_item(bt: BlockType) -> Item:
 var cell_size := Vector2(50, 50)
 var show_captions := false
 
-var _flow: HFlowContainer
+var _canvas: Control                 # fixed-height virtual content; cells positioned inside it
 var _scroll: ScrollContainer
 var _search: LineEdit
 var _baker: BlockIconBaker
 var _items: Array = []               # Array[Item], as handed to populate_items()
+var _filtered: Array = []            # Array[Item], _items passing the current search filter
+var _active: Dictionary = {}         # filtered-index -> live cell Control (only visible rows)
+var _pool: Array = []                # released cells kept for reuse, so scrolling rebinds
+                                     # rather than allocating/freeing nodes each row
+var _cols: int = 0                   # columns at the current width (drives layout + row count)
+var _last_start: int = -1            # index window realized last update; skip work if unchanged
+var _last_end: int = -1
 var _selected: String = ""           # selected item key
 
 const _CAPTION_H := 20.0
+const _H_SEP := 3.0                  # gap between cells in a row
+const _V_SEP := 3.0                  # gap between rows
+# Extra rows realized above and below the viewport so a row is already built (and its warm
+# icon loaded) before it scrolls into view — no placeholder flash on a normal scroll.
+const _BUFFER_ROWS := 4
 
 func _ready() -> void:
 	# The off-screen icon baker lives under the grid (it needs to be in the tree to
@@ -71,11 +92,17 @@ func _ready() -> void:
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	add_child(_scroll)
 
-	_flow = HFlowContainer.new()
-	_flow.size_flags_horizontal = SIZE_EXPAND_FILL
-	_flow.add_theme_constant_override("h_separation", 3)
-	_flow.add_theme_constant_override("v_separation", 3)
-	_scroll.add_child(_flow)
+	# A plain Control, not a flow container: we place cells by hand (see class doc). Its
+	# minimum height is the full virtual content height, so the scrollbar spans every row
+	# even though only the visible ones exist as nodes. ScrollContainer stretches its width
+	# to the viewport (horizontal scroll disabled), so _canvas.resized fires on width change.
+	_canvas = Control.new()
+	_canvas.size_flags_horizontal = SIZE_EXPAND_FILL
+	_canvas.resized.connect(_relayout)
+	_scroll.add_child(_canvas)
+	# Scrolling and viewport-height changes only shift which rows are visible, not the layout.
+	_scroll.get_v_scroll_bar().value_changed.connect(func(_v): _update_visible())
+	_scroll.resized.connect(_update_visible)
 
 	_search = LineEdit.new()
 	_search.placeholder_text = "Search blocks…"
@@ -88,7 +115,8 @@ func _ready() -> void:
 	add_child(_search)
 
 	if not _items.is_empty():
-		_rebuild_cells("")
+		_recompute_filtered("")
+		_relayout()
 
 # Replace the grid's contents with raw block types. Thin adapter over populate_items so the
 # Block Types tab (and anything else handing in BlockTypes) is unchanged.
@@ -99,11 +127,13 @@ func populate(block_types: Array) -> void:
 	populate_items(items)
 
 # Replace the grid's contents with arbitrary items. Re-applies the current search text so a
-# refresh keeps any active filter.
+# refresh keeps any active filter, and returns to the top.
 func populate_items(items: Array) -> void:
 	_items = items
-	if _flow:
-		_rebuild_cells(_search.text)
+	if _canvas:
+		_recompute_filtered(_search.text)
+		_scroll.scroll_vertical = 0
+		_relayout()
 
 # Re-bake icons after a block edit. With a name, only that block's icon is dropped and the
 # cells showing it redraw; with none, the whole grid re-bakes (rarely needed — structural
@@ -113,11 +143,28 @@ func refresh_icons(block_name := "") -> void:
 		return
 	if block_name.is_empty():
 		_baker.invalidate_all()
-		for cell in _flow.get_children():
+		for cell in _active.values():
 			cell.queue_redraw()
 	else:
 		_baker.invalidate(block_name)
 		_redraw_cells_for_block(block_name)
+
+# Force a fresh bake of every block currently in the grid (ignoring both the in-memory
+# and on-disk caches), then redraw. Used by the "Regenerate previews" action to re-run —
+# and time — the whole bake pipeline. Awaitable; returns once all icons are baked + saved.
+func force_rebake_all() -> void:
+	if not _baker:
+		return
+	var blocks: Array = []
+	for item in _items:
+		if item.block_type != null:
+			blocks.append(item.block_type)
+	await _baker.prebake(blocks, Callable(), true)
+	# prebake is bulk (disk-only): it neither refreshed nor retained in-memory icons, so
+	# drop the now-stale memory cache and repaint — the visible cells reload from disk.
+	_baker.invalidate_all()
+	for cell in _active.values():
+		cell.queue_redraw()
 
 # Highlight an item by key (no signal). Called by detail panels so external selection and
 # in-grid clicks stay in sync.
@@ -125,12 +172,14 @@ func set_selected(key: String) -> void:
 	if _selected == key:
 		return
 	_selected = key
-	if _flow:
-		for cell in _flow.get_children():
-			cell.queue_redraw()
+	for cell in _active.values():
+		cell.queue_redraw()
 
 func _apply_filter(text: String) -> void:
-	_rebuild_cells(text)
+	_recompute_filtered(text)
+	if _scroll:
+		_scroll.scroll_vertical = 0
+	_relayout()
 
 # Whether a global point falls inside the scrollable icon area — lets a host screen
 # decide if the mouse wheel should scroll the grid or do something else.
@@ -151,25 +200,118 @@ func _on_search_input(ev: InputEvent) -> void:
 		_search.select_all()
 		_search.accept_event()
 
-func _rebuild_cells(filter: String) -> void:
-	for c in _flow.get_children():
-		c.queue_free()
+# --- Virtualized layout -----------------------------------------------------
+
+# Rebuild the filtered item list from the current search text. The "add" tile is chrome and
+# always kept; everything else must match the needle in its label or caption.
+#
+# Every realized cell is bound to a *_filtered index*, so once that list changes an existing
+# cell at index i now shows the wrong item. Drop them all here so _update_visible rebuilds the
+# window against the new list — without this a search would keep the pre-filter cells on screen.
+func _recompute_filtered(filter: String) -> void:
 	var needle := filter.strip_edges().to_lower()
+	_filtered = []
 	for item in _items:
 		if item.is_add or needle.is_empty() or item.label.to_lower().contains(needle) or item.caption.to_lower().contains(needle):
-			_flow.add_child(_make_cell(item))
+			_filtered.append(item)
+	_clear_active()
 
-func _make_cell(item: Item) -> Control:
+func _cell_height() -> float:
+	return cell_size.y + (_CAPTION_H if show_captions else 0.0)
+
+# Recompute columns + total content height for the current width, then refresh which rows
+# are realized. Called on populate, filter change, and width change (via _canvas.resized).
+func _relayout() -> void:
+	if not _canvas:
+		return
+	var avail := _canvas.size.x
+	if avail <= 0.0:
+		avail = _scroll.size.x
+	if avail <= 0.0:
+		return   # not laid out yet; _canvas.resized will call us again once it has a width
+	var cols := maxi(1, int((avail + _H_SEP) / (cell_size.x + _H_SEP)))
+	var rows := int(ceil(float(_filtered.size()) / float(cols)))
+	_canvas.custom_minimum_size.y = maxf(0.0, rows * (_cell_height() + _V_SEP) - _V_SEP)
+	if cols != _cols:
+		# The column count changed, so every cell's position is stale — drop them all and
+		# let _update_visible rebuild the visible window at the new stride.
+		_cols = cols
+		_clear_active()
+	_update_visible()
+
+# Realize exactly the cells in the viewport (± the buffer) and release the rest. Cells are
+# rebound as they approach view and pooled once they scroll well past, so the live node count
+# stays proportional to the viewport, not the library size — and scrolling reuses nodes
+# instead of allocating them, which is what keeps it smooth.
+func _update_visible() -> void:
+	if _canvas == null or _cols <= 0 or _filtered.is_empty():
+		_clear_active()
+		return
+	var stride := _cell_height() + _V_SEP
+	var top: float = _scroll.scroll_vertical
+	var view_h: float = _scroll.size.y
+	var first_row := maxi(0, int(top / stride) - _BUFFER_ROWS)
+	var last_row := int((top + view_h) / stride) + _BUFFER_ROWS
+	var start := first_row * _cols
+	var end := mini(_filtered.size(), (last_row + 1) * _cols)
+
+	# Most scroll ticks don't cross a row boundary; when the window is unchanged there's
+	# nothing to rebuild, so bail before touching any nodes.
+	if start == _last_start and end == _last_end:
+		return
+	_last_start = start
+	_last_end = end
+
+	# Release cells that fell outside the window back to the pool.
+	for idx in _active.keys():
+		if idx < start or idx >= end:
+			_release(_active[idx])
+			_active.erase(idx)
+	# Bind a (pooled or fresh) cell for each index that entered it.
+	for idx in range(start, end):
+		if not _active.has(idx):
+			_active[idx] = _bind_cell(_acquire(), _filtered[idx], idx)
+
+func _clear_active() -> void:
+	for cell in _active.values():
+		_release(cell)
+	_active.clear()
+	_last_start = -1
+	_last_end = -1
+
+# A cell to (re)use: a pooled one if available, else a fresh node wired up once. The draw and
+# input handlers read the bound item from meta (not a captured var), so a cell is item-agnostic
+# and can be rebound to any index without reconnecting signals. Pooled cells stay children of
+# _canvas (just hidden) so they're freed with the grid rather than leaking as orphans.
+func _acquire() -> Control:
+	if not _pool.is_empty():
+		var reused: Control = _pool.pop_back()
+		reused.visible = true
+		return reused
 	var cell := Control.new()
-	var h := cell_size.y + (_CAPTION_H if show_captions else 0.0)
-	cell.custom_minimum_size = Vector2(cell_size.x, h)
-	cell.tooltip_text = item.label
+	cell.custom_minimum_size = Vector2(cell_size.x, _cell_height())
 	# Pixel art stays crisp when the baked icon is drawn down into the cell.
 	cell.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	cell.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	cell.draw.connect(func(): _draw_cell(cell, cell.get_meta("item")))
+	cell.gui_input.connect(func(ev: InputEvent): _on_cell_input(ev, cell.get_meta("item")))
+	_canvas.add_child(cell)
+	return cell
+
+# Hold a cell for reuse: hide it (so it stops drawing / handling input) but keep it parented.
+func _release(cell: Control) -> void:
+	cell.visible = false
+	_pool.append(cell)
+
+# Point a cell at an item + grid index: position it, set its tooltip, and (re)draw it.
+func _bind_cell(cell: Control, item: Item, idx: int) -> Control:
 	cell.set_meta("item", item)
-	cell.draw.connect(func(): _draw_cell(cell, item))
-	cell.gui_input.connect(func(ev: InputEvent): _on_cell_input(ev, item))
+	cell.tooltip_text = item.label
+	var col := idx % _cols
+	var row := idx / _cols
+	cell.position = Vector2(col * (cell_size.x + _H_SEP), row * (_cell_height() + _V_SEP))
+	cell.size = Vector2(cell_size.x, _cell_height())
+	cell.queue_redraw()   # a reused cell keeps its old drawing until told to repaint
 	return cell
 
 func _draw_cell(cell: Control, item: Item) -> void:
@@ -222,9 +364,7 @@ func _on_icon_ready(block_name: String) -> void:
 	_redraw_cells_for_block(block_name)
 
 func _redraw_cells_for_block(block_name: String) -> void:
-	if not _flow:
-		return
-	for cell in _flow.get_children():
+	for cell in _active.values():
 		var item: Item = cell.get_meta("item")
 		if item.block_type != null and item.block_type.name == block_name:
 			cell.queue_redraw()

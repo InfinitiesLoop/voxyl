@@ -117,6 +117,9 @@ func begin_import(selection: Array) -> int:
 	_pending_names = _resolve_names(selection)
 	imported_count = 0
 	warnings.clear()
+	# Overlap the per-texture pixel copies on worker threads for the duration of this
+	# import; end_import() flushes them before returning (and before previews bake).
+	MCTexImport.use_threads = true
 	return selection.size()
 
 # Import the i-th pending block. Returns true if it imported.
@@ -131,6 +134,10 @@ func import_step(i: int) -> bool:
 # Gather every importer's warnings and persist the target library (only if anything
 # imported).
 func end_import() -> void:
+	# Drain the threaded texture-copy writes and restore the default so any later
+	# non-UI importer (e.g. a test) stays fully synchronous.
+	MCTexImport.flush_writes()
+	MCTexImport.use_threads = false
 	for s in _sources:
 		warnings.append_array(_importer_for(s).warnings)
 	if imported_count > 0:
