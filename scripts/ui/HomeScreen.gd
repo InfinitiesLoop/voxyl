@@ -713,6 +713,7 @@ func _build_palette_editor_view() -> Control:
 	_palette_entry_grid.cell_size = Vector2(60, 60)
 	_palette_entry_grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_palette_entry_grid.item_selected.connect(_on_entry_selected)
+	_palette_entry_grid.item_right_clicked.connect(_on_entry_right_clicked)
 	grid_box.add_child(_palette_entry_grid)
 
 	_entry_detail = _build_entry_detail()
@@ -858,6 +859,27 @@ func _on_entry_selected(key: String) -> void:
 		_palette_entry_grid.set_selected(key)
 	_refresh_entry_detail()
 
+# Right-click an entry for a quick "Delete" without selecting it first. Builtin palettes
+# have no entries worth deleting (their entries aren't editable), so nothing is wired for
+# them — VoxelWorld.remove_palette_entry would refuse anyway.
+func _on_entry_right_clicked(key: String, global_pos: Vector2) -> void:
+	if not _editing_palette or _editing_palette.builtin:
+		return
+	var entry := _editing_palette.get_entry(key)
+	if not entry:
+		return
+	var menu := PopupMenu.new()
+	menu.add_item("Delete", 0)
+	menu.id_pressed.connect(func(_id):
+		VoxelWorld.remove_palette_entry(_editing_palette, entry)
+		if _selected_entry_semantic == entry.semantic_name:
+			_selected_entry_semantic = ""
+		_refresh_palette_entry_grid()
+		_refresh_entry_detail())
+	get_tree().root.add_child(menu)
+	menu.popup_hide.connect(menu.queue_free)
+	menu.popup(Rect2i(Vector2i(global_pos), Vector2i.ZERO))
+
 # The detail panel for the selected entry: rename its semantic name + a searchable grid of
 # every block available in scope (click one to reassign immediately — the currently-assigned
 # block is highlighted via BlockGrid's own selection ring) + delete it. All read-only for the
@@ -919,11 +941,7 @@ func _refresh_entry_detail() -> void:
 		assign_grid.cell_size = Vector2(48, 48)
 		assign_grid.custom_minimum_size = Vector2(0, 200)
 		assign_grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		var items: Array = []
-		for n in _scoped_block_type_names(_editing_palette):
-			var bt := VoxelWorld.workspace.resolve_block_type(n, _editing_palette.library_names)
-			items.append(BlockGrid.block_item(bt) if bt else _unmapped_item(n))
-		assign_grid.populate_items(items)
+		assign_grid.populate_items(_scoped_block_items(_editing_palette))
 		assign_grid.set_selected(entry.block_type_name)
 		assign_grid.item_selected.connect(func(key: String):
 			VoxelWorld.assign_palette_entry_block(_editing_palette, entry, key)
@@ -950,14 +968,6 @@ func _rename_entry(entry: PaletteEntry, new_name: String) -> void:
 	_refresh_palette_entry_grid()
 	_refresh_entry_detail()
 
-# A picker item for a block-type name that doesn't resolve in scope (planning placeholder).
-func _unmapped_item(bt_name: String) -> BlockGrid.Item:
-	var it := BlockGrid.Item.new()
-	it.key = bt_name
-	it.label = bt_name
-	it.caption = bt_name
-	return it
-
 # Append a new entry with a unique default name + empty block type, then select it so the
 # user renames / assigns it in the detail panel.
 func _on_add_entry() -> void:
@@ -978,11 +988,15 @@ func _unique_semantic_name(base: String) -> String:
 		i += 1
 	return candidate
 
-# The block-type names a palette can map to: every block in its subscribed libraries
-# (in priority order), then the basic-library fallback, de-duplicated.
-func _scoped_block_type_names(palette: Palette) -> Array:
+# Every block type a palette can map to: one BlockGrid.Item per block in its subscribed
+# libraries (in priority order), then the basic-library fallback, de-duplicated by name —
+# first hit wins, matching VoxelWorkspace.resolve_block_type's own scope order. Each
+# item's search text folds in the *owning* library's name (see BlockGrid.block_item), so
+# e.g. searching "ztones" finds every block from a "gtnh.ztones" library even when the
+# block's own name/namespace never mentions "ztones".
+func _scoped_block_items(palette: Palette) -> Array:
 	var seen := {}
-	var names: Array = []
+	var items: Array = []
 	var libs := palette.library_names.duplicate()
 	if VoxelWorkspace.BASIC_LIBRARY not in libs:
 		libs.append(VoxelWorkspace.BASIC_LIBRARY)
@@ -993,8 +1007,8 @@ func _scoped_block_type_names(palette: Palette) -> Array:
 		for bt in lib.sorted_block_types():
 			if not seen.has(bt.name):
 				seen[bt.name] = true
-				names.append(bt.name)
-	return names
+				items.append(BlockGrid.block_item(bt, lib_name))
+	return items
 
 # The palette's library-subscription editor, now a first-class always-visible section (not
 # collapsed): its ordered library_names (each with move-up / remove) plus an "add" picker of
@@ -1041,30 +1055,27 @@ func _build_palette_libraries(vbox: VBoxContainer, palette: Palette) -> void:
 		return
 
 	# Add-library picker: libraries not already subscribed (basic is implicit, skip it).
+	# A searchable popup rather than a dropdown — a workspace can have far too many
+	# libraries to manage in one flat OptionButton.
 	var available: Array = []
 	for n in VoxelWorld.workspace.list_libraries():
 		if n != VoxelWorkspace.BASIC_LIBRARY and n not in palette.library_names:
 			available.append(n)
 	if available.is_empty():
 		return
-	var add_row := HBoxContainer.new()
-	add_row.add_theme_constant_override("separation", 6)
-	var picker := OptionButton.new()
-	picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	for n in available:
-		picker.add_item(n)
-	add_row.add_child(picker)
 	var add_btn := Button.new()
-	add_btn.text = "Add library"
+	add_btn.text = "+ Add library"
 	add_btn.pressed.connect(func():
-		if picker.selected < 0:
-			return
-		VoxelWorld.add_palette_library(palette, available[picker.selected])
-		_rebuild_palette_editor_header()
-		_refresh_palette_entry_grid()
-		_refresh_entry_detail())
-	add_row.add_child(add_btn)
-	vbox.add_child(add_row)
+		var picker := SearchablePicker.new()
+		get_tree().root.add_child(picker)
+		picker.configure(available)
+		picker.picked.connect(func(library_name: String):
+			VoxelWorld.add_palette_library(palette, library_name)
+			_rebuild_palette_editor_header()
+			_refresh_palette_entry_grid()
+			_refresh_entry_detail())
+		picker.popup_centered(Vector2i(300, 380)))
+	vbox.add_child(add_btn)
 
 # ---------------------------------------------------------------------------
 # Block Types tab
@@ -1145,6 +1156,9 @@ func _build_block_types_tab() -> Control:
 	_block_grid = BlockGrid.new()
 	_block_grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_block_grid.block_selected.connect(_on_block_type_selected)
+	# A search also hides libraries with no matching block from the rail, not just blocks
+	# within the currently-selected one — see _refresh_library_rail.
+	_block_grid.search_changed.connect(func(_t): _refresh_library_rail())
 	rvbox.add_child(_block_grid)
 
 	# Right: detail / edit panel for the selected block (3D preview + fields). Pinned to
@@ -1188,7 +1202,8 @@ func _on_library_selected(library_name: String) -> void:
 	_selected_library = VoxelWorld.workspace.get_library(library_name)
 	_selected_block_type = ""
 	if _block_grid:
-		_block_grid.populate(_selected_library.sorted_block_types() if _selected_library else [])
+		_block_grid.populate(_selected_library.sorted_block_types() if _selected_library else [],
+			_selected_library.name if _selected_library else "")
 	_refresh_bt_detail()
 
 # Rename a library: prompt for a new name, then move it on disk + repoint palettes via
@@ -1303,21 +1318,28 @@ func _refresh_bt_detail() -> void:
 
 	# Name is read-only: palette entries reference block types by name, so renaming
 	# would silently break those refs (rename is intentionally out of scope).
-	var header := HBoxContainer.new()
-	header.add_theme_constant_override("separation", 8)
+	# The block's name alone can be ambiguous (split-imports name blocks bare within
+	# their per-namespace library — see ImportService.name_for), so show the full,
+	# library-qualified identifier here and in the tooltip. It gets its own full-width
+	# row so a long name wraps instead of fighting the "Open folder" button for space;
+	# clip_text would otherwise silently truncate it.
+	var full_name := "%s.%s" % [_selected_library.name, bt.name] if _selected_library else bt.name
 	var name_lbl := Label.new()
-	name_lbl.text = bt.name
+	name_lbl.text = full_name
+	name_lbl.tooltip_text = full_name
+	# Labels default to MOUSE_FILTER_IGNORE, which never receives hover — without this
+	# the tooltip above would silently never appear.
+	name_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
 	name_lbl.add_theme_font_size_override("font_size", 16)
-	name_lbl.clip_text = true
+	name_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	name_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	header.add_child(name_lbl)
+	vbox.add_child(name_lbl)
+
 	var files_btn := Button.new()
 	files_btn.text = "Open folder"
 	files_btn.tooltip_text = "Reveal this block in the library in your file browser"
 	files_btn.pressed.connect(func(): _on_open_in_files(bt))
-	header.add_child(files_btn)
-	vbox.add_child(header)
+	vbox.add_child(files_btn)
 
 	# Live, rotatable 3D render of the block.
 	_bt_preview = BlockPreview3D.new()
@@ -1581,15 +1603,38 @@ func _refresh(_arg = null) -> void:
 	if _palettes_list_container:
 		_rebuild_palette_list()
 	_ensure_selected_library()
-	if _library_rail:
-		_library_rail.selected = _selected_library.name if _selected_library else ""
-		var rail_libs: Array = []
-		for n in VoxelWorld.workspace.list_libraries():
-			if n != VoxelWorkspace.BASIC_LIBRARY:
-				rail_libs.append(n)
-		_library_rail.populate(rail_libs)
+	_refresh_library_rail()
 	if _block_grid:
-		_block_grid.populate(_selected_library.sorted_block_types() if _selected_library else [])
+		_block_grid.populate(_selected_library.sorted_block_types() if _selected_library else [],
+			_selected_library.name if _selected_library else "")
+
+# Rebuild the library rail from the workspace, restricted to libraries with at least one
+# block matching the block grid's current search (unfiltered when the search is empty). The
+# basic floor is never listed — it's not user-manageable. Search terms are space-separated
+# and AND-ed together, matching BlockGrid's own in-library filter (see split_terms).
+func _refresh_library_rail() -> void:
+	if not _library_rail:
+		return
+	_library_rail.selected = _selected_library.name if _selected_library else ""
+	var terms := BlockGrid.split_terms(_block_grid.get_search_text() if _block_grid else "")
+	var rail_libs: Array = []
+	for n in VoxelWorld.workspace.list_libraries():
+		if n == VoxelWorkspace.BASIC_LIBRARY:
+			continue
+		if terms.is_empty() or _library_has_match(VoxelWorld.workspace.get_library(n), terms):
+			rail_libs.append(n)
+	_library_rail.populate(rail_libs)
+
+# A term can hit any "part" of a block's identity — its library, its source namespace
+# (see BlockType.source_namespace), or its own leaf name — so a search for "ztone" finds
+# every block in a "ztones" library or namespace even if neither appears in the block's name.
+func _library_has_match(lib: BlockLibrary, terms: PackedStringArray) -> bool:
+	if lib == null:
+		return false
+	for bt in lib.sorted_block_types():
+		if BlockGrid.matches_all_terms("%s %s %s" % [lib.name, bt.source_namespace, bt.name], terms):
+			return true
+	return false
 
 func _margin(px: int) -> MarginContainer:
 	var m := MarginContainer.new()

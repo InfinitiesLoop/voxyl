@@ -35,6 +35,14 @@ extends Resource
 enum Shape { FULL, SLAB, STAIRS }
 
 @export var name: String = ""
+# The source namespace this block was imported from (e.g. "ztones", "minecraft"), kept
+# even when namespace-split importing routes the block into a same-named library and
+# leaves `name` bare (see ImportService.name_for) — otherwise that provenance would be
+# lost the moment split-import strips it from the name. Purely a search/lookup aid, never
+# an identity: block types are still looked up by `name` alone within their library.
+# Named source_namespace, not namespace — "namespace" is a reserved GDScript keyword
+# (reserved for a future feature) and using it as a property name fails to parse.
+@export var source_namespace: String = ""
 # Per-library sort order for the Block Types grid (decision 4). Set by the owning
 # BlockLibrary on add/import (next_order); the grid shows one library at a time sorted
 # by (order, name). Purely a presentation hint — never touches voxel data.

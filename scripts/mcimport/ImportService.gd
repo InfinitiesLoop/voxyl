@@ -17,23 +17,43 @@ extends RefCounted
 enum Mode { JSON, FLAT }
 
 var _sources: Array[MCAssetSource] = []
-var _importers := {}     # source -> MCImporter | MCFlatImporter (lazy; share the library)
+var _importers := {}     # source -> { library_name -> MCImporter | MCFlatImporter } (lazy)
 var _library: BlockLibrary
 var _mode: Mode
+
+# Namespace-split routing (opt-in via set_namespace_split). When on, import_step picks
+# the target library per block from its namespace instead of using the single `_library`,
+# and block types are named bare (the per-namespace library already scopes them). Off by
+# default so the ordinary single-target import (and every existing caller/test) is
+# unchanged.
+var _split := false
+var _library_resolver := Callable()   # func(ns: String) -> BlockLibrary
+var _lib_by_ns := {}     # ns -> BlockLibrary (cached resolver results for this import)
+var _touched := {}       # library name -> BlockLibrary that received a block this import
 
 # Diagnostics from the last import_selected().
 var imported_count := 0
 var warnings: Array[String] = []
 
-# `library` is the import target (decision: import targets a library). Block types,
-# models and textures land in it, `order` is assigned via its next_order(), and only
-# that library is persisted at the end. Pass the Block Types tab's selected library (or
-# a freshly created one) — never `basic`.
+# `library` is the default import target (decision: import targets a library). Block types,
+# models and textures land in it, `order` is assigned via its next_order(), and it's
+# persisted at the end. Pass the Block Types tab's selected library (or a freshly created
+# one) — never `basic`. It also backs browsing regardless of mode; under set_namespace_split
+# the per-namespace libraries receive the imports instead, and each is persisted once.
 func _init(sources: Array, library: BlockLibrary, mode := Mode.JSON) -> void:
 	for s in sources:
 		_sources.append(s)
 	_library = library
 	_mode = mode
+
+# Route the next import by namespace: every block lands in the library `resolver`
+# returns for its namespace (the caller creates/reuses it) rather than the single
+# `_library`, and block types are named bare. `resolver` is func(ns: String) ->
+# BlockLibrary; an invalid Callable turns splitting back off. Call before begin_import.
+# `_library` is still used for browsing, so pass a valid one either way.
+func set_namespace_split(resolver: Callable) -> void:
+	_split = resolver.is_valid()
+	_library_resolver = resolver
 
 # ---------------------------------------------------------------------------
 # Source detection
@@ -78,7 +98,7 @@ static func detect_sources(path: String) -> Array[MCAssetSource]:
 func available_blocks() -> Array:
 	var out: Array = []
 	for s in _sources:
-		var imp = _importer_for(s)
+		var imp = _importer_for(s, _library)
 		for ns in imp.list_namespaces():
 			for id in imp.list_blocks(ns):
 				out.append({"ns": ns, "id": id, "ref": "%s:%s" % [ns, id], "source": s})
@@ -117,6 +137,8 @@ func begin_import(selection: Array) -> int:
 	_pending_names = _resolve_names(selection)
 	imported_count = 0
 	warnings.clear()
+	_touched.clear()
+	_lib_by_ns.clear()
 	# Overlap the per-texture pixel copies on worker threads for the duration of this
 	# import; end_import() flushes them before returning (and before previews bake).
 	MCTexImport.use_threads = true
@@ -125,23 +147,27 @@ func begin_import(selection: Array) -> int:
 # Import the i-th pending block. Returns true if it imported.
 func import_step(i: int) -> bool:
 	var entry = _pending[i]
-	var imp = _importer_for(entry["source"])
+	var lib := _target_library_for(entry["ns"])
+	var imp = _importer_for(entry["source"], lib)
 	var ok := imp.import_block(entry["ns"], entry["id"], _pending_names[i]) != null
 	if ok:
 		imported_count += 1
+		_touched[lib.name] = lib   # remember to persist it once, in end_import
 	return ok
 
-# Gather every importer's warnings and persist the target library (only if anything
-# imported).
+# Gather every importer's warnings and persist each library that received a block —
+# exactly once, however many blocks (or namespaces) landed in it. That single write per
+# touched library at the very end is the whole efficiency guarantee: a split import
+# never re-saves a library mid-run.
 func end_import() -> void:
 	# Drain the threaded texture-copy writes and restore the default so any later
 	# non-UI importer (e.g. a test) stays fully synchronous.
 	MCTexImport.flush_writes()
 	MCTexImport.use_threads = false
-	for s in _sources:
-		warnings.append_array(_importer_for(s).warnings)
-	if imported_count > 0:
-		LibraryStore.save_library(_library)
+	for imp in _all_importers():
+		warnings.append_array(imp.warnings)
+	for lib in _touched.values():
+		LibraryStore.save_library(lib)
 
 # The BlockTypes imported so far (deduped across sources), read back out of the target
 # library by each importer's final names. Lets a caller act on the fresh blocks — the
@@ -149,12 +175,15 @@ func end_import() -> void:
 func imported_block_types() -> Array:
 	var out: Array = []
 	var seen := {}
-	for imp in _importers.values():
+	for imp in _all_importers():
 		for bt_name in imp.imported_blocks:
-			if seen.has(bt_name):
+			# Dedup per (library, name): a bare name like "stone" can legitimately exist
+			# in more than one library once splitting spreads blocks across namespaces.
+			var key := [imp._library.name, bt_name]
+			if seen.has(key):
 				continue
-			seen[bt_name] = true
-			var bt := _library.get_block_type(bt_name)
+			seen[key] = true
+			var bt: BlockType = imp._library.get_block_type(bt_name)
 			if bt != null:
 				out.append(bt)
 	return out
@@ -176,6 +205,10 @@ func close() -> void:
 # or each other. This "minecraft == default namespace" rule is MC-specific, so it lives
 # here in the importer plugin, never in the core workspace.
 func name_for(ns: String, id: String) -> String:
+	# Splitting puts each namespace in its own library, so the library already scopes the
+	# name — keep it bare (the block id) for every namespace, no "ns:" qualifier needed.
+	if _split:
+		return id
 	return id if ns == "minecraft" else "%s:%s" % [ns, id]
 
 func _resolve_names(selection: Array) -> PackedStringArray:
@@ -184,13 +217,37 @@ func _resolve_names(selection: Array) -> PackedStringArray:
 		out.append(name_for(entry["ns"], entry["id"]))
 	return out
 
-# The translator for a source, matching the chosen mode. MCImporter and
+# The target library for a block's namespace: the single `_library` normally, or the
+# split resolver's per-namespace library (cached for this import) when splitting.
+func _target_library_for(ns: String) -> BlockLibrary:
+	if not _split:
+		return _library
+	if not _lib_by_ns.has(ns):
+		_lib_by_ns[ns] = _library_resolver.call(ns)
+	return _lib_by_ns[ns]
+
+# The translator for a (source, library) pair, matching the chosen mode. Keyed by both
+# because splitting feeds one source's blocks into several libraries (and one library can
+# be fed by several sources), and an importer is bound to a single library. MCImporter and
 # MCFlatImporter share the methods this service uses (list_namespaces / list_blocks /
-# import_block / warnings), so callers treat them alike (duck-typed).
-func _importer_for(source: MCAssetSource):
-	if not _importers.has(source):
+# import_block / warnings + imported_blocks), so callers treat them alike (duck-typed).
+func _importer_for(source: MCAssetSource, library: BlockLibrary):
+	var by_lib = _importers.get(source)
+	if by_lib == null:
+		by_lib = {}
+		_importers[source] = by_lib
+	var imp = by_lib.get(library.name)
+	if imp == null:
 		if _mode == Mode.FLAT:
-			_importers[source] = MCFlatImporter.new(source, _library)
+			imp = MCFlatImporter.new(source, library)
 		else:
-			_importers[source] = MCImporter.new(source, _library)
-	return _importers[source]
+			imp = MCImporter.new(source, library)
+		by_lib[library.name] = imp
+	return imp
+
+# Every importer created so far, across all (source, library) pairs.
+func _all_importers() -> Array:
+	var out: Array = []
+	for by_lib in _importers.values():
+		out.append_array(by_lib.values())
+	return out

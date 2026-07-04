@@ -32,7 +32,10 @@ var _created_library_names: Array[String] = []
 const _NEW_LIBRARY_ITEM := "New library…"
 
 var _format: OptionButton
+var _target_lbl: Label
 var _target_picker: OptionButton
+var _prefix_edit: LineEdit          # shown in place of the picker when splitting is on
+var _split_check: CheckBox
 var _locations: MenuButton
 var _loc_entries: Array = []        # MCInstallLocations.candidates() for this platform
 var _flat_note: Label
@@ -82,15 +85,30 @@ func _build() -> void:
 	var tgt_row := HBoxContainer.new()
 	tgt_row.add_theme_constant_override("separation", 6)
 	vbox.add_child(tgt_row)
-	var tgt_lbl := Label.new()
-	tgt_lbl.text = "Add to library:"
-	tgt_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	tgt_row.add_child(tgt_lbl)
+	_target_lbl = Label.new()
+	_target_lbl.text = "Add to library:"
+	_target_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	tgt_row.add_child(_target_lbl)
 	_target_picker = OptionButton.new()
 	_target_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_target_picker.item_selected.connect(_on_target_selected)
 	tgt_row.add_child(_target_picker)
+	# Shown in the picker's place when splitting: the optional name becomes a prefix.
+	_prefix_edit = LineEdit.new()
+	_prefix_edit.placeholder_text = "Optional prefix, e.g. gtnh"
+	_prefix_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_prefix_edit.visible = false
+	tgt_row.add_child(_prefix_edit)
 	_refresh_target_picker()
+
+	# Split into one library per namespace. The imported blocks' namespaces (ztones,
+	# create, minecraft…) each become their own library; the name above, if given, is a
+	# prefix ("gtnh" → "gtnh.ztones"). Blocks add to matching existing libraries too.
+	_split_check = CheckBox.new()
+	_split_check.text = "Split into a separate library per namespace"
+	_split_check.tooltip_text = "Route each block to a library named after its namespace (e.g. \"ztones\").\nThe name above, if set, becomes a prefix (e.g. \"gtnh.ztones\")."
+	_split_check.toggled.connect(_on_split_toggled)
+	vbox.add_child(_split_check)
 
 	# Source pickers — file (archive) or folder (pack / assets / mods), plus a
 	# launcher-aware shortcut that jumps the picker to where installs usually live.
@@ -248,6 +266,30 @@ func _refresh_target_picker() -> void:
 	_target_picker.add_item(_NEW_LIBRARY_ITEM)
 	_target_picker.selected = sel
 
+# Toggle namespace-splitting: swap the library picker for the optional-prefix field and
+# relabel. Nothing is re-browsed — the browse list is target-independent, and the actual
+# routing is configured on the service at import time (see _import).
+func _on_split_toggled(on: bool) -> void:
+	_target_picker.visible = not on
+	_prefix_edit.visible = on
+	_target_lbl.text = "Library prefix (optional):" if on else "Add to library:"
+
+# Split-mode resolver: a block's namespace → its target library. The optional prefix
+# prefixes the namespace ("gtnh" + "ztones" → "gtnh.ztones"; blank → "ztones"). A dot,
+# not a colon: the library name is also its on-disk folder, and ':' is illegal in a path
+# on Windows. Existing libraries of that name are reused (imports append to them); ones
+# this resolver creates are tracked so _close() can drop any left empty by a canceled or
+# partial import.
+func _split_library_for(ns: String) -> BlockLibrary:
+	var prefix := _prefix_edit.text.strip_edges()
+	var lib_name := "%s.%s" % [prefix, ns] if not prefix.is_empty() else ns
+	if lib_name == VoxelWorkspace.BASIC_LIBRARY:
+		lib_name = "%s_imported" % ns   # never route imports into the built-in floor
+	if VoxelWorld.workspace.get_library(lib_name) == null \
+			and lib_name not in _created_library_names:
+		_created_library_names.append(lib_name)
+	return VoxelWorld.workspace.get_or_add_library(lib_name)
+
 func _on_target_selected(idx: int) -> void:
 	var text := _target_picker.get_item_text(idx)
 	if text == _NEW_LIBRARY_ITEM:
@@ -349,6 +391,10 @@ func _import() -> void:
 	if selection.is_empty():
 		_status.text = "Select one or more blocks to import."
 		return
+	# Configure per-namespace routing (or clear it) just before the run — the checkbox and
+	# prefix are read here rather than eagerly so toggling them never re-browses the source.
+	_service.set_namespace_split(
+		Callable(self, "_split_library_for") if _split_check.button_pressed else Callable())
 	# Drive the import through a modal progress window so a big batch doesn't freeze
 	# the panel; it stays open afterwards for the user to read any warnings.
 	_import_btn.disabled = true

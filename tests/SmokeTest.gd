@@ -33,6 +33,7 @@ func _ready() -> void:
 	_test_asset_sources()
 	_test_import_service()
 	_test_incremental_import()
+	_test_import_split_by_namespace()
 	_test_flat_import()
 	_test_import_service_flat()
 	_test_install_locations()
@@ -1273,6 +1274,68 @@ func _test_incremental_import() -> void:
 	LibraryStore.load_persisted(after)
 	_check("end_import persists the imported blocks",
 		after.get_block_type("alpha") != null and after.get_block_type("beta") != null)
+
+	svc.close()
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src_root)
+	AssetLibrary.ROOT = saved_root
+
+# Namespace-split import: set_namespace_split routes each block to a per-namespace
+# library (resolved by a caller-supplied callback, exactly as ImportPanel does), names
+# the block types bare (the library scopes them), appends to a pre-existing matching
+# library instead of clobbering it, and persists every touched library — while the
+# scratch browse library that backed available_blocks() receives nothing.
+func _test_import_split_by_namespace() -> void:
+	print("-- import: split into a library per namespace")
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_split_lib__"
+	var src_root := "user://__voxyl_split_src__"
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src_root)
+	var assets := src_root + "/assets"
+	for ref in [["minecraft", "stone"], ["othermod", "widget"], ["othermod", "gadget"]]:
+		var ns: String = ref[0]
+		var id: String = ref[1]
+		_write_file("%s/%s/blockstates/%s.json" % [assets, ns, id],
+			'{"variants":{"":{"model":"%s:block/%s"}}}' % [ns, id])
+		_write_file("%s/%s/models/block/%s.json" % [assets, ns, id],
+			'{"textures":{"all":"%s:block/%s"},"elements":[{"from":[0,0,0],"to":[16,16,16],"faces":{"up":{"texture":"#all"}}}]}' % [ns, id])
+		_write_solid("%s/%s/textures/block/%s.png" % [assets, ns, id], Color(0.5, 0.4, 0.3))
+
+	var ws := VoxelWorkspace.new()
+	# A pre-existing per-namespace library the import must ADD to, not replace.
+	var existing := ws.get_or_add_library("gtnh.othermod")
+	existing.add_block_type("preexisting")
+
+	# available_blocks() browses through this scratch library; splitting routes imports
+	# elsewhere, so it must stay empty.
+	var svc := ImportService.new(ImportService.detect_sources(src_root), ws.get_or_add_library("scratch"))
+	# Resolver mirrors ImportPanel._split_library_for: "<prefix>.<ns>" (prefix "gtnh").
+	svc.set_namespace_split(func(ns: String) -> BlockLibrary:
+		return ws.get_or_add_library("gtnh.%s" % ns))
+	var n := svc.import_selected(svc.available_blocks())
+	_check("split import imports every block", n == 3)
+
+	var mc_lib := ws.get_library("gtnh.minecraft")
+	var om_lib := ws.get_library("gtnh.othermod")
+	_check("minecraft block routed to gtnh.minecraft under a bare name",
+		mc_lib != null and mc_lib.get_block_type("stone") != null)
+	_check("modded blocks routed to gtnh.othermod under bare names",
+		om_lib != null and om_lib.get_block_type("widget") != null and om_lib.get_block_type("gadget") != null)
+	_check("splitting stores no qualified 'ns:id' names",
+		mc_lib.get_block_type("minecraft:stone") == null and om_lib.get_block_type("othermod:widget") == null)
+	_check("import appends to the existing library, keeping prior blocks",
+		om_lib == existing and om_lib.get_block_type("preexisting") != null)
+	_check("the scratch browse library received no imports",
+		ws.get_library("scratch").block_types.is_empty())
+
+	# Each touched library persisted (once, at end_import) — a fresh workspace reloads them.
+	var ws2 := VoxelWorkspace.new()
+	LibraryStore.load_persisted(ws2)
+	_check("split libraries persisted per namespace",
+		ws2.get_library("gtnh.minecraft") != null
+		and ws2.get_library("gtnh.minecraft").get_block_type("stone") != null
+		and ws2.get_library("gtnh.othermod").get_block_type("widget") != null)
 
 	svc.close()
 	_rm_rf(AssetLibrary.ROOT)

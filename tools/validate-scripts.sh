@@ -50,12 +50,24 @@ else
     exit 1
 fi
 
+# A healthy run finishes in ~14s (51 scripts + Godot shutdown); if it hangs (e.g. a stray
+# instance holding a lock, or a popup waiting on input) it would otherwise block forever.
+# `timeout -k` sends TERM at 20s and follows with KILL 2s later if that didn't take.
 if [[ ${#script_args[@]} -gt 0 ]]; then
-    output=$("$godot_executable" -d --ignore-error-breaks --headless --log-file "$log_file" --path . --script tests/validate_all_scripts.gd -- "${script_args[@]}" 2>&1)
+    output=$(timeout -k 2 20 "$godot_executable" -d --ignore-error-breaks --headless --log-file "$log_file" --path . --script tests/validate_all_scripts.gd -- "${script_args[@]}" 2>&1)
 else
-    output=$("$godot_executable" -d --ignore-error-breaks --headless --log-file "$log_file" --path . --script tests/validate_all_scripts.gd 2>&1)
+    output=$(timeout -k 2 20 "$godot_executable" -d --ignore-error-breaks --headless --log-file "$log_file" --path . --script tests/validate_all_scripts.gd 2>&1)
 fi
 godot_exit_code=$?
+
+if [[ $godot_exit_code -eq 124 || $godot_exit_code -eq 137 ]]; then
+    echo "" >&2
+    echo -e "\033[91;1mGodot did not finish within 20s and was killed — it's stuck, not slow.\033[0m" >&2
+    echo -e "\033[90mCheck for a leftover Godot process holding a project lock (kill it) or a blocking dialog.\033[0m" >&2
+    echo -e "\033[90mGodot output so far:\033[0m" >&2
+    echo "$output" >&2
+    exit 1
+fi
 
 error_found=0
 

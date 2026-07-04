@@ -127,11 +127,11 @@ func import_block(ns: String, block_id: String, name_override := "") -> BlockTyp
 		if be_ref.is_empty():
 			_warn("no model referenced: %s:%s" % [ns, block_id])
 			return null
-		return _emit_block_entity(bt_name, be_ref)
+		return _emit_block_entity(ns, bt_name, be_ref)
 
 	# The resting-orientation model is what BlockType.model_id and the current 3D
 	# path resolve; sample its dominant texture for the planning color (decision 1).
-	return _emit_block_type(bt_name, state_map.default_model_id(), state_map)
+	return _emit_block_type(ns, bt_name, state_map.default_model_id(), state_map)
 
 # Translate an MC `when` connection value ("side"/"up"/etc.) into voxyl's neutral
 # vocabulary. Only the importer (this file) ever sees MC's own words — core files
@@ -181,7 +181,7 @@ func _import_multipart(ns: String, block_id: String, bt_name: String, multipart)
 	if state_map.parts.is_empty():
 		_warn("multipart had no usable parts: %s:%s" % [ns, block_id])
 		return null
-	return _emit_block_type(bt_name, state_map.default_part_model_id(), state_map)
+	return _emit_block_type(ns, bt_name, state_map.default_part_model_id(), state_map)
 
 # First pass over a block's whole `multipart` array: pick the first-seen value for
 # each non-direction property (age, flower_amount, slot_N_occupied, …) so the second
@@ -336,12 +336,16 @@ func _parse_direction_value(raw: String):
 
 # Create/update the BlockType for an imported block: bind its primary model, nest
 # the state map, and mirror the dominant texture's average into the planning color.
-# `bt_name` is the final, possibly-deduped name (bare block id or qualified "ns:id").
-func _emit_block_type(bt_name: String, primary_ref: String, state_map: BlockStateMap) -> BlockType:
+# `bt_name` is the final, possibly-deduped name (bare block id or qualified "ns:id"); `ns`
+# is the source namespace, kept on the BlockType even when `bt_name` doesn't carry it
+# (namespace-split import names the type bare — see ImportService.name_for) so the
+# provenance isn't lost.
+func _emit_block_type(ns: String, bt_name: String, primary_ref: String, state_map: BlockStateMap) -> BlockType:
 	var primary_model := _library.get_block_model(primary_ref)
 	var bt := _library.get_block_type(bt_name)
 	if bt == null:
 		bt = _library.add_block_type(bt_name)
+	bt.source_namespace = ns
 	bt.model_id = primary_ref
 	bt.state_map = state_map
 	var avg = _model_average_color(primary_model)
@@ -371,15 +375,15 @@ func _emit_block_type(bt_name: String, primary_ref: String, state_map: BlockStat
 # a model that *resolves but carries no geometry* is a block entity (a bodiless
 # builtin/entity model); a model that couldn't be read at all is genuinely broken — skip
 # it as before rather than invent a cube for an asset that isn't there.
-func _emit_block_entity(bt_name: String, primary_ref: String) -> BlockType:
+func _emit_block_entity(ns: String, bt_name: String, primary_ref: String) -> BlockType:
 	if _resolve_model_json(primary_ref, 0) == null:
 		_warn("all variant models failed to import: %s" % bt_name)
 		return null
 	var tmpl := _build_entity_template(primary_ref)
 	if tmpl != null:
 		_library.add_block_model(tmpl)
-		return _emit_block_type(bt_name, tmpl.id, null)
-	return _emit_approximate_cube(bt_name, primary_ref)
+		return _emit_block_type(ns, bt_name, tmpl.id, null)
+	return _emit_approximate_cube(ns, bt_name, primary_ref)
 
 # Known block-entity primary model → the entity atlas its Java renderer samples. Keyed
 # by canonical model ref so only the precise vanilla blocks match; a modded chest with
@@ -446,7 +450,7 @@ func _atlas_uv(x: float, y: float, w: float, h: float) -> Rect2:
 # model's own particle texture (oak planks for signs, obsidian for an unknown chest, …)
 # — the best neutral stand-in the assets offer. No particle → a plain colored cube so the
 # block still exists in the "undecided" state (principle 5). Flagged in warnings.
-func _emit_approximate_cube(bt_name: String, primary_ref: String) -> BlockType:
+func _emit_approximate_cube(ns: String, bt_name: String, primary_ref: String) -> BlockType:
 	var particle := _particle_texture(primary_ref)
 	var model_id := _approx_model_id(primary_ref)
 	var model := _library.get_block_model(model_id)
@@ -467,7 +471,7 @@ func _emit_approximate_cube(bt_name: String, primary_ref: String) -> BlockType:
 		model.elements = [BlockModel.box_element(Vector3.ZERO, Vector3.ONE)]
 		model.textures = {}
 	_warn("approximate cube (block entity, no asset geometry): %s" % bt_name)
-	return _emit_block_type(bt_name, model_id, null)
+	return _emit_block_type(ns, bt_name, model_id, null)
 
 # The particle texture ref declared by a (bodiless) model, canonicalized, or "". This is
 # the one visual hint a builtin/entity model carries, so it seeds the approximate cube.

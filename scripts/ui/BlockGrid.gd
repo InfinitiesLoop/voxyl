@@ -23,11 +23,23 @@ extends VBoxContainer
 signal item_selected(key: String)
 # Back-compat: the Block Types tab listens to this; it fires alongside item_selected.
 signal block_selected(block_name: String)
+# Right-click on a non-"add" cell. `global_pos` is already in screen space (straight off
+# the InputEventMouseButton), so a host can pop a context menu at it with no conversion.
+# Emitted only — this grid stays a pure lens and never decides what right-click means.
+signal item_right_clicked(key: String, global_pos: Vector2)
+# Fires whenever the search box text changes, so a host screen can react beyond this grid
+# — e.g. the Block Types tab also hides libraries with no matching block (see HomeScreen).
+signal search_changed(text: String)
 
 # A single grid cell's data. RefCounted so callers build them freely and the grid holds refs.
 class Item extends RefCounted:
 	var key: String                       # emitted on click; unique within the grid
-	var label: String                     # tooltip + search text
+	var label: String                     # tooltip text
+	# What's actually matched against the search terms. Defaults to label, but a block
+	# item widens this to also cover its library and namespace (see block_item) so a
+	# search term can hit any "part" of a block's full identity without cluttering the
+	# tooltip with that extra text.
+	var search_text: String = ""
 	var caption: String = ""              # optional text drawn under the icon
 	var block_type: BlockType = null      # baked for the icon; null → placeholder
 	var placeholder_color := Color(0.5, 0.5, 0.5)
@@ -44,11 +56,15 @@ static func add_item(caption_text := "") -> Item:
 	it.is_add = true
 	return it
 
-# Build an item that displays a block type directly (key/label = its name).
-static func block_item(bt: BlockType) -> Item:
+# Build an item that displays a block type directly (key/label = its name). `library_name`,
+# when given, and the block's own namespace are folded into search_text (not the label) so
+# searching "ztone" finds every block in a "ztones" library or "ztones" namespace even when
+# neither is part of the block's own name.
+static func block_item(bt: BlockType, library_name: String = "") -> Item:
 	var it := Item.new()
 	it.key = bt.name
 	it.label = bt.name
+	it.search_text = "%s %s %s" % [library_name, bt.source_namespace, bt.name]
 	it.block_type = bt
 	it.placeholder_color = bt.color
 	return it
@@ -119,11 +135,13 @@ func _ready() -> void:
 		_relayout()
 
 # Replace the grid's contents with raw block types. Thin adapter over populate_items so the
-# Block Types tab (and anything else handing in BlockTypes) is unchanged.
-func populate(block_types: Array) -> void:
+# Block Types tab (and anything else handing in BlockTypes) is unchanged. `library_name`
+# (when every block_type belongs to the same library, as in the Block Types tab) is folded
+# into each item's search_text — see block_item.
+func populate(block_types: Array, library_name: String = "") -> void:
 	var items: Array = []
 	for bt in block_types:
-		items.append(block_item(bt))
+		items.append(block_item(bt, library_name))
 	populate_items(items)
 
 # Replace the grid's contents with arbitrary items. Re-applies the current search text so a
@@ -180,6 +198,7 @@ func _apply_filter(text: String) -> void:
 	if _scroll:
 		_scroll.scroll_vertical = 0
 	_relayout()
+	search_changed.emit(text)
 
 # Whether a global point falls inside the scrollable icon area — lets a host screen
 # decide if the mouse wheel should scroll the grid or do something else.
@@ -202,17 +221,40 @@ func _on_search_input(ev: InputEvent) -> void:
 
 # --- Virtualized layout -----------------------------------------------------
 
+# Split a query on whitespace into lowercase terms. Shared with hosts (e.g. HomeScreen)
+# that need to test the same terms against other haystacks — like a library's block names,
+# to decide whether that library has any match at all.
+static func split_terms(query: String) -> PackedStringArray:
+	var terms := PackedStringArray()
+	for t in query.strip_edges().to_lower().split(" ", false):
+		terms.append(t)
+	return terms
+
+# True if haystack contains every term (AND, not OR) — case-insensitive. Empty terms match
+# everything.
+static func matches_all_terms(haystack: String, terms: PackedStringArray) -> bool:
+	var h := haystack.to_lower()
+	for t in terms:
+		if not h.contains(t):
+			return false
+	return true
+
+func get_search_text() -> String:
+	return _search.text if _search else ""
+
 # Rebuild the filtered item list from the current search text. The "add" tile is chrome and
-# always kept; everything else must match the needle in its label or caption.
+# always kept; everything else must match every space-separated term (AND) against its
+# search_text (falling back to label when unset) plus its caption.
 #
 # Every realized cell is bound to a *_filtered index*, so once that list changes an existing
 # cell at index i now shows the wrong item. Drop them all here so _update_visible rebuilds the
 # window against the new list — without this a search would keep the pre-filter cells on screen.
 func _recompute_filtered(filter: String) -> void:
-	var needle := filter.strip_edges().to_lower()
+	var terms := split_terms(filter)
 	_filtered = []
 	for item in _items:
-		if item.is_add or needle.is_empty() or item.label.to_lower().contains(needle) or item.caption.to_lower().contains(needle):
+		var haystack: String = (item.search_text if not item.search_text.is_empty() else item.label) + " " + item.caption
+		if item.is_add or terms.is_empty() or matches_all_terms(haystack, terms):
 			_filtered.append(item)
 	_clear_active()
 
@@ -370,8 +412,12 @@ func _redraw_cells_for_block(block_name: String) -> void:
 			cell.queue_redraw()
 
 func _on_cell_input(ev: InputEvent, item: Item) -> void:
-	if ev is InputEventMouseButton and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT \
-			and (ev as InputEventMouseButton).pressed:
+	if not (ev is InputEventMouseButton) or not (ev as InputEventMouseButton).pressed:
+		return
+	var mb := ev as InputEventMouseButton
+	if mb.button_index == MOUSE_BUTTON_LEFT:
 		set_selected(item.key)
 		item_selected.emit(item.key)
 		block_selected.emit(item.key)
+	elif mb.button_index == MOUSE_BUTTON_RIGHT and not item.is_add:
+		item_right_clicked.emit(item.key, mb.global_position)

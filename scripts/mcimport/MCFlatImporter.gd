@@ -139,6 +139,7 @@ func import_block(ns: String, block_id: String, name_override := "") -> BlockTyp
 	var bt := _library.get_block_type(bt_name)
 	if bt == null:
 		bt = _library.add_block_type(bt_name)
+	bt.source_namespace = ns
 	bt.model_id = model_id
 	bt.state_map = null
 	var dom := _dominant(counts)

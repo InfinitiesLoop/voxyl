@@ -51,23 +51,39 @@ func populate(items: Array) -> void:
 	for item_name in items:
 		_add_row(item_name)
 
+# Selected-row background. A flat Button only paints its "pressed" stylebox override
+# while actually being pressed/hovered — not for an idle toggled-on state — so the
+# highlight is drawn on a wrapping PanelContainer instead, toggled explicitly here.
+static var _selected_sb: StyleBoxFlat
+static func _selected_style() -> StyleBoxFlat:
+	if _selected_sb == null:
+		_selected_sb = StyleBoxFlat.new()
+		_selected_sb.bg_color = Color(0.30, 0.55, 0.90, 0.35)
+		_selected_sb.corner_radius_top_left = 4
+		_selected_sb.corner_radius_top_right = 4
+		_selected_sb.corner_radius_bottom_left = 4
+		_selected_sb.corner_radius_bottom_right = 4
+	return _selected_sb
+
 func _add_row(item_name: String) -> void:
-	var row := HBoxContainer.new()
+	var row := PanelContainer.new()
+	row.set_meta("item_name", item_name)
+
+	var hbox := HBoxContainer.new()
+	row.add_child(hbox)
 
 	var btn := Button.new()
 	btn.text = item_name
 	btn.flat = true
 	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	btn.size_flags_horizontal = SIZE_EXPAND_FILL
-	btn.toggle_mode = true
-	btn.button_pressed = item_name == selected
 	var captured := item_name
 	btn.pressed.connect(func():
 		selected = captured
 		_update_selection()
 		item_selected.emit(captured)
 	)
-	row.add_child(btn)
+	hbox.add_child(btn)
 
 	if allow_rename:
 		var ren := Button.new()
@@ -75,21 +91,26 @@ func _add_row(item_name: String) -> void:
 		ren.flat = true
 		ren.tooltip_text = "Rename"
 		ren.pressed.connect(func(): rename_requested.emit(captured))
-		row.add_child(ren)
+		hbox.add_child(ren)
 
 	var del := Button.new()
 	del.text = "✕"
 	del.flat = true
 	del.pressed.connect(func(): delete_requested.emit(captured))
-	row.add_child(del)
+	hbox.add_child(del)
 
 	_item_list.add_child(row)
+	_apply_row_style(row, item_name == selected)
+
+func _apply_row_style(row: PanelContainer, is_selected: bool) -> void:
+	if is_selected:
+		row.add_theme_stylebox_override("panel", _selected_style())
+	else:
+		row.remove_theme_stylebox_override("panel")
 
 func _update_selection() -> void:
 	for row in _item_list.get_children():
-		var btn := row.get_child(0) as Button
-		if btn:
-			btn.button_pressed = btn.text == selected
+		_apply_row_style(row, row.get_meta("item_name") == selected)
 
 func _on_add() -> void:
 	var item_name := _name_input.text.strip_edges()

@@ -32,6 +32,12 @@ var _pivot: Node3D
 var _block: BlockType         # current block, re-instanced per layout change
 var _layout := Vector2i(1, 1)  # cols × rows currently rendered
 
+# Last layout chosen by the user, in this session. HomeScreen tears down and rebuilds a
+# fresh BlockPreview3D every time a different block is selected, so a plain instance var
+# would silently reset to 1×1 each time — keep the choice on the class instead so it
+# carries over as the user browses different block types.
+static var _last_layout := Vector2i(1, 1)
+
 var _cam_dist := 2.6
 var _dragging := false
 var _drag_last := Vector2.ZERO
@@ -65,6 +71,7 @@ func _ready() -> void:
 	_pivot = Node3D.new()
 	_viewport.add_child(_pivot)
 
+	_layout = _last_layout
 	_build_layout_bar()
 	set_process(true)
 
@@ -158,6 +165,7 @@ func _set_layout(footprint: Vector2i) -> void:
 	if footprint == _layout:
 		return
 	_layout = footprint
+	_last_layout = footprint
 	_rebuild_layout()
 
 func _update_camera() -> void:
