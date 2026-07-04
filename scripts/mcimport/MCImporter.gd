@@ -34,6 +34,20 @@ const _DIR6 := {
 	"north": 0, "east": 1, "south": 2, "west": 3, "up": 4, "down": 5,
 }
 
+# A pillar/log's `axis=` blockstate property names a line through the block (x/y/z),
+# not a single direction — either end reads identically (the bark wraps the same way
+# whichever way you look at it), unlike `facing=` which picks exactly one side. Binding
+# BOTH facings along that axis to the same model+rotation (see _state_to_orientation)
+# lets a placement land on either and rotation cycle through the pair, instead of every
+# axis variant colliding into one untagged ANY_FACING entry (which resolve() then always
+# picks the FIRST of, regardless of the placed orientation — a log stuck sideways with
+# 'r' doing nothing).
+const _AXIS_FACINGS := {
+	"x": [1, 3],   # east, west
+	"y": [4, 5],   # up, down
+	"z": [0, 2],   # north, south
+}
+
 var _source: MCAssetSource
 var _library: BlockLibrary
 
@@ -419,19 +433,36 @@ func _build_chest_model(model_id: String, atlas_ref: String) -> BlockModel:
 	# from/to in voxyl units (MC 0–16 ÷ 16); atlas offset (u,v) + box dims (dx,dy,dz) per
 	# Minecraft's box unwrap. Base occupies y 0–10, lid 10–14, latch protrudes at -Z.
 	model.elements = [
-		_entity_box(Vector3(1, 0, 1) / 16.0, Vector3(15, 10, 15) / 16.0, tex, 0, 19, 14, 10, 14),
-		_entity_box(Vector3(1, 10, 1) / 16.0, Vector3(15, 14, 15) / 16.0, tex, 0, 0, 14, 5, 14),
+		# Base and lid meet exactly at y=10/16: the base's top face and the lid's bottom
+		# face are perfectly coincident, and both are always fully hidden (the lid sits
+		# right on the base in this resting/closed pose — nothing ever exposes that seam).
+		# Emitting both anyway used to z-fight, which — combined with the atlas being
+		# classified CUTOUT because *some* pixel elsewhere in it is transparent — showed
+		# as a flickery hole cut into the chest's top. Neither face is ever visible, so
+		# just don't emit them.
+		_entity_box(Vector3(1, 0, 1) / 16.0, Vector3(15, 10, 15) / 16.0, tex, 0, 19, 14, 10, 14, [BlockModel.Dir.UP]),
+		_entity_box(Vector3(1, 10, 1) / 16.0, Vector3(15, 14, 15) / 16.0, tex, 0, 0, 14, 5, 14, [BlockModel.Dir.DOWN]),
 		_entity_box(Vector3(7, 7, 0) / 16.0, Vector3(9, 11, 1) / 16.0, tex, 0, 0, 2, 4, 1),
 	]
 	return model
 
 # One box element with all six faces UV-mapped into the atlas via Minecraft's standard
 # box unwrap (top row: top|bottom; second row: left|front|right|back — offset by depth).
+# `skip` omits faces that are geometrically hidden (see _build_chest_model) so they're
+# never even emitted, rather than drawn and left to z-fight against a neighboring box.
+#
+# The (u+dz,v) slot and the (u+dz+dx,v) slot are swapped relative to a naive world-space
+# reading of Mojang's own addBox()/TexturedQuad unwrap: MC's old entity-model coordinate
+# space has Y increasing DOWNWARD (opposite world space), so the slot that formula alone
+# suggests is "top" is actually the model's world-DOWN face, and vice versa. Confirmed by
+# comparing a real render against an actual vanilla chest: without the swap the lid's top
+# showed the OTHER slot's bordered/recessed-panel texture (that's the underside of the lid,
+# only meant to be seen with it open) instead of the plain plank top vanilla actually shows.
 func _entity_box(from: Vector3, to: Vector3, tex: String,
-		u: float, v: float, dx: float, dy: float, dz: float) -> Dictionary:
+		u: float, v: float, dx: float, dy: float, dz: float, skip: Array = []) -> Dictionary:
 	var uv := {
-		BlockModel.Dir.UP:    _atlas_uv(u + dz, v, dx, dz),
-		BlockModel.Dir.DOWN:  _atlas_uv(u + dz + dx, v, dx, dz),
+		BlockModel.Dir.UP:    _atlas_uv(u + dz + dx, v, dx, dz),
+		BlockModel.Dir.DOWN:  _atlas_uv(u + dz, v, dx, dz),
 		BlockModel.Dir.WEST:  _atlas_uv(u, v + dz, dz, dy),
 		BlockModel.Dir.NORTH: _atlas_uv(u + dz, v + dz, dx, dy),
 		BlockModel.Dir.EAST:  _atlas_uv(u + dz + dx, v + dz, dz, dy),
@@ -439,6 +470,8 @@ func _entity_box(from: Vector3, to: Vector3, tex: String,
 	}
 	var faces := {}
 	for d in uv:
+		if d in skip:
+			continue
 		faces[d] = BlockModel.make_face(tex, uv[d])
 	return {"from": from, "to": to, "faces": faces}
 
@@ -527,14 +560,17 @@ func _parse_variants(variants) -> Array:
 		if not (val is Dictionary):
 			continue
 		var so := _state_to_orientation(state_str)
-		out.append({
-			"facing": so["facing"],
-			"top": so["top"],
-			"model_ref": _canonical(str(val.get("model", ""))),
-			"x": int(val.get("x", 0)),
-			"y": int(val.get("y", 0)),
-			"uvlock": bool(val.get("uvlock", false)),
-		})
+		var model_ref := _canonical(str(val.get("model", "")))
+		var x := int(val.get("x", 0))
+		var y := int(val.get("y", 0))
+		var uvlock := bool(val.get("uvlock", false))
+		# Usually one facing; an axis= variant binds the same model+rotation to both
+		# ends of its axis (see _AXIS_FACINGS).
+		for facing in so["facings"]:
+			out.append({
+				"facing": facing, "top": so["top"], "model_ref": model_ref,
+				"x": x, "y": y, "uvlock": uvlock,
+			})
 	return out
 
 # The value of the `shape` property in an MC state string ("…,shape=inner_left" →
@@ -547,10 +583,11 @@ func _variant_shape(state_str: String) -> String:
 	return ""
 
 # Parse an MC state string ("facing=east,half=top") into voxyl orientation parts.
-# Only facing + the top/bottom half are meaningful to voxyl; everything else is
-# ignored. "" (the state-less variant) → the ANY_FACING default.
+# Only facing (or axis) + the top/bottom half are meaningful to voxyl; everything else
+# is ignored. "" (the state-less variant) → the ANY_FACING default. Returns `facings`
+# (plural — usually one value, two for an axis= pillar) rather than a single facing.
 func _state_to_orientation(state_str: String) -> Dictionary:
-	var facing := BlockStateMap.ANY_FACING
+	var facings: Array = [BlockStateMap.ANY_FACING]
 	var top := false
 	if state_str != "":
 		for prop in state_str.split(","):
@@ -559,12 +596,14 @@ func _state_to_orientation(state_str: String) -> Dictionary:
 				continue
 			match kv[0]:
 				"facing":
-					facing = _DIR6.get(kv[1], BlockStateMap.ANY_FACING)
+					facings = [_DIR6.get(kv[1], BlockStateMap.ANY_FACING)]
 				"half":
 					top = kv[1] == "top"     # stairs/doors/trapdoors
 				"type":
 					top = kv[1] == "top"     # slabs (type=top/bottom/double)
-	return {"facing": facing, "top": top}
+				"axis":
+					facings = _AXIS_FACINGS.get(kv[1], [BlockStateMap.ANY_FACING])
+	return {"facings": facings, "top": top}
 
 # ---------------------------------------------------------------------------
 # Models (parent chain → neutral BlockModel)

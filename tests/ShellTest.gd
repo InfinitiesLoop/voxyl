@@ -41,6 +41,19 @@ func _run() -> void:
 	v3d._rebuild()
 	_check("3D rebuild keeps a node for an oriented stairs cell",
 		(v3d.get("_cell_nodes") as Dictionary).has(Vector3i(0, 0, 0)))
+
+	# The crosshair "targeted block" highlight sizes itself to the block's ACTUAL rendered
+	# bounds (see View3D._cell_world_aabb), not a fixed unit cube — otherwise a shorter
+	# model (a slab, the MC chest entity template, …) shows its highlight floating above/
+	# outside the real geometry: a bright gap that reads as a hole cut into the block (the
+	# reported "cutout on the chest top", which turned out to be this highlight box, not
+	# the mesh itself).
+	var slab_box: AABB = v3d.call("_cell_world_aabb", Vector3i(0, 1, 0))
+	_check("slab's rendered bounds are half-height, not a full cube",
+		is_equal_approx(slab_box.size.y, 0.5))
+	_check("slab's rendered top sits at y=1.5 (cell floor 1.0 + half height), not y=2.0",
+		is_equal_approx(slab_box.position.y + slab_box.size.y, 1.5))
+
 	VoxelWorld.clear_block(Vector3i(0, 0, 0))
 	VoxelWorld.clear_block(Vector3i(0, 1, 0))
 
@@ -230,6 +243,21 @@ func _check_textured_render(v3d: Node) -> void:
 		s_mi != null and _mesh_winding_ok(s_mi.mesh))
 	_check("textured cube emits all six faces",
 		s_mi != null and _distinct_normals(s_mi.mesh) == 6)
+
+	# Regression: View3D's per-model-id mesh cache (_model_meshes / _textured_model_meshes)
+	# must be dropped on workspace_changed, or a model whose GEOMETRY changes under the same
+	# id (a reimport regenerating a model — e.g. the MC chest template after a code fix —
+	# or this test mutating one directly) keeps showing the stale cached mesh until the view
+	# itself is torn down and recreated. Shrink the static block's model to half-height and
+	# fire workspace_changed: the already-built cell must pick up the new geometry.
+	var mesh_before := s_mi.mesh
+	s_model.elements = [BlockModel.box_element(Vector3.ZERO, Vector3(1, 0.5, 1), "all")]
+	VoxelWorld.workspace_changed.emit()
+	v3d._rebuild()
+	var s_mi2: MeshInstance3D = (v3d.get("_cell_nodes") as Dictionary).get(Vector3i(0, 5, 0))
+	_check("model geometry change under the same id is picked up after workspace_changed",
+		s_mi2 != null and s_mi2.mesh != mesh_before
+		and is_equal_approx(s_mi2.mesh.get_aabb().size.y, 0.5))
 
 	# Teardown — restore the workspace/project for the structural checks that follow.
 	VoxelWorld.clear_block(Vector3i(0, 5, 0))

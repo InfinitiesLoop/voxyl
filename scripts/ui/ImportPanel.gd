@@ -31,6 +31,11 @@ var _created_library_names: Array[String] = []
 
 const _NEW_LIBRARY_ITEM := "New library…"
 
+# Fired once the user dismisses the progress/report dialog, right before this panel closes
+# itself. Carries the names of every library that actually received a block, so the opener
+# (HomeScreen) can jump the selection there when it's unambiguous (exactly one library).
+signal import_finished(touched_library_names: Array)
+
 var _format: OptionButton
 var _target_lbl: Label
 var _target_picker: OptionButton
@@ -107,8 +112,10 @@ func _build() -> void:
 	_split_check = CheckBox.new()
 	_split_check.text = "Split into a separate library per namespace"
 	_split_check.tooltip_text = "Route each block to a library named after its namespace (e.g. \"ztones\").\nThe name above, if set, becomes a prefix (e.g. \"gtnh.ztones\")."
+	_split_check.button_pressed = true   # namespace splitting is the sane default for a mixed pack/jar
 	_split_check.toggled.connect(_on_split_toggled)
 	vbox.add_child(_split_check)
+	_on_split_toggled(true)   # match the UI (picker/prefix visibility) to the default above
 
 	# Source pickers — file (archive) or folder (pack / assets / mods), plus a
 	# launcher-aware shortcut that jumps the picker to where installs usually live.
@@ -268,11 +275,31 @@ func _refresh_target_picker() -> void:
 
 # Toggle namespace-splitting: swap the library picker for the optional-prefix field and
 # relabel. Nothing is re-browsed — the browse list is target-independent, and the actual
-# routing is configured on the service at import time (see _import).
+# routing is configured on the service at import time (see _import). Turning splitting off
+# defaults the single target back to a fresh "new library" rather than silently reusing
+# whichever existing library happened to be first in the picker.
 func _on_split_toggled(on: bool) -> void:
 	_target_picker.visible = not on
 	_prefix_edit.visible = on
 	_target_lbl.text = "Library prefix (optional):" if on else "Add to library:"
+	if not on:
+		_reset_target_to_new_placeholder()
+		if not _current_path.is_empty():
+			_set_source(_current_path)
+
+# Pick a fresh, non-colliding placeholder library name ("imported", "imported2", …) and make
+# it the resolved target, as if the user had just typed it into "New library…".
+func _reset_target_to_new_placeholder() -> void:
+	var base := "imported"
+	var lib_name := base
+	var n := 2
+	while VoxelWorld.workspace.get_library(lib_name) != null or lib_name in _created_library_names:
+		lib_name = "%s%d" % [base, n]
+		n += 1
+	_target_library_name = lib_name
+	if lib_name not in _created_library_names:
+		_created_library_names.append(lib_name)
+	_refresh_target_picker()
 
 # Split-mode resolver: a block's namespace → its target library. The optional prefix
 # prefixes the namespace ("gtnh" + "ztones" → "gtnh.ztones"; blank → "ztones"). A dot,
@@ -405,6 +432,10 @@ func _import() -> void:
 	VoxelWorld.workspace_changed.emit()
 	_status.text = "Imported %d block(s)." % _service.imported_count
 	_import_btn.disabled = _list.item_count == 0
+	var touched := _service.touched_library_names()
+	await dlg.dismissed
+	import_finished.emit(touched)
+	_close()
 
 func _close() -> void:
 	if _service != null:

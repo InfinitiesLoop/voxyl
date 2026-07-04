@@ -57,7 +57,10 @@ func _ready() -> void:
 	confirmed.connect(_on_confirmed)
 	canceled.connect(queue_free)
 
-	about_to_popup.connect(func(): _name_edit.grab_focus())
+	# Deferred: AcceptDialog grabs focus onto its own default button as part of showing
+	# itself, which runs after about_to_popup — a same-frame grab_focus() here would just
+	# get overridden. Deferring runs after that, so the name field wins.
+	about_to_popup.connect(func(): _focus_name_edit.call_deferred())
 
 # Set once, right after instantiation and before popup — `palette` is used only to check
 # name uniqueness on confirm; `items` is the caller-built scoped block-type list (already
@@ -79,6 +82,11 @@ func setup_edit(palette: Palette, entry: PaletteEntry, items: Array) -> void:
 	_picked_block_name = entry.block_type_name
 	_grid.populate_items(items)
 	_grid.set_selected(entry.block_type_name)
+
+func _focus_name_edit() -> void:
+	_name_edit.grab_focus()
+	if _editing_entry:
+		_name_edit.select_all()   # editing: highlight the current name so typing overtypes it
 
 func _on_confirmed() -> void:
 	var n := _name_edit.text.strip_edges()

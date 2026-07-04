@@ -29,9 +29,31 @@ const BUILTIN_SLAB := "slab"
 const BUILTIN_STAIRS := "stairs"
 
 @export var id: String = ""
-@export var elements: Array = []             # Array[Dictionary] — see above
-@export var textures: Dictionary = {}        # texture_key:String -> TextureAsset id:String
-@export var ambient_occlusion: bool = true
+@export var elements: Array = []:             # Array[Dictionary] — see above
+	set(value):
+		elements = value
+		revision += 1
+@export var textures: Dictionary = {}:        # texture_key:String -> TextureAsset id:String
+	set(value):
+		textures = value
+		revision += 1
+@export var ambient_occlusion: bool = true:
+	set(value):
+		ambient_occlusion = value
+		revision += 1
+
+# Bumped whenever this model's rendered geometry/material bindings change: a plain
+# reassignment (elements = / textures = / ambient_occlusion =, via the setters above), or
+# an explicit bump_revision() call for an in-place edit that doesn't reassign the property
+# (e.g. model.textures[key] = ..., which mutates the existing Dictionary without going
+# through the setter — see HomeScreen._on_replace_texture). NOT persisted (@export-free):
+# it only needs to differ from a moment ago within THIS running session. Cheap callers
+# (View3D's per-model meshes/materials caches) fold it into their cache key so a changed
+# model is never served stale — a bump beats re-hashing elements/textures on every lookup.
+var revision: int = 0
+
+func bump_revision() -> void:
+	revision += 1
 
 # True when the model binds any texture keys. The built-ins (full/slab/stairs)
 # carry none, so they stay on the color path; an importer/hand-authored model with

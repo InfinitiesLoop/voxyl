@@ -10,6 +10,11 @@ extends Window
 
 const _BATCH := 16          # blocks per frame; small enough to keep the UI live
 
+# Fired when the user dismisses this dialog (Close button or the window's own close box),
+# after warnings are shown. The opener (ImportPanel) awaits this to know when the report has
+# actually been read, rather than just when the import work finished.
+signal dismissed
+
 var _bar: ProgressBar
 var _status: Label
 var _warn_summary: Label
@@ -134,4 +139,5 @@ func _show_warnings(warnings: Array) -> void:
 	_warn_box.visible = true
 
 func _on_close() -> void:
+	dismissed.emit()
 	queue_free()

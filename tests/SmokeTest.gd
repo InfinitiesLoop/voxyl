@@ -16,6 +16,7 @@ func _ready() -> void:
 	_test_hotbar()
 	_test_shapes()
 	_test_models()
+	_test_model_revision()
 	_test_element_rotation()
 	_test_reorient()
 	_test_asset_library()
@@ -257,6 +258,32 @@ func _test_models() -> void:
 		VoxelWorld.get_model_for_semantic("Wall").id == "__test_pillar__")
 	bt.model_id = ""
 	ws.basic_library().remove_block_model("__test_pillar__")
+
+# View3D's per-model-id caches (mesh, resolved textures, surface materials — see
+# View3D._model_key) key off this counter instead of re-hashing elements/textures on every
+# lookup: a plain int is free to read, but only useful if it actually changes whenever the
+# model's rendered look would. Covers both ways that happens — a full property
+# reassignment (auto-bumped by the setters in BlockModel.gd) and an in-place edit that
+# doesn't reassign the property, like model.textures[key] = ... (must call bump_revision()
+# itself — see HomeScreen._on_replace_texture for the one real call site that does).
+func _test_model_revision() -> void:
+	print("-- BlockModel revision (View3D's per-model-id caches key off this)")
+	var m := BlockModel.new()
+	var r0 := m.revision
+	m.elements = [BlockModel.box_element(Vector3.ZERO, Vector3.ONE)]
+	_check("reassigning elements bumps revision", m.revision != r0)
+	var r1 := m.revision
+	m.textures = {"all": "some_tex"}
+	_check("reassigning textures bumps revision", m.revision != r1)
+	var r2 := m.revision
+	m.ambient_occlusion = false
+	_check("reassigning ambient_occlusion bumps revision", m.revision != r2)
+	var r3 := m.revision
+	m.textures["all"] = "some_other_tex"   # in-place dict edit — no property reassignment
+	_check("an in-place dict edit alone does NOT bump revision (must call bump_revision())",
+		m.revision == r3)
+	m.bump_revision()
+	_check("bump_revision() bumps it explicitly", m.revision != r3)
 
 func _test_element_rotation() -> void:
 	print("-- element rotation (coral fans / crossed plants stand up, not flat)")
@@ -567,6 +594,16 @@ func _test_mc_import() -> void:
 	"facing=west":  { "model": "testmod:block/test_block", "y": 180 },
 	"facing=north": { "model": "testmod:block/test_block", "y": 270 } } }
 """)
+	# A pillar (log-style) `axis=` blockstate — mirrors vanilla oak_log.json. Each axis is
+	# a LINE through the block, so both its ends must resolve identically (regression test
+	# for the bug where axis= wasn't parsed at all and every variant collapsed into one
+	# untagged ANY_FACING entry — a log stuck on one fixed rotation no matter its placement).
+	_write_file(assets + "/testmod/blockstates/test_log.json", """
+{ "variants": {
+	"axis=y": { "model": "testmod:block/test_block" },
+	"axis=z": { "model": "testmod:block/test_block", "x": 90 },
+	"axis=x": { "model": "testmod:block/test_block", "x": 90, "y": 90 } } }
+""")
 	# Pixels: a flat-colored static texture, and a 2-frame vertical strip + .mcmeta.
 	var tex_color := Color(0.2, 0.5, 0.8)
 	var tex := Image.create_empty(16, 16, false, Image.FORMAT_RGBA8)
@@ -583,9 +620,10 @@ func _test_mc_import() -> void:
 	var imp := MCImporter.new(assets, lib)
 	imp.import_namespace("testmod")
 
-	_check("all five blocks imported",
-		imp.imported_blocks.size() == 5 and imp.imported_blocks.has("test_block")
-		and imp.imported_blocks.has("test_stairs") and imp.imported_blocks.has("test_fan"))
+	_check("all six blocks imported",
+		imp.imported_blocks.size() == 6 and imp.imported_blocks.has("test_block")
+		and imp.imported_blocks.has("test_stairs") and imp.imported_blocks.has("test_fan")
+		and imp.imported_blocks.has("test_log"))
 
 	# Block type + primary model.
 	var bt := ws.get_block_type("test_block")
@@ -653,6 +691,32 @@ func _test_mc_import() -> void:
 		east.get("model_id", "") == "testmod:block/test_block" and int(east.get("y_rot", -1)) == 0)
 	_check("facing=north carries its y rotation", int(north.get("y_rot", -1)) == 270)
 
+	# axis= (pillar/log) variants: both ends of an axis must resolve to the SAME
+	# model+rotation, and different axes must resolve to DIFFERENT rotations — otherwise
+	# every axis collapses into one fixed orientation regardless of placement/rotation.
+	var log_bt := ws.get_block_type("test_log")
+	_check("axis variants captured in a state_map",
+		log_bt != null and log_bt.state_map != null and not log_bt.state_map.is_empty())
+	var up := log_bt.state_map.resolve(Orientation.make(Orientation.Facing.UP, false))
+	var down := log_bt.state_map.resolve(Orientation.make(Orientation.Facing.DOWN, false))
+	var e2 := log_bt.state_map.resolve(Orientation.make(Orientation.Facing.EAST, false))
+	var w2 := log_bt.state_map.resolve(Orientation.make(Orientation.Facing.WEST, false))
+	var n2 := log_bt.state_map.resolve(Orientation.make(Orientation.Facing.NORTH, false))
+	var s2 := log_bt.state_map.resolve(Orientation.make(Orientation.Facing.SOUTH, false))
+	_check("axis=y (up/down) is the unrotated variant",
+		int(up.get("x_rot", -1)) == 0 and int(up.get("y_rot", -1)) == 0)
+	_check("both ends of the y axis (up/down) resolve the same",
+		up.get("x_rot") == down.get("x_rot") and up.get("y_rot") == down.get("y_rot"))
+	_check("both ends of the x axis (east/west) resolve the same",
+		e2.get("x_rot") == w2.get("x_rot") and e2.get("y_rot") == w2.get("y_rot"))
+	_check("both ends of the z axis (north/south) resolve the same",
+		n2.get("x_rot") == s2.get("x_rot") and n2.get("y_rot") == s2.get("y_rot"))
+	_check("the x and z axes resolve to genuinely different rotations",
+		int(e2.get("y_rot", -1)) != int(n2.get("y_rot", -1))
+		or int(e2.get("x_rot", -1)) != int(n2.get("x_rot", -1)))
+	_check("the x and y axes resolve to genuinely different rotations",
+		e2.get("x_rot") != up.get("x_rot") or e2.get("y_rot") != up.get("y_rot"))
+
 	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(src)
 	AssetLibrary.ROOT = saved_root
@@ -718,8 +782,25 @@ func _test_mc_import_block_entities() -> void:
 	var base_north: Rect2 = chest_m.elements[0]["faces"][BlockModel.Dir.NORTH]["uv"]
 	_check("chest base front face UV-mapped into the atlas",
 		base_north.is_equal_approx(Rect2(14.0 / 64.0, 33.0 / 64.0, 14.0 / 64.0, 10.0 / 64.0)))
+	# The lid's UP face (element 1) is the chest's visible top. MC's entity-model space has
+	# Y increasing DOWNWARD (opposite world space), so naively reading Mojang's own
+	# addBox()/TexturedQuad unwrap formula assigns the WRONG atlas cell to world-up — the
+	# lid's hidden underside (a bordered/recessed-panel design meant to be seen only with
+	# the lid open) instead of the plain plank top vanilla actually shows. Regression test
+	# for that swap: atlas px (28,0)..(42,14), not (14,0)..(28,14).
+	var lid_up: Rect2 = chest_m.elements[1]["faces"][BlockModel.Dir.UP]["uv"]
+	_check("chest lid's visible top samples the plank cell, not the lid-underside cell",
+		lid_up.is_equal_approx(Rect2(28.0 / 64.0, 0.0 / 64.0, 14.0 / 64.0, 14.0 / 64.0)))
 	_check("chest state_map stays null (view rotates the single model by facing)",
 		chest_bt != null and chest_bt.state_map == null)
+	# The base's top (element 0) and the lid's bottom (element 1) sit at the exact same
+	# y=10/16 plane — always hidden, one behind the other. Emitting both used to z-fight,
+	# which (combined with any transparent pixel elsewhere in the shared atlas making it
+	# CUTOUT) showed as a hole cut into the chest's top. Neither should be emitted at all.
+	_check("chest base's hidden top face is omitted",
+		chest_m != null and not (chest_m.elements[0]["faces"] as Dictionary).has(BlockModel.Dir.UP))
+	_check("chest lid's hidden bottom face is omitted",
+		chest_m != null and not (chest_m.elements[1]["faces"] as Dictionary).has(BlockModel.Dir.DOWN))
 
 	# --- Approximate cube: no template, but a particle texture to skin it ---
 	var sign_bt := imp.import_block("testmod", "test_sign")

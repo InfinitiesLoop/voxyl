@@ -250,14 +250,29 @@ func _save_image_worker(img: Image, path: String, prefix: String) -> void:
 	_write_icon(img, path, prefix)
 
 # Shared prune-then-write used by both the sync and threaded paths.
+#
+# More than one BlockIconBaker can be alive at once (e.g. the editor chrome's persistent
+# hotbar plus the Inventory screen's own overlay hotbar — see Hotbar.gd) and both read the
+# SAME on-disk cache_dir. A single edit (like subscribing a palette to another library) fires
+# workspace_changed, which invalidates every baker at once, so they can end up re-baking and
+# writing the exact same disk path in the same frame. Writing straight to `path` via
+# save_png() lets two concurrent writers interleave bytes into one file — readable as a
+# corrupt/blank (often solid white) image. Writing to a private temp file and renaming into
+# place means `path` only ever holds one writer's complete output: POSIX rename() atomically
+# replaces, and on Windows a rename onto an existing file simply fails (harmlessly, since
+# that file's content is already the same signature) rather than corrupting it.
 func _write_icon(img: Image, path: String, prefix: String) -> void:
 	var keep := path.get_file()
 	var dir := DirAccess.open(cache_dir)
 	if dir != null:
 		for f in dir.get_files():
-			if f.begins_with(prefix) and f != keep:
+			if f.begins_with(prefix) and f != keep and not f.ends_with(".tmp"):
 				dir.remove(f)
-	img.save_png(path)
+	var tmp := "%s.%d_%d.tmp" % [path, OS.get_process_id(), Time.get_ticks_usec()]
+	if img.save_png(tmp) != OK:
+		return
+	if DirAccess.rename_absolute(tmp, path) != OK:
+		DirAccess.remove_absolute(tmp)
 
 # Block until every dispatched disk-write task has completed, so a caller (prebake) can
 # rely on the PNGs being on disk before it returns. Cheap when use_threads is off (no

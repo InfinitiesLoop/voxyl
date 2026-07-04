@@ -139,6 +139,7 @@ func _ready() -> void:
 	VoxelWorld.palette_stack_changed.connect(func(): _mark_dirty(); if _fly_mode: _overlay.queue_redraw())
 	VoxelWorld.block_type_changed.connect(func(): _mark_dirty(); if _fly_mode: _overlay.queue_redraw())
 	VoxelWorld.selection_changed.connect(func(_s): if _fly_mode: _overlay.queue_redraw())
+	VoxelWorld.workspace_changed.connect(_on_workspace_changed)
 	visibility_changed.connect(_on_visibility_changed)
 	set_process(true)
 	# A view created while a project is already open (e.g. spawned during a layout
@@ -797,6 +798,17 @@ func _mark_dirty(_arg = null) -> void:
 		_dirty = true
 		call_deferred("_rebuild")
 
+# _model_meshes/_textured_model_meshes are now keyed by each model's revision (_model_key),
+# so a changed model can never be served a stale entry — correctness doesn't depend on
+# this handler firing at all. What it's for is memory: without it, every distinct edit to
+# the same model id (undo/redo, iterating on a reimport, …) would pile up its own orphaned
+# entry for the rest of the session. workspace_changed is the signal every structural edit
+# already fires, so it's a convenient point to trim back to just what's current.
+func _on_workspace_changed() -> void:
+	_model_meshes.clear()
+	_textured_model_meshes.clear()
+	_mark_dirty()
+
 func _rebuild() -> void:
 	_dirty = false
 	for child in _voxel_root.get_children():
@@ -914,8 +926,15 @@ func _mesh_for_model(model: BlockModel) -> Mesh:
 		_model_meshes[key] = BlockMesher.color_mesh(model)
 	return _model_meshes[key]
 
+# A model's cache key folds in its revision counter (bumped by BlockModel itself whenever
+# elements/textures/ambient_occlusion change — see BlockModel.gd) rather than just its id,
+# so every per-model-id cache below (mesh, resolved textures, surface materials) self-
+# invalidates: a changed model gets a different key, and the old entry is simply never
+# looked up again. A plain int read + string concat, not a hash — cheap enough to call on
+# every cell in a rebuild, unlike re-hashing elements/textures per lookup.
 func _model_key(model: BlockModel) -> String:
-	return model.id if not model.id.is_empty() else str(model.get_instance_id())
+	var base := model.id if not model.id.is_empty() else str(model.get_instance_id())
+	return "%s#%d" % [base, model.revision]
 
 # ---------------------------------------------------------------------------
 # Cell appearance: textured path (new) layered over the color path (Phase 0)
@@ -1138,20 +1157,36 @@ func _draw_floor_fill(cell: Vector3i) -> void:
 	im.surface_add_vertex(Vector3(x0, y, z1))
 	im.surface_end()
 
+# The face rectangle is sized to the block's ACTUAL rendered bounds (see _cell_world_aabb),
+# not a fixed unit cube: a block whose model doesn't fill the whole cell (a chest template,
+# a slab, …) would otherwise show its highlight floating above/outside the real geometry —
+# a bright gap that reads as a hole cut into the block (the reported "cutout on the chest
+# top", which turned out to be this highlight box, not the mesh itself).
 func _draw_face_highlight(block: Vector3i, normal: Vector3i) -> void:
 	var n := Vector3(normal)
-	var center := Vector3(block) + Vector3(0.5, 0.5, 0.5) + n * 0.502
+	var bbox := _cell_world_aabb(block)
+	if bbox.size == Vector3.ZERO:
+		bbox = AABB(Vector3(block), Vector3.ONE)   # no rendered geometry found: fall back
+	var lo := bbox.position
+	var hi := bbox.position + bbox.size
+	var mid := (lo + hi) * 0.5
+	const MARGIN := 0.002   # nudge off the surface so it doesn't z-fight with it
+	var center := Vector3(
+		(hi.x if n.x > 0.0 else lo.x) if absf(n.x) > 0.5 else mid.x,
+		(hi.y if n.y > 0.0 else lo.y) if absf(n.y) > 0.5 else mid.y,
+		(hi.z if n.z > 0.0 else lo.z) if absf(n.z) > 0.5 else mid.z,
+	) + n * MARGIN
 	var t1: Vector3
 	var t2: Vector3
-	if abs(n.y) > 0.5:
-		t1 = Vector3(0.5, 0.0, 0.0)
-		t2 = Vector3(0.0, 0.0, 0.5)
-	elif abs(n.x) > 0.5:
-		t1 = Vector3(0.0, 0.5, 0.0)
-		t2 = Vector3(0.0, 0.0, 0.5)
+	if absf(n.y) > 0.5:
+		t1 = Vector3((hi.x - lo.x) * 0.5, 0.0, 0.0)
+		t2 = Vector3(0.0, 0.0, (hi.z - lo.z) * 0.5)
+	elif absf(n.x) > 0.5:
+		t1 = Vector3(0.0, (hi.y - lo.y) * 0.5, 0.0)
+		t2 = Vector3(0.0, 0.0, (hi.z - lo.z) * 0.5)
 	else:
-		t1 = Vector3(0.5, 0.0, 0.0)
-		t2 = Vector3(0.0, 0.5, 0.0)
+		t1 = Vector3((hi.x - lo.x) * 0.5, 0.0, 0.0)
+		t2 = Vector3(0.0, (hi.y - lo.y) * 0.5, 0.0)
 	var c0 := center - t1 - t2
 	var c1 := center + t1 - t2
 	var c2 := center + t1 + t2
@@ -1164,6 +1199,24 @@ func _draw_face_highlight(block: Vector3i, normal: Vector3i) -> void:
 	im.surface_add_vertex(c2); im.surface_add_vertex(c3)
 	im.surface_add_vertex(c3); im.surface_add_vertex(c0)
 	im.surface_end()
+
+# The union of a cell's actual rendered mesh bounds, in world space — a plain block is one
+# MeshInstance3D, a multipart/connecting block several (see _cell_mesh_instances); either
+# way this is the real visible footprint, which can be smaller than (or offset within) the
+# full unit cell. Empty (zero size) when the cell has no node or no mesh yet.
+func _cell_world_aabb(pos: Vector3i) -> AABB:
+	var node = _cell_nodes.get(pos)
+	if node == null:
+		return AABB()
+	var result := AABB()
+	var first := true
+	for mi in _cell_mesh_instances(node):
+		if mi.mesh == null:
+			continue
+		var world_box: AABB = mi.global_transform * mi.mesh.get_aabb()
+		result = world_box if first else result.merge(world_box)
+		first = false
+	return result
 
 func _raycast_grid(origin: Vector3, direction: Vector3, max_dist: float) -> Dictionary:
 	if not VoxelWorld.active_project:

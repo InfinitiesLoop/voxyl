@@ -242,6 +242,13 @@ static func matches_all_terms(haystack: String, terms: PackedStringArray) -> boo
 func get_search_text() -> String:
 	return _search.text if _search else ""
 
+# Clear the search box and re-apply (empty) filtering — used when a host screen wants to
+# jump to a library/block without a stale query hiding it.
+func clear_search() -> void:
+	if _search and not _search.text.is_empty():
+		_search.text = ""
+		_apply_filter("")
+
 # Rebuild the filtered item list from the current search text. The "add" tile is chrome and
 # always kept; everything else must match every space-separated term (AND) against its
 # search_text (falling back to label when unset) plus its caption.

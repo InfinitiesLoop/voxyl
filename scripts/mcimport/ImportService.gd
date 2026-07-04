@@ -55,6 +55,12 @@ func set_namespace_split(resolver: Callable) -> void:
 	_split = resolver.is_valid()
 	_library_resolver = resolver
 
+# Every library name that actually received a block during the last import (populated by
+# import_step, cleared by begin_import). Lets a caller act only when the result is
+# unambiguous — e.g. auto-selecting the target library when exactly one was touched.
+func touched_library_names() -> Array:
+	return _touched.keys()
+
 # ---------------------------------------------------------------------------
 # Source detection
 # ---------------------------------------------------------------------------

@@ -1483,6 +1483,7 @@ func _on_replace_texture(bt: BlockType, model: BlockModel, key: String) -> void:
 		if asset == null:
 			return
 		model.textures[key] = asset.id
+		model.bump_revision()   # in-place dict edit — the textures= setter never fires
 		_after_block_edit(bt)
 		_refresh_bt_detail())
 
@@ -1551,8 +1552,26 @@ func _on_import_blocks() -> void:
 	# the panel still lets the user pick or create another.
 	if _selected_library != null and not _selected_library.builtin:
 		panel.default_library = _selected_library.name
+	panel.import_finished.connect(_on_import_finished)
 	get_tree().root.add_child(panel)
 	panel.popup_centered()
+
+# The import panel closed after its report was dismissed. Jump the Block Types tab to the
+# imported library only when the result is unambiguous (everything landed in one library);
+# a split import spreading blocks across several libraries leaves the selection as-is.
+func _on_import_finished(touched_library_names: Array) -> void:
+	if touched_library_names.size() != 1:
+		return
+	var lib := VoxelWorld.workspace.get_library(touched_library_names[0])
+	if lib == null:
+		return
+	_selected_library = lib
+	_selected_block_type = ""
+	if _block_grid:
+		_block_grid.clear_search()
+		_block_grid.populate(lib.sorted_block_types(), lib.name)
+	_refresh_library_rail()
+	_refresh_bt_detail()
 
 # Reveal the block's saved resource in the OS file browser. Persists first so the
 # .tres exists, then highlights it (falling back to the library root if needed). The
