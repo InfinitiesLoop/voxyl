@@ -4,11 +4,14 @@ extends Node
 # Renders each library block into a 2D icon texture through the real renderer
 # (shared BlockRender3D geometry + materials), so a grid icon matches exactly what
 # the block looks like in-scene — a flower bakes as its crossed planes, a slab as a
-# half-height box, with the same perspective as the 3D view. This replaces the old
-# hand-rolled isometric painter, which only knew flat cube/slab/stairs silhouettes.
+# half-height box. This replaces the old hand-rolled isometric painter, which only knew
+# flat cube/slab/stairs silhouettes.
 #
-# Baking is async (a SubViewport needs a frame to render). A pool of viewports bakes
-# many blocks per frame, and results are cached two ways:
+# Baking is async (a SubViewport needs a frame to render). Blocks bake a whole grid at a
+# time: an orthographic "atlas" viewport lays out BATCH blocks in a grid, renders them in
+# one pass, and a single GPU→CPU readback is sliced back into per-block icons — so the
+# readback stall (the dominant, un-threadable cost) is paid once per batch, not per block.
+# Results are cached two ways:
 #   - in memory (block name -> ImageTexture), cleared on edits/imports;
 #   - on disk under user://, keyed by an appearance signature so unchanged blocks load
 #     instantly on the next launch and only changed blocks re-bake.
@@ -21,30 +24,38 @@ signal icon_ready(block_name: String)
 const RES := 64                           # bake resolution (square); drawn down into the cell.
 										  # Cells display at ~48–64px, so 64 is 1:1-ish — 128
 										  # was ~4× the pixels shown, wasting bake time + VRAM.
-# Blocks baked per frame (one off-screen viewport each, allocated up front). Each frame
-# does `batch` renders + GPU readbacks on the main thread — the unavoidable, can't-be-
-# threaded cost — so this is THE lever on per-frame time and thus app responsiveness while
-# baking. Measured on a large library: batch=50 ran the app at ~16fps (≈60ms/frame, very
-# sluggish); batch=8 holds ~60fps (≈17ms/frame, p95 under the 33ms jank line) for only
-# ~40% more total wall time. 8 is the sweet spot; raise it to favor throughput over a
-# smooth UI (e.g. behind a modal). Small consumers like the hotbar set a lower pool still.
-var batch: int = 8
+# Blocks baked per frame — the whole atlas grid (see _make_atlas). Every block is laid out
+# in ONE off-screen viewport and the frame is read back with a SINGLE get_image(), so the
+# GPU→CPU stall (formerly the dominant cost, one per block) is now paid once per `batch`.
+# Measured on a 1200-block gregtech sample (threaded): total wall time is essentially flat
+# across grid sizes (batch 8→2.7s, 16→2.8s, 64→2.2s) — the readback is no longer the
+# bottleneck (PNG encode + disk write is), so a bigger grid buys little wall time while
+# making each frame heavier (median frame batch 8→7ms, 16→13ms, 32→23ms, 64→54ms). So the
+# lever is now SMOOTHNESS, not throughput: keep it small for the interactive lazy path (cells
+# bake in at ~60fps while browsing), raise it only behind a modal where frame time doesn't
+# matter and a bigger grid's ~20% wall-time edge is worth having. Must be set before the baker
+# enters the tree (the atlas is sized from it in _ready). Small consumers (hotbar) set less.
+var batch: int = 16
 # 3/4 angle from the -X/-Z (WEST+NORTH) side, raised: shows top + two sides, and shows
 # the STEPPED face of MC stairs (whose default model opens toward -X/WEST) facing the
 # camera instead of its solid back. The higher vantage drops the near top corner toward
-# the icon's center. Kept in sync with BlockPreview3D so live preview and icon match.
+# the icon's center. Kept in sync with BlockPreview3D so the live preview and icon agree.
 const _CAM_DIR := Vector3(-0.9, 1.0, -1.2)
-# A narrow FOV pulled back reads almost isometric — the block fills the icon with
-# minimal perspective distortion, rather than a small head-on cube.
-const _CAM_FOV := 30.0
-const _CAM_DIST := 3.2
+# The camera is ORTHOGRAPHIC: under a parallel projection, translating a block in the screen
+# plane just slides its icon to another grid cell with identical framing and shading
+# (directional lights are direction-only, ambient is uniform) — which is exactly what lets a
+# whole grid of blocks bake in one render + one readback. _CELL_WORLD is the world-space size
+# of one icon cell (the ortho extent mapped to RES px), tuned so a unit cube fills the cell
+# with a little margin. _CAM_DIST only pushes the camera back far enough that nothing clips.
+const _CELL_WORLD := 1.85
+const _CAM_DIST := 6.0
 # On-disk icon cache location. A var (not const) so a throwaway consumer — the perf
 # bench — can redirect it to a scratch dir and not clobber the shared cache; set it
 # before adding the baker to the tree (its _ready creates the dir), like `batch`.
 var cache_dir := "user://icon_cache/"
 # Bump when the render setup (camera/lights/RES) changes, to invalidate every disk
 # icon — a block's signature embeds this, so stale-look icons can't survive an upgrade.
-const _BAKE_VERSION := 9   # 9: RES 128 → 64
+const _BAKE_VERSION := 10   # 10: perspective → orthographic grid-atlas
 
 var _cache := {}        # block_name -> ImageTexture (in-memory)
 # Texture path -> file mtime, memoized across a run so a bulk prebake doesn't re-stat the
@@ -55,10 +66,15 @@ var _queue: Array = []  # BlockType, FIFO of pending bakes
 var _queued := {}       # block_name -> true (queue membership, for dedup)
 var _baking := false
 
-# Parallel pool of off-screen viewports + their current mesh instance, so BATCH
-# blocks render in the same frame and a single frame_post_draw captures them all.
-var _viewports: Array[SubViewport] = []
-var _meshes: Array[MeshInstance3D] = []
+# One off-screen viewport holding a grid of positioned slots, so BATCH blocks render in the
+# same frame and a single frame_post_draw + get_image() captures the whole atlas at once.
+# _cols/_rows is the grid derived from `batch`; each slot is a Node3D fixed at its cell's
+# world position, holding the current block's mesh instance (replaced per bake).
+var _atlas: SubViewport
+var _cols := 1
+var _rows := 1
+var _slots: Array[Node3D] = []
+var _slot_mesh: Array[MeshInstance3D] = []
 
 # EXPERIMENTAL: offload each baked icon's PNG encode + disk write to a WorkerThreadPool
 # thread. The render + GPU readback can't leave the main thread (they're driven by the
@@ -80,38 +96,52 @@ var _bulk_done := 0     # blocks finished this prebake run (drives progress with
 
 func _ready() -> void:
 	DirAccess.make_dir_recursive_absolute(cache_dir)
-	for i in batch:
-		_viewports.append(_make_viewport())
-		_meshes.append(null)
+	_make_atlas()
 	# Structural changes (import/reimport, delete, new block) can alter a block's
 	# look while keeping its name; drop the in-memory cache and let the disk
 	# signature decide what actually needs re-baking.
 	VoxelWorld.workspace_changed.connect(invalidate_all)
 
-# One off-screen viewport with its own world, ambient + key/fill rig, and a camera
-# framed on the unit cell — mirrors BlockPreview3D so a baked icon matches the live
-# preview. Renders only on demand (UPDATE_ONCE per bake), never every frame.
-func _make_viewport() -> SubViewport:
-	var vp := SubViewport.new()
-	vp.size = Vector2i(RES, RES)
-	vp.transparent_bg = true
-	vp.own_world_3d = true
-	vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
-	add_child(vp)
+# Build the off-screen atlas: one viewport sized to the _cols×_rows grid, an ambient +
+# key/fill rig, an orthographic camera aimed down _CAM_DIR, and a Node3D slot fixed at each
+# cell's world position. Renders only on demand (UPDATE_ONCE per bake), never every frame.
+func _make_atlas() -> void:
+	_cols = maxi(1, ceili(sqrt(float(batch))))
+	_rows = maxi(1, ceili(float(batch) / float(_cols)))
 
-	# Shared lighting rig (see BlockLightRig) so a baked icon matches the live preview;
-	# its key light is aimed from the camera direction so visible faces stay lit.
-	BlockLightRig.apply(vp, _CAM_DIR)
+	_atlas = SubViewport.new()
+	_atlas.size = Vector2i(_cols * RES, _rows * RES)
+	_atlas.transparent_bg = true
+	_atlas.own_world_3d = true
+	_atlas.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	add_child(_atlas)
 
-	# Add to the tree BEFORE aiming it: look_at() no-ops on a node that isn't inside
-	# the tree, which would leave the camera pointing straight down -Z (block off to
-	# the side, head-on). Configure only once it's parented to the viewport.
+	# Shared lighting rig (see BlockLightRig): directional lights depend only on their aim,
+	# so one rig lights every cell of the grid identically — no per-cell setup.
+	BlockLightRig.apply(_atlas, _CAM_DIR)
+
+	# Add to the tree BEFORE aiming it: look_at() no-ops on a node outside the tree. An
+	# orthographic projection sized so one grid cell spans _CELL_WORLD world units → RES px.
 	var camera := Camera3D.new()
-	vp.add_child(camera)
-	camera.fov = _CAM_FOV
+	_atlas.add_child(camera)
+	camera.set_orthogonal(_rows * _CELL_WORLD, 0.05, 100.0)
 	camera.position = _CAM_DIR.normalized() * _CAM_DIST
 	camera.look_at(Vector3.ZERO, Vector3.UP)
-	return vp
+
+	# The camera's screen-plane axes: translating a slot along these keeps its block framed
+	# identically (the whole point of the ortho projection). Cells run left→right, top→bottom
+	# to match how the atlas image is sliced back apart in _bake_next.
+	var right := camera.transform.basis.x
+	var up := camera.transform.basis.y
+	for i in batch:
+		var col := i % _cols
+		var row := i / _cols
+		var slot := Node3D.new()
+		slot.position = right * ((col + 0.5 - _cols * 0.5) * _CELL_WORLD) \
+			+ up * ((_rows * 0.5 - row - 0.5) * _CELL_WORLD)
+		_atlas.add_child(slot)
+		_slots.append(slot)
+		_slot_mesh.append(null)
 
 # The icon for a block: in-memory, then disk (loaded synchronously — instant on a
 # warm cache), else null + a queued bake (icon_ready fires when it lands). The cache
@@ -154,6 +184,7 @@ func prebake(block_types: Array, on_progress := Callable(), force := false) -> v
 			for f in dir.get_files():
 				on_disk[f] = true
 	var pending := {}   # names actually enqueued this run, for progress accounting
+	var baked: Array = []  # the BlockTypes enqueued this run, for the end-of-run stale sweep
 	for bt in block_types:
 		if bt == null:
 			continue
@@ -163,6 +194,7 @@ func prebake(block_types: Array, on_progress := Callable(), force := false) -> v
 		if not force and (_cache.has(bt.name) or on_disk.has(_disk_path(bt).get_file())):
 			continue
 		pending[bt.name] = true
+		baked.append(bt)
 		_enqueue(bt)
 	var total := pending.size()
 	if total == 0:
@@ -184,6 +216,9 @@ func prebake(block_types: Array, on_progress := Callable(), force := false) -> v
 	# The last batch's disk writes may still be in flight on worker threads; block until
 	# they land so a caller that awaited prebake() can rely on the PNGs being on disk.
 	_drain_save_tasks()
+	# Remove any older-signature icons for the blocks just baked in ONE directory pass,
+	# instead of _write_icon rescanning the whole (growing) cache dir on every write — O(n²).
+	_reconcile_stale(baked)
 
 # --- Internals --------------------------------------------------------------
 
@@ -196,68 +231,90 @@ func _enqueue(bt: BlockType) -> void:
 		_baking = true
 		_bake_next.call_deferred()
 
-# Bake up to BATCH queued blocks in one frame: assign each to a pool viewport, render
-# them all at once, then capture every viewport after a single frame_post_draw. The
-# block's live state is read at build time, so rapid edits coalesce to the latest look.
+# Bake up to BATCH queued blocks in one frame: fill that many grid slots, render the whole
+# atlas at once, then slice the single readback back into per-block icons. The block's live
+# state is read at build time, so rapid edits coalesce to the latest look.
 func _bake_next() -> void:
 	if _queue.is_empty():
 		_baking = false
 		return
 	var jobs: Array = []  # [BlockType, slot_index]
 	var n: int = mini(batch, _queue.size())
+	# Pop this batch's blocks and gather every texture they'll need, then decode those PNGs in
+	# parallel on worker threads (BlockTextureCache.predecode) BEFORE building — so build_into
+	# only uploads ready images instead of decoding serially on the main thread, which was
+	# ~all of a cold bake's cost. Then build each block into its slot.
+	var picked: Array = []
+	var paths := {}
 	for i in n:
 		var bt: BlockType = _queue.pop_front()
 		_queued.erase(bt.name)
+		picked.append(bt)
+		BlockRender3D.collect_texture_paths(bt, paths)
+	BlockTextureCache.predecode(paths.keys())
+	for i in picked.size():
+		var bt: BlockType = picked[i]
 		# Fresh instance per bake so a previous block's per-surface overrides never
 		# linger. Free synchronously (not queue_free): the old node must leave the tree
 		# before we render, or it would draw on top of the new one in the capture.
-		if _meshes[i] != null:
-			_meshes[i].free()
-		_meshes[i] = MeshInstance3D.new()
-		_viewports[i].add_child(_meshes[i])
-		BlockRender3D.build_into(_meshes[i], bt)
-		_viewports[i].render_target_update_mode = SubViewport.UPDATE_ONCE
+		if _slot_mesh[i] != null:
+			_slot_mesh[i].free()
+		_slot_mesh[i] = MeshInstance3D.new()
+		_slots[i].add_child(_slot_mesh[i])
+		BlockRender3D.build_into(_slot_mesh[i], bt)
 		jobs.append([bt, i])
+	_atlas.render_target_update_mode = SubViewport.UPDATE_ONCE
 
 	await RenderingServer.frame_post_draw
 
+	# ONE GPU→CPU readback for the whole grid; each icon is then a cheap CPU-side sub-region.
+	var atlas_img := _atlas.get_texture().get_image()
+	if atlas_img == null or atlas_img.is_empty():
+		_bake_next.call_deferred()
+		return
 	for job in jobs:
 		var bt: BlockType = job[0]
-		var img := _viewports[job[1]].get_texture().get_image()
-		if img != null and not img.is_empty():
-			# Lazy path: keep the icon in memory + tell the cell to repaint now. Bulk path:
-			# disk only — skip the GPU upload + retention, just bump the progress counter.
-			if not _bulk:
-				_cache[bt.name] = ImageTexture.create_from_image(img)
-			else:
-				_bulk_done += 1
-			# create_from_image() (when used) has already copied the pixels it needs, so
-			# `img` is now ours alone — hand the encode + write to a worker (see use_threads)
-			# instead of blocking the bake loop on save_png. _disk_path/_safe are computed
-			# here on the main thread (they read the workspace); the worker only touches the
-			# Image + disk.
-			if use_threads:
-				_save_tasks.append(WorkerThreadPool.add_task(
-					_save_image_worker.bind(img, _disk_path(bt), _safe(bt.name) + "__")))
-			else:
-				_save_to_disk(bt, img)
-			if not _bulk:
-				icon_ready.emit(bt.name)
+		var slot: int = job[1]
+		var img := atlas_img.get_region(Rect2i((slot % _cols) * RES, (slot / _cols) * RES, RES, RES))
+		if img.is_empty():
+			continue
+		# Lazy path: keep the icon in memory + tell the cell to repaint now. Bulk path:
+		# disk only — skip the GPU upload + retention, just bump the progress counter.
+		if not _bulk:
+			_cache[bt.name] = ImageTexture.create_from_image(img)
+		else:
+			_bulk_done += 1
+		# get_region()/create_from_image() have copied the pixels, so `img` is ours alone —
+		# hand the encode + write to a worker (see use_threads) instead of blocking the bake
+		# loop on save_png. _disk_path/_safe are computed here on the main thread (they read
+		# the workspace); the worker only touches the Image + disk.
+		# Bulk bakes skip the per-write stale-icon prune (prebake reconciles once at the end);
+		# the lazy path prunes inline since it only ever writes a handful of icons.
+		var prune := not _bulk
+		if use_threads:
+			_save_tasks.append(WorkerThreadPool.add_task(
+				_save_image_worker.bind(img, _disk_path(bt), _safe(bt.name) + "__", prune)))
+		else:
+			_save_to_disk(bt, img, prune)
+		if not _bulk:
+			icon_ready.emit(bt.name)
 	_bake_next.call_deferred()
 
 # --- Disk cache -------------------------------------------------------------
 
 # Persist the baked icon, pruning any older-signature file for the same block so the
 # cache holds exactly one PNG per block (latest look only).
-func _save_to_disk(bt: BlockType, img: Image) -> void:
-	_write_icon(img, _disk_path(bt), _safe(bt.name) + "__")
+func _save_to_disk(bt: BlockType, img: Image, prune: bool) -> void:
+	var t := Time.get_ticks_usec()
+	_write_icon(img, _disk_path(bt), _safe(bt.name) + "__", prune)
+	prof_write_us += Time.get_ticks_usec() - t
 
 # The threaded half of _save_to_disk: prune older-signature files for this block, then
 # encode + write the PNG. Runs on a WorkerThreadPool thread when use_threads is on, so it
 # must touch only the (exclusively-owned) Image + file I/O — never the workspace or the
 # RenderingServer. The path + prefix are resolved by the caller on the main thread.
-func _save_image_worker(img: Image, path: String, prefix: String) -> void:
-	_write_icon(img, path, prefix)
+func _save_image_worker(img: Image, path: String, prefix: String, prune: bool) -> void:
+	_write_icon(img, path, prefix, prune)
 
 # Shared prune-then-write used by both the sync and threaded paths.
 #
@@ -271,18 +328,45 @@ func _save_image_worker(img: Image, path: String, prefix: String) -> void:
 # place means `path` only ever holds one writer's complete output: POSIX rename() atomically
 # replaces, and on Windows a rename onto an existing file simply fails (harmlessly, since
 # that file's content is already the same signature) rather than corrupting it.
-func _write_icon(img: Image, path: String, prefix: String) -> void:
-	var keep := path.get_file()
-	var dir := DirAccess.open(cache_dir)
-	if dir != null:
-		for f in dir.get_files():
-			if f.begins_with(prefix) and f != keep and not f.ends_with(".tmp"):
-				dir.remove(f)
+func _write_icon(img: Image, path: String, prefix: String, prune: bool) -> void:
+	# Prune older-signature files for this block. Only the lazy path does this inline (it
+	# writes a handful of icons); a bulk prebake passes prune=false and reconciles once at the
+	# end (see _reconcile_stale) so a mass bake never rescans the whole growing cache dir per
+	# write, which was O(n²).
+	if prune:
+		var keep := path.get_file()
+		var dir := DirAccess.open(cache_dir)
+		if dir != null:
+			for f in dir.get_files():
+				if f.begins_with(prefix) and f != keep and not f.ends_with(".tmp"):
+					dir.remove(f)
 	var tmp := "%s.%d_%d.tmp" % [path, OS.get_process_id(), Time.get_ticks_usec()]
 	if img.save_png(tmp) != OK:
 		return
 	if DirAccess.rename_absolute(tmp, path) != OK:
 		DirAccess.remove_absolute(tmp)
+
+# One-pass removal of older-signature icons for the blocks baked this run — replaces the
+# per-write full-dir scan that made a mass bake O(n²). Only files belonging to a baked block
+# are touched, so icons from other libraries sharing cache_dir are left alone. Filenames are
+# "<safe_name>__<16-hex-sig>.png": the current-signature file is kept (in `expected`), any
+# other file sharing a baked block's "<safe_name>__" prefix is a stale older look and removed.
+func _reconcile_stale(blocks: Array) -> void:
+	var t := Time.get_ticks_usec()
+	var prefixes := {}   # "<safe_name>__" -> true, for blocks baked this run
+	var expected := {}   # current-signature filename -> true, to keep
+	for bt in blocks:
+		prefixes[_safe(bt.name) + "__"] = true
+		expected[_disk_path(bt).get_file()] = true
+	var dir := DirAccess.open(cache_dir)
+	if dir != null:
+		for f in dir.get_files():
+			# 16-char sig + ".png" = 20 trailing chars; anything shorter can't be one of ours.
+			if not f.ends_with(".png") or f.length() <= 20 or expected.has(f):
+				continue
+			if prefixes.has(f.substr(0, f.length() - 20)):
+				dir.remove(f)
+	prof_reconcile_us += Time.get_ticks_usec() - t
 
 # Block until every dispatched disk-write task has completed, so a caller (prebake) can
 # rely on the PNGs being on disk before it returns. Cheap when use_threads is off (no

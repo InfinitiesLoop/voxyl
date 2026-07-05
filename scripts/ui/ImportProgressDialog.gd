@@ -98,9 +98,11 @@ func run(service: ImportService, selection: Array) -> void:
 		_status.text = "Baking previews…"
 		_bar.value = 0
 		var baker := BlockIconBaker.new()
-		# This runs behind our modal, so favor bake throughput over UI smoothness with a
-		# larger per-frame batch than the interactive default (see BlockIconBaker.batch).
-		baker.batch = 24
+		# This runs behind our modal, so favor bake throughput over UI smoothness with a bigger
+		# atlas grid than the interactive default (see BlockIconBaker.batch): an 8×8 grid was the
+		# wall-time sweet spot in benching — heavier per frame, but frame time doesn't matter
+		# behind a modal, and going larger stopped helping once the readback left the hot path.
+		baker.batch = 64
 		add_child(baker)
 		await baker.prebake(imported, func(baked: int, count: int) -> void:
 			_bar.max_value = maxi(count, 1)

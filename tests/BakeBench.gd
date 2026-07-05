@@ -15,7 +15,7 @@ extends Node
 const _CACHE_DIR := "user://bench_icon_cache/"
 # Cap the sample so a giant library (e.g. gtnh's 21k blocks) still benches in seconds
 # while staying representative — the threaded win scales with count, this just samples it.
-const _MAX := 500
+const _MAX := 1200
 
 # Frame-time watch (records every frame delta while a bake runs).
 var _watching := false
@@ -40,27 +40,31 @@ func _ready() -> void:
 		blocks = blocks.slice(0, _MAX)
 	print("[bench] library '%s' — baking %d blocks per config\n" % [lib.name, blocks.size()])
 
-	# Correctness: sync vs threaded at the current default batch must be byte-identical.
-	var sync_res := await _run(blocks, false, 50)
+	# Correctness: sync vs threaded at the default atlas grid must be byte-identical.
+	var sync_res := await _run(blocks, false, 64)
 	var sync_files := _snapshot_cache()
-	var threaded_res := await _run(blocks, true, 50)
+	var threaded_res := await _run(blocks, true, 64)
 	var threaded_files := _snapshot_cache()
-	_report("synchronous  batch=50", sync_res)
-	_report("threaded     batch=50", threaded_res)
+	_report("synchronous  batch=64", sync_res)
+	_report("threaded     batch=64", threaded_res)
 	_compare(sync_files, threaded_files)
+	# Phase split from the SYNCHRONOUS run (the threaded path hides the write on worker
+	# threads, so its write_ms reads ~0). This is where the remaining wall time actually goes.
+	_phases("synchronous  batch=64", sync_res)
 	print("")
 
-	# Responsiveness sweep: threaded at shrinking per-frame batch sizes. Lower batch =
-	# lighter frames (smoother app) at some cost to total throughput.
-	for b in [16, 8, 4, 2]:
+	# Throughput/responsiveness sweep across atlas grid sizes. With one readback per batch,
+	# a bigger grid means fewer total GPU stalls (faster wall time) but a heavier single
+	# frame; this finds where that trade-off sits now.
+	for b in [64, 32, 16, 8]:
 		_report("threaded     batch=%d" % b, await _run(blocks, true, b))
 
-	# Full frame distribution per batch, to pick a default that keeps frames light. The
+	# Full frame distribution per grid size, to pick a default that keeps frames light. The
 	# warmup spike (first bake frame) is excluded so the numbers reflect steady state.
 	print("")
-	for b in [50, 16, 8, 4]:
+	for b in [64, 32, 16, 8]:
 		var res := await _run(blocks, true, b)
-		_distribution("threaded batch=%-2d" % b, res["frames"])
+		_distribution("threaded batch=%-3d" % b, res["frames"])
 
 	get_tree().quit(0)
 
@@ -75,19 +79,45 @@ func _run(blocks: Array, use_threads: bool, batch: int) -> Dictionary:
 	_clear_cache()
 	_frames = []
 	_watching = true
+	# Snapshot the shared decode/upload counters so we can report THIS run's delta — only the
+	# first (cold) run misses the texture cache; later runs hit it and add ~0.
+	var dec0 := BlockTextureCache.prof_decode_us
+	var up0 := BlockTextureCache.prof_upload_us
 	var t0 := Time.get_ticks_msec()
 	await baker.prebake(blocks, Callable(), true)
 	var dt := Time.get_ticks_msec() - t0
 	_watching = false
+	var res := {
+		"total_ms": dt, "frames": _frames.duplicate(),
+		"build_ms": baker.prof_build_us / 1000.0, "read_ms": baker.prof_read_us / 1000.0,
+		"write_ms": baker.prof_write_us / 1000.0, "reconcile_ms": baker.prof_reconcile_us / 1000.0,
+		"predecode_ms": baker.prof_predecode_us / 1000.0,
+		"decode_ms": (BlockTextureCache.prof_decode_us - dec0) / 1000.0,
+		"upload_ms": (BlockTextureCache.prof_upload_us - up0) / 1000.0,
+	}
 	baker.free()
 	var worst := 0.0
 	for f in _frames:
 		worst = maxf(worst, f)
-	return {"total_ms": dt, "max_frame_ms": worst, "frames": _frames.duplicate()}
+	res["max_frame_ms"] = worst
+	return res
 
 func _report(label: String, res: Dictionary) -> void:
 	print("[bench] %-22s total %5d ms   worst frame %6.1f ms" % [
 		label, int(res["total_ms"]), res["max_frame_ms"]])
+
+# Where the wall time goes: main-thread build + readback/slice + disk write + the end-of-run
+# stale sweep. Summed across the whole run (not per frame), so build+read+write+reconcile
+# should roughly account for total on the synchronous path.
+func _phases(label: String, res: Dictionary) -> void:
+	print("[bench] %-22s build %6.1f  read %6.1f  write %7.1f  reconcile %6.1f  (ms)" % [
+		label, res["build_ms"], res["read_ms"], res["write_ms"], res["reconcile_ms"]])
+	# Texture half of build (cold cache): decode = PNG→Image work (now summed across worker
+	# threads, so it can exceed wall time), upload = create GPU texture (main-thread only),
+	# predecode = the main-thread WALL spent waiting on the parallel decode. The win shows as
+	# predecode ≪ decode (work parallelized) and build_ms dropping toward predecode + upload.
+	print("[bench] %-22s   textures: decode(work) %7.1f  predecode(wall) %6.1f  upload %5.1f  (ms)" % [
+		label, res["decode_ms"], res["predecode_ms"], res["upload_ms"]])
 
 # Print count / avg / median / p95 / max plus how many frames exceeded 33ms (jank),
 # excluding the one-time warmup spike (worst frame) so numbers reflect steady state.

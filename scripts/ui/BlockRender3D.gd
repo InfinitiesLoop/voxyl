@@ -144,6 +144,28 @@ static func model_for(bt: BlockType) -> BlockModel:
 	var builtin := VoxelWorld.workspace.get_block_model(shape_id)
 	return builtin if builtin != null else BlockModel.builtin_by_id(shape_id)
 
+# The library-relative image paths a block will pull through BlockTextureCache when built —
+# i.e. exactly the textures build_into resolves (its model, or each multipart part's model).
+# Added into `into` used as a set (path -> true) so a caller can dedupe across many blocks and
+# hand the union to BlockTextureCache.predecode, decoding them in parallel before building.
+static func collect_texture_paths(bt: BlockType, into: Dictionary) -> void:
+	if bt == null:
+		return
+	var sm := bt.state_map
+	if sm != null and sm.is_multipart():
+		for part in preview_parts(sm):
+			_collect_model_paths(VoxelWorld.workspace.get_block_model(str(part.get("model_id", ""))), into)
+	else:
+		_collect_model_paths(model_for(bt), into)
+
+static func _collect_model_paths(model: BlockModel, into: Dictionary) -> void:
+	if model == null or not model.has_textures():
+		return
+	for key in model.textures:
+		var asset := VoxelWorld.workspace.get_texture_asset(model.textures[key])
+		if asset != null and not asset.image_path.is_empty():
+			into[asset.image_path] = true
+
 # --- Internals --------------------------------------------------------------
 
 # Texture-key bindings resolved to drawable textures (shared with the grid/preview
