@@ -52,3 +52,17 @@ enum Shape { FULL, SLAB, STAIRS }
 @export var model_id: String = ""
 @export var state_map: BlockStateMap = null
 @export var tint: Color = Color.WHITE
+# Free-form searchable labels, decoupled from identity exactly like source_namespace: a
+# term hits a tag without the tag being part of the block's name. Import extensions
+# (see MCImportExtension) use these to make a block findable by its real-world name and
+# category (e.g. a healed GregTech machine tagged "machine", "bender", "lv") even though
+# its `name` is something else. Purely a search/display aid — never touches voxel data,
+# never looked up as an id.
+@export var tags: PackedStringArray = []
+
+# The text a search matches a block against: its library, source namespace, leaf name, and
+# tags, space-joined. One place so BlockGrid (the icon browser) and HomeScreen (the library
+# rail's has-a-match test) score identically. `library_name` is passed in because a block
+# type doesn't know which library holds it.
+func search_haystack(library_name := "") -> String:
+	return "%s %s %s %s" % [library_name, source_namespace, name, " ".join(tags)]

@@ -30,6 +30,7 @@ var _split := false
 var _library_resolver := Callable()   # func(ns: String) -> BlockLibrary
 var _lib_by_ns := {}     # ns -> BlockLibrary (cached resolver results for this import)
 var _touched := {}       # library name -> BlockLibrary that received a block this import
+var _ns_source := {}     # ns -> MCAssetSource that fed it (for the post-import extension pass)
 
 # Diagnostics from the last import_selected().
 var imported_count := 0
@@ -145,6 +146,7 @@ func begin_import(selection: Array) -> int:
 	warnings.clear()
 	_touched.clear()
 	_lib_by_ns.clear()
+	_ns_source.clear()
 	# Overlap the per-texture pixel copies on worker threads for the duration of this
 	# import; end_import() flushes them before returning (and before previews bake).
 	MCTexImport.use_threads = true
@@ -155,6 +157,9 @@ func import_step(i: int) -> bool:
 	var entry = _pending[i]
 	var lib := _target_library_for(entry["ns"])
 	var imp = _importer_for(entry["source"], lib)
+	# Remember which source fed each namespace so the post-import extension pass (which reads
+	# more of the same source) can find it — even for a block that failed to import.
+	_ns_source[entry["ns"]] = entry["source"]
 	var ok := imp.import_block(entry["ns"], entry["id"], _pending_names[i]) != null
 	if ok:
 		imported_count += 1
@@ -170,10 +175,29 @@ func end_import() -> void:
 	# non-UI importer (e.g. a test) stays fully synchronous.
 	MCTexImport.flush_writes()
 	MCTexImport.use_threads = false
+	# Post-import: let a mod-specific extension reshape each imported namespace (add healed
+	# blocks, remove junk) before anything is persisted. Runs after the presumptive import so
+	# it sees the whole result; runs before save so its changes land on disk.
+	_run_extensions()
 	for imp in _all_importers():
 		warnings.append_array(imp.warnings)
 	for lib in _touched.values():
 		LibraryStore.save_library(lib)
+
+# Run the registered extension (if any) for each namespace imported this run, on the library
+# that received it. Idempotent per namespace (keyed dict), so a namespace fed by several
+# sources still heals once — the extension re-reads whatever it needs from the source itself.
+func _run_extensions() -> void:
+	for ns in _ns_source:
+		var ext := MCImportExtension.for_namespace(ns)
+		if ext == null:
+			continue
+		var lib := _target_library_for(ns)
+		var ctx := MCHealContext.new(lib, _ns_source[ns], ns)
+		ext.heal(ctx)
+		ctx.flush_composites()   # block until the threaded composite writes are all on disk
+		warnings.append_array(ctx.warnings)
+		_touched[lib.name] = lib   # a heal-only namespace still needs persisting
 
 # The BlockTypes imported so far (deduped across sources), read back out of the target
 # library by each importer's final names. Lets a caller act on the fresh blocks — the

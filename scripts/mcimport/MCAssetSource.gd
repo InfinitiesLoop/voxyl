@@ -46,6 +46,14 @@ func read_image(_rel: String) -> Image:
 func read_bytes(_rel: String) -> PackedByteArray:
 	return PackedByteArray()
 
+# The on-disk path this source reads from (the archive file, or the assets directory), or
+# "" if it has none. A mod-specific import extension uses it to reach files that live NEXT to
+# the source rather than inside it — e.g. GregTech's per-machine display names sit in an
+# instance-level `GregTech.lang`, a sibling of the `mods/` folder the jar came from, not in
+# the jar's own assets. Plumbing only; no MC/mod knowledge leaks in here.
+func archive_path() -> String:
+	return ""
+
 # Release any held handles (zip readers). Safe to call more than once.
 func close() -> void:
 	pass

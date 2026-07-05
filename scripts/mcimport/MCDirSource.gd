@@ -59,5 +59,8 @@ func read_bytes(rel: String) -> PackedByteArray:
 		return PackedByteArray()
 	return FileAccess.get_file_as_bytes(abs_path)
 
+func archive_path() -> String:
+	return _root
+
 func describe() -> String:
 	return _root

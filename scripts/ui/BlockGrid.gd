@@ -64,7 +64,7 @@ static func block_item(bt: BlockType, library_name: String = "") -> Item:
 	var it := Item.new()
 	it.key = bt.name
 	it.label = bt.name
-	it.search_text = "%s %s %s" % [library_name, bt.source_namespace, bt.name]
+	it.search_text = bt.search_haystack(library_name)
 	it.block_type = bt
 	it.placeholder_color = bt.color
 	return it

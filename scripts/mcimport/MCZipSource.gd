@@ -265,5 +265,8 @@ func _notification(what: int) -> void:
 			_fallback_reader.close()
 			_fallback_reader = null
 
+func archive_path() -> String:
+	return _zip_path
+
 func describe() -> String:
 	return _zip_path

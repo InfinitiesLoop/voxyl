@@ -1335,6 +1335,18 @@ func _refresh_bt_detail() -> void:
 	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.add_child(name_lbl)
 
+	# Searchable tags (import extensions attach real-world names/categories here). Read-only,
+	# muted, and only shown when present so an untagged block's panel is unchanged.
+	if not bt.tags.is_empty():
+		var tags_lbl := Label.new()
+		tags_lbl.text = "🏷  " + "  ".join(bt.tags)
+		tags_lbl.tooltip_text = "Tags (searchable): " + ", ".join(bt.tags)
+		tags_lbl.mouse_filter = Control.MOUSE_FILTER_STOP
+		tags_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		tags_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		tags_lbl.modulate = Color(1, 1, 1, 0.6)
+		vbox.add_child(tags_lbl)
+
 	var files_btn := Button.new()
 	files_btn.text = "Open folder"
 	files_btn.tooltip_text = "Reveal this block in the library in your file browser"
@@ -1645,13 +1657,14 @@ func _refresh_library_rail() -> void:
 	_library_rail.populate(rail_libs)
 
 # A term can hit any "part" of a block's identity — its library, its source namespace
-# (see BlockType.source_namespace), or its own leaf name — so a search for "ztone" finds
-# every block in a "ztones" library or namespace even if neither appears in the block's name.
+# (see BlockType.source_namespace), its own leaf name, or a tag — so a search for "ztone"
+# finds every block in a "ztones" library or namespace even if neither appears in the
+# block's name. Uses the same haystack BlockGrid scores against so the rail and the grid agree.
 func _library_has_match(lib: BlockLibrary, terms: PackedStringArray) -> bool:
 	if lib == null:
 		return false
 	for bt in lib.sorted_block_types():
-		if BlockGrid.matches_all_terms("%s %s %s" % [lib.name, bt.source_namespace, bt.name], terms):
+		if BlockGrid.matches_all_terms(bt.search_haystack(lib.name), terms):
 			return true
 	return false
 

@@ -29,7 +29,7 @@ const TRASH_DIR := ".trash"
 # raw variant (de)serializer skips all that: gtnh's ~65k objects load in ~0.8s this way vs ~37s
 # via ResourceLoader, whether from 65k loose files or one .res. Bump INDEX_FORMAT to invalidate.
 const INDEX_FILE := "index.dat"
-const INDEX_FORMAT := 2
+const INDEX_FORMAT := 3
 
 # --- Save -------------------------------------------------------------------
 
