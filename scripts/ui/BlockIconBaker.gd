@@ -305,9 +305,7 @@ func _bake_next() -> void:
 # Persist the baked icon, pruning any older-signature file for the same block so the
 # cache holds exactly one PNG per block (latest look only).
 func _save_to_disk(bt: BlockType, img: Image, prune: bool) -> void:
-	var t := Time.get_ticks_usec()
 	_write_icon(img, _disk_path(bt), _safe(bt.name) + "__", prune)
-	prof_write_us += Time.get_ticks_usec() - t
 
 # The threaded half of _save_to_disk: prune older-signature files for this block, then
 # encode + write the PNG. Runs on a WorkerThreadPool thread when use_threads is on, so it
@@ -352,7 +350,6 @@ func _write_icon(img: Image, path: String, prefix: String, prune: bool) -> void:
 # "<safe_name>__<16-hex-sig>.png": the current-signature file is kept (in `expected`), any
 # other file sharing a baked block's "<safe_name>__" prefix is a stale older look and removed.
 func _reconcile_stale(blocks: Array) -> void:
-	var t := Time.get_ticks_usec()
 	var prefixes := {}   # "<safe_name>__" -> true, for blocks baked this run
 	var expected := {}   # current-signature filename -> true, to keep
 	for bt in blocks:
@@ -366,7 +363,6 @@ func _reconcile_stale(blocks: Array) -> void:
 				continue
 			if prefixes.has(f.substr(0, f.length() - 20)):
 				dir.remove(f)
-	prof_reconcile_us += Time.get_ticks_usec() - t
 
 # Block until every dispatched disk-write task has completed, so a caller (prebake) can
 # rely on the PNGs being on disk before it returns. Cheap when use_threads is off (no

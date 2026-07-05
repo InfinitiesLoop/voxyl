@@ -44,6 +44,12 @@ class Item extends RefCounted:
 	var block_type: BlockType = null      # baked for the icon; null → placeholder
 	var placeholder_color := Color(0.5, 0.5, 0.5)
 	var is_add: bool = false              # draws a "+" glyph instead of an icon
+	# Optional group name. Items must be contiguous by section (callers populate them
+	# grouped, not interleaved) — whenever this differs from the previous item's non-empty
+	# section, a full-width divider row is inserted before it. Empty ⇒ no divider, ever;
+	# this is what every existing caller gets, unchanged. Not library-specific: any grouping
+	# a caller wants (libraries, templates, ...) works the same way.
+	var section: String = ""
 
 # A trailing "add new" tile the caller appends last. Always emits ADD_KEY on click and is
 # excluded from search filtering (it's chrome, not content).
@@ -59,14 +65,16 @@ static func add_item(caption_text := "") -> Item:
 # Build an item that displays a block type directly (key/label = its name). `library_name`,
 # when given, and the block's own namespace are folded into search_text (not the label) so
 # searching "ztone" finds every block in a "ztones" library or "ztones" namespace even when
-# neither is part of the block's own name.
-static func block_item(bt: BlockType, library_name: String = "") -> Item:
+# neither is part of the block's own name. `section`, when given, groups this item under a
+# divider — see Item.section.
+static func block_item(bt: BlockType, library_name: String = "", section: String = "") -> Item:
 	var it := Item.new()
 	it.key = bt.name
 	it.label = bt.name
 	it.search_text = bt.search_haystack(library_name)
 	it.block_type = bt
 	it.placeholder_color = bt.color
+	it.section = section
 	return it
 
 # Per-grid look, set before populate_items: cell footprint + whether to draw captions
@@ -84,13 +92,23 @@ var _active: Dictionary = {}         # filtered-index -> live cell Control (only
 var _pool: Array = []                # released cells kept for reuse, so scrolling rebinds
                                      # rather than allocating/freeing nodes each row
 var _cols: int = 0                   # columns at the current width (drives layout + row count)
-var _last_start: int = -1            # index window realized last update; skip work if unchanged
-var _last_end: int = -1
 var _selected: String = ""           # selected item key
+
+# Row layout: precomputed once per _relayout (not per scroll tick) since section dividers
+# make rows non-uniform — a plain idx/_cols division no longer finds a row's position or
+# height. Each entry is a Dictionary: {is_header: true, title, y, height} for a divider, or
+# {is_header: false, start, count, y, height} for a row of up to _cols filtered-items
+# starting at index `start`. Sorted by `y`, so _update_visible binary-searches it.
+var _rows: Array = []
+var _active_headers: Dictionary = {} # row-index -> live header Control (only visible rows)
+var _header_pool: Array = []         # released header controls kept for reuse
+var _last_row_start: int = -1        # row-index window realized last update; skip if unchanged
+var _last_row_end: int = -1
 
 const _CAPTION_H := 20.0
 const _H_SEP := 3.0                  # gap between cells in a row
 const _V_SEP := 3.0                  # gap between rows
+const _HEADER_H := 24.0              # height of a section-divider row
 # Extra rows realized above and below the viewport so a row is already built (and its warm
 # icon loaded) before it scrolls into view — no placeholder flash on a normal scroll.
 const _BUFFER_ROWS := 4
@@ -150,8 +168,10 @@ func populate_items(items: Array) -> void:
 	_items = items
 	if _canvas:
 		_recompute_filtered(_search.text)
-		_scroll.scroll_vertical = 0
+		# _relayout (rebuilds _rows to match the new _filtered) must run before touching
+		# scroll_vertical — see the comment in _apply_filter for why.
 		_relayout()
+		_scroll.scroll_vertical = 0
 
 # Re-bake icons after a block edit. With a name, only that block's icon is dropped and the
 # cells showing it redraw; with none, the whole grid re-bakes (rarely needed — structural
@@ -195,9 +215,14 @@ func set_selected(key: String) -> void:
 
 func _apply_filter(text: String) -> void:
 	_recompute_filtered(text)
+	# Rebuild _rows against the new _filtered *before* touching scroll_vertical: assigning it
+	# fires the scrollbar's value_changed synchronously (see the _update_visible connection in
+	# _ready), and _update_visible indexes _filtered via _rows — so _rows must already match
+	# the new _filtered or that handler reads stale row data (e.g. from a longer list) and
+	# indexes off the end.
+	_relayout()
 	if _scroll:
 		_scroll.scroll_vertical = 0
-	_relayout()
 	search_changed.emit(text)
 
 # Whether a global point falls inside the scrollable icon area — lets a host screen
@@ -268,8 +293,9 @@ func _recompute_filtered(filter: String) -> void:
 func _cell_height() -> float:
 	return cell_size.y + (_CAPTION_H if show_captions else 0.0)
 
-# Recompute columns + total content height for the current width, then refresh which rows
-# are realized. Called on populate, filter change, and width change (via _canvas.resized).
+# Recompute columns, rebuild the row layout (cell rows + any section-divider rows) for the
+# current width, then refresh which rows are realized. Called on populate, filter change,
+# and width change (via _canvas.resized).
 func _relayout() -> void:
 	if not _canvas:
 		return
@@ -279,54 +305,127 @@ func _relayout() -> void:
 	if avail <= 0.0:
 		return   # not laid out yet; _canvas.resized will call us again once it has a width
 	var cols := maxi(1, int((avail + _H_SEP) / (cell_size.x + _H_SEP)))
-	var rows := int(ceil(float(_filtered.size()) / float(cols)))
-	_canvas.custom_minimum_size.y = maxf(0.0, rows * (_cell_height() + _V_SEP) - _V_SEP)
 	if cols != _cols:
 		# The column count changed, so every cell's position is stale — drop them all and
 		# let _update_visible rebuild the visible window at the new stride.
 		_cols = cols
 		_clear_active()
+	_build_rows()
 	_update_visible()
 
-# Realize exactly the cells in the viewport (± the buffer) and release the rest. Cells are
-# rebound as they approach view and pooled once they scroll well past, so the live node count
-# stays proportional to the viewport, not the library size — and scrolling reuses nodes
-# instead of allocating them, which is what keeps it smooth.
+# Build the row layout from _filtered + _cols: a header row wherever an item's section
+# differs from the running section (see Item.section), else cell rows packed up to _cols
+# items — a cell row ends early rather than spanning a section boundary, so the following
+# header always starts a fresh row. Rows are non-uniform height, so each records its own
+# `y`/`height` rather than relying on a fixed stride — that's what lets _update_visible
+# binary-search straight to the visible window instead of a plain idx/_cols division.
+func _build_rows() -> void:
+	_rows = []
+	var y := 0.0
+	var i := 0
+	var n := _filtered.size()
+	var current_section := ""
+	var first := true
+	while i < n:
+		var item: Item = _filtered[i]
+		if item.section != "" and (first or item.section != current_section):
+			var header_h := _HEADER_H + _V_SEP
+			_rows.append({"is_header": true, "title": item.section, "y": y, "height": header_h})
+			y += header_h
+		current_section = item.section
+		first = false
+		var row_start := i
+		var count := 0
+		while count < _cols and i < n and _filtered[i].section == current_section:
+			i += 1
+			count += 1
+		var row_h := _cell_height() + _V_SEP
+		_rows.append({"is_header": false, "start": row_start, "count": count, "y": y, "height": row_h})
+		y += row_h
+	_canvas.custom_minimum_size.y = maxf(0.0, y - _V_SEP)
+	_last_row_start = -1
+	_last_row_end = -1
+
+# Binary search _rows (sorted by ascending y) for the index of the last row whose top is
+# at or before `y` — i.e. the row containing `y`, or the row just before it if `y` falls in
+# a gap. Returns -1 if every row starts after `y`.
+func _find_row_at_y(y: float) -> int:
+	var lo := 0
+	var hi := _rows.size() - 1
+	var res := -1
+	while lo <= hi:
+		@warning_ignore("integer_division")
+		var mid := (lo + hi) / 2
+		if _rows[mid]["y"] <= y:
+			res = mid
+			lo = mid + 1
+		else:
+			hi = mid - 1
+	return res
+
+# Realize exactly the rows in the viewport (± the buffer) and release the rest — both
+# section-header rows and cell rows. Cells/headers are rebound as they approach view and
+# pooled once they scroll well past, so the live node count stays proportional to the
+# viewport, not the library size — and scrolling reuses nodes instead of allocating them,
+# which is what keeps it smooth.
 func _update_visible() -> void:
-	if _canvas == null or _cols <= 0 or _filtered.is_empty():
+	if _canvas == null or _cols <= 0 or _rows.is_empty():
 		_clear_active()
 		return
-	var stride := _cell_height() + _V_SEP
 	var top: float = _scroll.scroll_vertical
 	var view_h: float = _scroll.size.y
-	var first_row := maxi(0, int(top / stride) - _BUFFER_ROWS)
-	var last_row := int((top + view_h) / stride) + _BUFFER_ROWS
-	var start := first_row * _cols
-	var end := mini(_filtered.size(), (last_row + 1) * _cols)
+	var first_row := maxi(0, _find_row_at_y(top) - _BUFFER_ROWS)
+	var last_visible := _find_row_at_y(top + view_h)
+	if last_visible < 0:
+		last_visible = 0
+	var last_row := mini(_rows.size() - 1, last_visible + _BUFFER_ROWS)
 
 	# Most scroll ticks don't cross a row boundary; when the window is unchanged there's
 	# nothing to rebuild, so bail before touching any nodes.
-	if start == _last_start and end == _last_end:
+	if first_row == _last_row_start and last_row == _last_row_end:
 		return
-	_last_start = start
-	_last_end = end
+	_last_row_start = first_row
+	_last_row_end = last_row
 
-	# Release cells that fell outside the window back to the pool.
+	# Release headers/cells that fell outside the window back to their pools.
+	for ridx in _active_headers.keys():
+		if ridx < first_row or ridx > last_row:
+			_release_header(_active_headers[ridx])
+			_active_headers.erase(ridx)
+	var keep_idx := {}
+	for ridx in range(first_row, last_row + 1):
+		var row: Dictionary = _rows[ridx]
+		if row["is_header"]:
+			if _active_headers.has(ridx):
+				_active_headers[ridx].size.x = _canvas.size.x   # canvas may have resized since bind
+			else:
+				_active_headers[ridx] = _bind_header(_acquire_header(), row)
+		else:
+			for idx in range(row["start"], row["start"] + row["count"]):
+				keep_idx[idx] = true
 	for idx in _active.keys():
-		if idx < start or idx >= end:
+		if not keep_idx.has(idx):
 			_release(_active[idx])
 			_active.erase(idx)
-	# Bind a (pooled or fresh) cell for each index that entered it.
-	for idx in range(start, end):
-		if not _active.has(idx):
-			_active[idx] = _bind_cell(_acquire(), _filtered[idx], idx)
+	for ridx in range(first_row, last_row + 1):
+		var row: Dictionary = _rows[ridx]
+		if row["is_header"]:
+			continue
+		for idx in range(row["start"], row["start"] + row["count"]):
+			if not _active.has(idx):
+				var col: int = idx - int(row["start"])
+				var pos := Vector2(col * (cell_size.x + _H_SEP), row["y"])
+				_active[idx] = _bind_cell(_acquire(), _filtered[idx], pos)
 
 func _clear_active() -> void:
 	for cell in _active.values():
 		_release(cell)
 	_active.clear()
-	_last_start = -1
-	_last_end = -1
+	for hdr in _active_headers.values():
+		_release_header(hdr)
+	_active_headers.clear()
+	_last_row_start = -1
+	_last_row_end = -1
 
 # A cell to (re)use: a pooled one if available, else a fresh node wired up once. The draw and
 # input handlers read the bound item from meta (not a captured var), so a cell is item-agnostic
@@ -352,16 +451,46 @@ func _release(cell: Control) -> void:
 	cell.visible = false
 	_pool.append(cell)
 
-# Point a cell at an item + grid index: position it, set its tooltip, and (re)draw it.
-func _bind_cell(cell: Control, item: Item, idx: int) -> Control:
+# Point a cell at an item + explicit pixel position (from the row it belongs to — no longer
+# derivable from idx/_cols alone once section headers break the uniform grid).
+func _bind_cell(cell: Control, item: Item, pos: Vector2) -> Control:
 	cell.set_meta("item", item)
 	cell.tooltip_text = item.label
-	var col := idx % _cols
-	var row := idx / _cols
-	cell.position = Vector2(col * (cell_size.x + _H_SEP), row * (_cell_height() + _V_SEP))
+	cell.position = pos
 	cell.size = Vector2(cell_size.x, _cell_height())
 	cell.queue_redraw()   # a reused cell keeps its old drawing until told to repaint
 	return cell
+
+# A section-divider row: a plain full-width Control drawing its title, pooled the same way
+# as cells (see _acquire).
+func _acquire_header() -> Control:
+	if not _header_pool.is_empty():
+		var reused: Control = _header_pool.pop_back()
+		reused.visible = true
+		return reused
+	var hdr := Control.new()
+	hdr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hdr.draw.connect(func(): _draw_header(hdr, hdr.get_meta("title")))
+	_canvas.add_child(hdr)
+	return hdr
+
+func _release_header(hdr: Control) -> void:
+	hdr.visible = false
+	_header_pool.append(hdr)
+
+func _bind_header(hdr: Control, row: Dictionary) -> Control:
+	hdr.set_meta("title", row["title"])
+	hdr.position = Vector2(0, row["y"])
+	hdr.size = Vector2(_canvas.size.x, _HEADER_H)   # row["height"] also reserves the trailing gap
+	hdr.queue_redraw()
+	return hdr
+
+func _draw_header(hdr: Control, title: String) -> void:
+	var font := get_theme_default_font()
+	hdr.draw_line(Vector2(0, hdr.size.y - 2), Vector2(hdr.size.x, hdr.size.y - 2),
+		Color(1, 1, 1, 0.15), 1.0)
+	hdr.draw_string(font, Vector2(2, hdr.size.y - 8), title,
+		HORIZONTAL_ALIGNMENT_LEFT, hdr.size.x - 4, 13, Color(1, 1, 1, 0.85))
 
 func _draw_cell(cell: Control, item: Item) -> void:
 	# Icon occupies a centered square in the top region; the caption strip (if any) sits below.

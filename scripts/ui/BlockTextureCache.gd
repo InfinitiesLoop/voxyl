@@ -21,13 +21,6 @@ static var _frame_cache := {}
 static var _img_cache := {}
 static var _img_mutex := Mutex.new()
 
-# Perf counters (µs) for a throwaway bench: decode = Image.load (PNG→pixels, CPU-bound, now
-# parallel — this is the SUM of work across worker threads, so it exceeds wall time); upload =
-# ImageTexture.create_from_image (GPU texture creation, main-thread only). Accumulated only on
-# a cache miss, so they measure the one-time cold cost.
-static var prof_decode_us := 0
-static var prof_upload_us := 0
-
 # ImageTexture for a library-relative image path, cached. Null for an empty path or
 # an unreadable file. AssetLibrary.load_texture reads the loose file off disk.
 static func cached_texture(image_path: String) -> ImageTexture:
@@ -35,9 +28,7 @@ static func cached_texture(image_path: String) -> ImageTexture:
 		return null
 	if not _tex_cache.has(image_path):
 		var img := _take_decoded(image_path)   # pre-decoded on a worker, or decoded here
-		var t := Time.get_ticks_usec()
 		_tex_cache[image_path] = ImageTexture.create_from_image(img) if img != null else null
-		prof_upload_us += Time.get_ticks_usec() - t
 	return _tex_cache[image_path]
 
 # The drawable texture for a TextureAsset. Static textures return the full cached
@@ -57,9 +48,7 @@ static func face_texture(asset: TextureAsset) -> Texture2D:
 		else:
 			var w := img.get_width()
 			var h := mini(w, img.get_height())
-			var t := Time.get_ticks_usec()
 			_frame_cache[asset.image_path] = ImageTexture.create_from_image(img.get_region(Rect2i(0, 0, w, h)))
-			prof_upload_us += Time.get_ticks_usec() - t
 	return _frame_cache[asset.image_path]
 
 # Decode PNGs for the given paths in parallel on WorkerThreadPool, into _img_cache, so the
@@ -82,12 +71,9 @@ static func predecode(image_paths: Array) -> void:
 		WorkerThreadPool.wait_for_task_completion(t)
 
 static func _decode_worker(image_path: String) -> void:
-	var t := Time.get_ticks_usec()
 	var img := AssetLibrary.load_image(image_path)
-	var dt := Time.get_ticks_usec() - t
 	_img_mutex.lock()
 	_img_cache[image_path] = img
-	prof_decode_us += dt
 	_img_mutex.unlock()
 
 # The decoded Image for a path: a pre-decoded one from _img_cache (consumed — erased — since
@@ -101,7 +87,4 @@ static func _take_decoded(image_path: String) -> Image:
 		_img_mutex.unlock()
 		return img
 	_img_mutex.unlock()
-	var t := Time.get_ticks_usec()
-	var decoded := AssetLibrary.load_image(image_path)
-	prof_decode_us += Time.get_ticks_usec() - t
-	return decoded
+	return AssetLibrary.load_image(image_path)

@@ -11,8 +11,19 @@ var _expanded_project_name: String = ""
 var _project_filter: String = ""
 var _thumb_cache: Dictionary = {}
 var _library_rail: LibraryList
+# The full rail multi-selection (possibly several libraries). _selected_library mirrors
+# this only when it holds exactly one entry — see _on_library_selection_changed — since
+# single-target actions (New block, Open folder) have no unambiguous target otherwise.
+var _selected_libraries: Array = []
 var _selected_library: BlockLibrary
+var _new_block_btn: Button
+var _open_folder_btn: Button
 var _block_grid: BlockGrid
+# block name -> owning BlockLibrary for whatever's currently in _block_grid. Needed once
+# the grid can merge blocks from several libraries at once, so a selected block's actions
+# (delete, reveal in files, detail lookup) resolve the right library instead of assuming
+# _selected_library.
+var _bt_owner_by_name: Dictionary = {}
 var _bt_detail: Control
 var _bt_preview: BlockPreview3D
 var _selected_block_type: String = ""
@@ -1100,11 +1111,14 @@ func _build_block_types_tab() -> Control:
 	_library_rail = LibraryList.new()
 	_library_rail.list_title = "Libraries"
 	_library_rail.allow_rename = true
+	_library_rail.allow_multi_select = true
+	_library_rail.allow_bulk_delete = true
 	_library_rail.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_library_rail.add_requested.connect(_on_add_library)
 	_library_rail.delete_requested.connect(_on_delete_library)
 	_library_rail.rename_requested.connect(_on_rename_library)
-	_library_rail.item_selected.connect(_on_library_selected)
+	_library_rail.selection_changed.connect(_on_library_selection_changed)
+	_library_rail.bulk_delete_requested.connect(_confirm_delete_libraries)
 	rail_box.add_child(_library_rail)
 	split.split_offset = 220
 
@@ -1125,10 +1139,10 @@ func _build_block_types_tab() -> Control:
 	header.add_theme_constant_override("separation", 8)
 	rvbox.add_child(header)
 
-	var new_btn := Button.new()
-	new_btn.text = "New block…"
-	new_btn.pressed.connect(_on_new_block)
-	header.add_child(new_btn)
+	_new_block_btn = Button.new()
+	_new_block_btn.text = "New block…"
+	_new_block_btn.pressed.connect(_on_new_block)
+	header.add_child(_new_block_btn)
 
 	# Import blocks from the user's own MC assets — they land in this same grid.
 	var import_btn := Button.new()
@@ -1149,11 +1163,11 @@ func _build_block_types_tab() -> Control:
 	header.add_child(regen_btn)
 
 	# Jump to the selected library's folder on disk.
-	var folder_btn := Button.new()
-	folder_btn.text = "Open folder"
-	folder_btn.tooltip_text = "Reveal this library's folder in your file browser"
-	folder_btn.pressed.connect(_on_open_library_folder)
-	header.add_child(folder_btn)
+	_open_folder_btn = Button.new()
+	_open_folder_btn.text = "Open folder"
+	_open_folder_btn.tooltip_text = "Reveal this library's folder in your file browser"
+	_open_folder_btn.pressed.connect(_on_open_library_folder)
+	header.add_child(_open_folder_btn)
 
 	_block_grid = BlockGrid.new()
 	_block_grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -1181,8 +1195,8 @@ func _on_add_library(library_name: String) -> void:
 		return
 	VoxelWorld.workspace.get_or_add_library(library_name)
 	LibraryStore.save_library(VoxelWorld.workspace.get_library(library_name))
-	_selected_library = VoxelWorld.workspace.get_library(library_name)
-	_library_rail.selected = library_name
+	_selected_libraries = [VoxelWorld.workspace.get_library(library_name)]
+	_library_rail.set_selection([library_name])
 	VoxelWorld.workspace_changed.emit()
 
 func _on_delete_library(library_name: String) -> void:
@@ -1196,17 +1210,76 @@ func _on_delete_library(library_name: String) -> void:
 	# huge library doesn't freeze the app on delete.
 	LibraryStore.delete_library(library_name)
 	LibraryStore.purge_trash()
+	_selected_libraries.erase(lib)
 	if _selected_library == lib:
 		_selected_library = null
 	VoxelWorld.workspace_changed.emit()
 
-func _on_library_selected(library_name: String) -> void:
-	_selected_library = VoxelWorld.workspace.get_library(library_name)
+# Delete every selected library (2+), after confirmation — the bulk counterpart to the
+# per-row ✕ above, which deletes immediately with no prompt. Mirrors
+# _confirm_delete_project's ConfirmationDialog pattern.
+func _confirm_delete_libraries(library_names: Array) -> void:
+	if library_names.is_empty():
+		return
+	var dialog := ConfirmationDialog.new()
+	dialog.title = "Delete Libraries"
+	dialog.dialog_text = ("Delete \"%s\"? This can't be undone." % library_names[0]) \
+		if library_names.size() == 1 \
+		else "Delete %d libraries? This can't be undone.\n\n%s" % [library_names.size(), "\n".join(library_names)]
+	dialog.confirmed.connect(func():
+		for library_name in library_names:
+			_on_delete_library(library_name)
+		dialog.queue_free())
+	dialog.canceled.connect(func(): dialog.queue_free())
+	get_tree().root.add_child(dialog)
+	dialog.popup_centered()
+
+# The rail's multi-selection changed (a click or shift-click). Resolves the merged set of
+# libraries, rebuilds the grid (with dividers when 2+), and updates single-target header
+# buttons — see _populate_block_grid and _update_header_buttons.
+func _on_library_selection_changed(library_names: Array) -> void:
+	_selected_libraries = []
+	for n in library_names:
+		var lib := VoxelWorld.workspace.get_library(n)
+		if lib != null:
+			_selected_libraries.append(lib)
+	_selected_library = _selected_libraries[0] if _selected_libraries.size() == 1 else null
 	_selected_block_type = ""
-	if _block_grid:
-		_block_grid.populate(_selected_library.sorted_block_types() if _selected_library else [],
-			_selected_library.name if _selected_library else "")
+	_populate_block_grid()
+	_update_header_buttons()
 	_refresh_bt_detail()
+
+# Rebuild _block_grid + _bt_owner_by_name from _selected_libraries: one library populates
+# it exactly as before (no section set, so no divider — byte-identical to the old single-
+# select path); 2+ libraries merge every library's blocks into one list, each tagged with
+# its owning library as a divider section (see BlockGrid.Item.section).
+func _populate_block_grid() -> void:
+	_bt_owner_by_name = {}
+	if not _block_grid:
+		return
+	if _selected_libraries.is_empty():
+		_block_grid.populate([])
+	elif _selected_libraries.size() == 1:
+		var lib: BlockLibrary = _selected_libraries[0]
+		for bt in lib.sorted_block_types():
+			_bt_owner_by_name[bt.name] = lib
+		_block_grid.populate(lib.sorted_block_types(), lib.name)
+	else:
+		var items: Array = []
+		for lib in _selected_libraries:
+			for bt in lib.sorted_block_types():
+				_bt_owner_by_name[bt.name] = lib
+				items.append(BlockGrid.block_item(bt, lib.name, lib.name))
+		_block_grid.populate_items(items)
+
+# Single-target header actions (New block, Open folder) have no unambiguous target when
+# more than one library is selected, so they're disabled rather than guessing.
+func _update_header_buttons() -> void:
+	var disabled := _selected_library == null
+	if _new_block_btn:
+		_new_block_btn.disabled = disabled
+	if _open_folder_btn:
+		_open_folder_btn.disabled = disabled
 
 # Rename a library: prompt for a new name, then move it on disk + repoint palettes via
 # LibraryStore. The basic floor is undeletable/unrenamable, so its ✎ no-ops.
@@ -1258,10 +1331,15 @@ func _on_open_library_folder() -> void:
 
 # Pick a sensible selected library after a refresh: keep the current one if it still
 # exists, else fall back to the first library (basic on a fresh install).
-func _ensure_selected_library() -> void:
-	if _selected_library != null and VoxelWorld.workspace.get_library(_selected_library.name) != null:
-		return
-	_selected_library = VoxelWorld.workspace.libraries[0] if not VoxelWorld.workspace.libraries.is_empty() else null
+func _ensure_selected_libraries() -> void:
+	var kept: Array = []
+	for lib in _selected_libraries:
+		if VoxelWorld.workspace.get_library(lib.name) != null:
+			kept.append(lib)
+	if kept.is_empty() and not VoxelWorld.workspace.libraries.is_empty():
+		kept = [VoxelWorld.workspace.libraries[0]]
+	_selected_libraries = kept
+	_selected_library = _selected_libraries[0] if _selected_libraries.size() == 1 else null
 
 # The left detail panel shell: a styled PanelContainer (its background makes the
 # split seam visible) at a fixed width, holding a scrollable vbox. The fixed width +
@@ -1310,7 +1388,8 @@ func _refresh_bt_detail() -> void:
 	_bt_preview = null
 	await get_tree().process_frame
 
-	var bt := _selected_library.get_block_type(_selected_block_type) if _selected_library else null
+	var owner_lib: BlockLibrary = _bt_owner_by_name.get(_selected_block_type)
+	var bt := owner_lib.get_block_type(_selected_block_type) if owner_lib else null
 	if not bt:
 		var lbl := Label.new()
 		lbl.name = "Placeholder"
@@ -1325,7 +1404,7 @@ func _refresh_bt_detail() -> void:
 	# library-qualified identifier here and in the tooltip. It gets its own full-width
 	# row so a long name wraps instead of fighting the "Open folder" button for space;
 	# clip_text would otherwise silently truncate it.
-	var full_name := "%s.%s" % [_selected_library.name, bt.name] if _selected_library else bt.name
+	var full_name := "%s.%s" % [owner_lib.name, bt.name] if owner_lib else bt.name
 	var name_lbl := Label.new()
 	name_lbl.text = full_name
 	name_lbl.tooltip_text = full_name
@@ -1460,18 +1539,20 @@ func _texture_swatch(asset_id: String) -> Control:
 	return rect
 
 # The block's own editable model (explicit model_id), or null for a built-in shape
-# (no model to edit yet — the "Set texture…" path creates one). Scoped to the selected
-# library so editing acts on that library's model.
+# (no model to edit yet — the "Set texture…" path creates one). Scoped to the block's
+# owning library (via _bt_owner_by_name, not _selected_library — the grid may be showing
+# several libraries' blocks at once) so editing acts on the right library's model.
 func _editable_model(bt: BlockType) -> BlockModel:
-	if bt.model_id.is_empty() or _selected_library == null:
+	var lib: BlockLibrary = _bt_owner_by_name.get(bt.name)
+	if bt.model_id.is_empty() or lib == null:
 		return null
-	return _selected_library.get_block_model(bt.model_id)
+	return lib.get_block_model(bt.model_id)
 
 func _on_set_texture(bt: BlockType) -> void:
-	if _selected_library == null:
+	var lib: BlockLibrary = _bt_owner_by_name.get(bt.name)
+	if lib == null:
 		return
 	_pick_png(func(path: String):
-		var lib := _selected_library
 		var asset := TextureIngest.ingest_file(lib, path, "custom:%s/all" % bt.name)
 		if asset == null:
 			return
@@ -1490,10 +1571,11 @@ func _on_set_texture(bt: BlockType) -> void:
 # Rebind one texture key to a freshly ingested PNG. The new asset gets a per-block id
 # so replacing never clobbers a shared imported texture's pixels.
 func _on_replace_texture(bt: BlockType, model: BlockModel, key: String) -> void:
-	if _selected_library == null:
+	var lib: BlockLibrary = _bt_owner_by_name.get(bt.name)
+	if lib == null:
 		return
 	_pick_png(func(path: String):
-		var asset := TextureIngest.ingest_file(_selected_library, path, "custom:%s/%s" % [bt.name, key])
+		var asset := TextureIngest.ingest_file(lib, path, "custom:%s/%s" % [bt.name, key])
 		if asset == null:
 			return
 		model.textures[key] = asset.id
@@ -1509,8 +1591,9 @@ func _after_block_edit(bt: BlockType) -> void:
 		_bt_preview.set_block(bt)
 	if _block_grid:
 		_block_grid.refresh_icons(bt.name)
-	if _selected_library:
-		LibraryStore.save_library(_selected_library)
+	var lib: BlockLibrary = _bt_owner_by_name.get(bt.name)
+	if lib:
+		LibraryStore.save_library(lib)
 
 func _on_new_block() -> void:
 	var dlg := NewBlockDialog.new()
@@ -1579,36 +1662,41 @@ func _on_import_finished(touched_library_names: Array) -> void:
 	var lib := VoxelWorld.workspace.get_library(touched_library_names[0])
 	if lib == null:
 		return
+	_selected_libraries = [lib]
 	_selected_library = lib
 	_selected_block_type = ""
 	if _block_grid:
 		_block_grid.clear_search()
-		_block_grid.populate(lib.sorted_block_types(), lib.name)
+	_populate_block_grid()
+	_update_header_buttons()
 	_refresh_library_rail()
 	_refresh_bt_detail()
 
 # Reveal the block's saved resource in the OS file browser. Persists first so the
 # .tres exists, then highlights it (falling back to the library root if needed). The
-# block lives under its library's folder.
+# block lives under its owning library's folder — resolved via _bt_owner_by_name since
+# the grid may be showing several libraries' blocks at once.
 func _on_open_in_files(bt: BlockType) -> void:
-	if _selected_library == null:
+	var lib: BlockLibrary = _bt_owner_by_name.get(bt.name)
+	if lib == null:
 		return
-	LibraryStore.save_library(_selected_library)
-	var rel := AssetLibrary.in_library(_selected_library.name, AssetLibrary.BLOCK_TYPES_DIR) \
+	LibraryStore.save_library(lib)
+	var rel := AssetLibrary.in_library(lib.name, AssetLibrary.BLOCK_TYPES_DIR) \
 		.path_join(bt.name.validate_filename() + ".tres")
 	var abs_path := ProjectSettings.globalize_path(AssetLibrary.path_for(rel))
 	if FileAccess.file_exists(abs_path):
 		OS.shell_show_in_file_manager(abs_path)
 	else:
-		OS.shell_open(ProjectSettings.globalize_path(AssetLibrary.path_for(_selected_library.name)))
+		OS.shell_open(ProjectSettings.globalize_path(AssetLibrary.path_for(lib.name)))
 
 func _on_delete_block_type(block_name: String) -> void:
-	if _selected_library == null:
+	var lib: BlockLibrary = _bt_owner_by_name.get(block_name)
+	if lib == null:
 		return
-	_selected_library.remove_block_type(block_name)
+	lib.remove_block_type(block_name)
 	if _selected_block_type == block_name:
 		_selected_block_type = ""
-	LibraryStore.save_library(_selected_library)
+	LibraryStore.save_library(lib)
 	VoxelWorld.workspace_changed.emit()
 	_refresh_bt_detail()
 
@@ -1635,11 +1723,10 @@ func _refresh(_arg = null) -> void:
 		_rebuild_projects()
 	if _palettes_list_container:
 		_rebuild_palette_list()
-	_ensure_selected_library()
+	_ensure_selected_libraries()
 	_refresh_library_rail()
-	if _block_grid:
-		_block_grid.populate(_selected_library.sorted_block_types() if _selected_library else [],
-			_selected_library.name if _selected_library else "")
+	_populate_block_grid()
+	_update_header_buttons()
 
 # Rebuild the library rail from the workspace, restricted to libraries with at least one
 # block matching the block grid's current search (unfiltered when the search is empty). The
@@ -1648,7 +1735,10 @@ func _refresh(_arg = null) -> void:
 func _refresh_library_rail() -> void:
 	if not _library_rail:
 		return
-	_library_rail.selected = _selected_library.name if _selected_library else ""
+	var names: Array = []
+	for lib in _selected_libraries:
+		names.append(lib.name)
+	_library_rail.set_selection(names)
 	var terms := BlockGrid.split_terms(_block_grid.get_search_text() if _block_grid else "")
 	var rail_libs: Array = []
 	for n in VoxelWorld.workspace.list_libraries():

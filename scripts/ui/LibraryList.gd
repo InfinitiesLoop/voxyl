@@ -5,15 +5,34 @@ signal item_selected(item_name: String)
 signal add_requested(item_name: String)
 signal delete_requested(item_name: String)
 signal rename_requested(item_name: String)
+# Fires whenever the multi-selection changes as a result of a user click (plain click or
+# shift-click). Only meaningful when allow_multi_select is true — see set_selection for
+# the programmatic (non-signal-firing) counterpart a host uses to sync selection back in.
+signal selection_changed(items: Array)
+# The "Delete Selected" button (allow_bulk_delete) was pressed. Emitted only — this stays
+# a dumb lens with no confirmation of its own, same as the per-row delete_requested; the
+# host owns any "are you sure?" prompt.
+signal bulk_delete_requested(items: Array)
 
 @export var list_title: String = "Items"
 # When true each row gets a rename (✎) affordance; the owner handles the prompt.
 @export var allow_rename: bool = false
+# When true, shift-click toggles a row in/out of the selection instead of replacing it,
+# every selected row is highlighted (not just the anchor), and selection_changed fires.
+@export var allow_multi_select: bool = false
+# When true, a "Delete Selected" button appears under the add-bar, disabled while the
+# selection is empty. Only useful alongside allow_multi_select.
+@export var allow_bulk_delete: bool = false
 
+# The anchor: the most recently clicked item, whether or not it ended up selected (e.g. a
+# shift-click that deselects it still moves the anchor there). Single-select callers can
+# keep treating this as "the" selection, same as before multi-select existed.
 var selected: String = ""
 
+var _selected_set: Dictionary = {}   # string set: item_name -> true
 var _item_list: VBoxContainer
 var _name_input: LineEdit
+var _delete_btn: Button
 
 func _ready() -> void:
 	custom_minimum_size.x = 180
@@ -44,6 +63,13 @@ func _ready() -> void:
 	add_btn.text = "+"
 	add_btn.pressed.connect(_on_add)
 	add_bar.add_child(add_btn)
+
+	if allow_bulk_delete:
+		_delete_btn = Button.new()
+		_delete_btn.text = "Delete Selected"
+		_delete_btn.disabled = true
+		_delete_btn.pressed.connect(func(): bulk_delete_requested.emit(get_selected_items()))
+		add_child(_delete_btn)
 
 func populate(items: Array) -> void:
 	for c in _item_list.get_children():
@@ -84,11 +110,7 @@ func _add_row(item_name: String) -> void:
 	btn.clip_text = true
 	btn.tooltip_text = item_name
 	var captured := item_name
-	btn.pressed.connect(func():
-		selected = captured
-		_update_selection()
-		item_selected.emit(captured)
-	)
+	btn.pressed.connect(func(): _handle_click(captured))
 	hbox.add_child(btn)
 
 	if allow_rename:
@@ -106,7 +128,7 @@ func _add_row(item_name: String) -> void:
 	hbox.add_child(del)
 
 	_item_list.add_child(row)
-	_apply_row_style(row, item_name == selected)
+	_apply_row_style(row, _selected_set.has(item_name))
 
 func _apply_row_style(row: PanelContainer, is_selected: bool) -> void:
 	if is_selected:
@@ -116,7 +138,44 @@ func _apply_row_style(row: PanelContainer, is_selected: bool) -> void:
 
 func _update_selection() -> void:
 	for row in _item_list.get_children():
-		_apply_row_style(row, row.get_meta("item_name") == selected)
+		_apply_row_style(row, _selected_set.has(row.get_meta("item_name")))
+	if _delete_btn:
+		_delete_btn.disabled = _selected_set.is_empty()
+
+# A row was clicked. Shift-click (multi-select only) toggles it in/out of the selection;
+# a plain click always replaces the selection with just this item. The anchor (`selected`)
+# moves to the clicked item either way, even a shift-click that deselects it.
+func _handle_click(item_name: String) -> void:
+	if allow_multi_select and Input.is_key_pressed(KEY_SHIFT):
+		if _selected_set.has(item_name):
+			_selected_set.erase(item_name)
+		else:
+			_selected_set[item_name] = true
+	else:
+		_selected_set = {item_name: true}
+	selected = item_name
+	_update_selection()
+	selection_changed.emit(get_selected_items())
+	item_selected.emit(item_name)
+
+# The current multi-selection, in rail order (not click order).
+func get_selected_items() -> Array:
+	var items: Array = []
+	for row in _item_list.get_children():
+		var n = row.get_meta("item_name")
+		if _selected_set.has(n):
+			items.append(n)
+	return items
+
+# Programmatic selection (e.g. a host re-syncing after creating/importing/deleting a
+# library). Does not emit selection_changed — that signal is for user-driven clicks only,
+# so a host calling this to reflect its own state change doesn't re-enter itself.
+func set_selection(items: Array) -> void:
+	_selected_set = {}
+	for n in items:
+		_selected_set[n] = true
+	selected = items[-1] if not items.is_empty() else ""
+	_update_selection()
 
 func _on_add() -> void:
 	var item_name := _name_input.text.strip_edges()
