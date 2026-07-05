@@ -15,6 +15,7 @@ func _ready() -> void:
 	_test_cell_orientation_tags()
 	_test_hotbar()
 	_test_shapes()
+	_test_full_facing_classification()
 	_test_models()
 	_test_model_revision()
 	_test_element_rotation()
@@ -178,6 +179,23 @@ func _test_orientation() -> void:
 		Orientation.from_dir(Vector3(0.1, 0.0, -0.9)) == Orientation.Facing.NORTH)
 	_check("toggle_top flips", not Orientation.is_top(Orientation.toggle_top(o)))
 
+	# 6-way rotation (barrels, dispensers, …): rotating around a side axis reaches
+	# UP/DOWN, and rotating back around Y always lands back on a horizontal facing.
+	var north := Orientation.make(Orientation.Facing.NORTH)
+	_check("rotate around X: north → up",
+		Orientation.facing_of(Orientation.rotate_around_axis(north, 0, 1)) == Orientation.Facing.UP)
+	_check("rotate around X reversed: north → down",
+		Orientation.facing_of(Orientation.rotate_around_axis(north, 0, -1)) == Orientation.Facing.DOWN)
+	var up := Orientation.make(Orientation.Facing.UP)
+	_check("rotate around Y from up collapses to a horizontal facing",
+		Orientation.is_horizontal(Orientation.facing_of(Orientation.rotate_around_axis(up, 1, 1))))
+	_check("rotate_cw matches rotate_around_axis(.., 1, ..)",
+		Orientation.rotate_cw(north) == Orientation.rotate_around_axis(north, 1, 1))
+	_check("dominant_axis picks the largest component",
+		Orientation.dominant_axis(Vector3i(0, 5, -1)) == 1
+		and Orientation.dominant_axis(Vector3i(3, 0, -1)) == 0
+		and Orientation.dominant_axis(Vector3i(0, 1, 4)) == 2)
+
 func _test_cell_orientation_tags() -> void:
 	print("-- cell orientation + tags")
 	var project := VoxelWorld.workspace.get_project("My First Build")
@@ -223,6 +241,56 @@ func _test_shapes() -> void:
 		VoxelWorld.get_shape_for_semantic("Slab") == BlockType.Shape.SLAB)
 	_check("plain semantic resolves to FULL",
 		VoxelWorld.get_shape_for_semantic("Wall") == BlockType.Shape.FULL)
+
+# has_full_facing_for_semantic() is the gate for interactive 6-way placement/rotation
+# (View3D). A block with no state_map at all — a plain FULL cube (undecided, or a
+# FLAT-mode MC import that only ever gets one baked model) — has nothing to protect,
+# so it's still eligible: the generic whole-mesh transform (Orientation.basis_of)
+# renders any of the 6 facings just fine, even though vanilla MC never poses a plain
+# cube that way (see CLAUDE.md: MC-inspired, not MC-coupled). A shaped placeholder
+# (stairs/slab) stays constrained even without a state_map, because tipping the
+# built-in stair/slab mesh over would fight the "half" concept those shapes exist for.
+func _test_full_facing_classification() -> void:
+	print("-- full-facing classification (6-way placement/rotation gate)")
+	VoxelWorld.open(VoxelWorld.workspace.get_project("My First Build"))
+	_check("plain FULL semantic with no state_map is full-facing (undecided/FLAT case)",
+		VoxelWorld.has_full_facing_for_semantic("Wall"))
+	_check("STAIRS-shaped semantic with no state_map stays horizontal+half",
+		not VoxelWorld.has_full_facing_for_semantic("Stairs"))
+	_check("SLAB-shaped semantic with no state_map stays horizontal+half",
+		not VoxelWorld.has_full_facing_for_semantic("Slab"))
+	_check("a semantic no palette maps defaults to full-facing (FULL fallback)",
+		VoxelWorld.has_full_facing_for_semantic("__nothing_maps_this__"))
+
+	# A state_map that exists but only ever bakes horizontal facings (a real imported
+	# stair) must stay constrained — resolve() has no vertical entry to fall back on.
+	var ws := VoxelWorld.workspace
+	var lib := ws.get_or_add_library("full_facing_diag")
+	var horiz_bt := lib.add_block_type("diag_stairs_like")
+	horiz_bt.state_map = BlockStateMap.new()
+	horiz_bt.state_map.add_variant(Orientation.Facing.NORTH, false, "some:model")
+	var pal := ws.add_palette("full_facing_diag_pal")
+	pal.library_names = ["full_facing_diag"]
+	var e1 := PaletteEntry.new()
+	e1.semantic_name = "DiagStairsLike"
+	e1.block_type_name = "diag_stairs_like"
+	pal.entries.append(e1)
+	# A state_map that bakes a vertical facing (a real imported barrel/log) is full-facing.
+	var vert_bt := lib.add_block_type("diag_barrel_like")
+	vert_bt.state_map = BlockStateMap.new()
+	vert_bt.state_map.add_variant(Orientation.Facing.UP, false, "some:model")
+	var e2 := PaletteEntry.new()
+	e2.semantic_name = "DiagBarrelLike"
+	e2.block_type_name = "diag_barrel_like"
+	pal.entries.append(e2)
+	var project := ws.get_project("My First Build")
+	project.palette_names.append("full_facing_diag_pal")
+	VoxelWorld.open(project)
+	_check("state_map with only horizontal facings stays constrained",
+		not VoxelWorld.has_full_facing_for_semantic("DiagStairsLike"))
+	_check("state_map with a vertical facing is full-facing",
+		VoxelWorld.has_full_facing_for_semantic("DiagBarrelLike"))
+	project.palette_names.erase("full_facing_diag_pal")
 
 func _test_models() -> void:
 	print("-- model resolution (Phase 0 material layer)")
@@ -690,6 +758,8 @@ func _test_mc_import() -> void:
 	_check("facing=east resolves to its model with no rotation",
 		east.get("model_id", "") == "testmod:block/test_block" and int(east.get("y_rot", -1)) == 0)
 	_check("facing=north carries its y rotation", int(north.get("y_rot", -1)) == 270)
+	_check("stairs (horizontal-only facing) aren't classified as 6-way",
+		not stairs.state_map.has_vertical_facing())
 
 	# axis= (pillar/log) variants: both ends of an axis must resolve to the SAME
 	# model+rotation, and different axes must resolve to DIFFERENT rotations — otherwise
@@ -716,6 +786,8 @@ func _test_mc_import() -> void:
 		or int(e2.get("x_rot", -1)) != int(n2.get("x_rot", -1)))
 	_check("the x and y axes resolve to genuinely different rotations",
 		e2.get("x_rot") != up.get("x_rot") or e2.get("y_rot") != up.get("y_rot"))
+	_check("a log's axis facings (including up/down) classify it as 6-way",
+		log_bt.state_map.has_vertical_facing())
 
 	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(src)

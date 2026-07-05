@@ -1287,14 +1287,19 @@ func _place_targeted_block() -> void:
 		face_normal = Vector3i(0, 1, 0)  # standing on the ground plane
 	else:
 		return
-	# Orient like Minecraft: the block faces the player, and lands top-half when
-	# placed against a ceiling or while looking up at a side face. Tweak afterwards
-	# with R (rotate about the face you're looking at).
+	# Orient like Minecraft: a 6-way block (barrel, dispenser, a plain undecided/FULL
+	# cube, …) faces the way you placed it — the direction pointing out of the surface
+	# you clicked. A block constrained to horizontal + a half (stairs, slabs) instead
+	# faces the player and lands top-half when placed against a ceiling or while
+	# looking up at a side face. Tweak afterwards with R (rotate about the face you're
+	# looking at).
 	var o := _derive_place_orientation(place_pos, face_normal)
 	VoxelWorld.set_block(place_pos, VoxelWorld.selected_semantic, o)
 	_update_crosshair_target()
 
 func _derive_place_orientation(place_pos: Vector3i, face_normal: Vector3i) -> int:
+	if VoxelWorld.has_full_facing_for_semantic(VoxelWorld.selected_semantic):
+		return Orientation.make(Orientation.from_normal(face_normal))
 	var to_cam := _camera_pos - (Vector3(place_pos) + Vector3(0.5, 0.5, 0.5))
 	var facing := Orientation.from_dir(Vector3(to_cam.x, 0.0, to_cam.z))
 	var top := false
@@ -1321,10 +1326,13 @@ func _pick_targeted_block() -> void:
 	if cell:
 		VoxelWorld.pick_block(cell.type_id)
 
-# Rotate the crosshair-targeted block about the axis of the face you're looking
-# at: looking at the top/bottom turns the block (cycles facing); looking at a
-# side flips it upside-down. Shift reverses the turn. This is how you re-orient
-# in 3D — there is no global orientation mode.
+# Rotate the crosshair-targeted block about the axis of the face you're looking at.
+# A 6-way block (barrel, dispenser, a plain undecided/FULL cube, …) cycles its facing
+# around that axis — looking at the top/bottom cycles the 4 horizontal facings (like
+# rotate_cw), looking at a side reaches UP/DOWN — so every direction is reachable from
+# any view. A block constrained to horizontal + a half (stairs, slabs) keeps the old
+# split: top/bottom turns the block, a side flips it upside-down. Shift reverses the
+# turn. This is how you re-orient in 3D — there is no global orientation mode.
 func _rotate_targeted_block(reverse: bool) -> void:
 	if not _target_hit or not VoxelWorld.active_project:
 		return
@@ -1332,9 +1340,12 @@ func _rotate_targeted_block(reverse: bool) -> void:
 	if cell == null:
 		return
 	var normal := _target_place - _target_block  # face pointing toward the camera
+	var steps := -1 if reverse else 1
 	var o := cell.orientation
-	if absi(normal.y) >= absi(normal.x) and absi(normal.y) >= absi(normal.z):
-		o = Orientation.rotate_cw(o, -1 if reverse else 1)
+	if VoxelWorld.has_full_facing_for_semantic(cell.type_id):
+		o = Orientation.rotate_around_axis(o, Orientation.dominant_axis(normal), steps)
+	elif absi(normal.y) >= absi(normal.x) and absi(normal.y) >= absi(normal.z):
+		o = Orientation.rotate_cw(o, steps)
 	else:
 		o = Orientation.toggle_top(o)
 	VoxelWorld.reorient_block(_target_block, o)

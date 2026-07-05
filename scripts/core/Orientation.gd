@@ -32,6 +32,19 @@ const NAMES := ["North", "East", "South", "West", "Up", "Down"]
 # Clockwise (viewed from above) cycle of the four horizontal facings.
 const _CW := [Facing.NORTH, Facing.EAST, Facing.SOUTH, Facing.WEST]
 
+# The four facings you pass through rotating 90° at a time around a given world axis
+# (0=X, 1=Y, 2=Z) — i.e. the facings perpendicular to that axis, in cycle order. The
+# axis's own two poles (e.g. UP/DOWN for the Y axis) have no image under that
+# rotation, so they aren't members of any cycle; rotate_around_axis() special-cases
+# starting from one. Axis 1 is the familiar horizontal ring (rotate_cw); axes 0 and 2
+# are its counterparts for a block viewed from the side, and are how a 6-way block
+# (barrel, dispenser, log, …) reaches an UP/DOWN facing.
+const _AXIS_CYCLES := {
+	0: [Facing.NORTH, Facing.UP, Facing.SOUTH, Facing.DOWN],
+	1: _CW,
+	2: [Facing.WEST, Facing.UP, Facing.EAST, Facing.DOWN],
+}
+
 static func make(facing: int, top: bool = false) -> int:
 	return (facing & 7) | (_TOP_BIT if top else 0)
 
@@ -73,14 +86,37 @@ static func from_normal(n: Vector3i) -> int:
 # Vertical facings (Up/Down) collapse to North first so rotation always lands on
 # a horizontal facing the user can keep cycling.
 static func rotate_cw(o: int, steps: int = 1) -> int:
+	return rotate_around_axis(o, 1, steps)
+
+# Rotate a facing by `steps` quarter-turns around a world axis (0=X, 1=Y, 2=Z) — the
+# general form of rotate_cw, which is just this fixed to the vertical (Y) axis. Used
+# for blocks oriented across all 6 directions (barrels, dispensers, logs, …): looking
+# at a block from the side and rotating around the axis you're facing is how such a
+# block reaches an UP/DOWN facing, the same way rotate_cw cycles the 4 horizontal
+# ones. A facing lying on the rotation axis itself (no image under that rotation)
+# collapses to the cycle's start, so rotating always lands on a facing perpendicular
+# to the axis instead of doing nothing.
+static func rotate_around_axis(o: int, axis: int, steps: int = 1) -> int:
+	var cycle: Array = _AXIS_CYCLES[axis]
 	var f := facing_of(o)
-	var idx := _CW.find(f)
+	var idx: int = cycle.find(f)
 	if idx < 0:
 		idx = 0
 	idx = (idx + steps) % 4
 	if idx < 0:
 		idx += 4
-	return make(_CW[idx], is_top(o))
+	return make(cycle[idx], is_top(o))
+
+# Dominant world axis (0=X, 1=Y, 2=Z) of a direction vector — e.g. a clicked face's
+# normal — used to decide which axis a rotate/placement should act around. Ties
+# favor Y, then X, matching from_dir()'s own tie-breaking.
+static func dominant_axis(v: Vector3i) -> int:
+	var ax := absi(v.x); var ay := absi(v.y); var az := absi(v.z)
+	if ay >= ax and ay >= az:
+		return 1
+	if ax >= az:
+		return 0
+	return 2
 
 static func name_of(o: int) -> String:
 	var s: String = NAMES[facing_of(o)]

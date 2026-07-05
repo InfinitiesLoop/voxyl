@@ -214,6 +214,30 @@ func get_shape_for_semantic(semantic_name: String) -> BlockType.Shape:
 	var bt: BlockType = _resolve_semantic(semantic_name).get("bt")
 	return bt.shape if bt else BlockType.Shape.FULL
 
+# Whether a semantic can be oriented across all 6 directions (barrels, dispensers,
+# logs, …) rather than constrained to the 4 horizontal facings + a top/bottom half
+# (stairs, slabs). Two ways to earn it:
+#   - A state_map that itself declares a vertical (up/down) facing — the block was
+#     imported with real per-direction geometry, so rotating it into any of the 6
+#     poses picks a baked model MC itself would use.
+#   - No state_map at all (FLAT-imported, or a plain undecided block) AND a FULL
+#     shape. There's no baked per-facing variant to protect here, just one cube
+#     rendered via the generic whole-mesh transform (Orientation.basis_of), which is
+#     well-defined for any of the 6 facings — so a plain top/side/bottom cube can be
+#     tipped onto its side even though vanilla MC never renders it that way. Voxyl is
+#     MC-inspired, not MC-coupled (see CLAUDE.md); a schematic-style exporter can
+#     reconcile the difference later if a pose has no vanilla equivalent.
+# A state_map that exists but declares ONLY horizontal facings (stairs, slabs) is the
+# one case that stays constrained: resolve() would silently fall back to an arbitrary
+# entry for a facing it never baked, so the horizontal + half scheme is the only safe
+# choice there. Shape is checked via get_shape_for_semantic so an "undecided" semantic
+# (no resolved block type) still defaults to FULL — the least-restrictive scheme.
+func has_full_facing_for_semantic(semantic_name: String) -> bool:
+	var bt: BlockType = _resolve_semantic(semantic_name).get("bt")
+	if bt != null and bt.state_map != null and not bt.state_map.is_empty():
+		return bt.state_map.has_vertical_facing()
+	return get_shape_for_semantic(semantic_name) == BlockType.Shape.FULL
+
 # Resolved render geometry for a semantic, as a BlockModel. Same last-wins
 # palette-stack walk as color/shape: find the mapped block type, then return its
 # explicit model (model_id, resolved through the palette's library stack) or the

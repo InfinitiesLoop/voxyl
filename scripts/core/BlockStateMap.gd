@@ -58,6 +58,19 @@ const ANY_FACING := -1
 func is_empty() -> bool:
 	return entries.is_empty() and parts.is_empty()
 
+# True when this map's variants include an UP or DOWN facing — barrels, dispensers,
+# logs, pistons, … — as opposed to only the 4 horizontal facings (stairs, slabs,
+# which instead vary by the top/bottom half). Derived straight from the entries an
+# importer filled in, so it's data-driven rather than a per-block-name special case:
+# any block whose own blockstate uses a vertical facing gets oriented across all 6
+# directions; anything else keeps the horizontal-facing + half scheme.
+func has_vertical_facing() -> bool:
+	for e in entries:
+		var f: int = e.get("facing", ANY_FACING)
+		if f == Orientation.Facing.UP or f == Orientation.Facing.DOWN:
+			return true
+	return false
+
 # True when this is a connecting/multipart block (driven by `parts`). The view
 # computes connection flags from neighbors and selects parts via resolve_parts().
 func is_multipart() -> bool:
