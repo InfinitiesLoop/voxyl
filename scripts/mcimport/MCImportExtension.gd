@@ -17,21 +17,31 @@ extends RefCounted
 # per imported namespace and calls heal(ctx). No match → nothing runs, the presumptive import
 # stands unchanged.
 
-# namespace -> the extension subclass's script PATH (not its class_name). Referencing the path
-# as a string, and load()-ing it in for_namespace, deliberately avoids naming the subclass here:
-# a subclass `extends MCImportExtension`, so a class-name reference back to it would be a
-# circular parse dependency (neither would compile). This keeps the dependency one-directional.
-const _SCRIPTS := {
-	"gregtech": "res://scripts/mcimport/GregTechExtension.gd",
-}
+# Extension subclass script PATHS (not class_names). Referencing paths as strings, and load()-ing
+# them in for_namespace, deliberately avoids naming the subclasses here: a subclass
+# `extends MCImportExtension`, so a class-name reference back would be a circular parse dependency
+# (neither would compile). This keeps the dependency one-directional. Each entry may handle many
+# namespaces — an extension declares which via handles() — so one "pack" (e.g. all of GTNH) can be
+# a single script. New mods/packs: add the script path here.
+const _EXTENSIONS := [
+	"res://scripts/mcimport/GTNHExtension.gd",
+]
 
-# A fresh extension instance for `ns`, or null when the namespace imports the plain neutral way.
+# A fresh instance of the extension that handles `ns`, or null when no registered extension does
+# (the namespace then imports the plain neutral way). First match wins.
 static func for_namespace(ns: String) -> MCImportExtension:
-	var path = _SCRIPTS.get(ns)
-	if path == null:
-		return null
-	var script := load(path) as GDScript
-	return script.new() if script != null else null
+	for path in _EXTENSIONS:
+		var script := load(path) as GDScript
+		if script == null:
+			continue
+		var ext := script.new() as MCImportExtension
+		if ext != null and ext.handles(ns):
+			return ext
+	return null
+
+# Whether this extension handles `ns`. Override in a subclass; the base handles nothing.
+func handles(_ns: String) -> bool:
+	return false
 
 # Reshape the just-imported namespace in place. Override in a subclass; the base is a no-op.
 func heal(_ctx: MCHealContext) -> void:

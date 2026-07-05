@@ -1,18 +1,84 @@
-class_name GregTechExtension
+class_name GTNHExtension
 extends MCImportExtension
 
-# Heals the presumptive `gregtech` import into the blocks a GTNH player actually recognizes.
+# The GT New Horizons "pack" healer: one extension covering the several mods in the pack whose
+# blocks the neutral flat import can't model well. Registered once, it declares the namespaces it
+# handles (`_MODS`) and routes heal() to the right per-mod logic. Two kinds of fix:
 #
-# GregTech (a 1.7.10 mod) has no model/blockstate JSON, and — worse for a texture-only import —
-# it composites a machine's look in Java from two loose layers: an opaque voltage HULL
-# (iconsets/MACHINE_<TIER>_{SIDE,TOP,BOTTOM}) and a TRANSPARENT overlay per machine
-# (basicmachines/<machine>/OVERLAY_<FACE>[_ACTIVE]). The neutral flat importer therefore emits
-# invisible overlay cubes named `basicmachines/<m>/overlay` and cryptic hull cubes named
-# `iconsets/machine_lv`. This extension recreates the composite the renderer would draw, names
-# it from GTNH's own `GregTech.lang` (keyed by the same folder name — e.g.
-# `gt.blockmachines.basicmachine.bender.tier.01.name = Basic Bending Machine`), tags it for
-# search, and removes the now-superseded presumptive cubes. All of this GregTech knowledge lives
-# here, in the extension — the core import pipeline stays mod-agnostic.
+#   • Shared "overlay junk" strip (every GT-family namespace) — the pack's mods reuse GregTech's
+#     texture conventions, so they all litter the import with transparent single-purpose overlays
+#     that are useless as standalone building blocks: emissive `_GLOW` layers, pipe ARROW_* /
+#     PIPE_RESTRICTOR_* glyphs, fluid/item I/O `_SIGN`s, and cover overlays. Those are deleted.
+#   • GregTech machines + tier casings — rebuilt from the hull + overlay pieces and named from
+#     the pack's own GregTech.lang (see the gregtech section below).
+#
+# All pack knowledge lives here; the core import pipeline stays mod-agnostic (principle 4). Adding
+# another mod = add its namespace to `_MODS` (shared junk strip applies automatically) and, if it
+# needs bespoke healing, a branch in heal().
+
+# Namespaces this pack handles. gregtech gets full healing + the junk strip; the GT-family addons
+# (which share GregTech's texture conventions) get the junk strip only, for now.
+const _MODS := {
+	"gregtech": true,
+	"ggfab": true,
+}
+
+func handles(ns: String) -> bool:
+	return _MODS.has(ns)
+
+func heal(ctx: MCHealContext) -> void:
+	if ctx.ns == "gregtech":
+		_heal_gregtech(ctx)
+	_strip_overlay_junk(ctx)
+
+# ---------------------------------------------------------------------------
+# Shared: strip transparent "overlay junk" the flat import turned into blocks.
+# ---------------------------------------------------------------------------
+
+# Delete every presumptive block whose texture(s) are all single-purpose GT overlays — never a
+# building block. Matched on the texture leaf name so it's independent of subdir/namespace:
+#   *_GLOW               emissive layer (BOILER_FRONT_GLOW, DIESEL_GENERATOR_TOP_GLOW, …)
+#   ARROW_* / PIPE_RESTRICTOR_*   pipe routing glyphs
+#   *_SIGN               fluid/item I/O markers (FLUID_IN_SIGN, ITEM_OUT_SIGN, …)
+#   OVERLAY_SHUTTER / OVERLAY_COVER* / COVER_* / ENDERFLUIDLINK_OVERLAY   cover overlays
+# A block keeps its place if any texture isn't junk, so a real block that merely reuses one of
+# these as an accent survives. Healed blocks (model id ".../heal/…") are never touched.
+func _strip_overlay_junk(ctx: MCHealContext) -> void:
+	for bt in ctx.library.block_types.duplicate():
+		if bt.model_id.contains(":heal/"):
+			continue
+		var tex := ctx.block_texture_ids(bt)
+		if tex.is_empty():
+			continue
+		var all_junk := true
+		for tid in tex:
+			if not _leaf_is_junk(str(tid).get_file()):
+				all_junk = false
+				break
+		if all_junk:
+			ctx.remove_block(bt.name)
+
+func _leaf_is_junk(leaf: String) -> bool:
+	return leaf.ends_with("_GLOW") \
+		or leaf.begins_with("ARROW_") \
+		or leaf.contains("PIPE_RESTRICTOR") \
+		or leaf.ends_with("_SIGN") \
+		or leaf.begins_with("OVERLAY_SHUTTER") \
+		or leaf.begins_with("OVERLAY_COVER") \
+		or leaf.begins_with("COVER_") \
+		or leaf == "ENDERFLUIDLINK_OVERLAY"
+
+# ===========================================================================
+# GregTech — machines + tier casings.
+#
+# GregTech (1.7.10) has no model/blockstate JSON and composites a machine's look in Java from an
+# opaque voltage HULL (iconsets/MACHINE_<TIER>_{SIDE,TOP,BOTTOM}) + a TRANSPARENT overlay per
+# machine (basicmachines/<machine>/OVERLAY_<FACE>[_ACTIVE]), so the flat import yields invisible
+# overlay cubes + cryptic `iconsets/machine_lv` hull cubes. This rebuilds the composite the
+# renderer would draw, names it from GregTech.lang (keyed by the same folder name — e.g.
+# gt.blockmachines.basicmachine.bender.tier.01.name = Basic Bending Machine), tags it for search,
+# and removes the superseded presumptive cubes.
+# ===========================================================================
 
 # Texture-ref prefixes as the flat importer wrote them ("<ns>:<subdir>/<path>"). The `blocks`
 # segment is the pre-1.8 `textures/blocks/` folder MCFlatImporter reads from.
@@ -34,7 +100,7 @@ const _FOLDER_ALIAS := {
 	"electric_oven": "e_oven",
 }
 
-func heal(ctx: MCHealContext) -> void:
+func _heal_gregtech(ctx: MCHealContext) -> void:
 	var names := _parse_machine_names(ctx)
 	_heal_casings(ctx)
 	_heal_machines(ctx, names)
