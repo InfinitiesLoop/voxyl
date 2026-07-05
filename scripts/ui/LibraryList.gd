@@ -77,6 +77,12 @@ func _add_row(item_name: String) -> void:
 	btn.flat = true
 	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	btn.size_flags_horizontal = SIZE_EXPAND_FILL
+	# Clip long names instead of letting them widen the row. The list lives in an h-scroll-
+	# disabled ScrollContainer, whose minimum width is the widest row's — so without this a
+	# long library name grows the whole rail, and the split divider jumps as a search filters
+	# which libraries (and thus which is longest) are shown. The tooltip keeps the full name.
+	btn.clip_text = true
+	btn.tooltip_text = item_name
 	var captured := item_name
 	btn.pressed.connect(func():
 		selected = captured

@@ -1091,9 +1091,11 @@ func _build_block_types_tab() -> Control:
 	split.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.add_child(split)
 
-	# Far left: the library rail (create/rename/delete; rename+delete no-op for basic).
+	# Far left: the library rail (create/rename/delete; rename+delete no-op for basic). Fixed
+	# width so the divider stays put — rows clip long names (see LibraryList) so the rail no
+	# longer grows/shrinks with which libraries a search leaves visible.
 	var rail_box := _margin(12)
-	rail_box.custom_minimum_size.x = 180
+	rail_box.custom_minimum_size.x = 220
 	split.add_child(rail_box)
 	_library_rail = LibraryList.new()
 	_library_rail.list_title = "Libraries"
@@ -1104,7 +1106,7 @@ func _build_block_types_tab() -> Control:
 	_library_rail.rename_requested.connect(_on_rename_library)
 	_library_rail.item_selected.connect(_on_library_selected)
 	rail_box.add_child(_library_rail)
-	split.split_offset = 180
+	split.split_offset = 220
 
 	var inner := HSplitContainer.new()
 	inner.size_flags_horizontal = Control.SIZE_EXPAND_FILL

@@ -144,13 +144,23 @@ func invalidate_all() -> void:
 # pure pre-cache, not a replacement for the lazy icon_for() path. Blocks already cached
 # on disk are skipped, so a re-import only bakes what actually changed.
 func prebake(block_types: Array, on_progress := Callable(), force := false) -> void:
+	# One directory listing instead of a file_exists() syscall per block: a full modpack
+	# prebake is tens of thousands of blocks, so this is one readdir versus ~20k stat calls.
+	# `force` re-bakes everything, so it never consults the snapshot.
+	var on_disk := {}
+	if not force:
+		var dir := DirAccess.open(cache_dir)
+		if dir != null:
+			for f in dir.get_files():
+				on_disk[f] = true
 	var pending := {}   # names actually enqueued this run, for progress accounting
 	for bt in block_types:
 		if bt == null:
 			continue
 		# `force` re-bakes every block (the "Regenerate previews" path / perf timing),
-		# overwriting both caches; otherwise skip anything already warm in memory or on disk.
-		if not force and (_cache.has(bt.name) or FileAccess.file_exists(_disk_path(bt))):
+		# overwriting both caches; otherwise skip anything already warm in memory or present
+		# on disk (membership-tested against the one-shot snapshot above).
+		if not force and (_cache.has(bt.name) or on_disk.has(_disk_path(bt).get_file())):
 			continue
 		pending[bt.name] = true
 		_enqueue(bt)

@@ -28,6 +28,22 @@ const _PREVIEW_CONNECTIONS := {
 	BlockModel.Dir.UP: "none", BlockModel.Dir.DOWN: "none",
 }
 
+# Memoized mesh geometry, shared across every block that resolves to the same model.
+# BlockMesher builds pure geometry from a BlockModel: the mesh is a function of the model
+# alone — the bound textures live in the per-block MATERIALS below, not in the mesh — so the
+# thousands of blocks in a modpack that share a model (every full cube, every pane, every
+# stair…) would otherwise each rebuild a byte-identical SurfaceTool mesh, the dominant CPU
+# cost of a mass icon bake. Keyed by the model's instance id: VoxelWorkspace returns one
+# BlockModel instance per id, so all its blocks hit the same entry; `rev` (BlockModel
+# .revision) guards an in-place model edit. A Mesh is a resource assigned to
+# MeshInstance3D.mesh with per-instance override materials, so one mesh is safely shared by
+# many instances (nothing here mutates it). Cleared on workspace_changed — a reimport frees
+# and recreates models (and Godot can recycle a freed instance id), so the cache must never
+# outlive the workspace it was built against.
+static var _color_cache := {}      # model instance_id -> { rev, mesh }
+static var _textured_cache := {}   # model instance_id -> { rev, mesh, keys, tinted }
+static var _cache_hooked := false
+
 # The parts a multipart block shows in a preview (icon / detail panel). Shared with
 # BlockIconBaker's cache signature so the cached icon and the live render always agree.
 static func preview_parts(sm: BlockStateMap) -> Array:
@@ -45,6 +61,7 @@ static func preview_parts(sm: BlockStateMap) -> Array:
 static func build_into(mi: MeshInstance3D, bt: BlockType) -> void:
 	if bt == null:
 		return
+	_hook_invalidation()
 	var sm := bt.state_map
 	if sm != null and sm.is_multipart():
 		for part in preview_parts(sm):
@@ -67,18 +84,53 @@ static func build_into(mi: MeshInstance3D, bt: BlockType) -> void:
 static func _build_model_into(mi: MeshInstance3D, model: BlockModel, bt: BlockType) -> void:
 	var resolved := _resolve_textures(model)
 	if resolved.is_empty():
-		mi.mesh = BlockMesher.color_mesh(model)
+		mi.mesh = _color_mesh_cached(model)
 		var m := StandardMaterial3D.new()
 		m.albedo_color = bt.color
 		mi.material_override = m
 		return
-	var entry := BlockMesher.textured_mesh(model)
+	var entry := _textured_mesh_cached(model)
 	mi.mesh = entry["mesh"]
 	var keys: Array = entry["keys"]
 	var tinted: Array = entry["tinted"]
 	for i in keys.size():
 		mi.set_surface_override_material(i,
 			_surface_material(keys[i], resolved, bool(tinted[i]), bt.tint, bt.color))
+
+# The geometry for a model, built once and reused (see _color_cache/_textured_cache). The
+# color path and the textured path are mutually exclusive for a given model, so each has its
+# own cache; the per-block materials are still built fresh by the callers above.
+static func _color_mesh_cached(model: BlockModel) -> Mesh:
+	var iid := model.get_instance_id()
+	var hit: Dictionary = _color_cache.get(iid, {})
+	if not hit.is_empty() and hit["rev"] == model.revision:
+		return hit["mesh"]
+	var mesh := BlockMesher.color_mesh(model)
+	_color_cache[iid] = {"rev": model.revision, "mesh": mesh}
+	return mesh
+
+static func _textured_mesh_cached(model: BlockModel) -> Dictionary:
+	var iid := model.get_instance_id()
+	var hit: Dictionary = _textured_cache.get(iid, {})
+	if not hit.is_empty() and hit["rev"] == model.revision:
+		return hit
+	var entry := BlockMesher.textured_mesh(model)
+	entry["rev"] = model.revision
+	_textured_cache[iid] = entry
+	return entry
+
+# Wire the geometry cache to workspace_changed exactly once. A static-only class can't
+# _ready, so build_into calls this on every render; VoxelWorld is an autoload, so it's always
+# present by the time any block renders.
+static func _hook_invalidation() -> void:
+	if _cache_hooked:
+		return
+	_cache_hooked = true
+	VoxelWorld.workspace_changed.connect(clear_mesh_cache)
+
+static func clear_mesh_cache() -> void:
+	_color_cache.clear()
+	_textured_cache.clear()
 
 # The model to render: the block's explicit model_id (library), else the built-in for
 # its shape (mirrors VoxelWorld.get_model_for_semantic, but resolved from the block
