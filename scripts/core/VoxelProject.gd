@@ -26,8 +26,28 @@ extends Resource
 @export var hotbar: Array[String] = []
 @export var active_slot: int = 0
 
+# Undo/redo history for this build's voxel edits. `history` is the live runtime object
+# (an EditHistory of EditOperation deltas); `_history_data` is its packed on-disk mirror,
+# the ONLY thing persisted — exactly the split VoxelData uses for `cells` vs its packed
+# arrays, so history serializes as compact plain data, never one sub-resource per step.
+# pack_history()/unpack_history() bridge the two (called by ProjectStore around save/load).
+var history: EditHistory
+@export var _history_data: Dictionary = {}
+
 func _init() -> void:
 	data = VoxelData.new()
+	history = EditHistory.new()
+
+# Flatten the live history into its packed mirror. Called by ProjectStore just before save,
+# alongside data.pack().
+func pack_history() -> void:
+	if history != null:
+		_history_data = history.to_data()
+
+# Rebuild the live history from its packed mirror. Called by ProjectStore after load,
+# alongside data.unpack(). A legacy project (no saved history) rebuilds as empty.
+func unpack_history() -> void:
+	history = EditHistory.from_data(_history_data)
 
 # Returns all semantic names currently placed in this project's voxel data.
 func used_semantic_names() -> Array[String]:

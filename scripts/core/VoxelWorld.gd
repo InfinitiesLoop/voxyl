@@ -6,6 +6,11 @@ signal workspace_changed()
 signal project_opened(project: VoxelProject)
 signal palette_stack_changed()
 signal block_changed(pos: Vector3i, semantic_name: String)
+# Fired whenever the active project's undo/redo history changes (a step pushed, an undo, a
+# redo, or a project open). UI that reflects history state — the EditorBar undo/redo
+# buttons, a future Photoshop-style history panel — repaints from this. Carries no payload;
+# listeners read can_undo()/can_redo()/history_entries().
+signal history_changed()
 signal selection_changed(semantic_name: String)
 signal tool_changed(tool: Tool)
 signal slice_view_requested(axis: int, center: Vector3i, flipped: bool)
@@ -36,6 +41,18 @@ var active_slot: int = 0
 
 # One-shot timer backing the debounced autosave (created in _ready).
 var _save_timer: Timer
+
+# --- Undo/redo recording state ---------------------------------------------
+# The operation currently being recorded (between begin_operation/end_operation), or null.
+# While set, the block mutators funnel their before→after deltas into it instead of each
+# becoming its own history entry — so a whole paint-drag / line / fill / paste is ONE step.
+var _current_op: EditOperation = null
+# Re-entrancy depth so nested begin/end pairs (or a view that begins while one is already
+# open) collapse into a single step; the op is only sealed/pushed when depth returns to 0.
+var _op_depth := 0
+# True only while an undo/redo is being applied, so the mutations it drives don't get
+# re-recorded as brand-new history (which would make undo un-undoable).
+var _applying_history := false
 
 func _ready() -> void:
 	workspace = VoxelWorkspace.new()
@@ -110,6 +127,7 @@ func open(project: VoxelProject) -> void:
 	project_opened.emit(project)
 	hotbar_changed.emit()
 	active_slot_changed.emit(active_slot)
+	history_changed.emit()
 
 # Restore this project's saved hotbar into the shared live hotbar, then fill any still-
 # empty slots from the palette so a project saved before it had a full bar is still
@@ -127,7 +145,9 @@ func _load_hotbar_from_project() -> void:
 func set_block(pos: Vector3i, semantic_name: String, orientation: int = 0) -> void:
 	if not active_project:
 		return
+	var before: Variant = _encode_cell(active_project.data.get_cell(pos))
 	active_project.data.set_block(pos, semantic_name, orientation)
+	_record_change(pos, before, _encode_cell(active_project.data.get_cell(pos)), "Place")
 	block_changed.emit(pos, semantic_name)
 	mark_dirty()
 
@@ -139,16 +159,137 @@ func reorient_block(pos: Vector3i, orientation: int) -> void:
 	var cell := active_project.data.get_cell(pos)
 	if cell == null:
 		return
+	var before: Variant = _encode_cell(cell)
 	cell.orientation = orientation
+	_record_change(pos, before, _encode_cell(cell), "Rotate")
 	block_changed.emit(pos, cell.type_id)
 	mark_dirty()
 
 func clear_block(pos: Vector3i) -> void:
 	if not active_project:
 		return
+	var before: Variant = _encode_cell(active_project.data.get_cell(pos))
 	active_project.data.clear_block(pos)
+	_record_change(pos, before, null, "Erase")
 	block_changed.emit(pos, "")
 	mark_dirty()
+
+# ---------------------------------------------------------------------------
+# Undo / redo — command history layered over the block mutators above.
+#
+# A logical step (a whole paint-drag, a line, a fill, a paste) is bracketed by
+# begin_operation()/end_operation(); every set_block/clear_block/reorient_block in between
+# records its minimal before→after delta into that one step. A mutator called with no step
+# open auto-wraps into its own single-cell step, so ANY edit path is undoable without
+# opting in. Applying an undo/redo replays stored cell states directly and is flagged so it
+# never records itself as new history. See EditOperation/EditHistory for the delta model.
+# ---------------------------------------------------------------------------
+
+# Open a recording session named for the step about to happen. Nestable — an inner
+# begin/end pair just extends the outer step (depth-counted), so overlapping view code
+# can't produce a half-recorded op.
+func begin_operation(op_name: String) -> void:
+	if _op_depth == 0:
+		_current_op = EditOperation.new(op_name)
+	_op_depth += 1
+
+# Close the current recording session. At depth 0 the step is sealed and, if it made any
+# net change, pushed onto the undo stack (clearing the redo branch). A no-op step (nothing
+# changed, or changes that cancelled out) is discarded — it neither creates an entry nor
+# disturbs an existing redo stack.
+func end_operation() -> void:
+	if _op_depth == 0:
+		return
+	_op_depth -= 1
+	if _op_depth > 0:
+		return
+	var op := _current_op
+	_current_op = null
+	if op == null or active_project == null:
+		return
+	op.seal()
+	if op.is_empty():
+		return
+	active_project.history.push(op)
+	history_changed.emit()
+	mark_dirty()
+
+func can_undo() -> bool:
+	return active_project != null and active_project.history.can_undo()
+
+func can_redo() -> bool:
+	return active_project != null and active_project.history.can_redo()
+
+# Undo the most recent step: restore every touched cell's `before` state. Returns false
+# when there's nothing to undo.
+func undo() -> bool:
+	if not can_undo():
+		return false
+	_apply_op(active_project.history.pop_undo(), false)
+	return true
+
+# Redo the most recently undone step: restore every touched cell's `after` state. Returns
+# false when there's nothing to redo.
+func redo() -> bool:
+	if not can_redo():
+		return false
+	_apply_op(active_project.history.pop_redo(), true)
+	return true
+
+# Timeline snapshot for a history view (labels + which state is current). See
+# EditHistory.entries().
+func history_entries() -> Dictionary:
+	return active_project.history.entries() if active_project else {"entries": [], "current": -1}
+
+# Replay one step's stored cell states onto the live data. `is_redo` picks each change's
+# `after`, undo picks its `before`. Guarded by _applying_history so the mutations don't get
+# recorded as new history; emits block_changed per cell so every view repaints, and marks
+# the project dirty so the moved history cursor persists.
+func _apply_op(op: EditOperation, is_redo: bool) -> void:
+	if op == null or active_project == null:
+		return
+	_applying_history = true
+	var data := active_project.data
+	var states: Array = op.afters if is_redo else op.befores
+	for i in op.positions.size():
+		var pos: Vector3i = op.positions[i]
+		var encoded: Variant = states[i]
+		if encoded == null:
+			data.clear_block(pos)
+			block_changed.emit(pos, "")
+		else:
+			data.set_cell(pos, _decode_cell(encoded))
+			block_changed.emit(pos, encoded[0])
+	_applying_history = false
+	history_changed.emit()
+	mark_dirty()
+
+# Funnel one cell's delta into the open step, or — if none is open — into its own
+# single-cell step. No-ops (before == after) and history-replay mutations are ignored.
+func _record_change(pos: Vector3i, before: Variant, after: Variant, default_name: String) -> void:
+	if _applying_history or before == after:
+		return
+	if _current_op != null:
+		_current_op.record(pos, before, after)
+		return
+	var op := EditOperation.new(default_name)
+	op.record(pos, before, after)
+	op.seal()
+	if op.is_empty() or active_project == null:
+		return
+	active_project.history.push(op)
+	history_changed.emit()
+
+# Encode a BlockCell into the plain-data tuple EditOperation stores (null = empty cell).
+# tags are deep-copied so a later in-place edit of the live cell can't mutate recorded
+# history. See EditOperation for the tuple contract.
+func _encode_cell(cell: BlockCell) -> Variant:
+	if cell == null:
+		return null
+	return [cell.type_id, cell.orientation, cell.tags.duplicate(true)]
+
+func _decode_cell(encoded: Array) -> BlockCell:
+	return BlockCell.new(encoded[0], encoded[1], (encoded[2] as Dictionary).duplicate(true))
 
 func get_block(pos: Vector3i) -> String:
 	return active_project.data.get_block(pos) if active_project else ""

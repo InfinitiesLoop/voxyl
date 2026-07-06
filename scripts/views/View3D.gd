@@ -1294,7 +1294,9 @@ func _place_targeted_block() -> void:
 	# looking up at a side face. Tweak afterwards with R (rotate about the face you're
 	# looking at).
 	var o := _derive_place_orientation(place_pos, face_normal)
+	VoxelWorld.begin_operation("Place")
 	VoxelWorld.set_block(place_pos, VoxelWorld.selected_semantic, o)
+	VoxelWorld.end_operation()
 	_update_crosshair_target()
 
 func _derive_place_orientation(place_pos: Vector3i, face_normal: Vector3i) -> int:
@@ -1314,7 +1316,9 @@ func _derive_place_orientation(place_pos: Vector3i, face_normal: Vector3i) -> in
 func _erase_targeted_block() -> void:
 	if not _target_hit or not VoxelWorld.active_project:
 		return
+	VoxelWorld.begin_operation("Erase")
 	VoxelWorld.clear_block(_target_block)
+	VoxelWorld.end_operation()
 	_update_crosshair_target()
 
 # MC creative "pick block": copy the targeted cell's semantic + orientation into
@@ -1348,7 +1352,9 @@ func _rotate_targeted_block(reverse: bool) -> void:
 		o = Orientation.rotate_cw(o, steps)
 	else:
 		o = Orientation.toggle_top(o)
+	VoxelWorld.begin_operation("Rotate")
 	VoxelWorld.reorient_block(_target_block, o)
+	VoxelWorld.end_operation()
 	_update_crosshair_target()
 
 # ---------------------------------------------------------------------------

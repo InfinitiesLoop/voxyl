@@ -26,6 +26,9 @@ static func save_project(project: VoxelProject) -> Error:
 		return err
 	if project.data != null:
 		project.data.pack()
+	# Flatten the undo/redo history into its packed mirror too (same live-vs-packed split
+	# as the voxel data), so the history persists with the build across sessions.
+	project.pack_history()
 	# Single choke point for every save path (autosave debounce, go-home, quit, the
 	# immediate save on New Project) — so "last edited" is always current on disk.
 	project.modified_at = int(Time.get_unix_time_from_system())
@@ -137,6 +140,7 @@ static func load_persisted(workspace: VoxelWorkspace) -> void:
 			continue
 		if project.data != null:
 			project.data.unpack()
+		project.unpack_history()
 		_replace_project(workspace, project)
 
 # --- Internals --------------------------------------------------------------

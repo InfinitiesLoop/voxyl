@@ -90,7 +90,7 @@ var _items: Array = []               # Array[Item], as handed to populate_items(
 var _filtered: Array = []            # Array[Item], _items passing the current search filter
 var _active: Dictionary = {}         # filtered-index -> live cell Control (only visible rows)
 var _pool: Array = []                # released cells kept for reuse, so scrolling rebinds
-                                     # rather than allocating/freeing nodes each row
+									 # rather than allocating/freeing nodes each row
 var _cols: int = 0                   # columns at the current width (drives layout + row count)
 var _selected: String = ""           # selected item key
 

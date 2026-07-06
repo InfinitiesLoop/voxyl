@@ -20,6 +20,7 @@ func _ready() -> void:
 	_test_model_revision()
 	_test_element_rotation()
 	_test_reorient()
+	_test_undo_redo()
 	_test_asset_library()
 	_test_library_serialization()
 	_test_project_persistence()
@@ -396,6 +397,132 @@ func _test_reorient() -> void:
 	VoxelWorld.reorient_block(Vector3i(40, 40, 40), Orientation.make(Orientation.Facing.WEST))
 	_check("reorient of empty cell creates nothing", project.data.get_cell(Vector3i(40, 40, 40)) == null)
 	VoxelWorld.clear_block(p)
+
+# Undo/redo: single edits auto-wrap into one step; begin/end groups many cell changes into
+# ONE logical step; no-op edits don't pollute history or clear redo; a real new edit does
+# clear the redo branch; reorients are recorded. Plus the low-level pieces: the ring-buffer
+# limit, the delta serialization round-trip, and history surviving a full project save/load.
+func _test_undo_redo() -> void:
+	print("-- undo/redo history")
+	# A scratch projects dir so a debounced autosave during the test can't write into the
+	# repo. Restored at the end.
+	var saved_root := ProjectStore.ROOT
+	ProjectStore.ROOT = "user://__voxyl_undotest__"
+	_rm_rf(ProjectStore.ROOT)
+
+	# Fresh project so history starts empty (earlier tests dirtied "My First Build").
+	var project := VoxelWorld.workspace.add_project("Undo Test")
+	project.palette_names.append("Default")
+	VoxelWorld.open(project)
+	var a := Vector3i(0, 0, 0)
+	var b := Vector3i(1, 0, 0)
+	var c := Vector3i(2, 0, 0)
+
+	# A single mutation with no open step auto-wraps into its own undoable entry.
+	_check("fresh project has nothing to undo", not VoxelWorld.can_undo())
+	VoxelWorld.set_block(a, "Base")
+	_check("placing a block enables undo", VoxelWorld.can_undo())
+	_check("nothing to redo yet", not VoxelWorld.can_redo())
+	VoxelWorld.undo()
+	_check("undo removes the placed block", VoxelWorld.get_block(a) == "")
+	_check("undo enables redo", VoxelWorld.can_redo())
+	VoxelWorld.redo()
+	_check("redo restores the placed block", VoxelWorld.get_block(a) == "Base")
+
+	# begin/end brackets many cell changes into ONE history entry (a bulk step).
+	VoxelWorld.begin_operation("Bulk")
+	VoxelWorld.set_block(b, "Accent")
+	VoxelWorld.set_block(c, "Accent")
+	VoxelWorld.end_operation()
+	var e := VoxelWorld.history_entries()
+	_check("multi-cell step is a single entry", (e["entries"] as Array).size() == 2)
+	_check("newest entry keeps its name", e["entries"][1]["name"] == "Bulk")
+	_check("entry reports its change count", e["entries"][1]["change_count"] == 2)
+	_check("current index points at the newest step", e["current"] == 1)
+	VoxelWorld.undo()
+	_check("undo reverts every cell in the step at once",
+		VoxelWorld.get_block(b) == "" and VoxelWorld.get_block(c) == "")
+	VoxelWorld.redo()
+	_check("redo re-applies the whole step at once",
+		VoxelWorld.get_block(b) == "Accent" and VoxelWorld.get_block(c) == "Accent")
+
+	# A no-op edit (painting the block that's already there) neither adds an entry nor
+	# discards a pending redo.
+	VoxelWorld.undo()  # undo Bulk → redo now holds it
+	_check("redo available before the no-op", VoxelWorld.can_redo())
+	var depth_before := (VoxelWorld.history_entries()["entries"] as Array).size()
+	VoxelWorld.set_block(a, "Base")  # a is already Base → net no change
+	_check("no-op edit adds no history entry",
+		(VoxelWorld.history_entries()["entries"] as Array).size() == depth_before)
+	_check("no-op edit does not clear the redo stack", VoxelWorld.can_redo())
+	VoxelWorld.redo()
+	_check("redo still works after the no-op", VoxelWorld.get_block(b) == "Accent")
+
+	# A real new edit clears the redo branch (you can't redo into a diverged future).
+	VoxelWorld.undo()
+	_check("redo available before the diverging edit", VoxelWorld.can_redo())
+	VoxelWorld.set_block(Vector3i(5, 5, 5), "Trim")
+	_check("a new edit clears the redo stack", not VoxelWorld.can_redo())
+
+	# Reorientation is recorded and undoable (restores the prior facing, keeps the type).
+	VoxelWorld.set_block(a, "Stairs", Orientation.make(Orientation.Facing.NORTH, false))
+	VoxelWorld.reorient_block(a, Orientation.make(Orientation.Facing.EAST, true))
+	_check("reorient changed the facing",
+		Orientation.facing_of(project.data.get_orientation(a)) == Orientation.Facing.EAST)
+	VoxelWorld.undo()
+	_check("undo restores the prior orientation",
+		Orientation.facing_of(project.data.get_orientation(a)) == Orientation.Facing.NORTH)
+	_check("undo of a reorient keeps the block type", project.data.get_block(a) == "Stairs")
+
+	VoxelWorld.workspace.remove_project("Undo Test")
+	VoxelWorld.active_project = null
+
+	# --- low-level: ring-buffer limit ---
+	var h := EditHistory.new()
+	for i in EditHistory.LIMIT + 5:
+		var op := EditOperation.new("Op%d" % i)
+		op.record(Vector3i(i, 0, 0), null, ["Base", 0, {}])
+		h.push(op)
+	_check("undo stack is capped at LIMIT", (h.entries()["entries"] as Array).size() == EditHistory.LIMIT)
+
+	# --- low-level: delta serialization round-trip (no BlockCell resources involved) ---
+	var op2 := EditOperation.new("Round Trip")
+	op2.record(Vector3i(2, 3, 4), null, ["Base", 5, {}])                # a place
+	op2.record(Vector3i(0, 0, 0), ["Trim", 0, {"note": "hi"}], null)    # erase a tagged cell
+	var back := EditOperation.from_data(op2.to_data())
+	_check("op name survives serialization", back.name == "Round Trip")
+	_check("op change count survives", back.change_count() == 2)
+	var i1 := back.positions.find(Vector3i(2, 3, 4))
+	_check("placed change: before is empty", i1 >= 0 and back.befores[i1] == null)
+	_check("placed change: after keeps type + orientation",
+		i1 >= 0 and back.afters[i1][0] == "Base" and back.afters[i1][1] == 5)
+	var i2 := back.positions.find(Vector3i(0, 0, 0))
+	_check("erased change: before keeps tags",
+		i2 >= 0 and (back.befores[i2][2] as Dictionary).get("note", "") == "hi")
+	_check("erased change: after is empty", i2 >= 0 and back.afters[i2] == null)
+
+	# --- integration: history persists with the project across a save + reload ---
+	var ws := VoxelWorkspace.new()
+	var proj := ws.add_project("Hist RT")
+	proj.palette_names = ["Default"]
+	var op3 := EditOperation.new("Place")
+	op3.record(Vector3i(1, 1, 1), null, ["Base", 0, {}])
+	proj.history.push(op3)
+	proj.data.set_block(Vector3i(1, 1, 1), "Base")
+	_check("save project with history ok", ProjectStore.save_project(proj) == OK)
+	var ws2 := VoxelWorkspace.new()
+	ProjectStore.load_persisted(ws2)
+	var q := ws2.get_project("Hist RT")
+	_check("history reloaded from disk", q != null and q.history != null and q.history.can_undo())
+	_check("reloaded entry keeps its name",
+		q != null and q.history.entries()["entries"][0]["name"] == "Place")
+	VoxelWorld.open(q)
+	VoxelWorld.undo()
+	_check("undo of a reloaded step reverts the cell", VoxelWorld.get_block(Vector3i(1, 1, 1)) == "")
+	VoxelWorld.active_project = null
+
+	_rm_rf(ProjectStore.ROOT)
+	ProjectStore.ROOT = saved_root
 
 func _test_asset_library() -> void:
 	print("-- asset library (storage accessor)")

@@ -414,9 +414,12 @@ func _on_grid_input(event: InputEvent) -> void:
 				_place_orientation = _orientation_from_pos(mb.position)
 				match tool:
 					VoxelWorld.Tool.PAINT:
+						# The whole drag (press-to-release) is one undo step.
+						VoxelWorld.begin_operation("Paint")
 						_is_placing = true
 						_paint_cell(cell)
 					VoxelWorld.Tool.ERASE:
+						VoxelWorld.begin_operation("Erase")
 						_is_erasing = true
 						_paint_cell(cell)
 					VoxelWorld.Tool.FILL:
@@ -428,13 +431,19 @@ func _on_grid_input(event: InputEvent) -> void:
 			else:
 				if _drag_start != Vector2i(-1, -1):
 					_commit_preview()
+				if _is_placing or _is_erasing:
+					VoxelWorld.end_operation()
 				_is_placing = false
 				_is_erasing = false
 		elif mb.button_index == MOUSE_BUTTON_RIGHT:
-			_is_erasing = mb.pressed
 			_is_placing = false
 			if mb.pressed:
+				VoxelWorld.begin_operation("Erase")
+				_is_erasing = true
 				_paint_cell(_mouse_to_cell(mb.position))
+			elif _is_erasing:
+				_is_erasing = false
+				VoxelWorld.end_operation()
 		elif mb.button_index == MOUSE_BUTTON_MIDDLE:
 			_panning = mb.pressed
 			_pan_last = mb.position
@@ -478,12 +487,14 @@ func _paint_cell(cell: Vector2i) -> void:
 func _commit_preview() -> void:
 	if not VoxelWorld.active_project:
 		return
+	VoxelWorld.begin_operation("Rectangle" if VoxelWorld.active_tool == VoxelWorld.Tool.RECT else "Line")
 	for cell in _preview_cells:
 		var pos := _grid_to_world(cell.x, cell.y)
 		if VoxelWorld.selected_semantic.is_empty():
 			VoxelWorld.clear_block(pos)
 		else:
 			VoxelWorld.set_block(pos, VoxelWorld.selected_semantic, _place_orientation)
+	VoxelWorld.end_operation()
 	_preview_cells = []
 	_drag_start = Vector2i(-1, -1)
 
@@ -518,6 +529,7 @@ func _do_fill(start: Vector2i) -> void:
 	var fill_semantic := VoxelWorld.selected_semantic
 	if target_semantic == fill_semantic:
 		return
+	VoxelWorld.begin_operation("Fill")
 	var queue: Array[Vector2i] = [start]
 	var visited: Dictionary = {}
 	while not queue.is_empty():
@@ -538,6 +550,7 @@ func _do_fill(start: Vector2i) -> void:
 		queue.append(Vector2i(cell.x - 1, cell.y))
 		queue.append(Vector2i(cell.x, cell.y + 1))
 		queue.append(Vector2i(cell.x, cell.y - 1))
+	VoxelWorld.end_operation()
 
 # ---------------------------------------------------------------------------
 # Keyboard input (R rotate block, F mirror view)
