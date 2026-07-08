@@ -4,7 +4,7 @@ extends Node
 # index breaks. Which views a tool works in (2D "slice" / 3D "3d" / both) and whether
 # it wants a brush size are declared in tool_supports_view / tool_uses_brush below —
 # the tool rail and the views both read from there so they can never disagree.
-enum Tool { PAINT, ERASE, LINE, RECT, FILL, BUILD_TO_ME, WAND }
+enum Tool { PAINT, ERASE, LINE, RECT, FILL, BUILD_TO_ME, WAND, SELECT }
 
 signal workspace_changed()
 signal project_opened(project: VoxelProject)
@@ -16,6 +16,11 @@ signal block_changed(pos: Vector3i, semantic_name: String)
 # listeners read can_undo()/can_redo()/history_entries().
 signal history_changed()
 signal selection_changed(semantic_name: String)
+# Fired whenever the cuboid region selection changes — a corner set, the box completed,
+# the box cleared, or a project opened. Distinct from selection_changed above, which is
+# the palette/semantic "in hand" selection. Every view repaints its selection outline
+# from this; carries no payload — listeners read selection_box()/has_selection.
+signal region_selection_changed()
 signal tool_changed(tool: Tool)
 # Brush size (edge length of a tool's footprint, in cells). Only tools that opt in
 # via tool_uses_brush() honor it; the rest place a single cell. View/UI reflect this.
@@ -42,6 +47,17 @@ var selected_semantic: String = ""
 var active_tool: Tool = Tool.PAINT
 # Brush footprint edge length in cells (1 = single cell). Clamped by set_brush_size.
 var brush_size: int = 1
+
+# Cuboid region selection (the Select tool). Two opposite-corner cells define an
+# inclusive min→max box; future copy/cut/paste will operate on it. This is project-tied
+# editor state — persisted with the build like the hotbar/layout (Principle 2), NOT voxel
+# data: it references positions only, never a block type or material, so palette/data stay
+# decoupled. All views are lenses that visualize the same box. The pending first corner
+# (mid two-click) is transient and never persisted.
+var has_selection: bool = false
+var selection_min: Vector3i = Vector3i.ZERO
+var selection_max: Vector3i = Vector3i.ZERO
+var _selection_anchor: Variant = null  # Vector3i first corner, or null between cycles
 
 # Shared 9-slot hotbar: each entry is a semantic name ("" = empty slot). The
 # active slot's semantic is the selected_semantic used for placement.
@@ -112,6 +128,9 @@ func _flush_save() -> void:
 		return
 	active_project.hotbar = hotbar.duplicate()
 	active_project.active_slot = active_slot
+	active_project.has_selection = has_selection
+	active_project.selection_min = selection_min
+	active_project.selection_max = selection_max
 	about_to_save.emit(active_project)
 	ProjectStore.save_project(active_project)
 
@@ -124,12 +143,19 @@ func reset_for_tests() -> void:
 	active_project = null
 	hotbar.fill("")
 	active_slot = 0
+	has_selection = false
+	_selection_anchor = null
 	_populate_defaults()
 	workspace_changed.emit()
 
 func open(project: VoxelProject) -> void:
 	active_project = project
 	_load_hotbar_from_project()
+	# Restore the saved region selection (transient anchor always starts clear).
+	has_selection = project.has_selection
+	selection_min = project.selection_min
+	selection_max = project.selection_max
+	_selection_anchor = null
 	var names := merged_semantic_names()
 	selected_semantic = hotbar[active_slot] if not hotbar[active_slot].is_empty() \
 		else (names[0] if not names.is_empty() else "")
@@ -137,6 +163,7 @@ func open(project: VoxelProject) -> void:
 	hotbar_changed.emit()
 	active_slot_changed.emit(active_slot)
 	history_changed.emit()
+	region_selection_changed.emit()
 
 # Restore this project's saved hotbar into the shared live hotbar, then fill any still-
 # empty slots from the palette so a project saved before it had a full bar is still
@@ -650,6 +677,56 @@ func set_active_tool(tool: Tool) -> void:
 	active_tool = tool
 	tool_changed.emit(tool)
 
+# ---------------------------------------------------------------------------
+# Region selection (the Select tool) — one shared cuboid across every view.
+#
+# The two-click state machine, driven by whichever view the user right-clicks in.
+# Each click advances it: (empty) set the first corner → (anchored) complete the
+# cuboid → (selected) clear. Kept whole here rather than in a view so all views share
+# one selection and one state (Principle 2). Future copy/cut/paste reads selection_box().
+# ---------------------------------------------------------------------------
+
+# Advance the state machine with a clicked cell. `cell` is a Vector3i corner, or null
+# when the crosshair is on nothing — a null click can still CLEAR an existing selection
+# but can't start or finish one.
+func select_region_click(cell: Variant) -> void:
+	if has_selection:
+		clear_selection()  # third click clears
+		return
+	if cell == null:
+		return
+	var corner: Vector3i = cell
+	if _selection_anchor == null:
+		_selection_anchor = corner
+		region_selection_changed.emit()  # show the pending single-cell first corner
+		return
+	var a: Vector3i = _selection_anchor
+	selection_min = Vector3i(mini(a.x, corner.x), mini(a.y, corner.y), mini(a.z, corner.z))
+	selection_max = Vector3i(maxi(a.x, corner.x), maxi(a.y, corner.y), maxi(a.z, corner.z))
+	_selection_anchor = null
+	has_selection = true
+	region_selection_changed.emit()
+	mark_dirty()
+
+# Drop the current selection (and any pending anchor). No-op — and no signal — when
+# there's nothing to clear, so idle repaints stay cheap.
+func clear_selection() -> void:
+	if not has_selection and _selection_anchor == null:
+		return
+	has_selection = false
+	_selection_anchor = null
+	region_selection_changed.emit()
+	mark_dirty()
+
+# The inclusive [min, max] box a view should outline: the completed cuboid, or the
+# pending single-cell first corner, or [] when there's neither.
+func selection_box() -> Array:
+	if has_selection:
+		return [selection_min, selection_max]
+	if _selection_anchor != null:
+		return [_selection_anchor, _selection_anchor]
+	return []
+
 const BRUSH_SIZE_MAX := 15
 
 func set_brush_size(size: int) -> void:
@@ -662,10 +739,11 @@ func set_brush_size(size: int) -> void:
 # Which view kinds a tool is usable in ("3d" = View3D, "slice" = View2DGrid). This is
 # the single source of truth the tool rail greys buttons from and the views could gate
 # on. PAINT (the pencil) works everywhere; the shape/flood tools are 2D-only for now;
-# "build to me" is inherently camera-relative, so 3D-only.
+# "build to me" is inherently camera-relative, so 3D-only. Select (cuboid region) works
+# everywhere — each view visualizes the same box.
 func tool_supports_view(tool: Tool, view_kind: String) -> bool:
 	match tool:
-		Tool.PAINT:
+		Tool.PAINT, Tool.SELECT:
 			return true
 		Tool.BUILD_TO_ME, Tool.WAND:
 			return view_kind == "3d"

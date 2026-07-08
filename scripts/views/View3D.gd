@@ -154,6 +154,11 @@ var _guide_plane: MeshInstance3D
 var _guide_plane_mat: ShaderMaterial
 var _guide: Dictionary = {}
 
+# Selection box: the Select tool's cuboid, outlined so it reads through blocks (see
+# _setup_viewport for the two-pass show-through material and _update_selection_box).
+var _sel_box: MeshInstance3D
+var _sel_box_mat: StandardMaterial3D
+
 func _ready() -> void:
 	_setup_viewport()
 	_setup_overlay()
@@ -168,6 +173,8 @@ func _ready() -> void:
 	VoxelWorld.brush_size_changed.connect(func(_s): _refresh_ghost_preview())
 	VoxelWorld.selection_changed.connect(func(_s): _refresh_ghost_preview())
 	VoxelWorld.workspace_changed.connect(_on_workspace_changed)
+	# The region selection is shared across views; repaint the box whenever it changes.
+	VoxelWorld.region_selection_changed.connect(_update_selection_box)
 	visibility_changed.connect(_on_visibility_changed)
 	set_process(true)
 	# A view created while a project is already open (e.g. spawned during a layout
@@ -175,6 +182,7 @@ func _ready() -> void:
 	# itself — otherwise it stays blank until the next block_changed signal.
 	if VoxelWorld.active_project:
 		_mark_dirty()
+	_update_selection_box()
 
 func _on_visibility_changed() -> void:
 	if visible:
@@ -337,6 +345,30 @@ func _setup_viewport() -> void:
 	_slice_marker.material_override = _slice_marker_mat
 	_slice_marker.visible = false
 	_viewport.add_child(_slice_marker)
+
+	# Selection box: a wireframe cuboid for the Select tool that stays visible through
+	# blocks. A two-pass material fakes "outline behind geometry, dimmed": the base pass
+	# ignores depth (no_depth_test) so the whole box always draws, but dim; its next_pass
+	# depth-tests normally, redrawing only the currently-visible edges bright on top. So an
+	# edge in front of a block is bright, an edge behind one stays dim — never fully hidden,
+	# but obviously occluded. Neither pass writes depth, so it never disturbs the scene.
+	_sel_box_mat = StandardMaterial3D.new()
+	_sel_box_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_sel_box_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_sel_box_mat.no_depth_test = true
+	_sel_box_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_sel_box_mat.albedo_color = Color(0.28, 0.62, 1.0, 0.28)  # dim: where behind blocks
+	var sel_front := StandardMaterial3D.new()
+	sel_front.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	sel_front.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	sel_front.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	sel_front.albedo_color = Color(0.4, 0.8, 1.0, 1.0)  # bright: where visible
+	_sel_box_mat.next_pass = sel_front
+	_sel_box = MeshInstance3D.new()
+	_sel_box.mesh = ImmediateMesh.new()
+	_sel_box.material_override = _sel_box_mat
+	_sel_box.visible = false
+	_viewport.add_child(_sel_box)
 
 	_update_camera()
 
@@ -1336,6 +1368,8 @@ func _use_primary_tool() -> void:
 			_build_to_me()
 		VoxelWorld.Tool.WAND:
 			_wand()
+		VoxelWorld.Tool.SELECT:
+			_select_region_click()
 		_:
 			_place_targeted_block()
 
@@ -1745,6 +1779,50 @@ func _rotate_targeted_block(reverse: bool) -> void:
 	VoxelWorld.reorient_block(_target_block, o)
 	VoxelWorld.end_operation()
 	_update_crosshair_target()
+
+# ---------------------------------------------------------------------------
+# Region selection (the Select tool)
+# ---------------------------------------------------------------------------
+
+# Right-click with the Select tool: feed the crosshair'd cell to the shared state machine
+# (a hit block's own cell, else the ground cell, else null — which still lets the click
+# clear an existing selection). Both corners of the cuboid are picked this way; the box
+# and its state live on VoxelWorld so every view stays in sync.
+func _select_region_click() -> void:
+	if not VoxelWorld.active_project:
+		return
+	var cell: Variant = null
+	if _target_hit:
+		cell = _target_block
+	elif _floor_hit:
+		cell = _floor_place
+	VoxelWorld.select_region_click(cell)
+
+# Rebuild the wireframe box around the current selection (or the pending first corner),
+# hiding it when there's none. The box is world-space and independent of blocks, so it
+# never needs a data rebuild — only this cheap line refresh when the selection changes.
+func _update_selection_box() -> void:
+	if _sel_box == null:
+		return
+	var box := VoxelWorld.selection_box()
+	if box.is_empty():
+		_sel_box.visible = false
+		return
+	var lo := Vector3(box[0] as Vector3i)
+	var hi := Vector3(box[1] as Vector3i) + Vector3.ONE
+	var p := [
+		Vector3(lo.x, lo.y, lo.z), Vector3(hi.x, lo.y, lo.z), Vector3(hi.x, lo.y, hi.z), Vector3(lo.x, lo.y, hi.z),
+		Vector3(lo.x, hi.y, lo.z), Vector3(hi.x, hi.y, lo.z), Vector3(hi.x, hi.y, hi.z), Vector3(lo.x, hi.y, hi.z),
+	]
+	var edges := [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]]
+	var im := _sel_box.mesh as ImmediateMesh
+	im.clear_surfaces()
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	for e in edges:
+		im.surface_add_vertex(p[e[0]])
+		im.surface_add_vertex(p[e[1]])
+	im.surface_end()
+	_sel_box.visible = true
 
 # ---------------------------------------------------------------------------
 # Slice-select mode

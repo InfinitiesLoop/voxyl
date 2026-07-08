@@ -15,6 +15,12 @@ const MAX_CELL_PX := 96.0
 # Guideline showing where another view's active slice crosses this one (amber).
 const GUIDE_FILL := Color(1.0, 0.6, 0.2, 0.12)
 const GUIDE_LINE := Color(1.0, 0.65, 0.25, 0.85)
+# Region-selection outline (the Select tool's cuboid, shared across views). Bright +
+# filled when this slice is inside the selection's depth range, dim outline when the
+# selection sits on other layers — so you can see it's there without it reading in-plane.
+const SEL_FILL := Color(0.3, 0.72, 1.0, 0.12)
+const SEL_LINE := Color(0.35, 0.78, 1.0, 0.95)
+const SEL_LINE_DIM := Color(0.4, 0.65, 0.95, 0.4)
 
 # Slice configuration
 # axis 0=X (slice is YZ plane), 1=Y (slice is XZ plane), 2=Z (slice is XY plane)
@@ -87,6 +93,7 @@ func _ready() -> void:
 	VoxelWorld.block_changed.connect(func(_p, _s): _grid_area.queue_redraw())
 	VoxelWorld.palette_stack_changed.connect(_grid_area.queue_redraw)
 	VoxelWorld.block_type_changed.connect(_grid_area.queue_redraw)
+	VoxelWorld.region_selection_changed.connect(_grid_area.queue_redraw)
 	VoxelWorld.project_opened.connect(func(_p): _reset())
 	_update_slice_label()
 
@@ -204,6 +211,20 @@ func _grid_to_world(h: int, v: int) -> Vector3i:
 	result[ha] = mn[ha] + h if hd[ha] > 0 else mx[ha] - h
 	result[va] = mn[va] + v if vd[va] > 0 else mx[va] - v
 	return result
+
+# Inverse of _grid_to_world for the two in-plane axes: world cell → (h, v) grid coords.
+# The slice (axis) component is ignored — only the in-plane position matters — and the
+# same flip logic as _grid_to_world is mirrored so a rotated/mirrored view lines up.
+func _world_to_grid(pos: Vector3i) -> Vector2i:
+	var mn := _get_view_min()
+	var mx := _get_view_max()
+	var hd := _get_h_dir()
+	var vd := _get_v_dir()
+	var ha := _dir_axis(hd)
+	var va := _dir_axis(vd)
+	var h := pos[ha] - mn[ha] if hd[ha] > 0 else mx[ha] - pos[ha]
+	var v := pos[va] - mn[va] if vd[va] > 0 else mx[va] - pos[va]
+	return Vector2i(h, v)
 
 func _get_grid_w() -> int:
 	var mn := _get_view_min(); var mx := _get_view_max()
@@ -324,7 +345,32 @@ func _draw_grid() -> void:
 		_grid_area.draw_line(Vector2(0, gy + _cell_px * 0.5),
 			Vector2(_grid_area.size.x, gy + _cell_px * 0.5), GUIDE_LINE, 1.5)
 
+	_draw_selection(origin)
 	_draw_hint()
+
+# Outline the region selection where it crosses this slice. The cuboid projects to an
+# axis-aligned rect in grid space; drawn bright + filled when this slice is within the
+# selection's depth range, dim (outline only) when the selection sits on other layers.
+func _draw_selection(origin: Vector2) -> void:
+	var box := VoxelWorld.selection_box()
+	if box.is_empty():
+		return
+	var lo: Vector3i = box[0]
+	var hi: Vector3i = box[1]
+	# Both corners project to (h, v); their bounds cover the selection's in-plane extent.
+	var a := _world_to_grid(lo)
+	var b := _world_to_grid(hi)
+	var h0 := mini(a.x, b.x); var h1 := maxi(a.x, b.x)
+	var v0 := mini(a.y, b.y); var v1 := maxi(a.y, b.y)
+	var rect := Rect2(
+		origin + Vector2(h0, v0) * _cell_px,
+		Vector2(h1 - h0 + 1, v1 - v0 + 1) * _cell_px)
+	var in_range := slice_pos >= lo[axis] and slice_pos <= hi[axis]
+	if in_range:
+		_grid_area.draw_rect(rect, SEL_FILL)
+		_grid_area.draw_rect(rect, SEL_LINE, false, 2.0)
+	else:
+		_grid_area.draw_rect(rect, SEL_LINE_DIM, false, 1.0)
 
 # Facing arrow for an oriented cell, mapped into this slice's screen space.
 # A facing perpendicular to the plane is drawn as a diamond.
@@ -436,14 +482,19 @@ func _on_grid_input(event: InputEvent) -> void:
 				_is_placing = false
 				_is_erasing = false
 		elif mb.button_index == MOUSE_BUTTON_RIGHT:
-			_is_placing = false
-			if mb.pressed:
-				VoxelWorld.begin_operation("Erase")
-				_is_erasing = true
-				_paint_cell(_mouse_to_cell(mb.position))
-			elif _is_erasing:
-				_is_erasing = false
-				VoxelWorld.end_operation()
+			if tool == VoxelWorld.Tool.SELECT:
+				# Select tool claims right-click for its two-corner cuboid pick.
+				if mb.pressed:
+					_select_region_click(mb.position)
+			else:
+				_is_placing = false
+				if mb.pressed:
+					VoxelWorld.begin_operation("Erase")
+					_is_erasing = true
+					_paint_cell(_mouse_to_cell(mb.position))
+				elif _is_erasing:
+					_is_erasing = false
+					VoxelWorld.end_operation()
 		elif mb.button_index == MOUSE_BUTTON_MIDDLE:
 			_panning = mb.pressed
 			_pan_last = mb.position
@@ -551,6 +602,20 @@ func _do_fill(start: Vector2i) -> void:
 		queue.append(Vector2i(cell.x, cell.y + 1))
 		queue.append(Vector2i(cell.x, cell.y - 1))
 	VoxelWorld.end_operation()
+
+# Right-click with the Select tool: the clicked grid cell (on this slice's plane) becomes
+# a corner for the shared region-select state machine. A click outside the drawn grid
+# passes null — which still clears an existing selection but won't start/finish one. The
+# anchor lives on VoxelWorld, so you can set one corner here, scrub to another layer, and
+# set the opposite corner there to sweep a 3D-deep cuboid.
+func _select_region_click(mouse_pos: Vector2) -> void:
+	if not VoxelWorld.active_project:
+		return
+	var cell := _mouse_to_cell(mouse_pos)
+	var world: Variant = null
+	if cell.x >= 0 and cell.x < _get_grid_w() and cell.y >= 0 and cell.y < _get_grid_h():
+		world = _grid_to_world(cell.x, cell.y)
+	VoxelWorld.select_region_click(world)
 
 # ---------------------------------------------------------------------------
 # Keyboard input (R rotate block, F mirror view)

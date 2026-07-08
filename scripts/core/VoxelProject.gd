@@ -26,6 +26,13 @@ extends Resource
 @export var hotbar: Array[String] = []
 @export var active_slot: int = 0
 
+# Cuboid region selection (the Select tool), persisted as two opposite corners + a flag —
+# cheap, and enough to restore the exact box. Like layout/hotbar this is project-tied
+# editor state, not voxel data: it names positions, never a material.
+@export var has_selection: bool = false
+@export var selection_min: Vector3i = Vector3i.ZERO
+@export var selection_max: Vector3i = Vector3i.ZERO
+
 # Undo/redo history for this build's voxel edits. `history` is the live runtime object
 # (an EditHistory of EditOperation deltas); `_history_data` is its packed on-disk mirror,
 # the ONLY thing persisted — exactly the split VoxelData uses for `cells` vs its packed

@@ -21,6 +21,7 @@ func _ready() -> void:
 	_test_element_rotation()
 	_test_reorient()
 	_test_undo_redo()
+	_test_selection()
 	_test_asset_library()
 	_test_library_serialization()
 	_test_project_persistence()
@@ -521,6 +522,64 @@ func _test_undo_redo() -> void:
 	_check("undo of a reloaded step reverts the cell", VoxelWorld.get_block(Vector3i(1, 1, 1)) == "")
 	VoxelWorld.active_project = null
 
+	_rm_rf(ProjectStore.ROOT)
+	ProjectStore.ROOT = saved_root
+
+# Region selection (the Select tool): the two-click state machine (anchor → cuboid →
+# clear), min/max normalization from corners given in any order, a null click clearing
+# but never starting a box, and the completed box persisting as 2 coords + a flag across
+# a save + reload. This is shared editor state on VoxelWorld, visualized by every view.
+func _test_selection() -> void:
+	print("-- region selection (Select tool)")
+	var saved_root := ProjectStore.ROOT
+	ProjectStore.ROOT = "user://__voxyl_seltest__"
+	_rm_rf(ProjectStore.ROOT)
+
+	var project := VoxelWorld.workspace.add_project("Sel Test")
+	project.palette_names.append("Default")
+	VoxelWorld.open(project)
+	_check("fresh project has no selection", not VoxelWorld.has_selection)
+	_check("no box when nothing is selected", VoxelWorld.selection_box().is_empty())
+
+	# First corner → a pending anchor: shown as a single-cell box, but not yet a selection.
+	VoxelWorld.select_region_click(Vector3i(2, 1, 3))
+	_check("first click sets a pending anchor, not a selection", not VoxelWorld.has_selection)
+	var pending := VoxelWorld.selection_box()
+	_check("pending anchor shows as a single-cell box",
+		pending.size() == 2 and pending[0] == Vector3i(2, 1, 3) and pending[1] == Vector3i(2, 1, 3))
+
+	# Second corner (given out of order) → completes + normalizes to component-wise min/max.
+	VoxelWorld.select_region_click(Vector3i(0, 5, 1))
+	_check("second click completes the selection", VoxelWorld.has_selection)
+	_check("selection min is component-wise min", VoxelWorld.selection_min == Vector3i(0, 1, 1))
+	_check("selection max is component-wise max", VoxelWorld.selection_max == Vector3i(2, 5, 3))
+
+	# Third click clears — regardless of where the crosshair is (null is fine).
+	VoxelWorld.select_region_click(null)
+	_check("third click clears the selection", not VoxelWorld.has_selection)
+	_check("cleared selection has no box", VoxelWorld.selection_box().is_empty())
+
+	# A null click with no anchor is a harmless no-op (can't start a box off nothing).
+	VoxelWorld.select_region_click(null)
+	_check("null click with no anchor stays empty", not VoxelWorld.has_selection)
+
+	# A completed selection persists (2 coords + a flag) across a save + reload.
+	VoxelWorld.select_region_click(Vector3i(1, 1, 1))
+	VoxelWorld.select_region_click(Vector3i(4, 3, 2))
+	VoxelWorld.save_active_project()
+	var ws2 := VoxelWorkspace.new()
+	ProjectStore.load_persisted(ws2)
+	var q := ws2.get_project("Sel Test")
+	_check("selection persists across reload",
+		q != null and q.has_selection
+		and q.selection_min == Vector3i(1, 1, 1) and q.selection_max == Vector3i(4, 3, 2))
+
+	# clear_selection() resets everything on demand.
+	VoxelWorld.clear_selection()
+	_check("clear_selection() empties the selection", not VoxelWorld.has_selection)
+
+	VoxelWorld.workspace.remove_project("Sel Test")
+	VoxelWorld.active_project = null
 	_rm_rf(ProjectStore.ROOT)
 	ProjectStore.ROOT = saved_root
 

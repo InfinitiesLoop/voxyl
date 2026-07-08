@@ -21,6 +21,7 @@ const _TOOLS: Array = [
 	[VoxelWorld.Tool.PAINT,       "✏", "Pencil — right-click place, left-click clear"],
 	[VoxelWorld.Tool.BUILD_TO_ME, "⇧", "Build to me — extrude a column from the face toward the camera"],
 	[VoxelWorld.Tool.WAND,        "✦", "Wand — grow the clicked face's connected same-type blocks by one, using the selected block"],
+	[VoxelWorld.Tool.SELECT,      "⬚", "Select — right-click two opposite corners to select a cuboid region; right-click again to clear"],
 ]
 
 var _group := ButtonGroup.new()
