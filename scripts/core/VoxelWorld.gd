@@ -1,6 +1,10 @@
 extends Node
 
-enum Tool { PAINT, ERASE, LINE, RECT, FILL }
+# Build/edit tools. Ordinals are appended-only so nothing that stored a tool by
+# index breaks. Which views a tool works in (2D "slice" / 3D "3d" / both) and whether
+# it wants a brush size are declared in tool_supports_view / tool_uses_brush below —
+# the tool rail and the views both read from there so they can never disagree.
+enum Tool { PAINT, ERASE, LINE, RECT, FILL, BUILD_TO_ME, WAND }
 
 signal workspace_changed()
 signal project_opened(project: VoxelProject)
@@ -13,6 +17,9 @@ signal block_changed(pos: Vector3i, semantic_name: String)
 signal history_changed()
 signal selection_changed(semantic_name: String)
 signal tool_changed(tool: Tool)
+# Brush size (edge length of a tool's footprint, in cells). Only tools that opt in
+# via tool_uses_brush() honor it; the rest place a single cell. View/UI reflect this.
+signal brush_size_changed(size: int)
 signal slice_view_requested(axis: int, center: Vector3i, flipped: bool)
 signal block_type_changed()
 # Unified hotbar shared by every view (no view owns it). hotbar_changed fires on
@@ -33,6 +40,8 @@ var workspace: VoxelWorkspace
 var active_project: VoxelProject
 var selected_semantic: String = ""
 var active_tool: Tool = Tool.PAINT
+# Brush footprint edge length in cells (1 = single cell). Clamped by set_brush_size.
+var brush_size: int = 1
 
 # Shared 9-slot hotbar: each entry is a semantic name ("" = empty slot). The
 # active slot's semantic is the selected_semantic used for placement.
@@ -640,6 +649,34 @@ func _seed_hotbar_from_palette() -> void:
 func set_active_tool(tool: Tool) -> void:
 	active_tool = tool
 	tool_changed.emit(tool)
+
+const BRUSH_SIZE_MAX := 15
+
+func set_brush_size(size: int) -> void:
+	size = clampi(size, 1, BRUSH_SIZE_MAX)
+	if size == brush_size:
+		return
+	brush_size = size
+	brush_size_changed.emit(size)
+
+# Which view kinds a tool is usable in ("3d" = View3D, "slice" = View2DGrid). This is
+# the single source of truth the tool rail greys buttons from and the views could gate
+# on. PAINT (the pencil) works everywhere; the shape/flood tools are 2D-only for now;
+# "build to me" is inherently camera-relative, so 3D-only.
+func tool_supports_view(tool: Tool, view_kind: String) -> bool:
+	match tool:
+		Tool.PAINT:
+			return true
+		Tool.BUILD_TO_ME, Tool.WAND:
+			return view_kind == "3d"
+		Tool.ERASE, Tool.LINE, Tool.RECT, Tool.FILL:
+			return view_kind == "slice"
+		_:
+			return true
+
+# Whether a tool honors brush_size (footprint > 1 cell). Others always place one cell.
+func tool_uses_brush(tool: Tool) -> bool:
+	return tool == Tool.BUILD_TO_ME
 
 func request_slice_view(axis: int, center: Vector3i, flipped: bool = false) -> void:
 	slice_view_requested.emit(axis, center, flipped)

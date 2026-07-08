@@ -85,6 +85,30 @@ var _sky_label_timer: float = 0.0
 # --- Dirty flag ---
 var _dirty := false
 
+# --- Placement animation (bulk builds) -------------------------------------
+# A bulk tool writes its blocks to the data immediately, then asks for a quick reveal:
+# a blue placeholder box is spawned over each new cell and cleared on a short per-step
+# stagger, so the real blocks pop in a slice at a time toward the camera. Pure view
+# chrome — see _animate_placement. Tunable/disable-able here; swapping in a different
+# effect (e.g. scale-popping the real block) is localized to _spawn_placeholder.
+const PLACEMENT_FX_ENABLED := true
+const PLACEMENT_FX_HOLD := 0.075   # seconds a placeholder is held before it may clear
+const PLACEMENT_FX_STEP := 0.0375  # added delay per step deeper into the column
+const WAND_LIMIT := 32   # wand flood reaches at most this many cells each way from the click
+var _fx_root: Node3D
+var _fx_material: StandardMaterial3D
+var _placeholder_mesh: BoxMesh
+var _placement_fx: Array = []     # [{ node: MeshInstance3D, reveal_at: float }]
+
+# --- Ghost preview overlay -------------------------------------------------
+# Reusable translucent preview of the cells an action WOULD affect, drawn without ever
+# touching block data (drives build-to-me / wand now; copy/paste preview later). A single
+# MultiMeshInstance3D whose mesh IS the selected block at 50% alpha, so it looks like a
+# see-through copy of what you'd place and stays one draw call at any cell count.
+var _ghost_mm: MultiMeshInstance3D
+var _ghost_last: Array = []        # last cell set shown, to skip redundant rebuilds
+var _ghost_mesh_key := ""          # selected-block signature the ghost mesh was built for
+
 # True only while apply_view_state is restoring a saved camera, so _update_camera
 # doesn't mistake the restore for a user move and reschedule an autosave.
 var _applying_state := false
@@ -139,6 +163,10 @@ func _ready() -> void:
 	VoxelWorld.palette_stack_changed.connect(func(): _mark_dirty(); if _fly_mode: _overlay.queue_redraw())
 	VoxelWorld.block_type_changed.connect(func(): _mark_dirty(); if _fly_mode: _overlay.queue_redraw())
 	VoxelWorld.selection_changed.connect(func(_s): if _fly_mode: _overlay.queue_redraw())
+	# Keep the build-to-me ghost in sync with anything that changes what it would build.
+	VoxelWorld.tool_changed.connect(func(_t): _refresh_ghost_preview())
+	VoxelWorld.brush_size_changed.connect(func(_s): _refresh_ghost_preview())
+	VoxelWorld.selection_changed.connect(func(_s): _refresh_ghost_preview())
 	VoxelWorld.workspace_changed.connect(_on_workspace_changed)
 	visibility_changed.connect(_on_visibility_changed)
 	set_process(true)
@@ -177,6 +205,7 @@ func _on_about_to_save(project: VoxelProject) -> void:
 	ProjectStore.save_thumbnail(project.name, img)
 
 func _on_project_opened(_p: VoxelProject) -> void:
+	_clear_placement_fx()  # drop any in-flight reveal from the previous build
 	_mark_dirty()
 	# Position camera to see the whole scene on first open
 	var center := _get_world_center()
@@ -246,6 +275,25 @@ func _setup_viewport() -> void:
 
 	_voxel_root = Node3D.new()
 	_viewport.add_child(_voxel_root)
+
+	# Placement-FX layer: transient blue placeholders live here, above the voxel meshes
+	# and untouched by _rebuild (which only clears _voxel_root).
+	_fx_root = Node3D.new()
+	_viewport.add_child(_fx_root)
+	_fx_material = StandardMaterial3D.new()
+	_fx_material.albedo_color = Color(0.16, 0.52, 1.0, 1.0)
+	_fx_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+
+	# Ghost preview overlay: one MultiMesh whose mesh + per-surface translucent materials
+	# are the selected block itself (built lazily in _ensure_ghost_mesh), so the preview
+	# reads as a 50%-opacity copy of what you'd place. One draw call regardless of count.
+	var ghost_multimesh := MultiMesh.new()
+	ghost_multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	ghost_multimesh.instance_count = 0
+	_ghost_mm = MultiMeshInstance3D.new()
+	_ghost_mm.multimesh = ghost_multimesh
+	_ghost_mm.visible = false
+	_viewport.add_child(_ghost_mm)
 
 	_highlight_mat = StandardMaterial3D.new()
 	_highlight_mat.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
@@ -488,6 +536,7 @@ func _cycle_sky() -> void:
 # ---------------------------------------------------------------------------
 
 func _process(delta: float) -> void:
+	_tick_placement_fx()
 	if _sky_label_timer > 0.0:
 		_sky_label_timer -= delta
 		if _sky_label_timer <= 0.0:
@@ -589,7 +638,7 @@ func _input(event: InputEvent) -> void:
 		var mb := event as InputEventMouseButton
 		match mb.button_index:
 			MOUSE_BUTTON_LEFT:        _erase_targeted_block()
-			MOUSE_BUTTON_RIGHT:       _place_targeted_block()
+			MOUSE_BUTTON_RIGHT:       _use_primary_tool()
 			MOUSE_BUTTON_MIDDLE:      _pick_targeted_block()
 			MOUSE_BUTTON_WHEEL_UP:    _cycle_palette(-1)
 			MOUSE_BUTTON_WHEEL_DOWN:  _cycle_palette(1)
@@ -657,6 +706,7 @@ func _release_cursor() -> void:
 	_highlight.visible = false
 	_target_hit = false
 	_floor_hit = false
+	_clear_ghost()
 
 # Called by the shell when focus changes. Losing focus drops any captured
 # cursor and exits slice-select so a background view can't keep grabbing input.
@@ -811,6 +861,7 @@ func _on_workspace_changed() -> void:
 
 func _rebuild() -> void:
 	_dirty = false
+	_ghost_mesh_key = ""  # block appearance may have changed; rebuild the ghost mesh lazily
 	for child in _voxel_root.get_children():
 		_voxel_root.remove_child(child)
 		child.free()
@@ -1113,6 +1164,7 @@ func _update_crosshair_target() -> void:
 	_target_hit = false
 	_floor_hit = false
 	if not VoxelWorld.active_project:
+		_clear_ghost()
 		_highlight.visible = false
 		_overlay.queue_redraw()
 		return
@@ -1141,6 +1193,7 @@ func _update_crosshair_target() -> void:
 			_highlight.visible = false
 
 	_overlay.queue_redraw()
+	_refresh_ghost_preview()
 
 func _draw_floor_fill(cell: Vector3i) -> void:
 	var y := float(cell.y) + 0.005
@@ -1273,6 +1326,342 @@ func _raycast_floor_plane(origin: Vector3, direction: Vector3) -> Dictionary:
 # ---------------------------------------------------------------------------
 # Block editing
 # ---------------------------------------------------------------------------
+
+# Right-click action in fly mode, dispatched by the active tool. The pencil — and any
+# tool without 3D-specific behavior — places a single block; build-to-me extrudes a
+# column toward the camera. (Left-click stays a single erase for every tool.)
+func _use_primary_tool() -> void:
+	match VoxelWorld.active_tool:
+		VoxelWorld.Tool.BUILD_TO_ME:
+			_build_to_me()
+		VoxelWorld.Tool.WAND:
+			_wand()
+		_:
+			_place_targeted_block()
+
+# "Build to me": extrude a column from the crosshair'd face straight along that face's
+# normal toward the camera, stopping just short of the cell the camera occupies. The
+# column follows the single axis of the face normal — any horizontal offset from the
+# camera is ignored — so aiming at a top face 10 cells below the camera lays 9 blocks
+# up. brush_size widens it to an N×N cross-section. The whole extrude is one undo step;
+# the new blocks are revealed with a quick placement animation.
+func _build_to_me() -> void:
+	if not VoxelWorld.active_project or VoxelWorld.selected_semantic.is_empty():
+		return
+	var anchor := _build_to_me_anchor()
+	if anchor.is_empty():
+		return
+	var place: Vector3i = anchor["place"]
+	var normal: Vector3i = anchor["normal"]
+	var groups := _build_to_me_cells(place, normal)
+	if groups.is_empty():
+		return
+	var orient := _derive_place_orientation(place, normal)
+	VoxelWorld.begin_operation("Build to me")
+	for group in groups:
+		for cell: Vector3i in group:
+			VoxelWorld.set_block(cell, VoxelWorld.selected_semantic, orient)
+	VoxelWorld.end_operation()
+	_animate_placement(groups)
+	_update_crosshair_target()  # re-aims, refreshing the ghost onto the next column
+
+# The build-to-me anchor from the current crosshair target: the first cell to fill and
+# the face normal to extrude along, or {} if nothing is targeted. Shared by the commit
+# and the live ghost preview so they can never disagree about what will be built.
+func _build_to_me_anchor() -> Dictionary:
+	if _target_hit:
+		return {"place": _target_place, "normal": _target_place - _target_block}
+	elif _floor_hit:
+		return {"place": _floor_place, "normal": Vector3i(0, 1, 0)}
+	return {}
+
+# The cells a build-to-me from (place, normal) would fill, grouped by column step (each
+# group is one N×N slice, ordered face → camera). Occupied cells are skipped. Pure
+# computation — no data writes — so both the commit and the preview call it.
+func _build_to_me_cells(place: Vector3i, normal: Vector3i) -> Array:
+	var axis := _dominant_axis(Vector3(normal))
+	if normal[axis] == 0:
+		return []
+	var step := 1 if normal[axis] > 0 else -1
+	# Cells from the placement cell up to (excluding) the camera's cell along this axis.
+	var count := (floori(_camera_pos[axis]) - place[axis]) * step
+	if count <= 0:
+		return []
+	var data := VoxelWorld.active_project.data
+	# Brush footprint: an N×N square in the plane perpendicular to the build axis,
+	# centered on the column. `perp` is the two axes that aren't the build axis.
+	var brush := maxi(VoxelWorld.brush_size, 1)
+	@warning_ignore("integer_division")
+	var lo := -((brush - 1) / 2)  # left/top offset to center the N×N footprint
+	var perp := [0, 1, 2]
+	perp.erase(axis)
+	var groups: Array = []
+	for i in count:
+		var base := _add_axis(place, axis, step * i)
+		var this_step: Array = []
+		for du in brush:
+			for dv in brush:
+				var cell := base
+				cell[perp[0]] += lo + du
+				cell[perp[1]] += lo + dv
+				if data.get_block(cell).is_empty():   # never clobber an existing block
+					this_step.append(cell)
+		if not this_step.is_empty():
+			groups.append(this_step)
+	return groups
+
+# ---------------------------------------------------------------------------
+# Wand (flood-extend a face)
+# ---------------------------------------------------------------------------
+
+# "Wand": right-click a face to grow the connected run of same-type blocks on that face
+# outward by one, using the SELECTED block. Flood-fills across the face plane from the
+# clicked block, following only cells of the block you clicked (so a stone-brick wall with
+# wood ends grows only the stone bricks), bounded to ±WAND_LIMIT each way, placing a block
+# in the face-normal direction over every exposed cell it reaches. One undo step.
+func _wand() -> void:
+	if not VoxelWorld.active_project or VoxelWorld.selected_semantic.is_empty():
+		return
+	var anchor := _wand_anchor()
+	if anchor.is_empty():
+		return
+	var block: Vector3i = anchor["block"]
+	var normal: Vector3i = anchor["normal"]
+	var groups := _wand_cells(block, normal)
+	if groups.is_empty():
+		return
+	var orient := _derive_place_orientation(block + normal, normal)
+	VoxelWorld.begin_operation("Wand")
+	for group in groups:
+		for cell: Vector3i in group:
+			VoxelWorld.set_block(cell, VoxelWorld.selected_semantic, orient)
+	VoxelWorld.end_operation()
+	_animate_placement(groups)
+	_update_crosshair_target()
+
+# The wand needs a real block face: the clicked block and the face normal, or {} if the
+# crosshair isn't on a block (the virtual floor has nothing to extend).
+func _wand_anchor() -> Dictionary:
+	if _target_hit:
+		return {"block": _target_block, "normal": _target_place - _target_block}
+	return {}
+
+# The cells a wand from (block, normal) would fill, grouped by square-ring distance from
+# the clicked block (so the reveal ripples outward). Flood-fills same-type cells coplanar
+# with the click, 4-connected in the face plane, bounded ±WAND_LIMIT per axis; a cell
+# contributes a target when the cell in the normal direction is empty. Pure computation —
+# shared by the commit and the ghost preview so they can't disagree.
+func _wand_cells(block: Vector3i, normal: Vector3i) -> Array:
+	var data := VoxelWorld.active_project.data
+	var semantic := data.get_block(block)
+	if semantic.is_empty():
+		return []
+	var axis := _dominant_axis(Vector3(normal))
+	var perp := [0, 1, 2]
+	perp.erase(axis)
+	var u: int = perp[0]
+	var v: int = perp[1]
+	var du := _add_axis(Vector3i.ZERO, u, 1)
+	var dv := _add_axis(Vector3i.ZERO, v, 1)
+	var neighbors := [du, -du, dv, -dv]
+	var visited := {block: true}
+	var queue: Array = [block]
+	var head := 0
+	var by_ring := {}   # square-ring distance -> Array[Vector3i] of target cells
+	while head < queue.size():
+		var c: Vector3i = queue[head]
+		head += 1
+		var t := c + normal
+		if data.get_block(t).is_empty():
+			var ring := maxi(absi(c[u] - block[u]), absi(c[v] - block[v]))
+			if not by_ring.has(ring):
+				by_ring[ring] = []
+			by_ring[ring].append(t)
+		for nd in neighbors:
+			var nc: Vector3i = c + nd
+			if visited.has(nc):
+				continue
+			if absi(nc[u] - block[u]) > WAND_LIMIT or absi(nc[v] - block[v]) > WAND_LIMIT:
+				continue
+			if data.get_block(nc) != semantic:
+				continue
+			visited[nc] = true
+			queue.append(nc)
+	var rings := by_ring.keys()
+	rings.sort()
+	var groups: Array = []
+	for ring in rings:
+		groups.append(by_ring[ring])
+	return groups
+
+# ---------------------------------------------------------------------------
+# Ghost preview overlay (reusable)
+# ---------------------------------------------------------------------------
+
+# Show translucent ghosts for what the active tool WOULD build at the crosshair, without
+# touching block data. Called whenever the aim, tool, brush, or selection changes.
+# Currently drives the build-to-me column; the same _set_ghost_cells overlay is meant to
+# back copy/paste preview too.
+func _refresh_ghost_preview() -> void:
+	if not _fly_mode or not VoxelWorld.active_project or VoxelWorld.selected_semantic.is_empty():
+		_clear_ghost()
+		return
+	var groups: Array = []
+	var a: Dictionary = {}
+	match VoxelWorld.active_tool:
+		VoxelWorld.Tool.BUILD_TO_ME:
+			a = _build_to_me_anchor()
+			if not a.is_empty():
+				groups = _build_to_me_cells(a["place"], a["normal"])
+		VoxelWorld.Tool.WAND:
+			a = _wand_anchor()
+			if not a.is_empty():
+				groups = _wand_cells(a["block"], a["normal"])
+		_:
+			_clear_ghost()
+			return
+	if groups.is_empty():
+		_clear_ghost()
+		return
+	var cells: Array = []
+	for group in groups:
+		cells.append_array(group)
+	_ensure_ghost_mesh(VoxelWorld.selected_semantic)
+	_set_ghost_cells(cells)
+
+# Point the ghost overlay at an explicit set of cells (empty hides it). Skips the
+# MultiMesh rebuild when the set is unchanged, so holding aim on one face is free.
+func _set_ghost_cells(cells: Array) -> void:
+	if _ghost_mm == null or cells == _ghost_last:
+		return
+	_ghost_last = cells.duplicate()
+	var mm := _ghost_mm.multimesh
+	mm.instance_count = cells.size()
+	for i in cells.size():
+		var c: Vector3i = cells[i]
+		mm.set_instance_transform(i, Transform3D(
+			Basis().scaled(Vector3.ONE * VOXEL_SCALE),
+			Vector3(c.x + 0.5, c.y + 0.5, c.z + 0.5)))
+	_ghost_mm.visible = not cells.is_empty()
+
+func _clear_ghost() -> void:
+	if _ghost_mm == null or _ghost_last.is_empty():
+		return
+	_ghost_last = []
+	_ghost_mm.multimesh.instance_count = 0
+	_ghost_mm.visible = false
+
+# Ensure the ghost MultiMesh is showing the currently selected block. Its mesh + per-
+# surface translucent materials are the real block geometry/textures at 50% alpha, so the
+# preview looks like a see-through copy of what you'd place. Rebuilt only when the
+# selected block (or its appearance, via _rebuild resetting the key) changes.
+func _ensure_ghost_mesh(semantic: String) -> void:
+	if _ghost_mm == null:
+		return
+	var model := VoxelWorld.get_model_for_semantic(semantic)
+	var key := semantic + "|" + (_model_key(model) if model else "none")
+	if key == _ghost_mesh_key and _ghost_mm.multimesh.mesh != null:
+		return
+	_ghost_mesh_key = key
+	_ghost_mm.multimesh.mesh = _build_ghost_mesh(semantic, model)
+
+func _build_ghost_mesh(semantic: String, model: BlockModel) -> Mesh:
+	if model == null:
+		var box := BoxMesh.new()
+		box.material = _ghost_color_material(VoxelWorld.get_color_for_semantic(semantic))
+		return box
+	var resolved := _resolve_model_textures(model)
+	if resolved.is_empty():
+		var mesh := BlockMesher.color_mesh(model) as ArrayMesh
+		mesh.surface_set_material(0, _ghost_color_material(VoxelWorld.get_color_for_semantic(semantic)))
+		return mesh
+	var entry := BlockMesher.textured_mesh(model)
+	var tmesh: ArrayMesh = entry["mesh"]
+	var keys: Array = entry["keys"]
+	var tinted: Array = entry["tinted"]
+	var tint: Color = VoxelWorld.get_tint_for_semantic(semantic)
+	for i in keys.size():
+		tmesh.surface_set_material(i,
+			_ghost_texture_material(str(keys[i]), resolved, bool(tinted[i]), tint, semantic))
+	return tmesh
+
+# Translucent (50%) material for a color/undecided block ghost. Depth write is off so
+# stacked ghosts blend without per-instance sorting; the opaque scene still occludes them.
+func _ghost_color_material(col: Color) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(col.r, col.g, col.b, 0.5)
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	return m
+
+# Translucent (50%) textured material for one ghost surface — the block's own texture at
+# half alpha (animated strips render static, fine for a preview). A face with no bound
+# texture falls back to the block's ghost color.
+func _ghost_texture_material(key: String, resolved: Dictionary, is_tinted: bool,
+		tint: Color, semantic: String) -> Material:
+	if not resolved.has(key):
+		return _ghost_color_material(VoxelWorld.get_color_for_semantic(semantic))
+	var info: Dictionary = resolved[key]
+	var image: ImageTexture = info["image"]
+	var t := tint if is_tinted else Color.WHITE
+	var m := StandardMaterial3D.new()
+	m.albedo_texture = image
+	m.albedo_color = Color(t.r, t.g, t.b, 0.5)
+	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	return m
+
+# ---------------------------------------------------------------------------
+# Placement animation (bulk builds)
+# ---------------------------------------------------------------------------
+
+# Reveal freshly placed blocks with a quick per-step pop: an opaque blue placeholder is
+# dropped over each new cell (hiding the real block already sitting beneath it), then
+# cleared on a stagger that marches deeper into the build — so it reads as the blocks
+# building toward you. Data is untouched by any of this (Principle 2); tune or disable
+# via the PLACEMENT_FX_* constants.
+func _animate_placement(placed_by_step: Array) -> void:
+	if not PLACEMENT_FX_ENABLED or placed_by_step.is_empty():
+		return
+	var now := Time.get_ticks_msec() / 1000.0
+	for step_index in placed_by_step.size():
+		var reveal_at := now + PLACEMENT_FX_HOLD + step_index * PLACEMENT_FX_STEP
+		for cell: Vector3i in placed_by_step[step_index]:
+			_placement_fx.append({"node": _spawn_placeholder(cell), "reveal_at": reveal_at})
+
+func _spawn_placeholder(cell: Vector3i) -> MeshInstance3D:
+	if _placeholder_mesh == null:
+		_placeholder_mesh = BoxMesh.new()
+		_placeholder_mesh.size = Vector3.ONE
+	var mi := MeshInstance3D.new()
+	mi.mesh = _placeholder_mesh
+	mi.material_override = _fx_material
+	# Slightly oversized so it fully occludes the real (possibly smaller) block beneath.
+	mi.transform = Transform3D(Basis().scaled(Vector3.ONE * VOXEL_SCALE * 1.03),
+		Vector3(cell.x + 0.5, cell.y + 0.5, cell.z + 0.5))
+	_fx_root.add_child(mi)
+	return mi
+
+# Free each placeholder once its reveal time passes, letting the real block show. Runs
+# every frame from _process (ahead of the fly/slice early-outs) so an in-flight reveal
+# completes even after you drop out of fly mode.
+func _tick_placement_fx() -> void:
+	if _placement_fx.is_empty():
+		return
+	var now := Time.get_ticks_msec() / 1000.0
+	var still: Array = []
+	for fx in _placement_fx:
+		if now >= fx["reveal_at"]:
+			(fx["node"] as Node).queue_free()
+		else:
+			still.append(fx)
+	_placement_fx = still
+
+func _clear_placement_fx() -> void:
+	for fx in _placement_fx:
+		(fx["node"] as Node).queue_free()
+	_placement_fx.clear()
 
 func _place_targeted_block() -> void:
 	if not VoxelWorld.active_project or VoxelWorld.selected_semantic.is_empty():

@@ -12,6 +12,11 @@ const Slice2DScene := preload("res://scenes/views/View2DGrid.tscn")
 
 enum Preset { SINGLE, COLUMNS, ROWS, GRID }
 
+# Fires whenever the focused pane's active view changes (focus move, tab switch, or
+# re-layout), carrying that view's kind ("3d"/"slice", "" if none). The tool rail
+# listens so it can scope which tools are usable to the view you're working in.
+signal focus_changed(view_kind: String)
+
 var focused_pane: ViewPane = null
 
 var _focus_overlay: Control
@@ -461,6 +466,16 @@ func _update_active_views() -> void:
 	for v in _all_views():
 		if v.has_method("set_active"):
 			v.set_active(v == active_view)
+	focus_changed.emit(focused_view_kind())
+
+# The kind of the currently focused/active view ("3d"/"slice"), or "" if none. Lets a
+# late-connecting listener (the tool rail, built after this shell) read current state.
+func focused_view_kind() -> String:
+	if is_instance_valid(focused_pane):
+		var v := focused_pane.get_current_tab_control()
+		if v and v.has_method("view_kind"):
+			return v.view_kind()
+	return ""
 
 # The focused 2D view broadcasts its slice; every other view renders it as a
 # guide (3D as a plane, other 2D as an intersection line). Polled so scrubbing

@@ -4,6 +4,7 @@ extends Control
 @onready var _editor: Control = $Editor
 @onready var _project_label: Label = $Editor/VBoxContainer/EditorBar/LayoutLabel
 @onready var _bar: HBoxContainer = $Editor/VBoxContainer/EditorBar
+@onready var _content: HBoxContainer = $Editor/VBoxContainer/ContentArea
 @onready var _shell: MultiViewShell = $Editor/VBoxContainer/ContentArea/ViewShell
 
 var _inventory: InventoryScreen
@@ -16,6 +17,7 @@ func _ready() -> void:
 	($HomeScreen as HomeScreen).open_project_requested.connect(_open_editor)
 	($Editor/VBoxContainer/EditorBar/BackBtn as Button).pressed.connect(_go_home)
 	_build_layout_controls()
+	_build_tool_rail()
 	_build_inventory()
 	# Reflect undo/redo availability in the toolbar buttons whenever the history moves or
 	# a different project opens.
@@ -96,6 +98,17 @@ func _build_layout_controls() -> void:
 	_add_bar_button("Cols", func(): _shell.apply_preset(MultiViewShell.Preset.COLUMNS))
 	_add_bar_button("Rows", func(): _shell.apply_preset(MultiViewShell.Preset.ROWS))
 	_add_bar_button("2×2", func(): _shell.apply_preset(MultiViewShell.Preset.GRID))
+
+# The left tool rail lives in the content area, before the view shell (which keeps
+# expand-filling the rest). It scopes its tools to whichever view has focus, so we feed
+# it the shell's focus changes — plus the current kind once, since the shell's initial
+# focus fired during its own _ready, before this connection existed.
+func _build_tool_rail() -> void:
+	var rail := ToolsPanel.new()
+	_content.add_child(rail)
+	_content.move_child(rail, 0)
+	_shell.focus_changed.connect(rail.set_view_kind)
+	rail.set_view_kind(_shell.focused_view_kind())
 
 func _add_bar_button(text: String, cb: Callable) -> Button:
 	var b := Button.new()
