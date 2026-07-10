@@ -118,6 +118,34 @@ static func dominant_axis(v: Vector3i) -> int:
 		return 0
 	return 2
 
+# Rotate a facing 90°*steps around the vertical (Y) axis as a RIGID transform of a whole
+# structure it's part of — unlike rotate_cw (which deliberately collapses Up/Down to North so
+# the interactive single-block R-key always lands on a horizontal facing), a block already
+# facing Up/Down must keep that facing when the structure it belongs to swings around Y; only
+# its position (see rotate_offset_cw) moves. Used by paste's rotate.
+static func rotate_rigid_cw(o: int, steps: int = 1) -> int:
+	var f := facing_of(o)
+	if f == Facing.UP or f == Facing.DOWN:
+		return o
+	var idx: int = _CW.find(f)
+	idx = ((idx + steps) % 4 + 4) % 4
+	return make(_CW[idx], is_top(o))
+
+# Rotate a relative position offset 90°*steps clockwise (viewed from above) around the Y axis
+# through the origin — the same rotational sense as the facing cycle above (NORTH->EAST->
+# SOUTH->WEST maps to (x,z) -> (-z,x) per step). Used to swing a copied region's cell positions
+# around its pivot corner when a paste is rotated.
+static func rotate_offset_cw(v: Vector3i, steps: int = 1) -> Vector3i:
+	steps = ((steps % 4) + 4) % 4
+	var x := v.x
+	var z := v.z
+	for i in steps:
+		var nx := -z
+		var nz := x
+		x = nx
+		z = nz
+	return Vector3i(x, v.y, z)
+
 static func name_of(o: int) -> String:
 	var s: String = NAMES[facing_of(o)]
 	if is_top(o):

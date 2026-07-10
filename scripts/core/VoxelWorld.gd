@@ -59,6 +59,15 @@ var selection_min: Vector3i = Vector3i.ZERO
 var selection_max: Vector3i = Vector3i.ZERO
 var _selection_anchor: Variant = null  # Vector3i first corner, or null between cycles
 
+# Clipboard for copy/cut/paste of the region selection above. Deliberately a plain in-memory
+# field — never @exported, never touched by VoxelProject — so it's editor scratch state, not
+# build data: it survives switching the active project (paste across builds) but not an app
+# restart, and a save never carries it. Keys are positions relative to the copied box's min
+# corner (so paste can place it anywhere); values are deep-cloned BlockCells (tags included).
+var _clipboard: Dictionary = {}
+var _clipboard_size: Vector3i = Vector3i.ONE
+var _has_clipboard: bool = false
+
 # Shared 9-slot hotbar: each entry is a semantic name ("" = empty slot). The
 # active slot's semantic is the selected_semantic used for placement.
 var hotbar: Array[String] = []
@@ -208,6 +217,18 @@ func clear_block(pos: Vector3i) -> void:
 	active_project.data.clear_block(pos)
 	_record_change(pos, before, null, "Erase")
 	block_changed.emit(pos, "")
+	mark_dirty()
+
+# Place a fully-formed cell (type + orientation + tags) verbatim, via VoxelData.set_cell
+# ("used when moving/duplicating cells verbatim"). Unlike set_block (semantic + orientation
+# only), this carries tags too — needed by paste to clone a copied block exactly.
+func set_cell(pos: Vector3i, cell: BlockCell) -> void:
+	if not active_project:
+		return
+	var before: Variant = _encode_cell(active_project.data.get_cell(pos))
+	active_project.data.set_cell(pos, cell)
+	_record_change(pos, before, _encode_cell(cell), "Place")
+	block_changed.emit(pos, cell.type_id if cell else "")
 	mark_dirty()
 
 # ---------------------------------------------------------------------------
@@ -726,6 +747,52 @@ func selection_box() -> Array:
 	if _selection_anchor != null:
 		return [_selection_anchor, _selection_anchor]
 	return []
+
+# ---------------------------------------------------------------------------
+# Clipboard (copy/cut of the region selection) — see the field comments above for why
+# this is plain in-memory state rather than persisted/project-scoped. Paste itself is an
+# interactive 3D-view concern (aim, rotate, ghost preview) and lives in View3D; it reads
+# the accessors below every frame.
+# ---------------------------------------------------------------------------
+
+func has_clipboard() -> bool:
+	return _has_clipboard
+
+func clipboard_size() -> Vector3i:
+	return _clipboard_size
+
+func clipboard_cells() -> Dictionary:
+	return _clipboard
+
+# Deep-clone the selected region into the clipboard, keyed relative to selection_min so
+# paste can drop it anywhere. No-op without a completed selection.
+func copy_selection() -> void:
+	if not has_selection or not active_project:
+		return
+	var data := active_project.data
+	var clip := {}
+	for x in range(selection_min.x, selection_max.x + 1):
+		for y in range(selection_min.y, selection_max.y + 1):
+			for z in range(selection_min.z, selection_max.z + 1):
+				var pos := Vector3i(x, y, z)
+				var cell := data.get_cell(pos)
+				if cell != null:
+					clip[pos - selection_min] = cell.duplicate_cell()
+	_clipboard = clip
+	_clipboard_size = selection_max - selection_min + Vector3i.ONE
+	_has_clipboard = true
+
+# Copy the selection, then delete it as one undo step.
+func cut_selection() -> void:
+	if not has_selection or not active_project:
+		return
+	copy_selection()
+	begin_operation("Cut")
+	for x in range(selection_min.x, selection_max.x + 1):
+		for y in range(selection_min.y, selection_max.y + 1):
+			for z in range(selection_min.z, selection_max.z + 1):
+				clear_block(Vector3i(x, y, z))
+	end_operation()
 
 const BRUSH_SIZE_MAX := 15
 

@@ -102,9 +102,12 @@ var _placement_fx: Array = []     # [{ node: MeshInstance3D, reveal_at: float }]
 
 # --- Ghost preview overlay -------------------------------------------------
 # Reusable translucent preview of the cells an action WOULD affect, drawn without ever
-# touching block data (drives build-to-me / wand now; copy/paste preview later). A single
-# MultiMeshInstance3D whose mesh IS the selected block at 50% alpha, so it looks like a
-# see-through copy of what you'd place and stays one draw call at any cell count.
+# touching block data (drives build-to-me / wand — single block at a time). A single
+# MultiMeshInstance3D whose mesh IS the selected block at _GHOST_ALPHA, so it looks like a
+# see-through copy of what you'd place and stays one draw call at any cell count. Paste has
+# its own, separate opaque+tinted ghost recipe below (_paste_ghost_mms /
+# _build_paste_ghost_mesh) since a whole pasted region of these gets illegible fast.
+const _GHOST_ALPHA := 0.75
 var _ghost_mm: MultiMeshInstance3D
 var _ghost_last: Array = []        # last cell set shown, to skip redundant rebuilds
 var _ghost_mesh_key := ""          # selected-block signature the ghost mesh was built for
@@ -159,9 +162,36 @@ var _guide: Dictionary = {}
 var _sel_box: MeshInstance3D
 var _sel_box_mat: StandardMaterial3D
 
+# --- Paste mode -------------------------------------------------------------
+# Interactive drop of the clipboard (Ctrl+V): a live ghost preview follows the crosshair
+# (like build-to-me/wand) plus a manual offset/rotation the player can dial in. It's a
+# view-local modal layered on top of fly mode rather than a VoxelWorld tool — entering it
+# doesn't touch active_tool, so whatever tool was selected is exactly as it was on exit.
+var _paste_active := false
+var _paste_offset := Vector3i.ZERO
+var _paste_rotation := 0   # quarter-turns (0-3) applied around Y, see Orientation.rotate_*_cw
+# LMB toggles this: false = the anchor follows the crosshair every frame (the default,
+# "aim and place" feel); true = it's pinned to wherever it was at the moment of toggling, so
+# the player can look around freely without the paste drifting off the spot they lined up.
+var _paste_locked := false
+var _paste_locked_base := Vector3i.ZERO
+# One MultiMeshInstance3D per distinct semantic in the clipboard — unlike the single-semantic
+# _ghost_mm above (build-to-me/wand only ever preview ONE block type), a pasted region can mix
+# many, so each gets its own draw call.
+var _paste_ghost_mms: Dictionary = {}       # semantic -> MultiMeshInstance3D
+var _paste_ghost_mesh_keys: Dictionary = {} # semantic -> mesh signature, for rebuild-on-change
+var _paste_popup: PanelContainer            # offset/rotate/place/cancel controls (MMB to show)
+var _paste_offset_labels: Dictionary = {}   # "x"/"y"/"z" -> Label
+# Wireframe outline around the pasted region's full bounds (see _setup_viewport for the
+# show-through material and _update_paste_box) — the ghost blocks themselves are opaque now
+# (see _GHOST_ALPHA/_build_paste_ghost_mesh below), so the box is what still reads through walls.
+var _paste_box: MeshInstance3D
+var _paste_box_mat: StandardMaterial3D
+
 func _ready() -> void:
 	_setup_viewport()
 	_setup_overlay()
+	_build_paste_popup()
 	VoxelWorld.project_opened.connect(_on_project_opened)
 	VoxelWorld.about_to_save.connect(_on_about_to_save)
 	VoxelWorld.block_changed.connect(func(_p, _s): _mark_dirty())
@@ -187,6 +217,8 @@ func _ready() -> void:
 func _on_visibility_changed() -> void:
 	if visible:
 		return
+	if _paste_active:
+		_cancel_paste()
 	if _fly_mode:
 		_release_cursor()
 	if _slice_active:
@@ -369,6 +401,27 @@ func _setup_viewport() -> void:
 	_sel_box.material_override = _sel_box_mat
 	_sel_box.visible = false
 	_viewport.add_child(_sel_box)
+
+	# Paste box: same show-through recipe as the selection box above, marking the pasted
+	# region's full bounds so it reads clearly even where the (now fully opaque) ghost
+	# blocks themselves are occluded or off past the edge of what's on screen.
+	_paste_box_mat = StandardMaterial3D.new()
+	_paste_box_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_paste_box_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_paste_box_mat.no_depth_test = true
+	_paste_box_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	_paste_box_mat.albedo_color = Color(0.3, 0.55, 1.0, 0.30)  # dim: where behind blocks
+	var paste_front := StandardMaterial3D.new()
+	paste_front.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	paste_front.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	paste_front.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	paste_front.albedo_color = Color(0.5, 0.75, 1.0, 1.0)  # bright: where visible
+	_paste_box_mat.next_pass = paste_front
+	_paste_box = MeshInstance3D.new()
+	_paste_box.mesh = ImmediateMesh.new()
+	_paste_box.material_override = _paste_box_mat
+	_paste_box.visible = false
+	_viewport.add_child(_paste_box)
 
 	_update_camera()
 
@@ -625,15 +678,34 @@ func _input(event: InputEvent) -> void:
 				_enter_slice_select()
 				get_viewport().set_input_as_handled()
 				return
-			if key.keycode == KEY_ESCAPE and _fly_mode:
-				_release_cursor()
+			# Ctrl/Cmd+V: drop into paste mode. Ungated by _fly_mode (like Tab above) — it
+			# captures the cursor itself if not already flying, so it works from a cold view.
+			if key.keycode == KEY_V and (key.ctrl_pressed or key.meta_pressed) and not key.echo:
+				_enter_paste_mode()
 				get_viewport().set_input_as_handled()
 				return
+			if key.keycode == KEY_ESCAPE:
+				if _paste_active:
+					# Esc is always a hard cancel for paste, flying or not — MMB is the way
+					# to reach the offset popup (see the mouse-button handling below), so Esc
+					# doesn't need double duty here.
+					_cancel_paste()
+					get_viewport().set_input_as_handled()
+					return
+				if _fly_mode:
+					_release_cursor()
+					get_viewport().set_input_as_handled()
+					return
 			if key.keycode == KEY_B:
 				_cycle_sky()
 			# 1–9 palette slots + R rotate (captured mode only)
 			if _fly_mode:
 				var kc := key.keycode
+				if _paste_active and kc == KEY_R:
+					_paste_rotation = (_paste_rotation + 1) % 4
+					_refresh_ghost_preview()
+					get_viewport().set_input_as_handled()
+					return
 				if kc >= KEY_1 and kc <= KEY_9:
 					_select_palette_slot(kc - KEY_1)
 					get_viewport().set_input_as_handled()
@@ -668,12 +740,20 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 	elif event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
 		var mb := event as InputEventMouseButton
-		match mb.button_index:
-			MOUSE_BUTTON_LEFT:        _erase_targeted_block()
-			MOUSE_BUTTON_RIGHT:       _use_primary_tool()
-			MOUSE_BUTTON_MIDDLE:      _pick_targeted_block()
-			MOUSE_BUTTON_WHEEL_UP:    _cycle_palette(-1)
-			MOUSE_BUTTON_WHEEL_DOWN:  _cycle_palette(1)
+		if _paste_active:
+			# Paste mode repurposes the primary buttons: RMB confirms, LMB toggles anchor
+			# lock, MMB opens the offset popup — no erase/pick/palette-cycle while pending.
+			match mb.button_index:
+				MOUSE_BUTTON_RIGHT:  _commit_paste()
+				MOUSE_BUTTON_LEFT:   _toggle_paste_lock()
+				MOUSE_BUTTON_MIDDLE: _release_cursor()  # opens the popup, same as Esc used to
+		else:
+			match mb.button_index:
+				MOUSE_BUTTON_LEFT:        _erase_targeted_block()
+				MOUSE_BUTTON_RIGHT:       _use_primary_tool()
+				MOUSE_BUTTON_MIDDLE:      _pick_targeted_block()
+				MOUSE_BUTTON_WHEEL_UP:    _cycle_palette(-1)
+				MOUSE_BUTTON_WHEEL_DOWN:  _cycle_palette(1)
 		get_viewport().set_input_as_handled()
 
 # Non-captured mouse: drag-to-look + scroll-to-dolly
@@ -699,6 +779,8 @@ func _on_svc_input(event: InputEvent) -> void:
 				if not _drag_looking or mb.position.distance_to(_drag_last) < 4.0:
 					_capture_cursor()  # short click = enter fly mode
 				_drag_looking = false
+		elif mb.button_index == MOUSE_BUTTON_MIDDLE and mb.pressed and _paste_active:
+			_capture_cursor()  # closes the popup and resumes flying, mirroring MMB in _input
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP:
 			# Dolly forward along look direction
 			_camera_pos += _get_look_dir() * DOLLY_STEP
@@ -724,6 +806,7 @@ func _capture_cursor() -> void:
 	_fly_mode = true
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 	_overlay.visible = true
+	_update_paste_popup_visibility()
 	_update_crosshair_target()
 	_overlay.queue_redraw()
 
@@ -734,8 +817,15 @@ func _release_cursor() -> void:
 	_ralt_held = false
 	_rshift_held = false
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
-	_overlay.visible = false
 	_highlight.visible = false
+	if _paste_active:
+		# Mid-paste: MMB (see _input) called this to step out of fly mode and reveal the
+		# offset popup — the paste itself (ghost, aim, offset, lock) stays live, frozen at
+		# the last aimed cell.
+		_update_paste_popup_visibility()
+		_overlay.queue_redraw()
+		return
+	_overlay.visible = false
 	_target_hit = false
 	_floor_hit = false
 	_clear_ghost()
@@ -777,6 +867,8 @@ func set_active(active: bool) -> void:
 		return
 	_active = active
 	if not _active:
+		if _paste_active:
+			_cancel_paste()  # a backgrounded pane can't be left mid-paste with a live popup
 		if _fly_mode:
 			_release_cursor()
 		if _slice_active:
@@ -1537,6 +1629,11 @@ func _wand_cells(block: Vector3i, normal: Vector3i) -> Array:
 # Currently drives the build-to-me column; the same _set_ghost_cells overlay is meant to
 # back copy/paste preview too.
 func _refresh_ghost_preview() -> void:
+	if _paste_active:
+		# Unlike the tool ghosts below, paste stays live while the cursor is released (the
+		# offset popup is up) — it must not be gated on _fly_mode.
+		_refresh_paste_ghost()
+		return
 	if not _fly_mode or not VoxelWorld.active_project or VoxelWorld.selected_semantic.is_empty():
 		_clear_ghost()
 		return
@@ -1619,17 +1716,20 @@ func _build_ghost_mesh(semantic: String, model: BlockModel) -> Mesh:
 			_ghost_texture_material(str(keys[i]), resolved, bool(tinted[i]), tint, semantic))
 	return tmesh
 
-# Translucent (50%) material for a color/undecided block ghost. Depth write is off so
-# stacked ghosts blend without per-instance sorting; the opaque scene still occludes them.
+# Translucent material for a color/undecided block ghost, at _GHOST_ALPHA. Depth write is
+# off so stacked ghosts blend without per-instance sorting; the opaque scene still occludes
+# them. Build-to-me/wand only ever preview one block at a time, so a soft see-through works;
+# paste (below) uses a different, fully-opaque recipe since a whole pasted region of these
+# gets illegible fast.
 func _ghost_color_material(col: Color) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(col.r, col.g, col.b, 0.5)
+	m.albedo_color = Color(col.r, col.g, col.b, _GHOST_ALPHA)
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	m.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	return m
 
-# Translucent (50%) textured material for one ghost surface — the block's own texture at
-# half alpha (animated strips render static, fine for a preview). A face with no bound
+# Translucent textured material for one ghost surface — the block's own texture at
+# _GHOST_ALPHA (animated strips render static, fine for a preview). A face with no bound
 # texture falls back to the block's ghost color.
 func _ghost_texture_material(key: String, resolved: Dictionary, is_tinted: bool,
 		tint: Color, semantic: String) -> Material:
@@ -1640,10 +1740,65 @@ func _ghost_texture_material(key: String, resolved: Dictionary, is_tinted: bool,
 	var t := tint if is_tinted else Color.WHITE
 	var m := StandardMaterial3D.new()
 	m.albedo_texture = image
-	m.albedo_color = Color(t.r, t.g, t.b, 0.5)
+	m.albedo_color = Color(t.r, t.g, t.b, _GHOST_ALPHA)
 	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	m.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	return m
+
+# ---------------------------------------------------------------------------
+# Paste ghost mesh — fully opaque, tinted (not translucent)
+#
+# A pasted region can be dozens of blocks at once; at that count the translucent x-ray look
+# above stops being readable as "the actual blocks" and just reads as noise. Instead these are
+# rendered fully solid — same real geometry/texture as the block would be for real — with its
+# color washed toward a cool blue so it still reads as a preview at a glance (an obvious "not
+# real yet" signal that doesn't rely on legibility-costing transparency), same idea as
+# WorldEdit-style clipboard-paste previews in other voxel tools: solid blocks + a colored
+# bounding outline (_paste_box above) rather than x-ray ghosting. Normal depth draw (unlike
+# the translucent ghosts) since there's no blending to protect and it should occlude/be
+# occluded like real geometry.
+# ---------------------------------------------------------------------------
+
+const _PASTE_TINT := Color(0.35, 0.55, 1.0)
+const _PASTE_TINT_STRENGTH := 0.4
+
+func _build_paste_ghost_mesh(semantic: String, model: BlockModel) -> Mesh:
+	if model == null:
+		var box := BoxMesh.new()
+		box.material = _paste_solid_color_material(VoxelWorld.get_color_for_semantic(semantic))
+		return box
+	var resolved := _resolve_model_textures(model)
+	if resolved.is_empty():
+		var mesh := BlockMesher.color_mesh(model) as ArrayMesh
+		mesh.surface_set_material(0, _paste_solid_color_material(VoxelWorld.get_color_for_semantic(semantic)))
+		return mesh
+	var entry := BlockMesher.textured_mesh(model)
+	var tmesh: ArrayMesh = entry["mesh"]
+	var keys: Array = entry["keys"]
+	var tinted: Array = entry["tinted"]
+	var tint: Color = VoxelWorld.get_tint_for_semantic(semantic)
+	for i in keys.size():
+		tmesh.surface_set_material(i,
+			_paste_solid_texture_material(str(keys[i]), resolved, bool(tinted[i]), tint, semantic))
+	return tmesh
+
+func _paste_solid_color_material(col: Color) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = col.lerp(_PASTE_TINT, _PASTE_TINT_STRENGTH)
+	return m
+
+func _paste_solid_texture_material(key: String, resolved: Dictionary, is_tinted: bool,
+		tint: Color, semantic: String) -> Material:
+	if not resolved.has(key):
+		return _paste_solid_color_material(VoxelWorld.get_color_for_semantic(semantic))
+	var info: Dictionary = resolved[key]
+	var image: ImageTexture = info["image"]
+	var t := tint if is_tinted else Color.WHITE
+	var m := StandardMaterial3D.new()
+	m.albedo_texture = image
+	m.albedo_color = t.lerp(_PASTE_TINT, _PASTE_TINT_STRENGTH)
+	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 	return m
 
 # ---------------------------------------------------------------------------
@@ -1823,6 +1978,398 @@ func _update_selection_box() -> void:
 		im.surface_add_vertex(p[e[1]])
 	im.surface_end()
 	_sel_box.visible = true
+
+# ---------------------------------------------------------------------------
+# Paste mode (Ctrl+V) — drop the clipboard via the ghost-preview overlay
+#
+# A live preview follows the crosshair like build-to-me/wand, plus a manual offset/rotation
+# that persists for the rest of the paste (never reset except on a fresh Ctrl+V):
+#   RMB   — commit the paste
+#   LMB   — toggle the anchor between "follows the crosshair" (default) and "locked" at its
+#           current position, so the player can look elsewhere without the paste drifting
+#   MMB   — open/close the offset popup (releases/re-captures the cursor to do it — see
+#           _release_cursor/_capture_cursor; also reachable by clicking the bare viewport)
+#   R     — rotate 90°
+#   Esc   — cancel outright, flying or not; never a "back out one level" step, so it can't be
+#           pressed by reflex while reaching for the popup and lose the whole paste
+# Entering/exiting never touches VoxelWorld.active_tool — this is purely a View3D-local modal
+# layered over whatever tool/fly state was already active.
+# ---------------------------------------------------------------------------
+
+func _enter_paste_mode() -> void:
+	if not VoxelWorld.active_project or not VoxelWorld.has_clipboard():
+		return
+	_paste_active = true
+	_paste_offset = Vector3i.ZERO
+	_paste_rotation = 0
+	_paste_locked = false
+	if not _fly_mode:
+		_capture_cursor()  # also refreshes the crosshair aim + ghost
+	else:
+		_update_crosshair_target()
+	_update_paste_popup_visibility()
+	_overlay.visible = true
+	_overlay.queue_redraw()
+
+func _cancel_paste() -> void:
+	if not _paste_active:
+		return
+	_paste_active = false
+	_clear_paste_ghost()
+	_update_paste_popup_visibility()
+	_overlay.queue_redraw()
+
+# Clone the clipboard into the world at the current aim/offset/rotation, skipping any cell
+# that's already occupied (never overwrite), as one undo step. No-op if nothing is aimed at
+# or every target cell is already occupied.
+func _commit_paste() -> void:
+	if not _paste_active:
+		return
+	var anchor = _paste_anchor()
+	if anchor != null:
+		var targets := _paste_targets(anchor)
+		if not targets.is_empty():
+			var clip := VoxelWorld.clipboard_cells()
+			VoxelWorld.begin_operation("Paste")
+			for pos: Vector3i in targets:
+				var src: BlockCell = clip[targets[pos]]
+				var cell := src.duplicate_cell()
+				cell.orientation = Orientation.rotate_rigid_cw(cell.orientation, _paste_rotation)
+				VoxelWorld.set_cell(pos, cell)
+			VoxelWorld.end_operation()
+			_animate_placement(_group_by_distance(targets.keys(), anchor))
+	_paste_active = false
+	_clear_paste_ghost()
+	_update_paste_popup_visibility()
+	_update_crosshair_target()
+
+# Bucket cells by Manhattan distance from `origin` (nearest first), so _animate_placement
+# reveals a pasted region radiating outward from the anchor instead of all at once — build-
+# to-me/wand get their staggered reveal from a directional column/ring order; a paste's
+# shape is arbitrary, so distance-from-anchor is the natural equivalent.
+func _group_by_distance(cells: Array, origin: Vector3i) -> Array:
+	var by_ring := {}
+	for pos: Vector3i in cells:
+		var ring: int = absi(pos.x - origin.x) + absi(pos.y - origin.y) + absi(pos.z - origin.z)
+		if not by_ring.has(ring):
+			by_ring[ring] = []
+		by_ring[ring].append(pos)
+	var rings := by_ring.keys()
+	rings.sort()
+	var groups: Array = []
+	for ring in rings:
+		groups.append(by_ring[ring])
+	return groups
+
+# The world position the clipboard's local origin (its selection_min at copy time) would land
+# on right now: the crosshair's placement cell (same one a normal block placement would use),
+# or the frozen base while locked (see _toggle_paste_lock), plus the manual offset. Null when
+# nothing is aimed at and the anchor was never locked.
+func _paste_anchor() -> Variant:
+	var base: Vector3i
+	if _paste_locked:
+		base = _paste_locked_base
+	elif _target_hit:
+		base = _target_place
+	elif _floor_hit:
+		base = _floor_place
+	else:
+		return null
+	return base + _paste_offset
+
+# LMB: freeze the anchor at its current live position so the player can look elsewhere
+# without the paste following, or unfreeze it to resume tracking the crosshair. Locking
+# with nothing currently aimed at is a no-op (nothing to freeze onto).
+func _toggle_paste_lock() -> void:
+	if not _paste_active:
+		return
+	if _paste_locked:
+		_paste_locked = false
+	else:
+		if _target_hit:
+			_paste_locked_base = _target_place
+		elif _floor_hit:
+			_paste_locked_base = _floor_place
+		else:
+			return
+		_paste_locked = true
+	_refresh_ghost_preview()
+	_overlay.queue_redraw()
+
+# Cells the paste at `anchor` (current rotation) would touch: world position -> the
+# clipboard's relative key, skipping any position already occupied. Pure position math only
+# (no BlockCell cloning) so it's cheap to call every frame for the ghost; the commit clones
+# the source cell once per surviving hit. Shared by both so they can't disagree.
+func _paste_targets(anchor: Vector3i) -> Dictionary:
+	var data := VoxelWorld.active_project.data
+	var clip := VoxelWorld.clipboard_cells()
+	var out := {}
+	for rel: Vector3i in clip:
+		var pos := anchor + Orientation.rotate_offset_cw(rel, _paste_rotation)
+		if data.get_block(pos).is_empty():
+			out[pos] = rel
+	return out
+
+# Refresh the paste ghost from the current aim/offset/rotation — called from
+# _refresh_ghost_preview() (see below) whenever the aim, offset, or rotation changes.
+func _refresh_paste_ghost() -> void:
+	if not _paste_active or not VoxelWorld.active_project:
+		_clear_paste_ghost()
+		return
+	var anchor = _paste_anchor()
+	if anchor == null:
+		_clear_paste_ghost()
+		return
+	_update_paste_box(anchor)
+	var targets := _paste_targets(anchor)
+	var clip := VoxelWorld.clipboard_cells()
+	var by_semantic := {}   # semantic -> Array[{"pos": Vector3i, "o": int}]
+	for pos: Vector3i in targets:
+		var src: BlockCell = clip[targets[pos]]
+		var o := Orientation.rotate_rigid_cw(src.orientation, _paste_rotation)
+		if not by_semantic.has(src.type_id):
+			by_semantic[src.type_id] = []
+		by_semantic[src.type_id].append({"pos": pos, "o": o})
+	_set_paste_ghost_groups(by_semantic)
+
+# The [min, max] inclusive world bounds the pasted region's box would occupy at `anchor`,
+# current rotation. A 90°-multiple rotation only swaps/negates the X/Z axes (no shearing), so
+# rotating just the two extreme corners of the local box and taking their component-wise
+# min/max is exactly the rotated AABB — no need to touch every clipboard cell.
+func _paste_bounds(anchor: Vector3i) -> Array:
+	var clip_size := VoxelWorld.clipboard_size()
+	var c0 := Orientation.rotate_offset_cw(Vector3i.ZERO, _paste_rotation)
+	var c1 := Orientation.rotate_offset_cw(clip_size - Vector3i.ONE, _paste_rotation)
+	var lo := anchor + Vector3i(mini(c0.x, c1.x), mini(c0.y, c1.y), mini(c0.z, c1.z))
+	var hi := anchor + Vector3i(maxi(c0.x, c1.x), maxi(c0.y, c1.y), maxi(c0.z, c1.z))
+	return [lo, hi]
+
+# Rebuild the wireframe outline around the pasted region's full bounds — same box-drawing
+# recipe as _update_selection_box, just fed rotation-aware bounds instead of the selection.
+func _update_paste_box(anchor: Vector3i) -> void:
+	if _paste_box == null:
+		return
+	var bounds := _paste_bounds(anchor)
+	var lo := Vector3(bounds[0] as Vector3i)
+	var hi := Vector3(bounds[1] as Vector3i) + Vector3.ONE
+	var p := [
+		Vector3(lo.x, lo.y, lo.z), Vector3(hi.x, lo.y, lo.z), Vector3(hi.x, lo.y, hi.z), Vector3(lo.x, lo.y, hi.z),
+		Vector3(lo.x, hi.y, lo.z), Vector3(hi.x, hi.y, lo.z), Vector3(hi.x, hi.y, hi.z), Vector3(lo.x, hi.y, hi.z),
+	]
+	var edges := [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]]
+	var im := _paste_box.mesh as ImmediateMesh
+	im.clear_surfaces()
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	for e in edges:
+		im.surface_add_vertex(p[e[0]])
+		im.surface_add_vertex(p[e[1]])
+	im.surface_end()
+	_paste_box.visible = true
+
+# Push one ghost MultiMeshInstance3D per semantic present this frame (building/rebuilding its
+# mesh only when the semantic's appearance changes, same caching as _ensure_ghost_mesh), then
+# hide any left over from a previous frame whose semantic no longer appears.
+func _set_paste_ghost_groups(by_semantic: Dictionary) -> void:
+	for semantic in by_semantic.keys():
+		var mm := _ensure_paste_ghost_mm(semantic)
+		var entries: Array = by_semantic[semantic]
+		var multimesh := mm.multimesh
+		multimesh.instance_count = entries.size()
+		for i in entries.size():
+			var e: Dictionary = entries[i]
+			var pos: Vector3i = e["pos"]
+			var o: int = e["o"]
+			multimesh.set_instance_transform(i, Transform3D(
+				Orientation.basis_of(o).scaled(Vector3.ONE * VOXEL_SCALE),
+				Vector3(pos) + Vector3(0.5, 0.5, 0.5)))
+		mm.visible = true
+	for semantic in _paste_ghost_mms.keys():
+		if not by_semantic.has(semantic):
+			var mm: MultiMeshInstance3D = _paste_ghost_mms[semantic]
+			if mm.visible:
+				mm.multimesh.instance_count = 0
+				mm.visible = false
+
+func _ensure_paste_ghost_mm(semantic: String) -> MultiMeshInstance3D:
+	var mm: MultiMeshInstance3D = _paste_ghost_mms.get(semantic)
+	if mm == null:
+		var multimesh := MultiMesh.new()
+		multimesh.transform_format = MultiMesh.TRANSFORM_3D
+		mm = MultiMeshInstance3D.new()
+		mm.multimesh = multimesh
+		_viewport.add_child(mm)
+		_paste_ghost_mms[semantic] = mm
+	var model := VoxelWorld.get_model_for_semantic(semantic)
+	var key := semantic + "|" + (_model_key(model) if model else "none")
+	if key != _paste_ghost_mesh_keys.get(semantic, ""):
+		_paste_ghost_mesh_keys[semantic] = key
+		mm.multimesh.mesh = _build_paste_ghost_mesh(semantic, model)
+	return mm
+
+func _clear_paste_ghost() -> void:
+	for semantic in _paste_ghost_mms.keys():
+		var mm: MultiMeshInstance3D = _paste_ghost_mms[semantic]
+		mm.multimesh.instance_count = 0
+		mm.visible = false
+	if _paste_box != null:
+		_paste_box.visible = false
+
+# ---------------------------------------------------------------------------
+# Paste offset popup — a small non-modal panel for precise adjustment. MMB (or the bare
+# viewport click / this panel's own MMB) toggles it, releasing/re-capturing the cursor since
+# it needs real clicks; hidden again the moment fly resumes.
+# ---------------------------------------------------------------------------
+
+func _build_paste_popup() -> void:
+	_paste_popup = PanelContainer.new()
+	_paste_popup.visible = false
+	_paste_popup.mouse_filter = Control.MOUSE_FILTER_STOP
+	_paste_popup.custom_minimum_size = Vector2(260, 0)
+	# MMB toggles the popup — closing needs to work from a click anywhere on the panel
+	# itself (blank space included), not just the background viewport behind it.
+	_paste_popup.gui_input.connect(func(ev: InputEvent):
+		if ev is InputEventMouseButton and (ev as InputEventMouseButton).pressed \
+				and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_MIDDLE:
+			_capture_cursor()
+			get_viewport().set_input_as_handled())
+	# Opaque bordered card (same recipe as InventoryScreen's panel) — a bare PanelContainer
+	# falls back to the theme's default panel style, which reads as translucent against the
+	# 3D view behind it.
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.13, 0.14, 0.17, 1.0)
+	sb.border_color = Color(0.42, 0.47, 0.58)
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(10)
+	sb.set_content_margin_all(16)
+	sb.shadow_color = Color(0, 0, 0, 0.5)
+	sb.shadow_size = 12
+	_paste_popup.add_theme_stylebox_override("panel", sb)
+
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 10)
+	_paste_popup.add_child(col)
+
+	var title := Label.new()
+	title.text = "Paste"
+	title.add_theme_font_size_override("font_size", 20)
+	col.add_child(title)
+	col.add_child(HSeparator.new())
+
+	for axis in ["x", "y", "z"]:
+		col.add_child(_build_axis_row(axis))
+
+	var rotate_btn := Button.new()
+	rotate_btn.text = "Rotate 90°"
+	rotate_btn.focus_mode = Control.FOCUS_NONE
+	rotate_btn.custom_minimum_size = Vector2(0, 40)
+	rotate_btn.add_theme_font_size_override("font_size", 16)
+	rotate_btn.pressed.connect(func():
+		_paste_rotation = (_paste_rotation + 1) % 4
+		_refresh_ghost_preview()
+		_update_paste_offset_labels())
+	col.add_child(rotate_btn)
+
+	var buttons := HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 8)
+	col.add_child(buttons)
+	var place_btn := Button.new()
+	place_btn.text = "Place"
+	place_btn.focus_mode = Control.FOCUS_NONE
+	place_btn.custom_minimum_size = Vector2(0, 40)
+	place_btn.add_theme_font_size_override("font_size", 16)
+	place_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	place_btn.pressed.connect(_commit_paste)
+	buttons.add_child(place_btn)
+	var cancel_btn := Button.new()
+	cancel_btn.text = "Cancel"
+	cancel_btn.focus_mode = Control.FOCUS_NONE
+	cancel_btn.custom_minimum_size = Vector2(0, 40)
+	cancel_btn.add_theme_font_size_override("font_size", 16)
+	cancel_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cancel_btn.pressed.connect(_cancel_paste)
+	buttons.add_child(cancel_btn)
+
+	add_child(_paste_popup)
+	# Anchors stay at the Control default (top-left, fixed size) — reset_size() applies its
+	# real minimum size once here (get_combined_minimum_size(), same as a Container would lay
+	# out) so it's never a zero-size, unclickable rect. Placement from here on is pure
+	# global_position math in _position_paste_popup(), not anchors, so it can be pinned to
+	# the whole workspace rather than wherever this particular pane happens to sit.
+	_paste_popup.reset_size()
+
+func _build_axis_row(axis: String) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	var label := Label.new()
+	label.text = axis.to_upper() + ":"
+	label.add_theme_font_size_override("font_size", 16)
+	label.custom_minimum_size = Vector2(22, 0)
+	row.add_child(label)
+	var minus := Button.new()
+	minus.text = "-"
+	minus.focus_mode = Control.FOCUS_NONE
+	minus.custom_minimum_size = Vector2(40, 36)
+	minus.add_theme_font_size_override("font_size", 18)
+	minus.pressed.connect(func(): _nudge_paste_offset(axis, -1))
+	row.add_child(minus)
+	var value := Label.new()
+	value.text = "0"
+	value.add_theme_font_size_override("font_size", 16)
+	value.custom_minimum_size = Vector2(36, 0)
+	value.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	row.add_child(value)
+	_paste_offset_labels[axis] = value
+	var plus := Button.new()
+	plus.text = "+"
+	plus.focus_mode = Control.FOCUS_NONE
+	plus.custom_minimum_size = Vector2(40, 36)
+	plus.add_theme_font_size_override("font_size", 18)
+	plus.pressed.connect(func(): _nudge_paste_offset(axis, 1))
+	row.add_child(plus)
+	return row
+
+func _nudge_paste_offset(axis: String, delta: int) -> void:
+	match axis:
+		"x": _paste_offset.x += delta
+		"y": _paste_offset.y += delta
+		"z": _paste_offset.z += delta
+	_refresh_ghost_preview()
+	_update_paste_offset_labels()
+
+func _update_paste_offset_labels() -> void:
+	if _paste_offset_labels.is_empty():
+		return
+	(_paste_offset_labels["x"] as Label).text = str(_paste_offset.x)
+	(_paste_offset_labels["y"] as Label).text = str(_paste_offset.y)
+	(_paste_offset_labels["z"] as Label).text = str(_paste_offset.z)
+
+func _update_paste_popup_visibility() -> void:
+	if _paste_popup == null:
+		return
+	_paste_popup.visible = _paste_active and not _fly_mode
+	if _paste_popup.visible:
+		_position_paste_popup()
+		_update_paste_offset_labels()
+
+# Bottom-center of the whole multi-pane workspace, not this specific pane — so the popup
+# stays put regardless of which pane/view is doing the pasting, and doesn't get clipped by
+# sitting flush against a pane's own edge (which can be the window edge in single-pane view).
+func _position_paste_popup() -> void:
+	var rect := _paste_workspace_rect()
+	var popup_size := _paste_popup.size
+	_paste_popup.global_position = Vector2(
+		rect.position.x + (rect.size.x - popup_size.x) * 0.5,
+		rect.position.y + rect.size.y - popup_size.y - 16.0)
+
+# Walk up to the shared MultiViewShell (every pane lives under one) for its global rect;
+# falls back to the window if one somehow can't be found.
+func _paste_workspace_rect() -> Rect2:
+	var host: Node = self
+	while host != null and not (host is MultiViewShell):
+		host = host.get_parent()
+	if host is Control:
+		return (host as Control).get_global_rect()
+	return get_viewport().get_visible_rect()
 
 # ---------------------------------------------------------------------------
 # Slice-select mode
@@ -2110,6 +2657,26 @@ func _draw_slice_hud() -> void:
 	_overlay.draw_string(font, Vector2(10.0, _overlay.size.y - 10.0), hint,
 		HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.6))
 
+func _draw_paste_hud() -> void:
+	var font := ThemeDB.fallback_font
+	if _fly_mode:
+		var center := _overlay.size / 2.0
+		# Amber crosshair while the anchor is locked (pinned in place, not tracking aim) so
+		# the "frozen" state reads at a glance, not just from the HUD text.
+		var col := Color(1.0, 0.75, 0.25, 0.95) if _paste_locked else Color(1, 1, 1, 0.9)
+		_overlay.draw_line(center + Vector2(-14, 0),  center + Vector2(14, 0),  col, 1.5)
+		_overlay.draw_line(center + Vector2(0,  -14), center + Vector2(0,  14), col, 1.5)
+		_overlay.draw_circle(center, 3.0, Color(0,0,0,0.4))
+	var title := "Paste%s  offset (%d, %d, %d)  ·  rotation %d°" % [
+		"  (locked)" if _paste_locked else "",
+		_paste_offset.x, _paste_offset.y, _paste_offset.z, _paste_rotation * 90]
+	_overlay.draw_string(font, Vector2(14.0, 30.0), title,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color(0.85, 1.0, 0.9, 0.95))
+	var hint := ("RMB place  ·  LMB lock/unlock  ·  MMB offset controls  ·  R rotate  ·  Esc cancel" if _fly_mode
+		else "MMB or click the view to resume aiming  ·  Esc or Cancel to abort")
+	_overlay.draw_string(font, Vector2(10.0, _overlay.size.y - 10.0), hint,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.7))
+
 # --- Slice math helpers ---------------------------------------------------
 
 func _dominant_axis(v: Vector3) -> int:
@@ -2178,6 +2745,9 @@ func _select_palette_slot(slot: int) -> void:
 func _draw_overlay() -> void:
 	if _slice_active:
 		_draw_slice_hud()
+		return
+	if _paste_active:
+		_draw_paste_hud()
 		return
 	var center := _overlay.size / 2.0
 	_overlay.draw_line(center + Vector2(-14, 0),  center + Vector2(14, 0),  Color(1,1,1,0.9), 1.5)

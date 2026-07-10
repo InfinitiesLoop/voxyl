@@ -46,6 +46,12 @@ func _shortcut_input(event: InputEvent) -> void:
 		KEY_Y:
 			VoxelWorld.redo()
 			get_viewport().set_input_as_handled()
+		KEY_C:
+			VoxelWorld.copy_selection()
+			get_viewport().set_input_as_handled()
+		KEY_X:
+			VoxelWorld.cut_selection()
+			get_viewport().set_input_as_handled()
 
 func _refresh_history_buttons() -> void:
 	if _undo_btn != null:

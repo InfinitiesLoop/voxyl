@@ -12,6 +12,7 @@ func _ready() -> void:
 	_test_last_wins()
 	_test_named_libraries()
 	_test_orientation()
+	_test_rigid_rotation()
 	_test_cell_orientation_tags()
 	_test_hotbar()
 	_test_shapes()
@@ -22,6 +23,7 @@ func _ready() -> void:
 	_test_reorient()
 	_test_undo_redo()
 	_test_selection()
+	_test_clipboard()
 	_test_asset_library()
 	_test_library_serialization()
 	_test_project_persistence()
@@ -197,6 +199,35 @@ func _test_orientation() -> void:
 		Orientation.dominant_axis(Vector3i(0, 5, -1)) == 1
 		and Orientation.dominant_axis(Vector3i(3, 0, -1)) == 0
 		and Orientation.dominant_axis(Vector3i(0, 1, 4)) == 2)
+
+# Rigid (whole-structure) rotation, used by paste to swing a copied region 90° around Y
+# without disturbing a block already facing straight up/down — unlike rotate_cw, which
+# deliberately collapses Up/Down to North for the interactive single-block R-key.
+func _test_rigid_rotation() -> void:
+	print("-- rigid rotation (paste)")
+	var north := Orientation.make(Orientation.Facing.NORTH)
+	_check("rigid rotate matches rotate_cw for a horizontal facing",
+		Orientation.rotate_rigid_cw(north, 1) == Orientation.rotate_cw(north, 1))
+	var up := Orientation.make(Orientation.Facing.UP, true)
+	_check("rigid rotate leaves an Up facing untouched",
+		Orientation.rotate_rigid_cw(up, 1) == up)
+	var down := Orientation.make(Orientation.Facing.DOWN)
+	_check("rigid rotate leaves a Down facing untouched",
+		Orientation.rotate_rigid_cw(down, 3) == down)
+	_check("four rigid quarter-turns is the identity",
+		Orientation.rotate_rigid_cw(north, 4) == north)
+
+	# Offset rotation: same rotational sense as the facing cycle (NORTH(-Z) → EAST(+X)).
+	_check("offset rotate: +X → +Z after one step",
+		Orientation.rotate_offset_cw(Vector3i(1, 0, 0), 1) == Vector3i(0, 0, 1))
+	_check("offset rotate: +Z → -X after one step",
+		Orientation.rotate_offset_cw(Vector3i(0, 0, 1), 1) == Vector3i(-1, 0, 0))
+	_check("offset rotate leaves Y untouched",
+		Orientation.rotate_offset_cw(Vector3i(2, 7, -3), 1).y == 7)
+	_check("four offset quarter-turns is the identity",
+		Orientation.rotate_offset_cw(Vector3i(3, -1, -5), 4) == Vector3i(3, -1, -5))
+	_check("negative steps rotate the other way",
+		Orientation.rotate_offset_cw(Vector3i(1, 0, 0), -1) == Orientation.rotate_offset_cw(Vector3i(1, 0, 0), 3))
 
 func _test_cell_orientation_tags() -> void:
 	print("-- cell orientation + tags")
@@ -579,6 +610,84 @@ func _test_selection() -> void:
 	_check("clear_selection() empties the selection", not VoxelWorld.has_selection)
 
 	VoxelWorld.workspace.remove_project("Sel Test")
+	VoxelWorld.active_project = null
+	_rm_rf(ProjectStore.ROOT)
+	ProjectStore.ROOT = saved_root
+
+# Clipboard (copy/cut/paste support): deep-cloning a selection, tags isolation, cut as one
+# undo step, set_cell's tag-preserving verbatim write, and cross-project persistence (the
+# clipboard lives on VoxelWorld, not the project, so it must survive switching projects).
+func _test_clipboard() -> void:
+	print("-- clipboard (copy/cut)")
+	var saved_root := ProjectStore.ROOT
+	ProjectStore.ROOT = "user://__voxyl_cliptest__"
+	_rm_rf(ProjectStore.ROOT)
+
+	var project := VoxelWorld.workspace.add_project("Clip Test")
+	project.palette_names.append("Default")
+	VoxelWorld.open(project)
+
+	VoxelWorld.copy_selection()
+	_check("copy_selection with no selection is a no-op", not VoxelWorld.has_clipboard())
+
+	# A small region: two occupied cells (one oriented, one tagged) and one empty gap.
+	VoxelWorld.set_block(Vector3i(0, 0, 0), "Base", Orientation.make(Orientation.Facing.EAST, true))
+	VoxelWorld.set_block(Vector3i(1, 0, 0), "Trim")
+	project.data.get_cell(Vector3i(1, 0, 0)).tags["note"] = "hi"
+	# (2,0,0) stays empty — the selection covers it, but it shouldn't appear in the clipboard.
+	VoxelWorld.select_region_click(Vector3i(0, 0, 0))
+	VoxelWorld.select_region_click(Vector3i(2, 0, 0))
+	VoxelWorld.copy_selection()
+
+	_check("copy_selection populates the clipboard", VoxelWorld.has_clipboard())
+	_check("clipboard size matches the selection box", VoxelWorld.clipboard_size() == Vector3i(3, 1, 1))
+	var clip := VoxelWorld.clipboard_cells()
+	_check("clipboard has one entry per occupied cell (gap excluded)", clip.size() == 2)
+	var origin_cell: BlockCell = clip.get(Vector3i.ZERO)
+	_check("relative key 0 keeps type + orientation",
+		origin_cell != null and origin_cell.type_id == "Base"
+		and origin_cell.orientation == Orientation.make(Orientation.Facing.EAST, true))
+	var tagged_cell: BlockCell = clip.get(Vector3i(1, 0, 0))
+	_check("relative key carries the tagged cell's tags",
+		tagged_cell != null and tagged_cell.tags.get("note", "") == "hi")
+
+	# Deep clone: mutating the live cell after copy must not reach into the clipboard.
+	project.data.get_cell(Vector3i(1, 0, 0)).tags["note"] = "changed"
+	_check("clipboard cell is a deep copy, not a live reference",
+		tagged_cell.tags.get("note", "") == "hi")
+
+	# Cut deletes the whole box as one undo step, keeping the same clipboard contents.
+	VoxelWorld.cut_selection()
+	_check("cut clears every occupied cell in the box",
+		VoxelWorld.get_block(Vector3i(0, 0, 0)) == "" and VoxelWorld.get_block(Vector3i(1, 0, 0)) == "")
+	_check("cut still populated the clipboard", VoxelWorld.has_clipboard())
+	VoxelWorld.undo()
+	_check("a single undo restores the whole cut region",
+		VoxelWorld.get_block(Vector3i(0, 0, 0)) == "Base" and VoxelWorld.get_block(Vector3i(1, 0, 0)) == "Trim")
+	_check("undo also restores the tag",
+		project.data.get_cell(Vector3i(1, 0, 0)).tags.get("note", "") == "changed")
+
+	# set_cell: a verbatim, tag-preserving write (what paste uses instead of set_block).
+	var src := BlockCell.new("Accent", Orientation.make(Orientation.Facing.SOUTH), {"note": "pasted"})
+	VoxelWorld.set_cell(Vector3i(9, 9, 9), src)
+	var placed := project.data.get_cell(Vector3i(9, 9, 9))
+	_check("set_cell writes type + orientation + tags verbatim",
+		placed != null and placed.type_id == "Accent"
+		and placed.orientation == Orientation.make(Orientation.Facing.SOUTH)
+		and placed.tags.get("note", "") == "pasted")
+	VoxelWorld.undo()
+	_check("set_cell is undoable", VoxelWorld.get_block(Vector3i(9, 9, 9)) == "")
+
+	# Cross-project: the clipboard is VoxelWorld state, not project state, so opening a
+	# different project must not clear or alter it.
+	var other := VoxelWorld.workspace.add_project("Clip Test 2")
+	other.palette_names.append("Default")
+	VoxelWorld.open(other)
+	_check("clipboard survives switching the active project", VoxelWorld.has_clipboard())
+	_check("clipboard contents are unchanged after switching", VoxelWorld.clipboard_cells().size() == 2)
+
+	VoxelWorld.workspace.remove_project("Clip Test")
+	VoxelWorld.workspace.remove_project("Clip Test 2")
 	VoxelWorld.active_project = null
 	_rm_rf(ProjectStore.ROOT)
 	ProjectStore.ROOT = saved_root
