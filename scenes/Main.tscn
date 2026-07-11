@@ -1,9 +1,8 @@
-[gd_scene load_steps=4 format=3]
+[gd_scene load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://scripts/ui/Main.gd" id="1"]
 [ext_resource type="PackedScene" path="res://scenes/ui/HomeScreen.tscn" id="2"]
 [ext_resource type="Script" path="res://scripts/ui/MultiViewShell.gd" id="5"]
-[ext_resource type="PackedScene" path="res://scenes/ui/Hotbar.tscn" id="7"]
 
 [node name="Main" type="Control"]
 layout_mode = 3
@@ -57,6 +56,3 @@ layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 script = ExtResource("5")
-
-[node name="Hotbar" parent="Editor/VBoxContainer" instance=ExtResource("7")]
-layout_mode = 2

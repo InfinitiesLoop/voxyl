@@ -25,7 +25,7 @@ var _hover_drop := -1  # slot currently under a palette-block drag, or -1
 var _baker: BlockIconBaker  # bakes the real 3D icon for each slot's block
 
 func _ready() -> void:
-	custom_minimum_size = Vector2(0, SLOT + CAPTION_H + 14.0)
+	custom_minimum_size = Vector2(natural_width(), SLOT + CAPTION_H + 14.0)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	# Baked icons are pixel art when textured; keep them crisp when scaled into a slot.
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
@@ -52,10 +52,32 @@ func _on_appearance_changed() -> void:
 # Layout
 # ---------------------------------------------------------------------------
 
+func natural_width() -> float:
+	return VoxelWorld.HOTBAR_SIZE * SLOT + (VoxelWorld.HOTBAR_SIZE - 1) * GAP
+
 func _row_origin() -> Vector2:
-	var total := VoxelWorld.HOTBAR_SIZE * SLOT + (VoxelWorld.HOTBAR_SIZE - 1) * GAP
 	# Center the slot+caption block vertically so the name strip has room below.
-	return Vector2((size.x - total) * 0.5, (size.y - (SLOT + CAPTION_H)) * 0.5)
+	return Vector2((size.x - natural_width()) * 0.5, (size.y - (SLOT + CAPTION_H)) * 0.5)
+
+# Lays the hotbar out centered in a horizontal row, with an accessory control to its
+# left (the tool strip in the Inventory screen, or a read-only active-tool badge in the
+# editor chrome) and a matching spacer on the right so the hotbar's slots stay centered
+# in the row regardless of the accessory's width, rather than drifting off to one side.
+static func centered_row(left: Control, hotbar: Hotbar) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	row.add_child(left)
+
+	var center := CenterContainer.new()
+	center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	center.add_child(hotbar)
+	row.add_child(center)
+
+	var spacer := Control.new()
+	row.add_child(spacer)
+	left.resized.connect(func(): spacer.custom_minimum_size.x = left.size.x)
+	spacer.custom_minimum_size.x = left.size.x
+	return row
 
 func _slot_rect(i: int) -> Rect2:
 	var o := _row_origin()

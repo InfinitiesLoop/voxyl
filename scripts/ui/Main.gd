@@ -4,7 +4,7 @@ extends Control
 @onready var _editor: Control = $Editor
 @onready var _project_label: Label = $Editor/VBoxContainer/EditorBar/LayoutLabel
 @onready var _bar: HBoxContainer = $Editor/VBoxContainer/EditorBar
-@onready var _content: HBoxContainer = $Editor/VBoxContainer/ContentArea
+@onready var _bottom: VBoxContainer = $Editor/VBoxContainer
 @onready var _shell: MultiViewShell = $Editor/VBoxContainer/ContentArea/ViewShell
 
 var _inventory: InventoryScreen
@@ -17,8 +17,8 @@ func _ready() -> void:
 	($HomeScreen as HomeScreen).open_project_requested.connect(_open_editor)
 	($Editor/VBoxContainer/EditorBar/BackBtn as Button).pressed.connect(_go_home)
 	_build_layout_controls()
-	_build_tool_rail()
 	_build_inventory()
+	_build_bottom_bar()
 	# Reflect undo/redo availability in the toolbar buttons whenever the history moves or
 	# a different project opens.
 	VoxelWorld.history_changed.connect(_refresh_history_buttons)
@@ -105,16 +105,18 @@ func _build_layout_controls() -> void:
 	_add_bar_button("Rows", func(): _shell.apply_preset(MultiViewShell.Preset.ROWS))
 	_add_bar_button("2×2", func(): _shell.apply_preset(MultiViewShell.Preset.GRID))
 
-# The left tool rail lives in the content area, before the view shell (which keeps
-# expand-filling the rest). It scopes its tools to whichever view has focus, so we feed
-# it the shell's focus changes — plus the current kind once, since the shell's initial
-# focus fired during its own _ready, before this connection existed.
-func _build_tool_rail() -> void:
-	var rail := ToolsPanel.new()
-	_content.add_child(rail)
-	_content.move_child(rail, 0)
-	_shell.focus_changed.connect(rail.set_view_kind)
-	rail.set_view_kind(_shell.focused_view_kind())
+# The always-visible hotbar, with a read-only badge showing the active tool to its
+# left (kept centered by Hotbar.centered_row — see there). The tool itself can only be
+# changed from the Inventory screen's tool strip (_inventory.tool_strip()); that strip
+# is view-aware, so we still feed it the shell's focus changes here — plus the current
+# kind once, since the shell's initial focus fired during its own _ready, before this
+# connection existed.
+func _build_bottom_bar() -> void:
+	var badge := ActiveToolBadge.new()
+	var hotbar := Hotbar.new()
+	_bottom.add_child(Hotbar.centered_row(badge, hotbar))
+	_shell.focus_changed.connect(_inventory.tool_strip().set_view_kind)
+	_inventory.tool_strip().set_view_kind(_shell.focused_view_kind())
 
 func _add_bar_button(text: String, cb: Callable) -> Button:
 	var b := Button.new()

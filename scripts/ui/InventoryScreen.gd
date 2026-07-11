@@ -27,6 +27,7 @@ const _MARGIN := 72
 
 var _grid: BlockGrid
 var _hotbar: Hotbar
+var _tool_strip: ToolsPanel
 var _stack: PalettePanel
 var _lib_section: VBoxContainer
 var _armed := false  # only react to the open keys while the editor is on screen
@@ -124,10 +125,13 @@ func _build_ui() -> void:
 
 	vbox.add_child(HSeparator.new())
 
-	# The same Hotbar control the editor chrome uses — picks and the active-slot
-	# highlight stay in sync with the bar below because both read VoxelWorld.
+	# The tool strip (pencil/build-to-me/wand/select + brush size) sits to the left of
+	# the same Hotbar control the editor chrome uses — picks and the active-slot
+	# highlight stay in sync with the bar below because both read VoxelWorld. The strip
+	# is the only place the active tool or brush can be changed; see ToolsPanel.
+	_tool_strip = ToolsPanel.new()
 	_hotbar = Hotbar.new()
-	vbox.add_child(_hotbar)
+	vbox.add_child(Hotbar.centered_row(_tool_strip, _hotbar))
 
 func _build_header(parent: Control) -> void:
 	var row := HBoxContainer.new()
@@ -366,6 +370,11 @@ func _scoped_block_items(palette: Palette) -> Array:
 # ---------------------------------------------------------------------------
 # Open / close
 # ---------------------------------------------------------------------------
+
+# Lets the shell keep the tool strip scoped to whichever pane has focus, same as any
+# other view-aware chrome (see Main._build_tool_strip).
+func tool_strip() -> ToolsPanel:
+	return _tool_strip
 
 func open() -> void:
 	if visible:
