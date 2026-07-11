@@ -57,6 +57,8 @@ func _run() -> void:
 	VoxelWorld.clear_block(Vector3i(0, 0, 0))
 	VoxelWorld.clear_block(Vector3i(0, 1, 0))
 
+	_check_ceiling_slab_placement(v3d)
+
 	_check_textured_render(v3d)
 	_check_imported_render(v3d)
 	_check_multipart_render(v3d)
@@ -185,6 +187,32 @@ func _check_layout_roundtrip(shell: MultiViewShell) -> void:
 
 	# apply_layout rejects an empty/absent descriptor (caller falls back to a preset).
 	_check("apply_layout rejects an empty descriptor", not shell.apply_layout({}))
+
+# Reported bug: placing a slab against a ceiling should land it top-half (flush
+# against the block above), not bottom-half. Drives the real raycast + placement
+# path (View3D._update_crosshair_target / _place_targeted_block) with a camera
+# standing under a ceiling block and looking straight up.
+func _check_ceiling_slab_placement(v3d: Node) -> void:
+	VoxelWorld.set_block(Vector3i(2, 5, 2), "Slab")
+	VoxelWorld.selected_semantic = "Slab"
+	v3d.set("_camera_pos", Vector3(2.5, 4.5, 2.5))
+	v3d.set("_yaw", 0.0)
+	v3d.set("_pitch", 89.0)
+	v3d.call("_update_crosshair_target")
+	_check("ceiling raycast hits the block above",
+		v3d.get("_target_hit") and v3d.get("_target_block") == Vector3i(2, 5, 2))
+	_check("ceiling raycast places into the cell below it",
+		v3d.get("_target_place") == Vector3i(2, 4, 2))
+	v3d.call("_place_targeted_block")
+	var placed := VoxelWorld.active_project.data.get_cell(Vector3i(2, 4, 2))
+	_check("slab placed under a ceiling lands top-half",
+		placed != null and Orientation.is_top(placed.orientation))
+	v3d.call("_rebuild")
+	var box: AABB = v3d.call("_cell_world_aabb", Vector3i(2, 4, 2))
+	_check("top-half slab's rendered geometry actually sits in the upper half (y=4.5..5.0)",
+		is_equal_approx(box.position.y, 4.5) and is_equal_approx(box.position.y + box.size.y, 5.0))
+	VoxelWorld.clear_block(Vector3i(2, 5, 2))
+	VoxelWorld.clear_block(Vector3i(2, 4, 2))
 
 # Phase 1: a textured/animated block must render through the new per-face texture
 # path — a real PNG on disk, resolved via the workspace library into per-surface

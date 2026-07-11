@@ -10,6 +10,14 @@ extends Resource
 # that only care about "what kind of block is here"; get_cell() exposes the rest.
 var cells: Dictionary = {}
 
+# Cached get_used_aabb() result, invalidated on any mutation below. Recomputing the
+# bounds is an O(cell count) scan; without this cache a caller that queries it once per
+# visible cell in a redraw loop (View2DGrid) turns one redraw into O(visible × total)
+# work, which is fine at a few hundred blocks and ruinous at tens of thousands. Every
+# mutator lives in this file, so setting the flag here is the only place it's needed.
+var _aabb_cache: Array = []
+var _aabb_dirty := true
+
 # --- Persisted mirror of `cells` --------------------------------------------
 # `cells` is the runtime structure (a live Dictionary of BlockCell objects). For
 # on-disk storage we don't embed one BlockCell sub-resource per voxel — a big build
@@ -59,6 +67,7 @@ func unpack() -> void:
 		var orientation := _packed_orientations[i] if i < _packed_orientations.size() else 0
 		var tags: Dictionary = tags_by_index.get(i, {})
 		cells[pos] = BlockCell.new(_packed_type_ids[i], orientation, tags)
+	_aabb_dirty = true
 
 # Set (or update) the block at pos. An empty type_id erases. Orientation/tags
 # default to "plain" unless supplied — callers that care pass them explicitly.
@@ -67,6 +76,7 @@ func set_block(pos: Vector3i, type_id: String, orientation: int = 0, tags: Dicti
 		cells.erase(pos)
 	else:
 		cells[pos] = BlockCell.new(type_id, orientation, tags)
+	_aabb_dirty = true
 
 # Replace the whole cell object (used when moving/duplicating cells verbatim).
 func set_cell(pos: Vector3i, cell: BlockCell) -> void:
@@ -74,6 +84,7 @@ func set_cell(pos: Vector3i, cell: BlockCell) -> void:
 		cells.erase(pos)
 	else:
 		cells[pos] = cell
+	_aabb_dirty = true
 
 func get_block(pos: Vector3i) -> String:
 	var c: BlockCell = cells.get(pos, null)
@@ -88,9 +99,19 @@ func get_orientation(pos: Vector3i) -> int:
 
 func clear_block(pos: Vector3i) -> void:
 	cells.erase(pos)
+	_aabb_dirty = true
 
-# Returns [min: Vector3i, max: Vector3i] of all occupied cells, or [] if empty.
+# Returns [min: Vector3i, max: Vector3i] of all occupied cells, or [] if empty. Cached
+# (see _aabb_dirty) since some callers (e.g. View2DGrid's per-visible-cell redraw loop)
+# call this many times between edits — without the cache that turns one redraw into
+# O(visible cells × total cells) instead of O(total cells) once.
 func get_used_aabb() -> Array:
+	if _aabb_dirty:
+		_aabb_cache = _compute_used_aabb()
+		_aabb_dirty = false
+	return _aabb_cache
+
+func _compute_used_aabb() -> Array:
 	if cells.is_empty():
 		return []
 	var mn := Vector3i(cells.keys()[0])

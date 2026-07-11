@@ -83,7 +83,15 @@ var _current_sky: int = 0
 var _sky_label_timer: float = 0.0
 
 # --- Dirty flag ---
-var _dirty := false
+# A single block_changed edit no longer forces a full-scene rebuild (that was O(total
+# blocks in the project) per edit — fine at a few hundred blocks, ruinous at tens of
+# thousands). Instead we track exactly which cells need their render node touched;
+# _flush_dirty rebuilds only those nodes. Structural/appearance-wide changes (palette
+# edits, block-type edits, opening a project) still go through the full _rebuild path
+# via _full_rebuild_pending, since those can affect every cell's look.
+var _dirty := false                # true once a flush (incremental or full) is scheduled
+var _dirty_positions := {}         # Vector3i -> true; cells needing a node rebuild
+var _full_rebuild_pending := false
 
 # --- Placement animation (bulk builds) -------------------------------------
 # A bulk tool writes its blocks to the data immediately, then asks for a quick reveal:
@@ -194,7 +202,7 @@ func _ready() -> void:
 	_build_paste_popup()
 	VoxelWorld.project_opened.connect(_on_project_opened)
 	VoxelWorld.about_to_save.connect(_on_about_to_save)
-	VoxelWorld.block_changed.connect(func(_p, _s): _mark_dirty())
+	VoxelWorld.block_changed.connect(func(p, _s): _mark_cell_dirty(p))
 	VoxelWorld.palette_stack_changed.connect(func(): _mark_dirty(); if _fly_mode: _overlay.queue_redraw())
 	VoxelWorld.block_type_changed.connect(func(): _mark_dirty(); if _fly_mode: _overlay.queue_redraw())
 	VoxelWorld.selection_changed.connect(func(_s): if _fly_mode: _overlay.queue_redraw())
@@ -968,9 +976,66 @@ func _get_world_center() -> Vector3:
 # ---------------------------------------------------------------------------
 
 func _mark_dirty(_arg = null) -> void:
+	_full_rebuild_pending = true
+	_schedule_flush()
+
+# A single cell changed (block_changed). Its own render node needs rebuilding, and so
+# do its 6 neighbors: connecting/multipart blocks derive their connection flags from
+# neighbor occupancy at render time (see _cell_connections), so a neighbor's node can
+# be stale even though its own data didn't change. Bounded to 7 nodes per edit regardless
+# of how many blocks the project holds — this is the fix for per-edit cost scaling with
+# total project size instead of with edit size.
+func _mark_cell_dirty(pos: Vector3i) -> void:
+	_dirty_positions[pos] = true
+	for dir in BlockMesher.DIR_NORMALS:
+		_dirty_positions[pos + Vector3i(BlockMesher.DIR_NORMALS[dir])] = true
+	_schedule_flush()
+
+func _schedule_flush() -> void:
 	if not _dirty:
 		_dirty = true
-		call_deferred("_rebuild")
+		call_deferred("_flush_dirty")
+
+# Coalesces however many _mark_dirty/_mark_cell_dirty calls happened this frame (e.g. a
+# bulk tool or a multi-block undo/redo step, each emitting block_changed per cell) into
+# one deferred flush. A pending full rebuild wins outright since it already covers every
+# dirty position.
+func _flush_dirty() -> void:
+	_dirty = false
+	if _full_rebuild_pending:
+		_full_rebuild_pending = false
+		_dirty_positions.clear()
+		_rebuild()
+		return
+	if _dirty_positions.is_empty():
+		return
+	var positions := _dirty_positions.keys()
+	_dirty_positions.clear()
+	if not VoxelWorld.active_project:
+		return
+	var data := VoxelWorld.active_project.data
+	for pos: Vector3i in positions:
+		_update_cell_node(pos, data)
+	# Re-apply emphasis/guide the same way a full rebuild would (both are cheap: emphasis
+	# only touches the nodes that exist, guide only resizes a 4-vertex plane).
+	if _slice_active:
+		_update_slice_visuals()
+	_refresh_guide()
+
+# Rebuild exactly one cell's render node in place — the incremental counterpart to the
+# per-cell body of _rebuild()'s loop below (kept in sync via _build_cell_node).
+func _update_cell_node(pos: Vector3i, data: VoxelData) -> void:
+	var old_node = _cell_nodes.get(pos)
+	if old_node != null:
+		_voxel_root.remove_child(old_node)
+		old_node.free()
+		_cell_nodes.erase(pos)
+	var cell: BlockCell = data.get_cell(pos)
+	if cell == null or cell.type_id.is_empty():
+		return
+	var node := _build_cell_node(pos, cell, cell.type_id)
+	_voxel_root.add_child(node)
+	_cell_nodes[pos] = node
 
 # _model_meshes/_textured_model_meshes are now keyed by each model's revision (_model_key),
 # so a changed model can never be served a stale entry — correctness doesn't depend on
@@ -1005,33 +1070,7 @@ func _rebuild() -> void:
 		var semantic: String = cell.type_id
 		if semantic.is_empty():
 			continue
-		# A cell resolves to one or more render parts (geometry + a model rotation).
-		# A plain block is a single part; a connecting/multipart block is its post
-		# plus a side part per connected neighbor. The uniform VOXEL_SCALE leaves
-		# full blocks filling their whole cell (no air gap); a plain cube at the
-		# default orientation reduces to identity·scale — a flush full-block render.
-		var parts := _resolve_cell_parts(pos, cell, semantic)
-		var center := Vector3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5)
-		var node: Node3D
-		if parts.size() == 1:
-			# Common case (every default-build cell): a single MeshInstance3D, placed
-			# directly so the node structure — and thus the render — is unchanged.
-			var mi := MeshInstance3D.new()
-			_apply_cell_appearance(mi, semantic, parts[0]["model"])
-			mi.transform = Transform3D((parts[0]["basis"] as Basis).scaled(Vector3.ONE * VOXEL_SCALE), center)
-			node = mi
-		else:
-			# Multipart: a container at the cell center holding one child per part,
-			# each with its own model + rotation. The cached per-model meshes and
-			# per-surface materials are reused across parts and cells.
-			var container := Node3D.new()
-			container.position = center
-			for part in parts:
-				var mi := MeshInstance3D.new()
-				_apply_cell_appearance(mi, semantic, part["model"])
-				mi.transform = Transform3D((part["basis"] as Basis).scaled(Vector3.ONE * VOXEL_SCALE), Vector3.ZERO)
-				container.add_child(mi)
-			node = container
+		var node := _build_cell_node(pos, cell, semantic)
 		_voxel_root.add_child(node)
 		_cell_nodes[pos] = node
 	# Re-apply emphasis if a rebuild happened while choosing a slice (e.g. an edit
@@ -1039,6 +1078,37 @@ func _rebuild() -> void:
 	if _slice_active:
 		_update_slice_visuals()
 	_refresh_guide()  # the guide plane spans the build, so resize it on rebuild
+
+# A cell resolves to one or more render parts (geometry + a model rotation). A plain
+# block is a single part; a connecting/multipart block is its post plus a side part per
+# connected neighbor. The uniform VOXEL_SCALE leaves full blocks filling their whole cell
+# (no air gap); a plain cube at the default orientation reduces to identity·scale — a
+# flush full-block render. Shared by the full rebuild loop above and _update_cell_node's
+# single-cell incremental path, so both build identical nodes.
+func _build_cell_node(pos: Vector3i, cell: BlockCell, semantic: String) -> Node3D:
+	var parts := _resolve_cell_parts(pos, cell, semantic)
+	var center := Vector3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5)
+	var node: Node3D
+	if parts.size() == 1:
+		# Common case (every default-build cell): a single MeshInstance3D, placed
+		# directly so the node structure — and thus the render — is unchanged.
+		var mi := MeshInstance3D.new()
+		_apply_cell_appearance(mi, semantic, parts[0]["model"])
+		mi.transform = Transform3D((parts[0]["basis"] as Basis).scaled(Vector3.ONE * VOXEL_SCALE), center)
+		node = mi
+	else:
+		# Multipart: a container at the cell center holding one child per part,
+		# each with its own model + rotation. The cached per-model meshes and
+		# per-surface materials are reused across parts and cells.
+		var container := Node3D.new()
+		container.position = center
+		for part in parts:
+			var mi := MeshInstance3D.new()
+			_apply_cell_appearance(mi, semantic, part["model"])
+			mi.transform = Transform3D((part["basis"] as Basis).scaled(Vector3.ONE * VOXEL_SCALE), Vector3.ZERO)
+			container.add_child(mi)
+		node = container
+	return node
 
 # ---------------------------------------------------------------------------
 # Render-time part resolver
@@ -1881,7 +1951,16 @@ func _derive_place_orientation(place_pos: Vector3i, face_normal: Vector3i) -> in
 	if VoxelWorld.has_full_facing_for_semantic(VoxelWorld.selected_semantic):
 		return Orientation.make(Orientation.from_normal(face_normal))
 	var to_cam := _camera_pos - (Vector3(place_pos) + Vector3(0.5, 0.5, 0.5))
-	var facing := Orientation.from_dir(Vector3(to_cam.x, 0.0, to_cam.z))
+	var horiz := Vector3(to_cam.x, 0.0, to_cam.z)
+	if horiz.length_squared() < 0.0001:
+		# Camera has (almost) no horizontal offset from the cell — e.g. standing right
+		# under a ceiling block and looking straight up. from_dir() on a near-zero
+		# vector ties toward UP/DOWN, which breaks the top/bottom-half flip below (it
+		# only works around a horizontal facing axis). Fall back to camera yaw, which
+		# stays well-defined at any pitch (clamped short of straight up/down).
+		var look := _get_look_dir()
+		horiz = Vector3(-look.x, 0.0, -look.z)
+	var facing := Orientation.from_dir(horiz)
 	var top := false
 	if face_normal.y < 0:
 		top = true       # placed under a block
