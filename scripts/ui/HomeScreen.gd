@@ -729,7 +729,7 @@ func _build_palette_editor_view() -> Control:
 
 	_entry_detail = _build_entry_detail()
 	split.add_child(_entry_detail)
-	split.resized.connect(func(): split.split_offset = maxi(0, int(split.size.x) - 452))
+	split.resized.connect(func(): split.split_offset = maxi(0, int(split.size.x) - 732))
 
 	return root
 
@@ -738,7 +738,7 @@ func _build_palette_editor_view() -> Control:
 # _refresh_entry_detail (the block-type chooser grid scrolls internally and grows to fill it).
 func _build_entry_detail() -> Control:
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size.x = 440
+	panel.custom_minimum_size.x = 720
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.13, 0.13, 0.15)
 	sb.content_margin_left = 16
@@ -947,18 +947,19 @@ func _refresh_entry_detail() -> void:
 		bt_row.add_child(bt_name)
 		vbox.add_child(bt_row)
 	else:
-		var assign_grid := BlockGrid.new()
-		assign_grid.show_captions = true
-		assign_grid.cell_size = Vector2(48, 48)
-		assign_grid.custom_minimum_size = Vector2(0, 200)
-		assign_grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		assign_grid.populate_items(_scoped_block_items(_editing_palette))
-		assign_grid.set_selected(entry.block_type_name)
-		assign_grid.item_selected.connect(func(key: String):
+		var chooser := BlockChooser.new()
+		chooser.custom_minimum_size = Vector2(0, 340)
+		chooser.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		chooser.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		vbox.add_child(chooser)
+		chooser.configure(_editing_palette, entry.block_type_name)
+		# The inline editor has no OK button, so exploring commits live (as the old flat grid
+		# did). Refresh the left entry grid + the chooser's "Current:" chip, but *not* the whole
+		# detail — a full rebuild would tear down the chooser and lose its browse/preview state.
+		chooser.selection_changed.connect(func(key: String):
 			VoxelWorld.assign_palette_entry_block(_editing_palette, entry, key)
 			_refresh_palette_entry_grid()
-			_refresh_entry_detail())
-		vbox.add_child(assign_grid)
+			chooser.refresh_current(key))
 
 	if not builtin:
 		vbox.add_child(HSeparator.new())
@@ -998,28 +999,6 @@ func _unique_semantic_name(base: String) -> String:
 		candidate = "%s %d" % [base, i]
 		i += 1
 	return candidate
-
-# Every block type a palette can map to: one BlockGrid.Item per block in its subscribed
-# libraries (in priority order), then the basic-library fallback, de-duplicated by name —
-# first hit wins, matching VoxelWorkspace.resolve_block_type's own scope order. Each
-# item's search text folds in the *owning* library's name (see BlockGrid.block_item), so
-# e.g. searching "ztones" finds every block from a "gtnh.ztones" library even when the
-# block's own name/namespace never mentions "ztones".
-func _scoped_block_items(palette: Palette) -> Array:
-	var seen := {}
-	var items: Array = []
-	var libs := palette.library_names.duplicate()
-	if VoxelWorkspace.BASIC_LIBRARY not in libs:
-		libs.append(VoxelWorkspace.BASIC_LIBRARY)
-	for lib_name in libs:
-		var lib := VoxelWorld.workspace.get_library(lib_name)
-		if lib == null:
-			continue
-		for bt in lib.sorted_block_types():
-			if not seen.has(bt.name):
-				seen[bt.name] = true
-				items.append(BlockGrid.block_item(bt, lib_name))
-	return items
 
 # The palette's library-subscription editor, now a first-class always-visible section (not
 # collapsed): its ordered library_names (each with move-up / remove) plus an "add" picker of
@@ -1113,6 +1092,9 @@ func _build_block_types_tab() -> Control:
 	_library_rail.allow_rename = true
 	_library_rail.allow_multi_select = true
 	_library_rail.allow_bulk_delete = true
+	# A leading "All blocks" row: with nothing selected the grid shows every library's blocks
+	# merged with dividers, so browsing the whole catalog is the default, not an empty grid.
+	_library_rail.include_all_row = true
 	_library_rail.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_library_rail.add_requested.connect(_on_add_library)
 	_library_rail.delete_requested.connect(_on_delete_library)
@@ -1249,28 +1231,42 @@ func _on_library_selection_changed(library_names: Array) -> void:
 	_update_header_buttons()
 	_refresh_bt_detail()
 
-# Rebuild _block_grid + _bt_owner_by_name from _selected_libraries: one library populates
-# it exactly as before (no section set, so no divider — byte-identical to the old single-
-# select path); 2+ libraries merge every library's blocks into one list, each tagged with
-# its owning library as a divider section (see BlockGrid.Item.section).
+# Rebuild _block_grid + _bt_owner_by_name from the libraries in view (see _grid_libraries):
+# one library populates it with no section set, so no divider — byte-identical to the old
+# single-select path; 2+ libraries (including the "All blocks" default) merge every library's
+# blocks into one list, each tagged with its owning library as a divider section (see
+# BlockGrid.Item.section).
 func _populate_block_grid() -> void:
 	_bt_owner_by_name = {}
 	if not _block_grid:
 		return
-	if _selected_libraries.is_empty():
+	var libs := _grid_libraries()
+	if libs.is_empty():
 		_block_grid.populate([])
-	elif _selected_libraries.size() == 1:
-		var lib: BlockLibrary = _selected_libraries[0]
+	elif libs.size() == 1:
+		var lib: BlockLibrary = libs[0]
 		for bt in lib.sorted_block_types():
 			_bt_owner_by_name[bt.name] = lib
 		_block_grid.populate(lib.sorted_block_types(), lib.name)
 	else:
 		var items: Array = []
-		for lib in _selected_libraries:
+		for lib in libs:
 			for bt in lib.sorted_block_types():
 				_bt_owner_by_name[bt.name] = lib
 				items.append(BlockGrid.block_item(bt, lib.name, lib.name))
 		_block_grid.populate_items(items)
+
+# Libraries whose blocks the grid shows: the rail selection when there is one, else *every*
+# non-basic library (the "All blocks" default). basic is the resolution floor, not a
+# user-managed library, so it isn't listed on its own — same as the rail.
+func _grid_libraries() -> Array:
+	if not _selected_libraries.is_empty():
+		return _selected_libraries
+	var out: Array = []
+	for lib in VoxelWorld.workspace.libraries:
+		if lib.name != VoxelWorkspace.BASIC_LIBRARY:
+			out.append(lib)
+	return out
 
 # Single-target header actions (New block, Open folder) have no unambiguous target when
 # more than one library is selected, so they're disabled rather than guessing.
@@ -1329,15 +1325,14 @@ func _on_open_library_folder() -> void:
 	LibraryStore.save_library(_selected_library)
 	OS.shell_open(ProjectSettings.globalize_path(AssetLibrary.path_for(_selected_library.name)))
 
-# Pick a sensible selected library after a refresh: keep the current one if it still
-# exists, else fall back to the first library (basic on a fresh install).
+# Prune the selection to libraries that still exist after a refresh. An empty result is left
+# empty on purpose — that's the "All blocks" default (see _populate_block_grid), not a bug to
+# paper over by force-selecting the first library.
 func _ensure_selected_libraries() -> void:
 	var kept: Array = []
 	for lib in _selected_libraries:
 		if VoxelWorld.workspace.get_library(lib.name) != null:
 			kept.append(lib)
-	if kept.is_empty() and not VoxelWorld.workspace.libraries.is_empty():
-		kept = [VoxelWorld.workspace.libraries[0]]
 	_selected_libraries = kept
 	_selected_library = _selected_libraries[0] if _selected_libraries.size() == 1 else null
 

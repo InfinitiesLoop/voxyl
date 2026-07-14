@@ -436,6 +436,51 @@ func has_full_facing_for_semantic(semantic_name: String) -> bool:
 		return bt.state_map.has_vertical_facing()
 	return get_shape_for_semantic(semantic_name) == BlockType.Shape.FULL
 
+# The orientation scheme a semantic uses when placed and rotated — the single place that
+# decides how a block may be turned, so placement (_derive_place_orientation) and the R-key
+# rotation always agree. Returns a small profile Dictionary:
+#   mode: "full"            — 6-way: faces the direction out of the surface it's placed against
+#                             (barrels, dispensers, logs, a plain undecided FULL cube).
+#         "horizontal"      — 4 horizontal facings only, no vertical pose at all (chests,
+#                             furnaces, ladders): faces the player, never tips or top-flips.
+#         "horizontal_half" — 4 horizontal facings + a top/bottom half (stairs, slabs).
+#   into_surface: bool      — a "full" block that faces INTO the surface instead of out of it
+#                             (hoppers: a state_map with a DOWN facing but no UP). Only
+#                             meaningful when mode == "full".
+# Resolution order: an explicit BlockType.orient_mode override wins (an importer records one
+# when the block's own data proves a constraint no state_map survived — e.g. an entity-drawn
+# chest); else the state_map's own facings decide; else the built-in shape — FULL being the
+# least-restrictive default, matching "allow every pose when we can't tell".
+func orientation_profile_for_semantic(semantic_name: String) -> Dictionary:
+	var bt: BlockType = _resolve_semantic(semantic_name).get("bt")
+	if bt != null:
+		if bt.orient_mode == BlockType.OrientMode.HORIZONTAL:
+			return {"mode": "horizontal", "into_surface": false}
+		if bt.orient_mode == BlockType.OrientMode.FULL:
+			return {"mode": "full", "into_surface": false}
+		var sm := bt.state_map
+		if sm != null and not sm.is_empty():
+			if sm.has_vertical_facing():
+				var into := sm.has_facing(Orientation.Facing.DOWN) and not sm.has_facing(Orientation.Facing.UP)
+				return {"mode": "full", "into_surface": into}
+			return {"mode": "horizontal_half" if sm.has_top_variant() else "horizontal", "into_surface": false}
+	var full := get_shape_for_semantic(semantic_name) == BlockType.Shape.FULL
+	return {"mode": "full" if full else "horizontal_half", "into_surface": false}
+
+# Whether a semantic's orientation is a meaningful, inheritable property — used by the wand
+# to decide if new blocks should copy the orientation of the block they extend from. True for
+# any block with real per-facing data (a non-empty state_map) or an explicit orient_mode, or a
+# non-FULL built-in shape (slab/stairs); false for a plain undecided FULL cube, whose
+# orientation is visually inert so there's nothing worth inheriting.
+func is_orientable_for_semantic(semantic_name: String) -> bool:
+	var bt: BlockType = _resolve_semantic(semantic_name).get("bt")
+	if bt != null:
+		if bt.orient_mode != BlockType.OrientMode.AUTO:
+			return true
+		if bt.state_map != null and not bt.state_map.is_empty():
+			return true
+	return get_shape_for_semantic(semantic_name) != BlockType.Shape.FULL
+
 # Resolved render geometry for a semantic, as a BlockModel. Same last-wins
 # palette-stack walk as color/shape: find the mapped block type, then return its
 # explicit model (model_id, resolved through the palette's library stack) or the

@@ -2,11 +2,11 @@ class_name NewPaletteEntryDialog
 extends ConfirmationDialog
 
 # "New palette entry…" / "Edit palette entry…" — one dialog, two modes: a semantic name
-# (required, unique on the palette) plus a searchable grid to pick the block it resolves
-# to (optional when creating — leaving it unpicked keeps the entry undecided, the "build
-# before you decide" path). Pure UI, mirroring NewBlockDialog: it only gathers the picks
-# and emits them on confirm; the caller does the actual VoxelWorld mutation. That split is
-# what makes Cancel free — nothing changes unless `created` or `edited` fires.
+# (required, unique on the palette) plus a BlockChooser (the shared "mini multi-library view")
+# to pick the block it resolves to. The block is optional when creating — leaving it unpicked
+# keeps the entry undecided, the "build before you decide" path. Pure UI: it only gathers the
+# picks and emits them on confirm; the caller does the actual VoxelWorld mutation. That split
+# is what makes Cancel free — nothing changes unless `created` or `edited` fires.
 
 signal created(semantic_name: String, block_type_name: String)
 signal edited(entry: PaletteEntry, semantic_name: String, block_type_name: String)
@@ -14,16 +14,23 @@ signal edited(entry: PaletteEntry, semantic_name: String, block_type_name: Strin
 var _palette: Palette
 var _editing_entry: PaletteEntry = null  # null → create mode
 var _name_edit: LineEdit
-var _grid: BlockGrid
-var _picked_block_name: String = ""
+var _chooser: BlockChooser
 
 func _ready() -> void:
 	title = "New palette entry"
 	ok_button_text = "Create"
 
+	# Draggable by its title bar (default), and resizable — the user can grow it to browse
+	# more blocks at once. min_size keeps it usable; the content floor (vbox min) is kept
+	# well below that so dragging the corner smaller actually works.
+	unresizable = false
+	min_size = Vector2i(760, 520)
+
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 8)
-	vbox.custom_minimum_size = Vector2(520, 520)
+	# A modest content floor; the caller's popup_centered sets the (larger) initial size and
+	# the user can resize from there.
+	vbox.custom_minimum_size = Vector2(700, 460)
 	add_child(vbox)
 
 	var name_row := HBoxContainer.new()
@@ -39,54 +46,45 @@ func _ready() -> void:
 
 	vbox.add_child(HSeparator.new())
 
-	var bt_lbl := Label.new()
-	bt_lbl.text = "Block type (optional — pick later if undecided)"
-	bt_lbl.add_theme_font_size_override("font_size", 11)
-	bt_lbl.modulate = Color(1, 1, 1, 0.6)
-	vbox.add_child(bt_lbl)
-
-	_grid = BlockGrid.new()
-	_grid.show_captions = true
-	_grid.cell_size = Vector2(48, 48)
-	_grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_grid.item_selected.connect(func(key: String):
-		_picked_block_name = key
-		_grid.set_selected(key))
-	vbox.add_child(_grid)
+	_chooser = BlockChooser.new()
+	_chooser.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_chooser.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	vbox.add_child(_chooser)
 
 	confirmed.connect(_on_confirmed)
 	canceled.connect(queue_free)
 
 	# Deferred: AcceptDialog grabs focus onto its own default button as part of showing
 	# itself, which runs after about_to_popup — a same-frame grab_focus() here would just
-	# get overridden. Deferring runs after that, so the name field wins.
-	about_to_popup.connect(func(): _focus_name_edit.call_deferred())
+	# get overridden. Deferring runs after that, so our field wins.
+	about_to_popup.connect(func(): _apply_focus.call_deferred())
 
-# Set once, right after instantiation and before popup — `palette` is used only to check
-# name uniqueness on confirm; `items` is the caller-built scoped block-type list (already
-# has the machinery for this in InventoryScreen, no need to duplicate it here).
-func setup(palette: Palette, default_name: String, items: Array) -> void:
+# Create mode. Set once, right after instantiation *and after the dialog is in the tree* (so
+# the chooser's _ready has run) — `palette` checks name uniqueness on confirm and scopes the
+# chooser's block list. Opens undecided (no block picked yet).
+func setup(palette: Palette, default_name: String) -> void:
 	_palette = palette
 	_name_edit.text = default_name
-	_grid.populate_items(items)
+	_chooser.configure(palette, "")
 
-# Edit mode: prefill the current name and block, and highlight that block in the grid.
-# `_picked_block_name` starts at the entry's current assignment (not empty) so confirming
-# without touching the grid keeps it as-is instead of silently clearing it.
-func setup_edit(palette: Palette, entry: PaletteEntry, items: Array) -> void:
+# Edit mode: prefill the current name, and open the chooser on the entry's current block so
+# confirming without touching the grid keeps it as-is.
+func setup_edit(palette: Palette, entry: PaletteEntry) -> void:
 	_palette = palette
 	_editing_entry = entry
 	title = "Edit palette entry"
 	ok_button_text = "Save"
 	_name_edit.text = entry.semantic_name
-	_picked_block_name = entry.block_type_name
-	_grid.populate_items(items)
-	_grid.set_selected(entry.block_type_name)
+	_chooser.configure(palette, entry.block_type_name)
 
-func _focus_name_edit() -> void:
-	_name_edit.grab_focus()
+# Create: the name is the thing you must supply, so focus it (default name pre-filled). Edit:
+# the name's already set and you're only changing the block, so focus search to type-to-find.
+func _apply_focus() -> void:
 	if _editing_entry:
-		_name_edit.select_all()   # editing: highlight the current name so typing overtypes it
+		_chooser.focus_search()
+	else:
+		_name_edit.grab_focus()
+		_name_edit.select_all()
 
 func _on_confirmed() -> void:
 	var n := _name_edit.text.strip_edges()
@@ -97,8 +95,9 @@ func _on_confirmed() -> void:
 	if collision != null and collision != _editing_entry:
 		queue_free()
 		return
+	var block := _chooser.get_selected()
 	if _editing_entry:
-		edited.emit(_editing_entry, n, _picked_block_name)
+		edited.emit(_editing_entry, n, block)
 	else:
-		created.emit(n, _picked_block_name)
+		created.emit(n, block)
 	queue_free()

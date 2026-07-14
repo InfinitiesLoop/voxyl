@@ -309,10 +309,10 @@ func _on_add_entry() -> void:
 		return
 	var dlg := NewPaletteEntryDialog.new()
 	get_tree().root.add_child(dlg)
-	dlg.setup(palette, _unique_semantic_name(palette, "New"), _scoped_block_items(palette))
+	dlg.setup(palette, _unique_semantic_name(palette, "New"))
 	dlg.created.connect(func(semantic_name: String, block_type_name: String):
 		_create_entry(palette, semantic_name, block_type_name))
-	dlg.popup_centered(Vector2i(560, 560))
+	dlg.popup_centered(Vector2i(1200, 820))
 
 func _create_entry(palette: Palette, semantic_name: String, block_type_name: String) -> void:
 	var e := VoxelWorld.add_palette_entry(palette, semantic_name)
@@ -325,10 +325,10 @@ func _create_entry(palette: Palette, semantic_name: String, block_type_name: Str
 func _open_edit_entry_dialog(palette: Palette, entry: PaletteEntry) -> void:
 	var dlg := NewPaletteEntryDialog.new()
 	get_tree().root.add_child(dlg)
-	dlg.setup_edit(palette, entry, _scoped_block_items(palette))
+	dlg.setup_edit(palette, entry)
 	dlg.edited.connect(func(e: PaletteEntry, semantic_name: String, block_type_name: String):
 		_apply_entry_edit(palette, e, semantic_name, block_type_name))
-	dlg.popup_centered(Vector2i(560, 560))
+	dlg.popup_centered(Vector2i(1200, 820))
 
 func _apply_entry_edit(palette: Palette, entry: PaletteEntry, semantic_name: String, block_type_name: String) -> void:
 	if semantic_name != entry.semantic_name:
@@ -344,28 +344,6 @@ func _unique_semantic_name(palette: Palette, base: String) -> String:
 		candidate = "%s %d" % [base, i]
 		i += 1
 	return candidate
-
-# Every block type a palette can map to: one BlockGrid.Item per block in its subscribed
-# libraries (in priority order), then the basic-library fallback, de-duplicated by name —
-# first hit wins, matching VoxelWorkspace.resolve_block_type's own scope order. Each
-# item's search text folds in the *owning* library's name (see BlockGrid.block_item), so
-# e.g. searching "ztones" finds every block from a "gtnh.ztones" library even when the
-# block's own name/namespace never mentions "ztones".
-func _scoped_block_items(palette: Palette) -> Array:
-	var seen := {}
-	var items: Array = []
-	var libs := palette.library_names.duplicate()
-	if VoxelWorkspace.BASIC_LIBRARY not in libs:
-		libs.append(VoxelWorkspace.BASIC_LIBRARY)
-	for lib_name in libs:
-		var lib := VoxelWorld.workspace.get_library(lib_name)
-		if lib == null:
-			continue
-		for bt in lib.sorted_block_types():
-			if not seen.has(bt.name):
-				seen[bt.name] = true
-				items.append(BlockGrid.block_item(bt, lib_name))
-	return items
 
 # ---------------------------------------------------------------------------
 # Open / close

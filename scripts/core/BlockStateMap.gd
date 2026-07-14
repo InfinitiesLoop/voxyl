@@ -71,6 +71,25 @@ func has_vertical_facing() -> bool:
 			return true
 	return false
 
+# Whether any variant declares this specific facing (an Orientation.Facing value). Lets the
+# placement logic read the block's real facing set — e.g. a hopper (DOWN present, UP absent)
+# is a block that feeds INTO the surface it's placed against, so it faces the opposite way
+# from a barrel/dispenser (all 6 present) which faces out of that surface.
+func has_facing(facing: int) -> bool:
+	for e in entries:
+		if int(e.get("facing", ANY_FACING)) == facing:
+			return true
+	return false
+
+# Whether any variant is a "top half" (upside-down stairs/slabs). A horizontal-facing block
+# with NO top variant (chest, furnace, ladder) has no vertical pose at all — it must never be
+# top-flipped, unlike stairs/slabs which vary by half.
+func has_top_variant() -> bool:
+	for e in entries:
+		if bool(e.get("top", false)):
+			return true
+	return false
+
 # True when this is a connecting/multipart block (driven by `parts`). The view
 # computes connection flags from neighbors and selects parts via resolve_parts().
 func is_multipart() -> bool:

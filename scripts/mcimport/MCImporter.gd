@@ -141,7 +141,17 @@ func import_block(ns: String, block_id: String, name_override := "") -> BlockTyp
 		if be_ref.is_empty():
 			_warn("no model referenced: %s:%s" % [ns, block_id])
 			return null
-		return _emit_block_entity(ns, bt_name, be_ref)
+		# A block entity is drawn by Java, never tipped onto its back like a barrel — and its
+		# blockstate often carries no `facing` at all (a chest's rotation is entirely in the
+		# renderer). So default entity blocks to horizontal orientation, UNLESS the blockstate
+		# explicitly declares a vertical (up/down) facing (a shulker box), which keeps 6-way.
+		var has_vertical := false
+		for v in variants:
+			var f := int(v["facing"])
+			if f == Orientation.Facing.UP or f == Orientation.Facing.DOWN:
+				has_vertical = true
+				break
+		return _emit_block_entity(ns, bt_name, be_ref, not has_vertical)
 
 	# The resting-orientation model is what BlockType.model_id and the current 3D
 	# path resolve; sample its dominant texture for the planning color (decision 1).
@@ -389,15 +399,23 @@ func _emit_block_type(ns: String, bt_name: String, primary_ref: String, state_ma
 # a model that *resolves but carries no geometry* is a block entity (a bodiless
 # builtin/entity model); a model that couldn't be read at all is genuinely broken — skip
 # it as before rather than invent a cube for an asset that isn't there.
-func _emit_block_entity(ns: String, bt_name: String, primary_ref: String) -> BlockType:
+func _emit_block_entity(ns: String, bt_name: String, primary_ref: String, horizontal_only := false) -> BlockType:
 	if _resolve_model_json(primary_ref, 0) == null:
 		_warn("all variant models failed to import: %s" % bt_name)
 		return null
+	var bt: BlockType
 	var tmpl := _build_entity_template(primary_ref)
 	if tmpl != null:
 		_library.add_block_model(tmpl)
-		return _emit_block_type(ns, bt_name, tmpl.id, null)
-	return _emit_approximate_cube(ns, bt_name, primary_ref)
+		bt = _emit_block_type(ns, bt_name, tmpl.id, null)
+	else:
+		bt = _emit_approximate_cube(ns, bt_name, primary_ref)
+	# Horizontal-only blockstate ⇒ never tip it vertically (see BlockType.orient_mode). The
+	# state_map stays null, so the whole-model basis_of rotation still applies for the 4
+	# horizontal facings — this only forbids the vertical poses.
+	if bt != null and horizontal_only:
+		bt.orient_mode = BlockType.OrientMode.HORIZONTAL
+	return bt
 
 # Known block-entity primary model → the entity atlas its Java renderer samples. Keyed
 # by canonical model ref so only the precise vanilla blocks match; a modded chest with

@@ -34,6 +34,14 @@ extends Resource
 # tint_index. Decoupled like color: edit it freely without touching voxel data.
 enum Shape { FULL, SLAB, STAIRS }
 
+# How this block may be oriented when placed/rotated. AUTO (default) derives the scheme at
+# runtime from state_map + shape — the existing behavior. The explicit values are a constraint
+# an importer records when the block's own data proves it: HORIZONTAL for a block whose
+# Minecraft blockstate declares only horizontal facings (chest, furnace, …) — even when its
+# geometry is entity-drawn and no state_map survives — so it's never tipped onto its side.
+# FULL forces the 6-way scheme. Purely a placement/material-layer hint; never in voxel data.
+enum OrientMode { AUTO, FULL, HORIZONTAL }
+
 @export var name: String = ""
 # The source namespace this block was imported from (e.g. "ztones", "minecraft"), kept
 # even when namespace-split importing routes the block into a same-named library and
@@ -51,6 +59,9 @@ enum Shape { FULL, SLAB, STAIRS }
 @export var shape: Shape = Shape.FULL
 @export var model_id: String = ""
 @export var state_map: BlockStateMap = null
+# Explicit orientation constraint (see OrientMode). Defaults to AUTO so pre-existing saved
+# blocks and everything else keep deriving their scheme from state_map/shape.
+@export var orient_mode: OrientMode = OrientMode.AUTO
 @export var tint: Color = Color.WHITE
 # Free-form searchable labels, decoupled from identity exactly like source_namespace: a
 # term hits a tag without the tag being part of the block's name. Import extensions

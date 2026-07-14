@@ -23,6 +23,16 @@ signal bulk_delete_requested(items: Array)
 # When true, a "Delete Selected" button appears under the add-bar, disabled while the
 # selection is empty. Only useful alongside allow_multi_select.
 @export var allow_bulk_delete: bool = false
+# The bottom "Name… [+]" add-bar. Default true (management rail). A pure filter rail (e.g.
+# BlockChooser) sets this false — you pick from existing rows, you don't create them here.
+@export var allow_add: bool = true
+# The per-row ✕ delete affordance. Default true (management rail); false for a filter rail.
+@export var allow_delete: bool = true
+# When true a leading, undeletable "All blocks" row is shown. It represents the *empty*
+# real-selection (show-everything): clicking it clears the selection, and it highlights
+# whenever nothing else is selected. Excluded from get_selected_items / bulk delete. This is
+# what gives both the Libraries view and BlockChooser their "all by default" filter state.
+@export var include_all_row: bool = false
 
 # The anchor: the most recently clicked item, whether or not it ended up selected (e.g. a
 # shift-click that deselects it still moves the anchor there). Single-select callers can
@@ -50,19 +60,20 @@ func _ready() -> void:
 	_item_list.size_flags_horizontal = SIZE_EXPAND_FILL
 	scroll.add_child(_item_list)
 
-	var add_bar := HBoxContainer.new()
-	add_child(add_bar)
+	if allow_add:
+		var add_bar := HBoxContainer.new()
+		add_child(add_bar)
 
-	_name_input = LineEdit.new()
-	_name_input.size_flags_horizontal = SIZE_EXPAND_FILL
-	_name_input.placeholder_text = "Name..."
-	_name_input.text_submitted.connect(func(_t): _on_add())
-	add_bar.add_child(_name_input)
+		_name_input = LineEdit.new()
+		_name_input.size_flags_horizontal = SIZE_EXPAND_FILL
+		_name_input.placeholder_text = "Name..."
+		_name_input.text_submitted.connect(func(_t): _on_add())
+		add_bar.add_child(_name_input)
 
-	var add_btn := Button.new()
-	add_btn.text = "+"
-	add_btn.pressed.connect(_on_add)
-	add_bar.add_child(add_btn)
+		var add_btn := Button.new()
+		add_btn.text = "+"
+		add_btn.pressed.connect(_on_add)
+		add_bar.add_child(add_btn)
 
 	if allow_bulk_delete:
 		_delete_btn = Button.new()
@@ -74,8 +85,33 @@ func _ready() -> void:
 func populate(items: Array) -> void:
 	for c in _item_list.get_children():
 		c.queue_free()
+	if include_all_row:
+		_add_all_row()
 	for item_name in items:
 		_add_row(item_name)
+
+# The leading "All blocks" filter row. It carries no real item_name (empty), so it never
+# lands in _selected_set or get_selected_items; clicking it just clears the selection, which
+# every host reads as "show everything". Highlighted whenever nothing else is selected.
+func _add_all_row() -> void:
+	var row := PanelContainer.new()
+	row.set_meta("item_name", "")
+	row.set_meta("is_all", true)
+	var btn := Button.new()
+	btn.text = "All blocks"
+	btn.flat = true
+	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	btn.size_flags_horizontal = SIZE_EXPAND_FILL
+	btn.pressed.connect(_handle_all_click)
+	row.add_child(btn)
+	_item_list.add_child(row)
+	_apply_row_style(row, _selected_set.is_empty())
+
+func _handle_all_click() -> void:
+	_selected_set = {}
+	selected = ""
+	_update_selection()
+	selection_changed.emit(get_selected_items())
 
 # Selected-row background. A flat Button only paints its "pressed" stylebox override
 # while actually being pressed/hovered — not for an idle toggled-on state — so the
@@ -121,11 +157,12 @@ func _add_row(item_name: String) -> void:
 		ren.pressed.connect(func(): rename_requested.emit(captured))
 		hbox.add_child(ren)
 
-	var del := Button.new()
-	del.text = "✕"
-	del.flat = true
-	del.pressed.connect(func(): delete_requested.emit(captured))
-	hbox.add_child(del)
+	if allow_delete:
+		var del := Button.new()
+		del.text = "✕"
+		del.flat = true
+		del.pressed.connect(func(): delete_requested.emit(captured))
+		hbox.add_child(del)
 
 	_item_list.add_child(row)
 	_apply_row_style(row, _selected_set.has(item_name))
@@ -138,7 +175,12 @@ func _apply_row_style(row: PanelContainer, is_selected: bool) -> void:
 
 func _update_selection() -> void:
 	for row in _item_list.get_children():
-		_apply_row_style(row, _selected_set.has(row.get_meta("item_name")))
+		# The "All blocks" row lights up for the empty selection (show-everything); every
+		# other row lights up when it's in the set.
+		if row.get_meta("is_all", false):
+			_apply_row_style(row, _selected_set.is_empty())
+		else:
+			_apply_row_style(row, _selected_set.has(row.get_meta("item_name")))
 	if _delete_btn:
 		_delete_btn.disabled = _selected_set.is_empty()
 
@@ -158,10 +200,13 @@ func _handle_click(item_name: String) -> void:
 	selection_changed.emit(get_selected_items())
 	item_selected.emit(item_name)
 
-# The current multi-selection, in rail order (not click order).
+# The current multi-selection, in rail order (not click order). The "All blocks" row is a
+# filter affordance, never a selected item, so it's skipped.
 func get_selected_items() -> Array:
 	var items: Array = []
 	for row in _item_list.get_children():
+		if row.get_meta("is_all", false):
+			continue
 		var n = row.get_meta("item_name")
 		if _selected_set.has(n):
 			items.append(n)

@@ -196,6 +196,11 @@ var _paste_offset_labels: Dictionary = {}   # "x"/"y"/"z" -> Label
 var _paste_box: MeshInstance3D
 var _paste_box_mat: StandardMaterial3D
 
+# Wand preview: per-cell wireframe outlines (one box per block the flood would place), like a
+# builders-wand highlight — replaces the translucent ghost blocks for the wand, which read as
+# noise across a big flood. See _draw_wand_cells.
+var _wand_box: MeshInstance3D
+
 func _ready() -> void:
 	_setup_viewport()
 	_setup_overlay()
@@ -430,6 +435,20 @@ func _setup_viewport() -> void:
 	_paste_box.material_override = _paste_box_mat
 	_paste_box.visible = false
 	_viewport.add_child(_paste_box)
+
+	# Wand outlines: unshaded, no depth test so each per-block box reads clearly even through
+	# other geometry (builders-wand style). Uses per-vertex color from _draw_cell_wire.
+	var wand_mat := StandardMaterial3D.new()
+	wand_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	wand_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	wand_mat.no_depth_test = true
+	wand_mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	wand_mat.vertex_color_use_as_albedo = true
+	_wand_box = MeshInstance3D.new()
+	_wand_box.mesh = ImmediateMesh.new()
+	_wand_box.material_override = wand_mat
+	_wand_box.visible = false
+	_viewport.add_child(_wand_box)
 
 	_update_camera()
 
@@ -837,6 +856,7 @@ func _release_cursor() -> void:
 	_target_hit = false
 	_floor_hit = false
 	_clear_ghost()
+	_clear_wand_box()
 
 # Called by the shell when focus changes. Losing focus drops any captured
 # cursor and exits slice-select so a background view can't keep grabbing input.
@@ -1359,6 +1379,7 @@ func _update_crosshair_target() -> void:
 	_floor_hit = false
 	if not VoxelWorld.active_project:
 		_clear_ghost()
+		_clear_wand_box()
 		_highlight.visible = false
 		_overlay.queue_redraw()
 		return
@@ -1626,11 +1647,23 @@ func _wand() -> void:
 	var groups := _wand_cells(block, normal)
 	if groups.is_empty():
 		return
-	var orient := _derive_place_orientation(block + normal, normal)
+	var data := VoxelWorld.active_project.data
+	var placed := VoxelWorld.selected_semantic
+	var default_orient := _derive_place_orientation(block + normal, normal)
+	# When both the placed block and the block it extends from are orientable, each new block
+	# copies the orientation of its own contact block — the cell it sits against, one step back
+	# along the face normal. So extending a run of mixed-orientation barrels keeps each barrel's
+	# facing instead of stamping one derived orientation across the whole set.
+	var placed_orientable := VoxelWorld.is_orientable_for_semantic(placed)
 	VoxelWorld.begin_operation("Wand")
 	for group in groups:
 		for cell: Vector3i in group:
-			VoxelWorld.set_block(cell, VoxelWorld.selected_semantic, orient)
+			var o := default_orient
+			if placed_orientable:
+				var src := data.get_cell(cell - normal)
+				if src != null and VoxelWorld.is_orientable_for_semantic(src.type_id):
+					o = src.orientation
+			VoxelWorld.set_block(cell, placed, o)
 	VoxelWorld.end_operation()
 	_animate_placement(groups)
 	_update_crosshair_target()
@@ -1702,10 +1735,12 @@ func _refresh_ghost_preview() -> void:
 	if _paste_active:
 		# Unlike the tool ghosts below, paste stays live while the cursor is released (the
 		# offset popup is up) — it must not be gated on _fly_mode.
+		_clear_wand_box()
 		_refresh_paste_ghost()
 		return
 	if not _fly_mode or not VoxelWorld.active_project or VoxelWorld.selected_semantic.is_empty():
 		_clear_ghost()
+		_clear_wand_box()
 		return
 	var groups: Array = []
 	var a: Dictionary = {}
@@ -1720,15 +1755,47 @@ func _refresh_ghost_preview() -> void:
 				groups = _wand_cells(a["block"], a["normal"])
 		_:
 			_clear_ghost()
+			_clear_wand_box()
 			return
-	if groups.is_empty():
-		_clear_ghost()
-		return
 	var cells: Array = []
 	for group in groups:
 		cells.append_array(group)
+	# The wand previews as per-block outlines (builders-wand style), not translucent ghost
+	# blocks — a big flood of ghosts just reads as noise. Build-to-me keeps the ghost column.
+	if VoxelWorld.active_tool == VoxelWorld.Tool.WAND:
+		_clear_ghost()
+		_draw_wand_cells(cells)
+		return
+	_clear_wand_box()
+	if cells.is_empty():
+		_clear_ghost()
+		return
 	_ensure_ghost_mesh(VoxelWorld.selected_semantic)
 	_set_ghost_cells(cells)
+
+# Outline each cell the wand would fill with its own wireframe box (empty hides the overlay).
+# One box per block rather than a single region bound, so you read exactly which cells get
+# placed — the builders-wand look.
+func _draw_wand_cells(cells: Array) -> void:
+	if _wand_box == null:
+		return
+	var im := _wand_box.mesh as ImmediateMesh
+	im.clear_surfaces()
+	if cells.is_empty():
+		_wand_box.visible = false
+		return
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	var col := Color(0.55, 0.9, 1.0, 0.95)
+	for c: Vector3i in cells:
+		_draw_cell_wire(im, c, col, 1.0)
+	im.surface_end()
+	_wand_box.visible = true
+
+func _clear_wand_box() -> void:
+	if _wand_box == null or not _wand_box.visible:
+		return
+	(_wand_box.mesh as ImmediateMesh).clear_surfaces()
+	_wand_box.visible = false
 
 # Point the ghost overlay at an explicit set of cells (empty hides it). Skips the
 # MultiMesh rebuild when the set is unchanged, so holding aim on one face is free.
@@ -1948,8 +2015,17 @@ func _place_targeted_block() -> void:
 	_update_crosshair_target()
 
 func _derive_place_orientation(place_pos: Vector3i, face_normal: Vector3i) -> int:
-	if VoxelWorld.has_full_facing_for_semantic(VoxelWorld.selected_semantic):
-		return Orientation.make(Orientation.from_normal(face_normal))
+	var prof := VoxelWorld.orientation_profile_for_semantic(VoxelWorld.selected_semantic)
+	if prof["mode"] == "full":
+		var n := face_normal
+		if prof["into_surface"]:
+			# Hopper-style: its spout feeds the block it's attached to, so it faces INTO the
+			# clicked surface — the opposite way a barrel/dispenser (which faces out) does.
+			n = -n
+		return Orientation.make(Orientation.from_normal(n))
+	# Horizontal schemes face the player. Only "horizontal_half" (stairs/slabs) ever takes a
+	# top/bottom half; a plain horizontal block (chest, furnace) stays bottom-half so it can
+	# never be flipped onto its back or side.
 	var to_cam := _camera_pos - (Vector3(place_pos) + Vector3(0.5, 0.5, 0.5))
 	var horiz := Vector3(to_cam.x, 0.0, to_cam.z)
 	if horiz.length_squared() < 0.0001:
@@ -1962,12 +2038,13 @@ func _derive_place_orientation(place_pos: Vector3i, face_normal: Vector3i) -> in
 		horiz = Vector3(-look.x, 0.0, -look.z)
 	var facing := Orientation.from_dir(horiz)
 	var top := false
-	if face_normal.y < 0:
-		top = true       # placed under a block
-	elif face_normal.y > 0:
-		top = false      # placed on top of one (or the floor)
-	else:
-		top = _get_look_dir().y > 0.2  # side face, looking up → upper half
+	if prof["mode"] == "horizontal_half":
+		if face_normal.y < 0:
+			top = true       # placed under a block
+		elif face_normal.y > 0:
+			top = false      # placed on top of one (or the floor)
+		else:
+			top = _get_look_dir().y > 0.2  # side face, looking up → upper half
 	return Orientation.make(facing, top)
 
 func _erase_targeted_block() -> void:
@@ -2003,12 +2080,14 @@ func _rotate_targeted_block(reverse: bool) -> void:
 	var normal := _target_place - _target_block  # face pointing toward the camera
 	var steps := -1 if reverse else 1
 	var o := cell.orientation
-	if VoxelWorld.has_full_facing_for_semantic(cell.type_id):
+	var prof := VoxelWorld.orientation_profile_for_semantic(cell.type_id)
+	var normal_vertical := absi(normal.y) >= absi(normal.x) and absi(normal.y) >= absi(normal.z)
+	if prof["mode"] == "full":
 		o = Orientation.rotate_around_axis(o, Orientation.dominant_axis(normal), steps)
-	elif absi(normal.y) >= absi(normal.x) and absi(normal.y) >= absi(normal.z):
-		o = Orientation.rotate_cw(o, steps)
+	elif prof["mode"] == "horizontal_half" and not normal_vertical:
+		o = Orientation.toggle_top(o)         # side face flips stairs/slabs upside-down
 	else:
-		o = Orientation.toggle_top(o)
+		o = Orientation.rotate_cw(o, steps)   # cycle the 4 horizontal facings (never top-flip)
 	VoxelWorld.begin_operation("Rotate")
 	VoxelWorld.reorient_block(_target_block, o)
 	VoxelWorld.end_operation()
