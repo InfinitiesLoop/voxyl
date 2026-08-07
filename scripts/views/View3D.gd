@@ -188,8 +188,7 @@ var _paste_locked_base := Vector3i.ZERO
 # many, so each gets its own draw call.
 var _paste_ghost_mms: Dictionary = {}       # semantic -> MultiMeshInstance3D
 var _paste_ghost_mesh_keys: Dictionary = {} # semantic -> mesh signature, for rebuild-on-change
-var _paste_popup: PanelContainer            # offset/rotate/place/cancel controls (MMB to show)
-var _paste_offset_labels: Dictionary = {}   # "x"/"y"/"z" -> Label
+var _paste_offset_labels: Dictionary = {}   # "x"/"y"/"z" -> Label (paste overlay's live values)
 # Wireframe outline around the pasted region's full bounds (see _setup_viewport for the
 # show-through material and _update_paste_box) — the ghost blocks themselves are opaque now
 # (see _GHOST_ALPHA/_build_paste_ghost_mesh below), so the box is what still reads through walls.
@@ -201,10 +200,27 @@ var _paste_box_mat: StandardMaterial3D
 # noise across a big flood. See _draw_wand_cells.
 var _wand_box: MeshInstance3D
 
+# --- Tool overlays (middle-click panels) ------------------------------------
+# An extensible system so any tool — or the paste modal — can offer a small panel that
+# middle-click brings up (paste's offset controls were the first). The shared parts live
+# here: the ToolOverlayPanel framing, the open/close mechanism (MMB frees the cursor to
+# reveal the panel, MMB/click re-captures to hide it), and the bottom-center positioning.
+# A tool opts in by registering a panel under a string id and mapping its Tool enum to that
+# id (see _setup_tool_overlays); only the rows inside each panel vary by tool.
+var _tool_overlays := {}          # id -> { "panel": ToolOverlayPanel, "refresh": Callable }
+var _tool_overlay_ids := {}       # VoxelWorld.Tool -> overlay id (a tool's opt-in mapping)
+# A tool overlay (not the paste modal — that's tracked by _paste_active) is currently open.
+# Distinct from _fly_mode so the panel only shows when deliberately summoned via MMB, not
+# every time the cursor happens to be free (e.g. after Esc, or in the default orbit view).
+var _tool_overlay_open := false
+const _PASTE_OVERLAY := "paste"
+const _SELECTION_OVERLAY := "selection"
+var _selection_overlay: ToolOverlayPanel   # kept typed so its refresh can rebuild the list
+
 func _ready() -> void:
 	_setup_viewport()
 	_setup_overlay()
-	_build_paste_popup()
+	_setup_tool_overlays()
 	VoxelWorld.project_opened.connect(_on_project_opened)
 	VoxelWorld.about_to_save.connect(_on_about_to_save)
 	VoxelWorld.block_changed.connect(func(p, _s): _mark_cell_dirty(p))
@@ -213,11 +229,18 @@ func _ready() -> void:
 	VoxelWorld.selection_changed.connect(func(_s): if _fly_mode: _overlay.queue_redraw())
 	# Keep the build-to-me ghost in sync with anything that changes what it would build.
 	VoxelWorld.tool_changed.connect(func(_t): _refresh_ghost_preview())
+	# The selection highlight is only shown while the Select tool is active, so switching
+	# tools must re-evaluate its visibility.
+	VoxelWorld.tool_changed.connect(func(_t): _update_selection_box())
+	# Switching tools closes any open tool overlay (its rows belong to the tool you left).
+	VoxelWorld.tool_changed.connect(func(_t): _close_tool_overlay_if_open())
 	VoxelWorld.brush_size_changed.connect(func(_s): _refresh_ghost_preview())
 	VoxelWorld.selection_changed.connect(func(_s): _refresh_ghost_preview())
 	VoxelWorld.workspace_changed.connect(_on_workspace_changed)
 	# The region selection is shared across views; repaint the box whenever it changes.
 	VoxelWorld.region_selection_changed.connect(_update_selection_box)
+	# Keep a visible selection overlay's dimensions/counts current as the region changes.
+	VoxelWorld.region_selection_changed.connect(_update_tool_overlay_visibility)
 	visibility_changed.connect(_on_visibility_changed)
 	set_process(true)
 	# A view created while a project is already open (e.g. spawned during a layout
@@ -725,6 +748,14 @@ func _input(event: InputEvent) -> void:
 					return
 			if key.keycode == KEY_B:
 				_cycle_sky()
+			# BACKSPACE erases the selected region (one undo step), but only while the Select
+			# tool is active — otherwise a stray selection would hijack the key in every tool.
+			# Handled here in _input so it wins over any lower-priority BACKSPACE binding.
+			if key.keycode == KEY_BACKSPACE and VoxelWorld.active_tool == VoxelWorld.Tool.SELECT \
+					and VoxelWorld.has_selection:
+				VoxelWorld.delete_selection()
+				get_viewport().set_input_as_handled()
+				return
 			# 1–9 palette slots + R rotate (captured mode only)
 			if _fly_mode:
 				var kc := key.keycode
@@ -769,16 +800,22 @@ func _input(event: InputEvent) -> void:
 		var mb := event as InputEventMouseButton
 		if _paste_active:
 			# Paste mode repurposes the primary buttons: RMB confirms, LMB toggles anchor
-			# lock, MMB opens the offset popup — no erase/pick/palette-cycle while pending.
+			# lock, MMB opens the offset overlay — no erase/pick/palette-cycle while pending.
 			match mb.button_index:
 				MOUSE_BUTTON_RIGHT:  _commit_paste()
 				MOUSE_BUTTON_LEFT:   _toggle_paste_lock()
-				MOUSE_BUTTON_MIDDLE: _release_cursor()  # opens the popup, same as Esc used to
+				MOUSE_BUTTON_MIDDLE: _open_tool_overlay()  # reveals the panel, same as Esc used to
 		else:
 			match mb.button_index:
 				MOUSE_BUTTON_LEFT:        _erase_targeted_block()
 				MOUSE_BUTTON_RIGHT:       _use_primary_tool()
-				MOUSE_BUTTON_MIDDLE:      _pick_targeted_block()
+				# MMB opens the active tool's overlay if it registered one; otherwise it keeps
+				# its default "pick block" role. This is a tool's opt-in to the overlay system.
+				MOUSE_BUTTON_MIDDLE:
+					if _tool_overlay_ids.has(VoxelWorld.active_tool):
+						_open_tool_overlay()
+					else:
+						_pick_targeted_block()
 				MOUSE_BUTTON_WHEEL_UP:    _cycle_palette(-1)
 				MOUSE_BUTTON_WHEEL_DOWN:  _cycle_palette(1)
 		get_viewport().set_input_as_handled()
@@ -806,8 +843,8 @@ func _on_svc_input(event: InputEvent) -> void:
 				if not _drag_looking or mb.position.distance_to(_drag_last) < 4.0:
 					_capture_cursor()  # short click = enter fly mode
 				_drag_looking = false
-		elif mb.button_index == MOUSE_BUTTON_MIDDLE and mb.pressed and _paste_active:
-			_capture_cursor()  # closes the popup and resumes flying, mirroring MMB in _input
+		elif mb.button_index == MOUSE_BUTTON_MIDDLE and mb.pressed and _visible_overlay_id() != "":
+			_close_tool_overlay()  # closes the overlay and resumes flying, mirroring MMB in _input
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP:
 			# Dolly forward along look direction
 			_camera_pos += _get_look_dir() * DOLLY_STEP
@@ -831,9 +868,12 @@ func _capture_cursor() -> void:
 	if not _active:
 		return
 	_fly_mode = true
+	# Recapturing the cursor always dismisses a tool overlay (the paste modal itself stays
+	# live — only its panel hides, since panels only show while the cursor is free).
+	_tool_overlay_open = false
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 	_overlay.visible = true
-	_update_paste_popup_visibility()
+	_update_tool_overlay_visibility()
 	_update_crosshair_target()
 	_overlay.queue_redraw()
 
@@ -847,9 +887,9 @@ func _release_cursor() -> void:
 	_highlight.visible = false
 	if _paste_active:
 		# Mid-paste: MMB (see _input) called this to step out of fly mode and reveal the
-		# offset popup — the paste itself (ghost, aim, offset, lock) stays live, frozen at
+		# offset panel — the paste itself (ghost, aim, offset, lock) stays live, frozen at
 		# the last aimed cell.
-		_update_paste_popup_visibility()
+		_update_tool_overlay_visibility()
 		_overlay.queue_redraw()
 		return
 	_overlay.visible = false
@@ -857,6 +897,9 @@ func _release_cursor() -> void:
 	_floor_hit = false
 	_clear_ghost()
 	_clear_wand_box()
+	# If MMB (see _input) freed the cursor to open a tool overlay, reveal it now; otherwise
+	# this is a plain Esc/blur release and _update leaves every panel hidden.
+	_update_tool_overlay_visibility()
 
 # Called by the shell when focus changes. Losing focus drops any captured
 # cursor and exits slice-select so a background view can't keep grabbing input.
@@ -896,7 +939,10 @@ func set_active(active: bool) -> void:
 	_active = active
 	if not _active:
 		if _paste_active:
-			_cancel_paste()  # a backgrounded pane can't be left mid-paste with a live popup
+			_cancel_paste()  # a backgrounded pane can't be left mid-paste with a live panel
+		# Drop any open tool overlay too — a backgrounded pane shouldn't keep one floating.
+		_tool_overlay_open = false
+		_update_tool_overlay_visibility()
 		if _fly_mode:
 			_release_cursor()
 		if _slice_active:
@@ -914,6 +960,9 @@ func set_input_suspended(s: bool) -> void:
 		_fly_before_suspend = _fly_mode
 		if _fly_mode:
 			_release_cursor()
+		# A modal (the inventory) is taking over — don't leave a tool overlay floating over it.
+		_tool_overlay_open = false
+		_update_tool_overlay_visibility()
 	elif _fly_before_suspend and _active and is_visible_in_tree():
 		_capture_cursor()
 
@@ -1551,6 +1600,8 @@ func _use_primary_tool() -> void:
 			_build_to_me()
 		VoxelWorld.Tool.WAND:
 			_wand()
+		VoxelWorld.Tool.EXCHANGE:
+			_exchange()
 		VoxelWorld.Tool.SELECT:
 			_select_region_click()
 		_:
@@ -1724,6 +1775,69 @@ func _wand_cells(block: Vector3i, normal: Vector3i) -> Array:
 	return groups
 
 # ---------------------------------------------------------------------------
+# Exchange (flood-replace a same-type region in the clicked face's plane)
+# ---------------------------------------------------------------------------
+
+# "Exchange": right-click a block to replace it — and the connected run of same-type blocks
+# coplanar with the clicked face, out to the brush radius — with the SELECTED block. Unlike the
+# wand (which extends outward along the normal), this swaps the blocks in place. brush_size is
+# the radius: 1 = just the clicked block, 2 = up to 3×3, etc., but always bounded to the
+# connected same-type region (a 2×2 dirt patch in a stone wall replaces only those 4). One undo
+# step.
+func _exchange() -> void:
+	if not VoxelWorld.active_project or VoxelWorld.selected_semantic.is_empty() or not _target_hit:
+		return
+	var block := _target_block
+	var normal := _target_place - _target_block
+	var cells := _exchange_cells(block, normal)
+	if cells.is_empty():
+		return
+	var placed := VoxelWorld.selected_semantic
+	var orient := _derive_place_orientation(block, normal)
+	VoxelWorld.begin_operation("Exchange")
+	for cell: Vector3i in cells:
+		VoxelWorld.set_block(cell, placed, orient)
+	VoxelWorld.end_operation()
+	_update_crosshair_target()
+
+# The cells an exchange from (block, normal) would replace: flood-fill of same-type cells
+# coplanar with the clicked face (4-connected in that plane), bounded to a Chebyshev radius of
+# brush_size-1 from the clicked block. Pure computation — shared by the commit and the preview.
+func _exchange_cells(block: Vector3i, normal: Vector3i) -> Array:
+	var data := VoxelWorld.active_project.data
+	var semantic := data.get_block(block)
+	if semantic.is_empty():
+		return []
+	var axis := _dominant_axis(Vector3(normal))
+	var perp := [0, 1, 2]
+	perp.erase(axis)
+	var u: int = perp[0]
+	var v: int = perp[1]
+	var du := _add_axis(Vector3i.ZERO, u, 1)
+	var dv := _add_axis(Vector3i.ZERO, v, 1)
+	var neighbors := [du, -du, dv, -dv]
+	var radius := maxi(VoxelWorld.brush_size - 1, 0)
+	var visited := {block: true}
+	var queue: Array = [block]
+	var out: Array = [block]
+	var head := 0
+	while head < queue.size():
+		var c: Vector3i = queue[head]
+		head += 1
+		for nd in neighbors:
+			var nc: Vector3i = c + nd
+			if visited.has(nc):
+				continue
+			if absi(nc[u] - block[u]) > radius or absi(nc[v] - block[v]) > radius:
+				continue
+			if data.get_block(nc) != semantic:
+				continue
+			visited[nc] = true
+			queue.append(nc)
+			out.append(nc)
+	return out
+
+# ---------------------------------------------------------------------------
 # Ghost preview overlay (reusable)
 # ---------------------------------------------------------------------------
 
@@ -1753,6 +1867,9 @@ func _refresh_ghost_preview() -> void:
 			a = _wand_anchor()
 			if not a.is_empty():
 				groups = _wand_cells(a["block"], a["normal"])
+		VoxelWorld.Tool.EXCHANGE:
+			if _target_hit:
+				groups = [_exchange_cells(_target_block, _target_place - _target_block)]
 		_:
 			_clear_ghost()
 			_clear_wand_box()
@@ -1760,9 +1877,9 @@ func _refresh_ghost_preview() -> void:
 	var cells: Array = []
 	for group in groups:
 		cells.append_array(group)
-	# The wand previews as per-block outlines (builders-wand style), not translucent ghost
-	# blocks — a big flood of ghosts just reads as noise. Build-to-me keeps the ghost column.
-	if VoxelWorld.active_tool == VoxelWorld.Tool.WAND:
+	# The wand and exchange preview as per-block outlines (builders-wand style), not translucent
+	# ghost blocks — a big flood of ghosts just reads as noise. Build-to-me keeps the ghost column.
+	if VoxelWorld.active_tool == VoxelWorld.Tool.WAND or VoxelWorld.active_tool == VoxelWorld.Tool.EXCHANGE:
 		_clear_ghost()
 		_draw_wand_cells(cells)
 		return
@@ -2017,15 +2134,18 @@ func _place_targeted_block() -> void:
 func _derive_place_orientation(place_pos: Vector3i, face_normal: Vector3i) -> int:
 	var prof := VoxelWorld.orientation_profile_for_semantic(VoxelWorld.selected_semantic)
 	if prof["mode"] == "full":
+		if not prof.get("directional", true):
+			# Non-directional cube (plain FULL block, no facing data): keep its model faces
+			# bound to world axes so per-face textures never rotate by how it was placed.
+			return Orientation.make(Orientation.Facing.NORTH)
 		var n := face_normal
 		if prof["into_surface"]:
 			# Hopper-style: its spout feeds the block it's attached to, so it faces INTO the
 			# clicked surface — the opposite way a barrel/dispenser (which faces out) does.
 			n = -n
 		return Orientation.make(Orientation.from_normal(n))
-	# Horizontal schemes face the player. Only "horizontal_half" (stairs/slabs) ever takes a
-	# top/bottom half; a plain horizontal block (chest, furnace) stays bottom-half so it can
-	# never be flipped onto its back or side.
+	# Horizontal schemes. Only "horizontal_half" (stairs/slabs) ever takes a top/bottom half; a
+	# plain horizontal block (chest, furnace) stays bottom-half so it can never be flipped over.
 	var to_cam := _camera_pos - (Vector3(place_pos) + Vector3(0.5, 0.5, 0.5))
 	var horiz := Vector3(to_cam.x, 0.0, to_cam.z)
 	if horiz.length_squared() < 0.0001:
@@ -2036,7 +2156,11 @@ func _derive_place_orientation(place_pos: Vector3i, face_normal: Vector3i) -> in
 		# stays well-defined at any pitch (clamped short of straight up/down).
 		var look := _get_look_dir()
 		horiz = Vector3(-look.x, 0.0, -look.z)
-	var facing := Orientation.from_dir(horiz)
+	# Stairs/slabs (horizontal_half) face the way the player is LOOKING (away from them), so a
+	# stair's stepped side ends up toward the player — matching Minecraft. A plain horizontal
+	# block (chest, furnace) faces the player instead. (Slabs are facing-agnostic, so their flip
+	# is invisible; this is really the stairs fix.)
+	var facing := Orientation.from_dir(horiz if prof["mode"] == "horizontal" else -horiz)
 	var top := false
 	if prof["mode"] == "horizontal_half":
 		if face_normal.y < 0:
@@ -2117,6 +2241,11 @@ func _select_region_click() -> void:
 func _update_selection_box() -> void:
 	if _sel_box == null:
 		return
+	# Only show the selection highlight while the Select tool is active — the selection state
+	# persists under other tools (for copy/paste/DELETE), it's just not drawn.
+	if VoxelWorld.active_tool != VoxelWorld.Tool.SELECT:
+		_sel_box.visible = false
+		return
 	var box := VoxelWorld.selection_box()
 	if box.is_empty():
 		_sel_box.visible = false
@@ -2165,7 +2294,7 @@ func _enter_paste_mode() -> void:
 		_capture_cursor()  # also refreshes the crosshair aim + ghost
 	else:
 		_update_crosshair_target()
-	_update_paste_popup_visibility()
+	_update_tool_overlay_visibility()
 	_overlay.visible = true
 	_overlay.queue_redraw()
 
@@ -2174,7 +2303,7 @@ func _cancel_paste() -> void:
 		return
 	_paste_active = false
 	_clear_paste_ghost()
-	_update_paste_popup_visibility()
+	_update_tool_overlay_visibility()
 	_overlay.queue_redraw()
 
 # Clone the clipboard into the world at the current aim/offset/rotation, skipping any cell
@@ -2198,7 +2327,7 @@ func _commit_paste() -> void:
 			_animate_placement(_group_by_distance(targets.keys(), anchor))
 	_paste_active = false
 	_clear_paste_ghost()
-	_update_paste_popup_visibility()
+	_update_tool_overlay_visibility()
 	_update_crosshair_target()
 
 # Bucket cells by Manhattan distance from `origin` (nearest first), so _animate_placement
@@ -2373,48 +2502,108 @@ func _clear_paste_ghost() -> void:
 		_paste_box.visible = false
 
 # ---------------------------------------------------------------------------
-# Paste offset popup — a small non-modal panel for precise adjustment. MMB (or the bare
-# viewport click / this panel's own MMB) toggles it, releasing/re-capturing the cursor since
-# it needs real clicks; hidden again the moment fly resumes.
+# Tool overlays — the shared middle-click panel system (see the field block near the top).
+#
+# Registration pairs a ToolOverlayPanel (the card framing) with a refresh Callable under an
+# id, and maps any Tool enum values that should summon it. The paste modal registers one too,
+# keyed off _paste_active rather than a tool. Everything down to the "Paste overlay content"
+# header is generic; the per-tool rows live in the _build_*/_refresh_* helpers below it.
 # ---------------------------------------------------------------------------
 
-func _build_paste_popup() -> void:
-	_paste_popup = PanelContainer.new()
-	_paste_popup.visible = false
-	_paste_popup.mouse_filter = Control.MOUSE_FILTER_STOP
-	_paste_popup.custom_minimum_size = Vector2(260, 0)
-	# MMB toggles the popup — closing needs to work from a click anywhere on the panel
-	# itself (blank space included), not just the background viewport behind it.
-	_paste_popup.gui_input.connect(func(ev: InputEvent):
-		if ev is InputEventMouseButton and (ev as InputEventMouseButton).pressed \
-				and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_MIDDLE:
-			_capture_cursor()
-			get_viewport().set_input_as_handled())
-	# Opaque bordered card (same recipe as InventoryScreen's panel) — a bare PanelContainer
-	# falls back to the theme's default panel style, which reads as translucent against the
-	# 3D view behind it.
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.13, 0.14, 0.17, 1.0)
-	sb.border_color = Color(0.42, 0.47, 0.58)
-	sb.set_border_width_all(2)
-	sb.set_corner_radius_all(10)
-	sb.set_content_margin_all(16)
-	sb.shadow_color = Color(0, 0, 0, 0.5)
-	sb.shadow_size = 12
-	_paste_popup.add_theme_stylebox_override("panel", sb)
+func _setup_tool_overlays() -> void:
+	_register_tool_overlay(_PASTE_OVERLAY, _build_paste_overlay(), _update_paste_offset_labels)
+	_selection_overlay = _build_selection_overlay()
+	_register_tool_overlay(_SELECTION_OVERLAY, _selection_overlay, _refresh_selection_overlay,
+		[VoxelWorld.Tool.SELECT])
 
-	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 10)
-	_paste_popup.add_child(col)
+func _register_tool_overlay(id: String, panel: ToolOverlayPanel, refresh: Callable,
+		tools: Array = []) -> void:
+	panel.close_requested.connect(_close_tool_overlay)
+	add_child(panel)
+	# reset_size() gives the free-floating panel its real min size once, so it's never a
+	# zero-size unclickable rect; _position_tool_overlay re-fits it each time it's shown.
+	panel.reset_size()
+	_tool_overlays[id] = {"panel": panel, "refresh": refresh}
+	for tool in tools:
+		_tool_overlay_ids[tool] = id
 
-	var title := Label.new()
-	title.text = "Paste"
-	title.add_theme_font_size_override("font_size", 20)
-	col.add_child(title)
-	col.add_child(HSeparator.new())
+# The overlay that should be VISIBLE right now, or "" — panels only show while the cursor is
+# free (never over a captured fly view). Paste (a modal) wins; otherwise it's the active
+# tool's overlay, but only once deliberately summoned via MMB (_tool_overlay_open).
+func _visible_overlay_id() -> String:
+	if _fly_mode:
+		return ""
+	if _paste_active:
+		return _PASTE_OVERLAY
+	if _tool_overlay_open:
+		return _tool_overlay_ids.get(VoxelWorld.active_tool, "")
+	return ""
+
+# Show exactly the resolved overlay (refreshing + re-fitting it first) and hide the rest.
+func _update_tool_overlay_visibility() -> void:
+	var id := _visible_overlay_id()
+	for oid in _tool_overlays:
+		var entry: Dictionary = _tool_overlays[oid]
+		var panel: ToolOverlayPanel = entry["panel"]
+		if oid == id:
+			(entry["refresh"] as Callable).call()
+			_position_tool_overlay(panel)
+			panel.visible = true
+		else:
+			panel.visible = false
+
+# MMB in fly mode when the active tool/modal offers an overlay: free the cursor so its
+# controls are clickable. _release_cursor keeps the panel up because _tool_overlay_open is
+# now set (or _paste_active is), instead of doing the full Esc-style teardown.
+func _open_tool_overlay() -> void:
+	_tool_overlay_open = true
+	_release_cursor()
+
+# MMB/click while an overlay is up: re-capture the cursor, which hides the panel and (for a
+# tool overlay) drops back into flying right where you left off.
+func _close_tool_overlay() -> void:
+	_capture_cursor()
+
+# Close an open tool overlay if one is showing (e.g. the tool changed out from under it).
+# No-op for the paste modal, whose panel is torn down through _cancel_paste/_commit_paste.
+func _close_tool_overlay_if_open() -> void:
+	if _tool_overlay_open:
+		_tool_overlay_open = false
+		if not _fly_mode:
+			_update_tool_overlay_visibility()
+
+# Bottom-center of the whole multi-pane workspace, not this specific pane — so an overlay
+# stays put regardless of which pane/view summoned it, and doesn't get clipped sitting flush
+# against a pane's own edge (which can be the window edge in single-pane view).
+func _position_tool_overlay(panel: Control) -> void:
+	panel.reset_size()  # re-fit: a rebuilt list (e.g. selection counts) changes the size
+	var rect := _workspace_rect()
+	var sz := panel.size
+	panel.global_position = Vector2(
+		rect.position.x + (rect.size.x - sz.x) * 0.5,
+		rect.position.y + rect.size.y - sz.y - 16.0)
+
+# Walk up to the shared MultiViewShell (every pane lives under one) for its global rect;
+# falls back to the window if one somehow can't be found.
+func _workspace_rect() -> Rect2:
+	var host: Node = self
+	while host != null and not (host is MultiViewShell):
+		host = host.get_parent()
+	if host is Control:
+		return (host as Control).get_global_rect()
+	return get_viewport().get_visible_rect()
+
+# ---------------------------------------------------------------------------
+# Paste overlay content — offset nudgers, rotate, place/cancel. Only these rows are paste-
+# specific; the framing and open/close mechanism are shared above.
+# ---------------------------------------------------------------------------
+
+func _build_paste_overlay() -> ToolOverlayPanel:
+	var panel := ToolOverlayPanel.new("Paste")
+	var content := panel.content
 
 	for axis in ["x", "y", "z"]:
-		col.add_child(_build_axis_row(axis))
+		content.add_child(_build_axis_row(axis))
 
 	var rotate_btn := Button.new()
 	rotate_btn.text = "Rotate 90°"
@@ -2425,11 +2614,11 @@ func _build_paste_popup() -> void:
 		_paste_rotation = (_paste_rotation + 1) % 4
 		_refresh_ghost_preview()
 		_update_paste_offset_labels())
-	col.add_child(rotate_btn)
+	content.add_child(rotate_btn)
 
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 8)
-	col.add_child(buttons)
+	content.add_child(buttons)
 	var place_btn := Button.new()
 	place_btn.text = "Place"
 	place_btn.focus_mode = Control.FOCUS_NONE
@@ -2446,14 +2635,7 @@ func _build_paste_popup() -> void:
 	cancel_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	cancel_btn.pressed.connect(_cancel_paste)
 	buttons.add_child(cancel_btn)
-
-	add_child(_paste_popup)
-	# Anchors stay at the Control default (top-left, fixed size) — reset_size() applies its
-	# real minimum size once here (get_combined_minimum_size(), same as a Container would lay
-	# out) so it's never a zero-size, unclickable rect. Placement from here on is pure
-	# global_position math in _position_paste_popup(), not anchors, so it can be pinned to
-	# the whole workspace rather than wherever this particular pane happens to sit.
-	_paste_popup.reset_size()
+	return panel
 
 func _build_axis_row(axis: String) -> HBoxContainer:
 	var row := HBoxContainer.new()
@@ -2501,33 +2683,122 @@ func _update_paste_offset_labels() -> void:
 	(_paste_offset_labels["y"] as Label).text = str(_paste_offset.y)
 	(_paste_offset_labels["z"] as Label).text = str(_paste_offset.z)
 
-func _update_paste_popup_visibility() -> void:
-	if _paste_popup == null:
+# ---------------------------------------------------------------------------
+# Selection overlay content — the Select tool's read-out: the region's dimensions and a
+# per-semantic block tally (air included). Both the region and its contents change freely,
+# so the list is rebuilt wholesale on each refresh; the framing/open/close are shared above.
+# ---------------------------------------------------------------------------
+
+func _build_selection_overlay() -> ToolOverlayPanel:
+	# Rows depend on the live selection, so the card starts as just its frame; the content is
+	# filled in by _refresh_selection_overlay whenever MMB on the Select tool summons it.
+	return ToolOverlayPanel.new("Selection")
+
+func _refresh_selection_overlay() -> void:
+	var content := _selection_overlay.content
+	for child in content.get_children():
+		content.remove_child(child)
+		child.queue_free()
+	var stats := _selection_stats()
+	if stats.is_empty():
+		content.add_child(_overlay_note(
+			"No region selected.\nRight-click two corners with the Select tool."))
 		return
-	_paste_popup.visible = _paste_active and not _fly_mode
-	if _paste_popup.visible:
-		_position_paste_popup()
-		_update_paste_offset_labels()
+	var dims: Vector3i = stats["size"]
+	content.add_child(_overlay_note("%d × %d × %d  ·  %s cells" % [
+		dims.x, dims.y, dims.z, _grouped(stats["total"])]))
+	content.add_child(HSeparator.new())
+	# Occupied semantics first (busiest first), then air — so the eye lands on what's built.
+	var counts: Dictionary = stats["counts"]
+	var semantics := counts.keys()
+	semantics.sort_custom(func(a, b):
+		return counts[a] > counts[b] if counts[a] != counts[b] else a < b)
+	for semantic: String in semantics:
+		content.add_child(_selection_count_row(
+			VoxelWorld.get_color_for_semantic(semantic), semantic, counts[semantic]))
+	# Air last, with a hollow swatch — it's a tally of what's NOT there, not a block type.
+	content.add_child(_selection_count_row(Color.TRANSPARENT, "Air", stats["air"], true))
 
-# Bottom-center of the whole multi-pane workspace, not this specific pane — so the popup
-# stays put regardless of which pane/view is doing the pasting, and doesn't get clipped by
-# sitting flush against a pane's own edge (which can be the window edge in single-pane view).
-func _position_paste_popup() -> void:
-	var rect := _paste_workspace_rect()
-	var popup_size := _paste_popup.size
-	_paste_popup.global_position = Vector2(
-		rect.position.x + (rect.size.x - popup_size.x) * 0.5,
-		rect.position.y + rect.size.y - popup_size.y - 16.0)
+# One "[swatch] name … count" row. `hollow` dims the text and outlines the swatch (used for
+# the air row) so the count of empty cells reads as distinct from the placed block types.
+func _selection_count_row(fill: Color, label_text: String, count: int, hollow := false) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	row.add_child(_overlay_swatch(fill, hollow))
+	var name_label := Label.new()
+	name_label.text = label_text
+	name_label.add_theme_font_size_override("font_size", 15)
+	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(name_label)
+	var count_label := Label.new()
+	count_label.text = _grouped(count)
+	count_label.add_theme_font_size_override("font_size", 15)
+	count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	row.add_child(count_label)
+	if hollow:
+		var dim := Color(0.72, 0.76, 0.84)
+		name_label.add_theme_color_override("font_color", dim)
+		count_label.add_theme_color_override("font_color", dim)
+	return row
 
-# Walk up to the shared MultiViewShell (every pane lives under one) for its global rect;
-# falls back to the window if one somehow can't be found.
-func _paste_workspace_rect() -> Rect2:
-	var host: Node = self
-	while host != null and not (host is MultiViewShell):
-		host = host.get_parent()
-	if host is Control:
-		return (host as Control).get_global_rect()
-	return get_viewport().get_visible_rect()
+# A 16px palette-color chip. Hollow (air) draws a faint outline over nothing instead of a
+# fill — the color is read live from the palette (Principle 3), never stored in the data.
+func _overlay_swatch(fill: Color, hollow: bool) -> Panel:
+	var box := Panel.new()
+	box.custom_minimum_size = Vector2(16, 16)
+	var sb := StyleBoxFlat.new()
+	if hollow:
+		sb.bg_color = Color.TRANSPARENT
+		sb.border_color = Color(0.5, 0.55, 0.62)
+		sb.set_border_width_all(1)
+	else:
+		sb.bg_color = fill
+	sb.set_corner_radius_all(3)
+	box.add_theme_stylebox_override("panel", sb)
+	return box
+
+func _overlay_note(text: String) -> Label:
+	var label := Label.new()
+	label.text = text
+	label.add_theme_font_size_override("font_size", 15)
+	return label
+
+# Dimensions + a semantic→count tally for the current region (air = volume − occupied), or
+# {} when there's no completed selection. Iterates the placed cells and tests membership
+# rather than walking the region volume (which can be millions of cells): the same tack
+# VoxelProject.semantic_counts takes, bounded by the project's block count, not the box size.
+func _selection_stats() -> Dictionary:
+	if not VoxelWorld.has_selection or not VoxelWorld.active_project:
+		return {}
+	var box := VoxelWorld.selection_box()
+	if box.is_empty():
+		return {}
+	var lo: Vector3i = box[0]
+	var hi: Vector3i = box[1]
+	var dims := hi - lo + Vector3i.ONE
+	var total := dims.x * dims.y * dims.z
+	var counts := {}
+	var occupied := 0
+	for pos: Vector3i in VoxelWorld.active_project.data.cells:
+		if pos.x < lo.x or pos.x > hi.x or pos.y < lo.y or pos.y > hi.y \
+				or pos.z < lo.z or pos.z > hi.z:
+			continue
+		var cell: BlockCell = VoxelWorld.active_project.data.cells[pos]
+		counts[cell.type_id] = counts.get(cell.type_id, 0) + 1
+		occupied += 1
+	return {"size": dims, "total": total, "counts": counts, "air": total - occupied}
+
+# Thousands-grouped string for the read-out — a region can span millions of cells.
+func _grouped(n: int) -> String:
+	var s := str(absi(n))
+	var out := ""
+	var c := 0
+	for i in range(s.length() - 1, -1, -1):
+		out = s[i] + out
+		c += 1
+		if c % 3 == 0 and i > 0:
+			out = "," + out
+	return ("-" if n < 0 else "") + out
 
 # ---------------------------------------------------------------------------
 # Slice-select mode

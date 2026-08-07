@@ -18,6 +18,7 @@ const TOOLS: Array = [
 	[VoxelWorld.Tool.PAINT,       "✏", "Pencil", "Pencil — right-click place, left-click clear"],
 	[VoxelWorld.Tool.BUILD_TO_ME, "⇧", "Build to me", "Build to me — extrude a column from the face toward the camera"],
 	[VoxelWorld.Tool.WAND,        "✦", "Wand", "Wand — grow the clicked face's connected same-type blocks by one, using the selected block"],
+	[VoxelWorld.Tool.EXCHANGE,    "⇄", "Exchange", "Exchange — replace the clicked block, and connected same-type blocks in the clicked face's plane (out to the brush radius), with the selected block"],
 	[VoxelWorld.Tool.SELECT,      "⬚", "Select", "Select — right-click two opposite corners to select a cuboid region; right-click again to clear"],
 ]
 

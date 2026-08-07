@@ -4,7 +4,7 @@ extends Node
 # index breaks. Which views a tool works in (2D "slice" / 3D "3d" / both) and whether
 # it wants a brush size are declared in tool_supports_view / tool_uses_brush below —
 # the tool rail and the views both read from there so they can never disagree.
-enum Tool { PAINT, ERASE, LINE, RECT, FILL, BUILD_TO_ME, WAND, SELECT }
+enum Tool { PAINT, ERASE, LINE, RECT, FILL, BUILD_TO_ME, WAND, SELECT, EXCHANGE }
 
 signal workspace_changed()
 signal project_opened(project: VoxelProject)
@@ -455,17 +455,22 @@ func orientation_profile_for_semantic(semantic_name: String) -> Dictionary:
 	var bt: BlockType = _resolve_semantic(semantic_name).get("bt")
 	if bt != null:
 		if bt.orient_mode == BlockType.OrientMode.HORIZONTAL:
-			return {"mode": "horizontal", "into_surface": false}
+			return {"mode": "horizontal", "into_surface": false, "directional": true}
 		if bt.orient_mode == BlockType.OrientMode.FULL:
-			return {"mode": "full", "into_surface": false}
+			return {"mode": "full", "into_surface": false, "directional": true}
 		var sm := bt.state_map
 		if sm != null and not sm.is_empty():
 			if sm.has_vertical_facing():
 				var into := sm.has_facing(Orientation.Facing.DOWN) and not sm.has_facing(Orientation.Facing.UP)
-				return {"mode": "full", "into_surface": into}
-			return {"mode": "horizontal_half" if sm.has_top_variant() else "horizontal", "into_surface": false}
+				return {"mode": "full", "into_surface": into, "directional": true}
+			return {"mode": "horizontal_half" if sm.has_top_variant() else "horizontal", "into_surface": false, "directional": true}
+	# No resolved block type, or one with no state_map: fall back to the built-in shape. A plain
+	# FULL cube is NON-directional — placing it must NOT derive a facing, or a block with distinct
+	# per-face textures gets tipped so same-type blocks visibly mismatch by how they were placed.
+	# It stays manually rotatable with R (mode "full"), just placed at the resting orientation.
+	# slab/stairs built-ins remain directional.
 	var full := get_shape_for_semantic(semantic_name) == BlockType.Shape.FULL
-	return {"mode": "full" if full else "horizontal_half", "into_surface": false}
+	return {"mode": "full" if full else "horizontal_half", "into_surface": false, "directional": not full}
 
 # Whether a semantic's orientation is a meaningful, inheritable property — used by the wand
 # to decide if new blocks should copy the orientation of the block they extend from. True for
@@ -827,6 +832,19 @@ func copy_selection() -> void:
 	_clipboard_size = selection_max - selection_min + Vector3i.ONE
 	_has_clipboard = true
 
+# Erase every block in the selection as one undo step — a delete without the clipboard copy
+# that cut_selection makes. The selection itself is kept (so DELETE can be followed by more
+# edits in the same region). No-op without a completed selection.
+func delete_selection() -> void:
+	if not has_selection or not active_project:
+		return
+	begin_operation("Delete region")
+	for x in range(selection_min.x, selection_max.x + 1):
+		for y in range(selection_min.y, selection_max.y + 1):
+			for z in range(selection_min.z, selection_max.z + 1):
+				clear_block(Vector3i(x, y, z))
+	end_operation()
+
 # Copy the selection, then delete it as one undo step.
 func cut_selection() -> void:
 	if not has_selection or not active_project:
@@ -857,7 +875,7 @@ func tool_supports_view(tool: Tool, view_kind: String) -> bool:
 	match tool:
 		Tool.PAINT, Tool.SELECT:
 			return true
-		Tool.BUILD_TO_ME, Tool.WAND:
+		Tool.BUILD_TO_ME, Tool.WAND, Tool.EXCHANGE:
 			return view_kind == "3d"
 		Tool.ERASE, Tool.LINE, Tool.RECT, Tool.FILL:
 			return view_kind == "slice"
@@ -866,7 +884,7 @@ func tool_supports_view(tool: Tool, view_kind: String) -> bool:
 
 # Whether a tool honors brush_size (footprint > 1 cell). Others always place one cell.
 func tool_uses_brush(tool: Tool) -> bool:
-	return tool == Tool.BUILD_TO_ME
+	return tool == Tool.BUILD_TO_ME or tool == Tool.EXCHANGE
 
 func request_slice_view(axis: int, center: Vector3i, flipped: bool = false) -> void:
 	slice_view_requested.emit(axis, center, flipped)
