@@ -25,6 +25,8 @@ static func resolve(semantic: String, shape_id: String, hit_cell: Vector3i, vhit
 	if not VoxelWorld.active_project or not ShapeCatalog.has(shape_id) or side < 0 or side > 5:
 		return {}
 	var hcell := VoxelWorld.active_project.data.get_cell(hit_cell)
+	if ShapeCatalog.is_exclusive(shape_id):
+		return _resolve_arch(semantic, shape_id, hit_cell, hcell, vhit, side, opposite)
 	var into_parts := hcell != null and hcell.is_shaped()
 	var depth := vhit.dot(ShapeCatalog.SIDE_VECS[side]) + float((side % 2) ^ 1)
 	var internal := into_parts and depth < 1.0 - _EPS
@@ -53,6 +55,21 @@ static func resolve(semantic: String, shape_id: String, hit_cell: Vector3i, vhit
 			return _try(semantic, shape_id, hit_cell, oslot)
 		return _try(semantic, shape_id, outside, slot)
 	return _try(semantic, shape_id, outside, oslot if (use_opp and opposite) else slot)
+
+# Architecture shapes (ArchitectureCraft's rules, via ArchShapes): always placed into the
+# cell beside the clicked face, oriented from where on the face you clicked — or lined up
+# with the clicked shape when their profiles match. `opposite` is the mod's sneak: base
+# against the clicked face (a stair on its side), no lining up.
+static func _resolve_arch(semantic: String, shape_id: String, hit_cell: Vector3i, hcell: BlockCell,
+		vhit: Vector3, side: int, opposite: bool) -> Dictionary:
+	var sv := ShapeCatalog.side_vec(side)
+	# The click point relative to the new cell's center (AC's `hit`).
+	var hit := vhit - Vector3(sv) - Vector3(0.5, 0.5, 0.5)
+	var neighbor := {}
+	if hcell != null and hcell.parts.size() == 1 and ShapeCatalog.is_exclusive(str(hcell.parts[0]["shape"])):
+		neighbor = hcell.parts[0]
+	var slot := ArchShapes.orient_on_placement(shape_id, side, hit, opposite, neighbor)
+	return _try(semantic, shape_id, hit_cell + sv, slot)
 
 static func _try(semantic: String, shape_id: String, pos: Vector3i, slot: int) -> Dictionary:
 	var part := BlockCell.make_part(semantic, shape_id, slot)

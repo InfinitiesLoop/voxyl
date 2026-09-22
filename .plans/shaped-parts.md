@@ -1,7 +1,7 @@
 # Shaped Parts — Microblocks & Architecture Shapes
 
-Status: **Part 1 implemented, awaiting UX feedback** (microblocks end-to-end). Parts 2–5
-not started.
+Status: **Parts 1 and 3 implemented, awaiting UX feedback** (microblocks; architecture
+shapes). Parts 2, 4, 5 not started.
 
 Where Part 1 lives: `scripts/core/ShapeCatalog.gd` (shapes, slots, grids), `ShapeRules.gd`
 (sharing rules), `ShapePlacement.gd` (click → part), `ShapeModels.gd` (generated textured
@@ -175,18 +175,36 @@ Ported from FMP (`MicroblockPlacement` + `PlacementGrids`):
 - Multi-place tools for parts (e.g. wand along an edge run), 2D placement with a slot.
 - Selection stats / project details count parts.
 
-**Part 3 — Architecture shapes**
-- Rotation scheme (24 orientations). Triangle-mesh geometry in `BlockModel` +
-  `BlockMesher`, with world-projected UVs.
-- Built-in generated shapes: roof tile / outer / inner corner / ridge / valley, slopes
-  (A/B/C series), bevelled corners, cylinders & spheres family, stairs + corners, slab.
-- AC placement: top face → upright; bottom → upside down; side face → upper half upside
-  down, sneak (Shift) → base against the wall; turn from hit position by symmetry
-  (bilateral: nearest edge, unilateral: nearest corner, quadrilateral: fixed); match a
-  neighboring shape's orientation when profiles line up. AC shapes are exclusive.
-- Optional import extension: read ornate shapes (capitals, balustrades, windows,
-  arches…) from the user's AC jar `.objson` files. Secondary material (window glass,
-  cladding) and banister half-offsets are open questions.
+**Part 3 — Architecture shapes** (implemented, awaiting UX feedback)
+- `scripts/core/ArchShapes.gd`: 89 shapes on six picker pages (Roofing, Slopes & Stairs,
+  Rounded, Classical, Arches, Railings), generated from AC's own `Shape` table (names,
+  symmetry, collision masks, flags, profiles). Left out for now: windows (need a second
+  glass material + connection logic), cladding (an item, not a shape), the "glow" copies,
+  and AC's Slab (the microblock Slab covers it).
+- Geometry: roofs / ridges / valleys / A-B-C slope tiles ported from AC's `RenderRoof`
+  (their no-neighbor forms — the "smart" joins that react to neighbors aren't modeled
+  yet); everything else is AC's own `.objson` meshes, vendored (MIT) under
+  `assets/shapes/architecturecraft/` with its LICENSE + README. Note for a future export
+  build: `.objson` isn't an imported type, so the export preset needs `*.objson` in its
+  include filter.
+- Orientation: slot = side × 4 + turn (AC's `sideTurnRotations`, which are ordinary
+  right-handed rotations, so they map straight onto Godot `Basis`), +24 for a banister's
+  mirrored ±6/16 shift. Paste rotation re-solves (side, turn) for the turned basis.
+- Rendering: `BlockModel` gained *mesh* elements (free-form triangles); `BlockMesher`
+  builds them in both the color and textured paths. `ShapeModels` buckets each triangle
+  by the direction its normal leans (ties → side) and binds the entry's block texture for
+  that direction; AC's "projected" faces get position UVs like microblocks, the rest keep
+  the model's UVs (roof slopes run their texture down the slope, as in the mod).
+- Placement (`ArchShapes.orient_on_placement`, via `ShapePlacement`): always into the cell
+  beside the clicked face; top face → upright, bottom → upside down, a wall's upper half →
+  upside down, **Ctrl** (AC's sneak — Shift is fly-down here) → base against the wall
+  (stairs on their side); turn from the click by symmetry; lines up with an adjacent
+  architecture shape when profiles match (roof lines, cornices, stair runs); banisters on
+  a stair-like shape follow it. Aiming uses AC's collision boxes (2×2×2 cubelets / posts /
+  model boxes), which also draw the 2D footprint.
+- Rules: an architecture shape keeps its cell to itself (the mod's are whole blocks).
+- Picker: page tabs over a scrolling grid; glyphs draw the real triangles, each shown in
+  whichever of its 4 turns faces the icon camera best (same slot the baked icons use).
 
 **Part 4 — Convert placed parts** (deferred by request): reshape existing parts to a new
 shape as one undoable, validated edit, reporting conflicts.
@@ -203,3 +221,7 @@ export time.
 - Should exact FMP sizes 3/5/6/7 be pickable directly as shapes, or only by stacking?
 - Connection height for walls next to part cells currently reads the entry's block
   (always "tall"); refine if it looks wrong.
+- AC's "smart" roof pieces (hip ridge/valley, and valley/ridge joins on plain tiles) react
+  to neighbors in the mod; here they render their standalone form. Worth modeling as a
+  render-time neighbor lookup (like fence connections) if roofs look wrong.
+- Rotating a placed part (R / AC's hammer) — deferred with the rest of Part 2.

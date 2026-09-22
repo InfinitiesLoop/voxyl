@@ -14,7 +14,15 @@ extends Resource
 # `faces` maps a Dir (0..5) to a face Dictionary:
 #   { texture_key: String, uv: Rect2, cullface: int, rotation: int, tint_index: int }
 # Elements and faces are intrinsic to the model (never shared), so they stay plain
-# dicts rather than separate resources. Textures ARE shared, so `textures` holds
+# dicts rather than separate resources.
+#
+# A *mesh* element carries free-form triangles instead of a box (sloped roofs, cylinders —
+# the generated architecture shapes, see ShapeModels):
+#   { from: Vector3, to: Vector3,            # its bounds, for extent-only callers
+#     mesh: { pos: PackedVector3Array, nrm: PackedVector3Array, uv: PackedVector2Array },
+#     texture_key: String, tint_index: int, faces: {} }
+# `pos` is in the same 0..1 cell space, three entries per triangle; winding doesn't matter
+# (BlockMesher orients each triangle by its normals). Textures ARE shared, so `textures` holds
 # TextureAsset *ids* (decision 5), resolved through the workspace library.
 
 # Box-face directions. Same order/convention as Orientation.Facing (NORTH=-Z …),

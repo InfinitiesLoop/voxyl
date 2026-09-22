@@ -27,6 +27,9 @@ static func color_mesh(model: BlockModel) -> Mesh:
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var center := Transform3D(Basis(), -Vector3(0.5, 0.5, 0.5))
 	for element in model.elements:
+		if element.has("mesh"):
+			add_mesh_triangles(st, element["mesh"], false)
+			continue
 		var from: Vector3 = element["from"]
 		var to: Vector3 = element["to"]
 		var box := BoxMesh.new()
@@ -49,6 +52,19 @@ static func textured_mesh(model: BlockModel) -> Dictionary:
 	var order: Array[String] = []  # commit order → surface index
 	var key_tinted := {}         # texture_key -> bool (any face tint_index >= 0)
 	for element in model.elements:
+		if element.has("mesh"):
+			# Free-form triangles (architecture shapes): one texture key per element.
+			var mkey := str(element.get("texture_key", "all"))
+			if not tools.has(mkey):
+				var mst := SurfaceTool.new()
+				mst.begin(Mesh.PRIMITIVE_TRIANGLES)
+				tools[mkey] = mst
+				order.append(mkey)
+				key_tinted[mkey] = false
+			if int(element.get("tint_index", -1)) >= 0:
+				key_tinted[mkey] = true
+			add_mesh_triangles(tools[mkey], element["mesh"], true)
+			continue
 		var from: Vector3 = element["from"]
 		var to: Vector3 = element["to"]
 		var faces: Dictionary = element["faces"]
@@ -106,6 +122,27 @@ static func add_face(st: SurfaceTool, dir: int, from: Vector3, to: Vector3, uv: 
 			st.set_normal(tn)
 			st.set_uv(uvs[i])
 			st.add_vertex(xform * corners[i] - Vector3(0.5, 0.5, 0.5))
+
+# Append a mesh element's triangles (BlockModel mesh elements: pos / nrm / uv, 0..1 cell
+# space), centered like the box faces. Winding self-corrects per triangle the same way
+# add_face does: Godot's front faces wind so the geometric cross product points opposite
+# the surface normal, so flip any triangle that came out the other way.
+static func add_mesh_triangles(st: SurfaceTool, mesh: Dictionary, with_uv: bool) -> void:
+	var pos: PackedVector3Array = mesh["pos"]
+	var nrm: PackedVector3Array = mesh["nrm"]
+	var uv: PackedVector2Array = mesh.get("uv", PackedVector2Array())
+	with_uv = with_uv and uv.size() == pos.size()
+	for t in range(0, pos.size() - 2, 3):
+		var a := pos[t]
+		var n := nrm[t] + nrm[t + 1] + nrm[t + 2]
+		var order := [0, 1, 2]
+		if (pos[t + 1] - a).cross(pos[t + 2] - a).dot(n) > 0.0:
+			order = [0, 2, 1]
+		for k in order:
+			st.set_normal(nrm[t + k])
+			if with_uv:
+				st.set_uv(uv[t + k])
+			st.add_vertex(pos[t + k] - Vector3(0.5, 0.5, 0.5))
 
 # Four perimeter corners of a box face in [0,1] box space (centering happens in
 # add_face). Order is consistent per face; add_face fixes winding for Godot.

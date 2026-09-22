@@ -23,8 +23,13 @@ extends RefCounted
 #                  bit1 +Y), 8-11 along X (bit0 +Y, bit1 +Z).
 #                  slot 12..14 = centered post along axis (slot - 12): 0 Y, 1 Z, 2 X. Only
 #                  even sizes have these (a "Post"/"Pillar" clicked in a face's center).
+#
+# ARCH shapes (roofs, stairs, cylinders, … — see ArchShapes) are the other half: one per
+# cell, never shared, in any of 24 orientations. Their slot = side * 4 + turn (+24 for a
+# banister's mirrored shift). This file is the one facade both halves are asked through,
+# so rules, raycasts, footprints and icons don't care which kind a part is.
 
-enum Family { FACE, HOLLOW, EDGE, CORNER }
+enum Family { FACE, HOLLOW, EDGE, CORNER, ARCH }
 
 # id -> { name, family, size (eighths of a block) }. Ids are stable (they're stored on
 # every placed part); names are display-only.
@@ -53,8 +58,14 @@ const ORDER := [
 
 const FAMILY_NAMES := {
 	Family.FACE: "Faces", Family.HOLLOW: "Hollow faces",
-	Family.EDGE: "Edges", Family.CORNER: "Corners",
+	Family.EDGE: "Edges", Family.CORNER: "Corners", Family.ARCH: "Architecture",
 }
+
+# The shape picker's pages: [title, ids]. Microblocks first, then the architecture pages.
+static func pages() -> Array:
+	var out: Array = [["Microblocks", ORDER]]
+	out.append_array(ArchShapes.PAGES)
+	return out
 
 # First centered-post slot (EDGE family): 12 + axis group.
 const CENTER_SLOT := 12
@@ -78,13 +89,21 @@ const _EDGE_BETWEEN := [-1, -1, 8, 10, 4, 5, -1, -1, 9, 11, 6, 7, -1, -1, -1, -1
 # --- Lookup -----------------------------------------------------------------
 
 static func has(shape_id: String) -> bool:
-	return SHAPES.has(shape_id)
+	return SHAPES.has(shape_id) or ArchShapes.has(shape_id)
 
 static func name_of(shape_id: String) -> String:
-	return str(SHAPES[shape_id]["name"]) if SHAPES.has(shape_id) else shape_id
+	if SHAPES.has(shape_id):
+		return str(SHAPES[shape_id]["name"])
+	return ArchShapes.name_of(shape_id) if ArchShapes.has(shape_id) else shape_id
 
 static func family_of(shape_id: String) -> int:
-	return int(SHAPES[shape_id]["family"]) if SHAPES.has(shape_id) else -1
+	if SHAPES.has(shape_id):
+		return int(SHAPES[shape_id]["family"])
+	return Family.ARCH if ArchShapes.has(shape_id) else -1
+
+# Whether parts of this shape keep a whole cell to themselves (architecture shapes).
+static func is_exclusive(shape_id: String) -> bool:
+	return family_of(shape_id) == Family.ARCH
 
 # Thickness in eighths of a block.
 static func size_of(shape_id: String) -> int:
@@ -95,6 +114,7 @@ static func slot_count(shape_id: String) -> int:
 		Family.FACE, Family.HOLLOW: return 6
 		Family.CORNER: return 8
 		Family.EDGE: return 15 if size_of(shape_id) % 2 == 0 else 12
+		Family.ARCH: return ArchShapes.slot_count(shape_id)
 	return 0
 
 static func is_valid_slot(shape_id: String, slot: int) -> bool:
@@ -105,8 +125,10 @@ static func is_centered(shape_id: String, slot: int) -> bool:
 
 # The slot used for a shaped entry's icon / preview: whatever reads best from the icon
 # camera (which looks from -X,+Y,-Z): a slab lying flat, the front vertical edge, the
-# front-bottom corner.
-static func preview_slot(_shape_id: String) -> int:
+# front-bottom corner; an architecture shape standing as it would on a floor.
+static func preview_slot(shape_id: String) -> int:
+	if family_of(shape_id) == Family.ARCH:
+		return ArchShapes.preview_slot(shape_id)
 	return 0
 
 # The side (0..5) whose outward vector best matches a normal.
@@ -153,13 +175,16 @@ static func edge_between(s1: int, s2: int) -> int:
 # --- Geometry -----------------------------------------------------------------
 
 # The visible boxes of a placed part, in cell-local space. Empty for an unknown shape or
-# an invalid slot.
+# an invalid slot. For an architecture shape these are its collision boxes (what you aim
+# at and what the 2D view outlines) — its real surface is a triangle mesh (ArchShapes).
 static func boxes(shape_id: String, slot: int) -> Array[AABB]:
 	var out: Array[AABB] = []
 	if not is_valid_slot(shape_id, slot):
 		return out
 	var d := size_of(shape_id) / 8.0
 	match family_of(shape_id):
+		Family.ARCH:
+			return ArchShapes.placed_boxes(shape_id, slot)
 		Family.FACE:
 			out.append(_face_box(slot, d))
 		Family.HOLLOW:
@@ -350,6 +375,8 @@ static func uses_opposite(shape_id: String, slot: int, side: int) -> bool:
 # face-plane coordinates (u, v) ∈ [-0.5, 0.5]², where u runs along side (side+2)%6 and v
 # along (side+4)%6. The view maps them onto the aimed face.
 static func grid_lines(shape_id: String) -> Array:
+	if family_of(shape_id) == Family.ARCH:
+		return []   # architecture shapes orient from where you click, with no zones to show
 	var sq := [
 		[Vector2(-0.5, -0.5), Vector2(0.5, -0.5)], [Vector2(0.5, -0.5), Vector2(0.5, 0.5)],
 		[Vector2(0.5, 0.5), Vector2(-0.5, 0.5)], [Vector2(-0.5, 0.5), Vector2(-0.5, -0.5)],
@@ -382,6 +409,16 @@ static func grid_lines(shape_id: String) -> Array:
 static func rotate_slot_y(shape_id: String, slot: int, steps: int) -> int:
 	steps = ((steps % 4) + 4) % 4
 	if steps == 0 or not is_valid_slot(shape_id, slot):
+		return slot
+	if family_of(shape_id) == Family.ARCH:
+		# Turn the orientation itself: find the (side, turn) whose rotation is the old one
+		# pre-multiplied by the structure's turn ((x, z) -> (-z, x) is -90° about +Y).
+		var want := Basis(Vector3.UP, deg_to_rad(-90.0 * steps)) \
+			* ArchShapes.rotation(ArchShapes.side_of(slot), ArchShapes.turn_of(slot))
+		for side in 6:
+			for turn in 4:
+				if ArchShapes.rotation(side, turn).is_equal_approx(want):
+					return ArchShapes.make_slot(side, turn, slot >= 24)
 		return slot
 	var b := bounds(shape_id, slot)
 	var lo := b.position - Vector3(0.5, 0.5, 0.5)

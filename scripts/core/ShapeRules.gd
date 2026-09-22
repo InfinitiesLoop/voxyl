@@ -18,6 +18,13 @@ static func can_add(existing: Array, part: Dictionary) -> bool:
 	var slot := int(part.get("slot", -1))
 	if not ShapeCatalog.is_valid_slot(shape, slot):
 		return false
+	# Architecture shapes (roofs, stairs, …) take a whole cell, like the mod's own blocks:
+	# nothing shares a cell with one.
+	if ShapeCatalog.is_exclusive(shape):
+		return existing.is_empty()
+	for p in existing:
+		if ShapeCatalog.is_exclusive(str(p.get("shape", ""))):
+			return false
 	# One part per slot (faces and hollow faces share the six face slots).
 	var fslot := fmp_slot(part)
 	if fslot >= 0:

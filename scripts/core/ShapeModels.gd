@@ -47,6 +47,18 @@ static func model_for(shape_id: String, slot: int, base: BlockModel) -> BlockMod
 	var m := BlockModel.new()
 	m.id = mid
 	var bindings := _base_bindings(base)
+	if ShapeCatalog.family_of(shape_id) == ShapeCatalog.Family.ARCH:
+		m.elements = _arch_elements(shape_id, slot, bindings)
+	else:
+		m.elements = _box_elements(shape_id, slot, bindings)
+	if base != null:
+		m.textures = base.textures.duplicate()
+		m.ambient_occlusion = base.ambient_occlusion
+	_by_id[mid] = m
+	return m
+
+# A microblock's boxes, every face bound to the base's texture for its direction.
+static func _box_elements(shape_id: String, slot: int, bindings: Dictionary) -> Array:
 	var elements: Array = []
 	for box in ShapeCatalog.boxes(shape_id, slot):
 		var faces := {}
@@ -57,12 +69,65 @@ static func model_for(shape_id: String, slot: int, base: BlockModel) -> BlockMod
 			face["tint_index"] = int(b.get("tint_index", -1))
 			faces[d] = face
 		elements.append({"from": box.position, "to": box.end, "faces": faces})
-	m.elements = elements
-	if base != null:
-		m.textures = base.textures.duplicate()
-		m.ambient_occlusion = base.ambient_occlusion
-	_by_id[mid] = m
-	return m
+	return elements
+
+# An architecture shape's triangles as mesh elements (see BlockModel): one per direction
+# bucket, each bound to the base block's texture for that direction. A triangle's bucket is
+# the direction its normal leans most (ties → the side, so a 45° roof slope takes the side
+# texture). Projected faces get UVs from their position, exactly like a microblock face; the
+# rest keep the shape's own UVs (a roof slope's texture runs down the slope, as in the mod).
+static func _arch_elements(shape_id: String, slot: int, bindings: Dictionary) -> Array:
+	# Accumulate into plain Arrays (Packed*Arrays are value types — appending through a
+	# dictionary lookup would append to a copy), packed once at the end.
+	var buckets := {}   # BlockModel.Dir -> [positions, normals, uvs]
+	var lo := Vector3.ONE * INF
+	var hi := -Vector3.ONE * INF
+	for f in ArchShapes.placed_faces(shape_id, slot):
+		var pos: PackedVector3Array = f["pos"]
+		var nrm: PackedVector3Array = f["nrm"]
+		var uv: PackedVector2Array = f["uv"]
+		var projected: bool = f["projected"]
+		for t in range(0, pos.size(), 3):
+			var dir := _dir_of(nrm[t] + nrm[t + 1] + nrm[t + 2])
+			var base_uv: Rect2 = (bindings.get(dir, {}) as Dictionary).get("uv", Rect2(0, 0, 1, 1))
+			if not buckets.has(dir):
+				buckets[dir] = [[], [], []]
+			var bk: Array = buckets[dir]
+			for k in 3:
+				var p := pos[t + k]
+				var local_uv: Vector2 = _point_uv(dir, p) if projected else uv[t + k]
+				bk[0].append(p)
+				bk[1].append(nrm[t + k])
+				bk[2].append(base_uv.position + local_uv * base_uv.size)
+				lo = lo.min(p)
+				hi = hi.max(p)
+	var out: Array = []
+	for dir in buckets:
+		var b: Dictionary = bindings.get(dir, {})
+		var bk: Array = buckets[dir]
+		var mesh := {"pos": PackedVector3Array(bk[0]), "nrm": PackedVector3Array(bk[1]), "uv": PackedVector2Array(bk[2])}
+		out.append({"from": lo, "to": hi, "faces": {}, "mesh": mesh,
+			"texture_key": str(b.get("texture_key", "all")), "tint_index": int(b.get("tint_index", -1))})
+	return out
+
+static func _dir_of(n: Vector3) -> int:
+	var ax := absf(n.x); var ay := absf(n.y); var az := absf(n.z)
+	if ay > maxf(ax, az) + 0.0001:
+		return BlockModel.Dir.UP if n.y > 0.0 else BlockModel.Dir.DOWN
+	if ax >= az:
+		return BlockModel.Dir.EAST if n.x > 0.0 else BlockModel.Dir.WEST
+	return BlockModel.Dir.SOUTH if n.z > 0.0 else BlockModel.Dir.NORTH
+
+# Where point p (cell space) falls on a full cube's face texture in direction `dir` — the
+# per-point form of _projected_uv, same convention.
+static func _point_uv(dir: int, p: Vector3) -> Vector2:
+	match dir:
+		BlockModel.Dir.NORTH: return Vector2(p.x, 1.0 - p.y)
+		BlockModel.Dir.EAST: return Vector2(p.z, 1.0 - p.y)
+		BlockModel.Dir.SOUTH: return Vector2(1.0 - p.x, 1.0 - p.y)
+		BlockModel.Dir.WEST: return Vector2(1.0 - p.z, 1.0 - p.y)
+		BlockModel.Dir.UP: return Vector2(p.x, p.z)
+	return Vector2(p.x, 1.0 - p.z)   # DOWN
 
 # Per-direction face bindings (texture_key, uv, tint_index) of the base's full-cube element —
 # the first element spanning the whole cell, else the biggest one. A direction the element

@@ -41,6 +41,9 @@ static func draw_into(ci: CanvasItem, rect: Rect2, p_shape_id: String, p_color: 
 	var cube_col := Color(1, 1, 1, 0.16)
 	_box_outline(ci, proj, Vector3.ZERO, Vector3.ONE, cube_col)
 
+	if ShapeCatalog.family_of(p_shape_id) == ShapeCatalog.Family.ARCH:
+		_draw_mesh(ci, proj, p_shape_id, p_color)
+		return
 	var boxes := ShapeCatalog.boxes(p_shape_id, ShapeCatalog.preview_slot(p_shape_id))
 	# Painter's order: farthest from the viewer (at -X +Y -Z) first.
 	boxes.sort_custom(func(a: AABB, b: AABB) -> bool:
@@ -65,6 +68,34 @@ static func draw_into(ci: CanvasItem, rect: Rect2, p_shape_id: String, p_color: 
 			ci.draw_colored_polygon(pts, f[0])
 			pts.append(pts[0])
 			ci.draw_polyline(pts, edge, 1.0, true)
+
+# An architecture shape's triangles, flat-shaded: back faces dropped, the rest painted far to
+# near. Cheap enough for the picker's ~100 glyphs (the roundest shapes are a few hundred
+# triangles).
+const _VIEW := Vector3(-0.577, 0.577, -0.577)          # toward the viewer
+const _LIGHT := Vector3(-0.27, 0.9, -0.34)             # soft light from above-front
+
+static func _draw_mesh(ci: CanvasItem, proj: Callable, p_shape_id: String, p_color: Color) -> void:
+	var tris: Array = []   # [depth, PackedVector2Array, Color]
+	for f in ArchShapes.placed_faces(p_shape_id, ShapeCatalog.preview_slot(p_shape_id)):
+		var pos: PackedVector3Array = f["pos"]
+		var nrm: PackedVector3Array = f["nrm"]
+		for t in range(0, pos.size() - 2, 3):
+			var n := (nrm[t] + nrm[t + 1] + nrm[t + 2]).normalized()
+			if n.dot(_VIEW) <= 0.0:
+				continue
+			var c := (pos[t] + pos[t + 1] + pos[t + 2]) / 3.0
+			var shade := 0.55 + 0.45 * maxf(0.0, n.dot(_LIGHT.normalized()))
+			var col := Color(p_color.r * shade, p_color.g * shade, p_color.b * shade, 1.0)
+			var a2: Vector2 = proj.call(pos[t])
+			var b2: Vector2 = proj.call(pos[t + 1])
+			var c2: Vector2 = proj.call(pos[t + 2])
+			if absf((b2 - a2).cross(c2 - a2)) < 0.02:
+				continue   # edge-on sliver: nothing to see, and it trips polygon triangulation
+			tris.append([c.dot(_VIEW), PackedVector2Array([a2, b2, c2]), col])
+	tris.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
+	for tri in tris:
+		ci.draw_colored_polygon(tri[1], tri[2])
 
 static func _box_outline(ci: CanvasItem, proj: Callable, lo: Vector3, hi: Vector3, col: Color) -> void:
 	var c := [

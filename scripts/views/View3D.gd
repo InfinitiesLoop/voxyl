@@ -2297,6 +2297,12 @@ func _clear_shaped_preview() -> void:
 # The shape family's placement zones drawn across the aimed cell face, at the hit's depth,
 # so you can see which zone picks which slot (Forge Microblocks' grid overlay).
 func _draw_place_grid(shape_id: String, aim: Dictionary) -> void:
+	var lines := ShapeCatalog.grid_lines(shape_id)
+	if lines.is_empty():
+		# Architecture shapes have no zones — just the ghost.
+		(_place_grid.mesh as ImmediateMesh).clear_surfaces()
+		_place_grid.visible = false
+		return
 	var side: int = aim["side"]
 	var cell: Vector3i = aim["cell"]
 	var point: Vector3 = aim["point"]
@@ -2310,7 +2316,7 @@ func _draw_place_grid(shape_id: String, aim: Dictionary) -> void:
 	var im := _place_grid.mesh as ImmediateMesh
 	im.clear_surfaces()
 	im.surface_begin(Mesh.PRIMITIVE_LINES)
-	for seg in ShapeCatalog.grid_lines(shape_id):
+	for seg in lines:
 		for p2: Vector2 in seg:
 			im.surface_add_vertex(center + u_axis * p2.x + v_axis * p2.y)
 	im.surface_end()

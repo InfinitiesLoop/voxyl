@@ -47,6 +47,7 @@ func _ready() -> void:
 	_test_shape_catalog()
 	_test_shape_rules()
 	_test_shaped_parts()
+	_test_arch_shapes()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
@@ -2282,4 +2283,81 @@ func _test_shaped_parts() -> void:
 		dup.parts[0]["slot"] = 12
 		_check("duplicate_cell deep-copies parts", int(rc.parts[0]["slot"]) == 13)
 
+	VoxelWorld.reset_for_tests()
+
+func _test_arch_shapes() -> void:
+	print("-- architecture shapes (roofs, stairs, …)")
+	var missing: Array = []
+	for id in ArchShapes.TABLE:
+		var geo := ArchShapes.local_geometry(id)
+		if (geo["faces"] as Array).is_empty() or (geo["boxes"] as Array).is_empty():
+			missing.append(id)
+	_check("every architecture shape has geometry + boxes (missing: %s)" % [missing], missing.is_empty())
+	var paged := {}
+	for page in ArchShapes.PAGES:
+		for id in page[1]:
+			paged[id] = true
+	_check("every architecture shape is on a picker page", paged.size() == ArchShapes.TABLE.size())
+	_check("architecture shapes are in the catalog",
+		ShapeCatalog.has("roof_tile") and ShapeCatalog.is_exclusive("stairs") and not ShapeCatalog.is_exclusive("face1"))
+
+	# Orientation: side = the face the base sits on, turn = quarter turns about it.
+	_check("side 0 turn 0 is the identity", ArchShapes.rotation(0, 0).is_equal_approx(Basis()))
+	_check("side 2 puts the base to the north",
+		(ArchShapes.rotation(2, 0) * Vector3.DOWN).is_equal_approx(Vector3(0, 0, -1)))
+	var seen := {}
+	for side in 6:
+		for turn in 4:
+			seen[str(ArchShapes.rotation(side, turn))] = true
+	_check("24 distinct orientations", seen.size() == 24)
+
+	# Placement from the click (hit is relative to the new cell's center).
+	var slot := ArchShapes.orient_from_hit("roof_tile", 1, Vector3(0, -0.5, -0.4), false)
+	_check("on a floor: right way up, turned toward the clicked edge",
+		ArchShapes.side_of(slot) == 0 and ArchShapes.turn_of(slot) == 2)
+	slot = ArchShapes.orient_from_hit("stairs", 2, Vector3(0.1, 0.3, 0.5), false)
+	_check("upper half of a wall: upside down", ArchShapes.side_of(slot) == 1)
+	slot = ArchShapes.orient_from_hit("stairs", 2, Vector3(0.1, -0.3, 0.5), true)
+	_check("ctrl on a wall: base against the wall (sideways)", ArchShapes.side_of(slot) == 3)
+	slot = ArchShapes.orient_from_hit("arch_d1", 1, Vector3(0, -0.5, 0.3), false)
+	_check("arches hang from above by default", ArchShapes.side_of(slot) == 1)
+	_check("banisters have mirrored offset slots", ArchShapes.slot_count("banister_plain") == 48)
+
+	# Continuing a roof line: a tile placed off a tile's east face lines up with it.
+	var n := BlockCell.make_part("R", "roof_tile", ArchShapes.make_slot(0, 1))
+	slot = ArchShapes.orient_on_placement("roof_tile", 5, Vector3(-0.5, 0.2, 0.3), false, n)
+	var along := ArchShapes.rotation(0, 1) * Vector3.RIGHT
+	var ok_line := ArchShapes.side_of(slot) == 0 and ArchShapes.turn_of(slot) == 1
+	_check("roof tile continues its neighbor's line", ok_line or absf(along.x) < 0.5)
+	slot = ArchShapes.orient_on_placement("roof_tile", 5, Vector3(-0.5, 0.2, 0.3), true, n)
+	_check("ctrl skips lining up (base against the clicked face)", ArchShapes.side_of(slot) == 4)
+
+	# Sharing: an architecture shape keeps its cell to itself.
+	_check("empty cell takes a roof tile", ShapeRules.can_add([], _p("A", "roof_tile", 0)))
+	_check("no roof tile beside a cover", not ShapeRules.can_add([_p("A", "face1", 0)], _p("A", "roof_tile", 0)))
+	_check("no cover beside a roof tile", not ShapeRules.can_add([_p("A", "roof_tile", 0)], _p("A", "face1", 1)))
+	_check("bad arch slot refused", not ShapeRules.can_add([], _p("A", "stairs", 24)))
+
+	var turned := ShapeCatalog.rotate_slot_y("stairs", ArchShapes.make_slot(0, 0), 1)
+	_check("paste rotation turns an architecture shape", turned != ArchShapes.make_slot(0, 0))
+	_check("four paste turns come back around",
+		ShapeCatalog.rotate_slot_y("stairs", ArchShapes.make_slot(3, 2), 4) == ArchShapes.make_slot(3, 2))
+	var hb := ShapeCatalog.boxes("stairs", ArchShapes.make_slot(0, 0))
+	_check("stairs aim at their stair-shaped cubelets", hb.size() == 6)
+
+	var m := ShapeModels.model_for("roof_tile", ArchShapes.make_slot(0, 0), null)
+	var has_mesh := not m.elements.is_empty()
+	for el in m.elements:
+		has_mesh = has_mesh and (el as Dictionary).has("mesh")
+	_check("architecture shapes render as triangle meshes", has_mesh)
+	var mesh := BlockMesher.color_mesh(m)
+	_check("the mesher builds them", mesh != null and mesh.get_aabb().size.is_equal_approx(Vector3.ONE))
+
+	# Placement through the shared resolver: stairs against a block's top land above it.
+	VoxelWorld.reset_for_tests()
+	VoxelWorld.open(VoxelWorld.workspace.get_project("My First Build"))
+	VoxelWorld.active_project.data.set_block(Vector3i(0, 0, 0), "Wall")
+	var r := ShapePlacement.resolve("Wall", "stairs", Vector3i(0, 0, 0), Vector3(0.5, 1.0, 0.9), 1, false)
+	_check("stairs placed on a block sit in the cell above",
+		not r.is_empty() and r["pos"] == Vector3i(0, 1, 0) and ArchShapes.side_of(int(r["part"]["slot"])) == 0)
 	VoxelWorld.reset_for_tests()
