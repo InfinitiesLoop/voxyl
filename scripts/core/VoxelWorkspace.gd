@@ -170,7 +170,6 @@ func duplicate_palette(source_name: String, new_name: String) -> Palette:
 		copy.semantic_name = e.semantic_name
 		copy.block_type_name = e.block_type_name
 		copy.shape_id = e.shape_id
-		copy.base_name = e.base_name
 		p.entries.append(copy)
 	return p
 

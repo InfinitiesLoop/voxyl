@@ -260,13 +260,12 @@ func _refresh_items() -> void:
 		it.label = entry.semantic_name
 		it.caption = entry.semantic_name
 		if entry.is_shaped():
-			# Its shape cut from its base (as this palette defines it), searchable by shape +
-			# base name too.
-			it.block_type = VoxelWorld.icon_block_type_for_shape(entry.shape_id, entry.base_name, palette)
+			# Its shape cut from its block, searchable by shape + block name too.
+			it.block_type = VoxelWorld.icon_block_type_for_shape(entry.shape_id, entry.block_type_name, palette)
 			it.placeholder_color = it.block_type.color if it.block_type else Color(0.35, 0.35, 0.35)
 			it.label = "%s — %s of %s" % [entry.semantic_name, ShapeCatalog.name_of(entry.shape_id),
-				entry.base_name if not entry.base_name.is_empty() else "(undecided)"]
-			it.search_text = "%s %s %s" % [entry.semantic_name, ShapeCatalog.name_of(entry.shape_id), entry.base_name]
+				entry.block_type_name if not entry.block_type_name.is_empty() else "(undecided)"]
+			it.search_text = "%s %s %s" % [entry.semantic_name, ShapeCatalog.name_of(entry.shape_id), entry.block_type_name]
 		else:
 			var bt := VoxelWorld.workspace.resolve_block_type(entry.block_type_name, palette.library_names)
 			it.block_type = bt
@@ -307,7 +306,7 @@ func _on_entry_right_clicked(key: String, global_pos: Vector2) -> void:
 			VoxelWorld.remove_palette_entry(palette, entry)
 			_refresh_items()
 		else:
-			_on_add_entry(entry.semantic_name))
+			_on_add_entry(entry.block_type_name, true))
 	get_tree().root.add_child(menu)
 	menu.popup_hide.connect(menu.queue_free)
 	menu.popup(Rect2i(Vector2i(global_pos), Vector2i.ZERO))
@@ -318,56 +317,43 @@ func _on_entry_right_clicked(key: String, global_pos: Vector2) -> void:
 # ---------------------------------------------------------------------------
 
 # `shape_base` opens the dialog on the Shape kind, cutting from that entry.
-func _on_add_entry(shape_base := "") -> void:
+# `block` / `as_shape` preset the dialog ("New shape from this…": same block, Shape tab).
+func _on_add_entry(block := "", as_shape := false) -> void:
 	var palette := VoxelWorld.workspace.get_palette(_selected_palette_name) if VoxelWorld.workspace else null
 	if not palette or palette.builtin:
 		return
 	var dlg := NewPaletteEntryDialog.new()
 	get_tree().root.add_child(dlg)
-	dlg.setup(palette, _unique_semantic_name(palette, "New"), shape_base)
-	dlg.created.connect(func(semantic_name: String, block_type_name: String):
-		_create_entry(palette, semantic_name, block_type_name))
-	dlg.created_shaped.connect(func(semantic_name: String, shape_id: String, base_name: String):
-		_create_shaped_entry(palette, semantic_name, shape_id, base_name))
+	dlg.setup(palette, _unique_semantic_name(palette, "New"), block, as_shape)
+	dlg.created.connect(func(semantic_name: String, block_type_name: String, shape_id: String):
+		_create_entry(palette, semantic_name, block_type_name, shape_id))
 	dlg.popup_centered(Vector2i(1200, 820))
-
-func _create_entry(palette: Palette, semantic_name: String, block_type_name: String) -> void:
-	var e := VoxelWorld.add_palette_entry(palette, semantic_name)
-	if e and not block_type_name.is_empty():
-		VoxelWorld.assign_palette_entry_block(palette, e, block_type_name)
-	_refresh_items()
 
 # A new shaped entry goes straight into the active hotbar slot too — making one is almost
 # always about placing it next.
-func _create_shaped_entry(palette: Palette, semantic_name: String, shape_id: String, base_name: String) -> void:
+func _create_entry(palette: Palette, semantic_name: String, block_type_name: String, shape_id: String) -> void:
 	var e := VoxelWorld.add_palette_entry(palette, semantic_name)
 	if e:
-		VoxelWorld.set_palette_entry_shape(palette, e, shape_id, base_name)
-		VoxelWorld.set_hotbar_slot(VoxelWorld.active_slot, semantic_name)
+		VoxelWorld.set_palette_entry_picks(palette, e, block_type_name, shape_id)
+		if not shape_id.is_empty():
+			VoxelWorld.set_hotbar_slot(VoxelWorld.active_slot, semantic_name)
 	_refresh_items()
 
-# Right-click "Edit": the same dialog, prefilled — lets the block type / shape / base (or
-# the semantic name) be changed without leaving the project.
+# Right-click "Edit": the same dialog, prefilled — lets the block type / shape (or the
+# semantic name) be changed without leaving the project.
 func _open_edit_entry_dialog(palette: Palette, entry: PaletteEntry) -> void:
 	var dlg := NewPaletteEntryDialog.new()
 	get_tree().root.add_child(dlg)
 	dlg.setup_edit(palette, entry)
-	dlg.edited.connect(func(e: PaletteEntry, semantic_name: String, block_type_name: String):
-		_apply_entry_edit(palette, e, semantic_name, block_type_name))
-	dlg.edited_shaped.connect(func(e: PaletteEntry, semantic_name: String, shape_id: String, base_name: String):
-		_apply_shaped_edit(palette, e, semantic_name, shape_id, base_name))
+	dlg.edited.connect(func(e: PaletteEntry, semantic_name: String, block_type_name: String, shape_id: String):
+		_apply_entry_edit(palette, e, semantic_name, block_type_name, shape_id))
 	dlg.popup_centered(Vector2i(1200, 820))
 
-func _apply_entry_edit(palette: Palette, entry: PaletteEntry, semantic_name: String, block_type_name: String) -> void:
+func _apply_entry_edit(palette: Palette, entry: PaletteEntry, semantic_name: String,
+		block_type_name: String, shape_id: String) -> void:
 	if semantic_name != entry.semantic_name:
 		VoxelWorld.rename_palette_entry(palette, entry, semantic_name)
-	VoxelWorld.assign_palette_entry_block(palette, entry, block_type_name)
-	_refresh_items()
-
-func _apply_shaped_edit(palette: Palette, entry: PaletteEntry, semantic_name: String, shape_id: String, base_name: String) -> void:
-	if semantic_name != entry.semantic_name:
-		VoxelWorld.rename_palette_entry(palette, entry, semantic_name)
-	VoxelWorld.set_palette_entry_shape(palette, entry, shape_id, base_name)
+	VoxelWorld.set_palette_entry_picks(palette, entry, block_type_name, shape_id)
 	_refresh_items()
 
 # "New", "New 2", "New 3", … — the first that no existing entry on this palette uses.

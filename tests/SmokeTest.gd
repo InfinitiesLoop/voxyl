@@ -2168,20 +2168,35 @@ func _test_shaped_parts() -> void:
 	pal.entries.append(base)
 	var strip := PaletteEntry.new()
 	strip.semantic_name = "TStrip"
+	strip.block_type_name = "plank"
 	strip.shape_id = "edge1"
-	strip.base_name = "TBase"
 	pal.entries.append(strip)
 	var loose := PaletteEntry.new()
 	loose.semantic_name = "TLoose"
-	loose.shape_id = "face1"          # shaped, but no base picked yet
+	loose.shape_id = "face1"          # shaped, but no block picked yet
 	pal.entries.append(loose)
 	project.palette_names.append("__shape_pal__")
 	VoxelWorld.open(project)
 
 	_check("shaped entry reports its shape", VoxelWorld.get_shape_id_for_semantic("TStrip") == "edge1")
 	_check("block entry has no shape", VoxelWorld.get_shape_id_for_semantic("TBase") == "")
-	_check("shaped entry takes its base's color",
+	_check("shaped entry shows its own block's color",
 		VoxelWorld.get_color_for_semantic("TStrip") == VoxelWorld.get_color_for_semantic("TBase"))
+	_check("shaped entry resolves its block type", VoxelWorld.get_block_type_for_semantic("TStrip") == "plank")
+
+	# Legacy palettes (shapes cut from another entry) fold the base's block into the entry.
+	var legacy := Palette.new()
+	var lb := PaletteEntry.new()
+	lb.semantic_name = "LB"
+	lb.block_type_name = "stone"
+	legacy.entries.append(lb)
+	var ls := PaletteEntry.new()
+	ls.semantic_name = "LS"
+	ls.shape_id = "edge4"
+	ls.base_name = "LB"
+	legacy.entries.append(ls)
+	_check("legacy shaped entry migrates", legacy.migrate_legacy_shapes()
+		and ls.block_type_name == "stone" and ls.base_name.is_empty() and ls.shape_id == "edge4")
 	_check("undecided shaped entry is still shaped", VoxelWorld.is_shaped_semantic("TLoose"))
 	_check("undecided shaped entry uses the planning color",
 		VoxelWorld.get_color_for_semantic("TLoose") == Color(0.35, 0.35, 0.35))

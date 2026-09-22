@@ -302,6 +302,7 @@ static func load_persisted(workspace: VoxelWorkspace) -> void:
 	for palette in _load_dir(PALETTES_DIR):
 		if palette.builtin:
 			continue
+		palette.migrate_legacy_shapes()
 		_replace_palette(workspace, palette)
 
 # --- Internals --------------------------------------------------------------

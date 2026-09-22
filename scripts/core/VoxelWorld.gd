@@ -267,7 +267,7 @@ func remove_part(pos: Vector3i, index: int) -> void:
 	mark_dirty()
 
 # The render geometry for one placed part: its stored shape + slot, cut from whatever block
-# the palette currently maps its semantic's base to (untextured while undecided).
+# the palette currently maps its semantic to (untextured while undecided).
 func get_part_model(part: Dictionary) -> BlockModel:
 	var base := get_model_for_semantic(str(part.get("semantic", "")))
 	return ShapeModels.model_for(str(part.get("shape", "")), int(part.get("slot", 0)), base)
@@ -283,25 +283,23 @@ func icon_block_type_for_semantic(semantic_name: String) -> BlockType:
 	var r := _resolve_semantic(semantic_name)
 	if not r.has("shape"):
 		return r.get("bt")
-	return icon_block_type_for_shape(str(r["shape"]), str(r.get("base", "")))
+	var libs: Array = (r["palette"] as Palette).library_names if r.has("palette") else []
+	return _shape_icon_type(str(r["shape"]), r.get("bt"), libs)
 
-# The synthetic icon block type for `shape_id` cut from the block entry `base_name` ("" or
-# unmapped → the undecided look). With `palette`, the base is looked up in that palette alone
-# (an editor listing one palette, possibly with no project open); otherwise through the
-# active project's palette stack, the way placed parts resolve.
-func icon_block_type_for_shape(shape_id: String, base_name: String, palette: Palette = null) -> BlockType:
+# The synthetic icon block type for `shape_id` cut from the block `block_type_name`, resolved
+# within `palette`'s library stack ("" / unresolvable → the undecided look). For editors that
+# list one palette's entries, possibly with no project open.
+func icon_block_type_for_shape(shape_id: String, block_type_name: String, palette: Palette) -> BlockType:
+	var libs: Array = palette.library_names if palette else []
+	var bt: BlockType = null
+	if not block_type_name.is_empty():
+		bt = workspace.resolve_block_type(block_type_name, libs)
+	return _shape_icon_type(shape_id, bt, libs)
+
+func _shape_icon_type(shape_id: String, base_bt: BlockType, libs: Array) -> BlockType:
 	if not ShapeCatalog.has(shape_id):
 		return null
-	var base_bt: BlockType = null
-	var base_model: BlockModel = null
-	if palette != null:
-		var be := palette.get_entry(base_name)
-		if be != null and not be.is_shaped() and not be.block_type_name.is_empty():
-			base_bt = workspace.resolve_block_type(be.block_type_name, palette.library_names)
-		base_model = _model_for_block_type(base_bt, palette.library_names)
-	else:
-		base_bt = _resolve_block_entry(base_name).get("bt") if active_project else null
-		base_model = get_model_for_semantic(base_name)
+	var base_model := _model_for_block_type(base_bt, libs)
 	var model := ShapeModels.model_for(shape_id, ShapeCatalog.preview_slot(shape_id), base_model)
 	var key := "%s|%s" % [shape_id, model.id]
 	var bt: BlockType = _shape_icon_types.get(key, null)
@@ -460,17 +458,14 @@ func get_block(pos: Vector3i) -> String:
 # library stack (first-hit, basic fallback). Returns {} when no palette maps it, else
 # { palette, name, bt } where `bt` may be null if no library in scope defines the name.
 #
-# A shaped entry (PaletteEntry.shape_id set) wins the walk like any other entry, but its
-# material comes from its base entry, resolved by the same walk restricted to block entries.
-# Its result carries "shape" (the entry's ShapeCatalog id) and "base" (the base's semantic)
-# on top of the base's { palette, name, bt } — so color/tint/model/icon lookups on a shaped
-# semantic transparently show its base's material. An undecided block entry still doesn't
-# override an earlier mapped one; a shaped entry always counts (its shape is real intent
-# even while its base is undecided).
+# A shaped entry (PaletteEntry.shape_id set) also carries "shape" (its ShapeCatalog id) —
+# its block type is still its material, so color/tint/model lookups work unchanged. An
+# undecided plain entry doesn't override an earlier mapped one, but a shaped entry always
+# counts: its shape is real intent even while its block is undecided ({ shape } alone).
 func _resolve_semantic(semantic_name: String) -> Dictionary:
 	if not active_project:
 		return {}
-	var winner: PaletteEntry = null
+	var result := {}
 	for palette_name in active_project.palette_names:
 		var palette := workspace.get_palette(palette_name)
 		if not palette:
@@ -478,34 +473,15 @@ func _resolve_semantic(semantic_name: String) -> Dictionary:
 		var e := palette.get_entry(semantic_name)
 		if e == null or (not e.is_shaped() and e.block_type_name.is_empty()):
 			continue
-		winner = e
-	if winner == null:
-		return {}
-	if not winner.is_shaped():
-		return _resolve_block_entry(semantic_name)
-	var result := _resolve_block_entry(winner.base_name)
-	result["shape"] = winner.shape_id
-	result["base"] = winner.base_name
-	return result
-
-# The last-wins walk over block entries only (the plain-semantic case, and a shaped entry's
-# base): { palette, name, bt }, or {} when no palette maps it to a block type.
-func _resolve_block_entry(semantic_name: String) -> Dictionary:
-	var result := {}
-	if semantic_name.is_empty():
-		return result
-	for palette_name in active_project.palette_names:
-		var palette := workspace.get_palette(palette_name)
-		if not palette:
-			continue
-		var e := palette.get_entry(semantic_name)
-		if e == null or e.is_shaped() or e.block_type_name.is_empty():
-			continue
-		result = {
-			"palette": palette,
-			"name": e.block_type_name,
-			"bt": workspace.resolve_block_type(e.block_type_name, palette.library_names),
-		}
+		result = {}
+		if not e.block_type_name.is_empty():
+			result = {
+				"palette": palette,
+				"name": e.block_type_name,
+				"bt": workspace.resolve_block_type(e.block_type_name, palette.library_names),
+			}
+		if e.is_shaped():
+			result["shape"] = e.shape_id
 	return result
 
 # The ShapeCatalog id a semantic's winning entry cuts its base into, or "" for a plain
@@ -791,37 +767,32 @@ func rename_palette_entry(palette: Palette, entry: PaletteEntry, new_name: Strin
 	var n := new_name.strip_edges()
 	if n.is_empty() or n == entry.semantic_name or palette.get_entry(n) != null:
 		return false
-	# Shaped entries on this palette that cut from the renamed entry follow it.
-	for other in palette.entries:
-		if other.is_shaped() and other.base_name == entry.semantic_name:
-			other.base_name = n
 	entry.semantic_name = n
 	_save_palettes()
 	workspace_changed.emit()
 	return true
 
-# Make an entry a plain block entry mapped to `block_type_name` ("" = undecided), dropping
-# any shape it had.
+# Map an entry to `block_type_name` ("" = undecided). A shaped entry keeps its shape — every
+# placed part of it re-skins, since parts resolve their material through the entry.
 func assign_palette_entry_block(palette: Palette, entry: PaletteEntry, block_type_name: String) -> void:
 	if palette.builtin:
 		return
 	entry.block_type_name = block_type_name
-	entry.shape_id = ""
-	entry.base_name = ""
 	notify_block_type_changed()
 	_save_palettes()
 	workspace_changed.emit()
 
-# Make an entry a shaped entry: `shape_id` (a ShapeCatalog id) cut from the block entry named
-# `base_name` ("" = undecided). A shaped entry never names a block type itself. Changing the
-# shape only affects parts placed from now on (placed parts store their own shape);
-# changing the base re-skins every placed use, since parts resolve their material through it.
-func set_palette_entry_shape(palette: Palette, entry: PaletteEntry, shape_id: String, base_name: String) -> void:
-	if palette.builtin or not ShapeCatalog.has(shape_id):
+# Give an entry a shape (a ShapeCatalog id), or "" to make it place whole blocks again. Only
+# affects what's placed from now on: placed parts store their own shape.
+func set_palette_entry_shape(palette: Palette, entry: PaletteEntry, shape_id: String) -> void:
+	set_palette_entry_picks(palette, entry, entry.block_type_name, shape_id)
+
+# Both picks at once (what the entry dialog commits): block type + shape ("" = whole block).
+func set_palette_entry_picks(palette: Palette, entry: PaletteEntry, block_type_name: String, shape_id: String) -> void:
+	if palette.builtin or (not shape_id.is_empty() and not ShapeCatalog.has(shape_id)):
 		return
+	entry.block_type_name = block_type_name
 	entry.shape_id = shape_id
-	entry.base_name = base_name
-	entry.block_type_name = ""
 	notify_block_type_changed()
 	_save_palettes()
 	workspace_changed.emit()

@@ -850,7 +850,7 @@ func _refresh_palette_entry_grid() -> void:
 	for entry in _editing_palette.entries:
 		var bt: BlockType
 		if entry.is_shaped():
-			bt = VoxelWorld.icon_block_type_for_shape(entry.shape_id, entry.base_name, _editing_palette)
+			bt = VoxelWorld.icon_block_type_for_shape(entry.shape_id, entry.block_type_name, _editing_palette)
 		else:
 			bt = VoxelWorld.workspace.resolve_block_type(entry.block_type_name, _editing_palette.library_names)
 		var it := BlockGrid.Item.new()
@@ -930,9 +930,7 @@ func _refresh_entry_detail() -> void:
 
 	vbox.add_child(HSeparator.new())
 
-	if entry.is_shaped():
-		_build_shaped_entry_detail(vbox, entry, builtin)
-		return
+	_build_shape_row(vbox, entry, builtin)
 
 	var bt_lbl := Label.new()
 	bt_lbl.text = "Block type"
@@ -964,6 +962,7 @@ func _refresh_entry_detail() -> void:
 		# The inline editor has no OK button, so exploring commits live (as the old flat grid
 		# did). Refresh the left entry grid + the chooser's "Current:" chip, but *not* the whole
 		# detail — a full rebuild would tear down the chooser and lose its browse/preview state.
+		# A shaped entry keeps its shape; only its material changes.
 		chooser.selection_changed.connect(func(key: String):
 			VoxelWorld.assign_palette_entry_block(_editing_palette, entry, key)
 			_refresh_palette_entry_grid()
@@ -971,54 +970,51 @@ func _refresh_entry_detail() -> void:
 
 	if not builtin:
 		vbox.add_child(HSeparator.new())
-		var shape_btn := Button.new()
-		shape_btn.text = "New shape from this…"
-		shape_btn.tooltip_text = "Cut a shape (cover, strip, corner, …) from this entry's material."
-		shape_btn.pressed.connect(func(): _open_entry_dialog(null, entry.semantic_name))
-		vbox.add_child(shape_btn)
-		_add_delete_entry_button(vbox, entry)
+		if not entry.is_shaped():
+			var shape_btn := Button.new()
+			shape_btn.text = "New shape from this…"
+			shape_btn.tooltip_text = "A new entry that cuts this block into a shape (cover, strip, corner, …)."
+			shape_btn.pressed.connect(func(): _open_entry_dialog(null, entry.block_type_name))
+			vbox.add_child(shape_btn)
+		var del_btn := Button.new()
+		del_btn.text = "Delete entry"
+		del_btn.pressed.connect(func():
+			VoxelWorld.remove_palette_entry(_editing_palette, entry)
+			_selected_entry_semantic = ""
+			_refresh_palette_entry_grid()
+			_refresh_entry_detail())
+		vbox.add_child(del_btn)
 
-func _add_delete_entry_button(vbox: VBoxContainer, entry: PaletteEntry) -> void:
-	var del_btn := Button.new()
-	del_btn.text = "Delete entry"
-	del_btn.pressed.connect(func():
-		VoxelWorld.remove_palette_entry(_editing_palette, entry)
-		_selected_entry_semantic = ""
-		_refresh_palette_entry_grid()
-		_refresh_entry_detail())
-	vbox.add_child(del_btn)
-
-# Detail for a shaped entry: what it is (shape + the entry it's cut from) and a button into
-# the full entry dialog to change either. No inline block chooser — a shaped entry never
-# picks a block itself; its look flows from its base (.plans/shaped-parts.md).
-func _build_shaped_entry_detail(vbox: VBoxContainer, entry: PaletteEntry, builtin: bool) -> void:
+# What the entry places — a whole block, or a shape cut from its block — with a button into
+# the full entry dialog (its Shape tab) to change that.
+func _build_shape_row(vbox: VBoxContainer, entry: PaletteEntry, builtin: bool) -> void:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
-	var glyph := ShapeGlyph.new()
-	glyph.shape_id = entry.shape_id
-	glyph.custom_minimum_size = Vector2(56, 56)
-	var icon_bt := VoxelWorld.icon_block_type_for_shape(entry.shape_id, entry.base_name, _editing_palette)
-	if icon_bt:
-		glyph.color = icon_bt.color
-	row.add_child(glyph)
+	if entry.is_shaped():
+		var glyph := ShapeGlyph.new()
+		glyph.shape_id = entry.shape_id
+		glyph.custom_minimum_size = Vector2(44, 44)
+		var icon_bt := VoxelWorld.icon_block_type_for_shape(entry.shape_id, entry.block_type_name, _editing_palette)
+		if icon_bt:
+			glyph.color = icon_bt.color
+		row.add_child(glyph)
 	var info := Label.new()
-	info.text = "%s\ncut from %s" % [ShapeCatalog.name_of(entry.shape_id),
-		entry.base_name if not entry.base_name.is_empty() else "(undecided)"]
+	info.text = "Shape: " + (ShapeCatalog.name_of(entry.shape_id) if entry.is_shaped() else "whole block")
 	info.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(info)
+	if not builtin:
+		var edit_btn := Button.new()
+		edit_btn.text = "Change shape…"
+		edit_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		edit_btn.pressed.connect(func(): _open_entry_dialog(entry, ""))
+		row.add_child(edit_btn)
 	vbox.add_child(row)
-	if builtin:
-		return
-	var edit_btn := Button.new()
-	edit_btn.text = "Edit shape…"
-	edit_btn.pressed.connect(func(): _open_entry_dialog(entry, ""))
-	vbox.add_child(edit_btn)
 	vbox.add_child(HSeparator.new())
-	_add_delete_entry_button(vbox, entry)
 
-# The shared palette-entry dialog, from the palette editor: edit `entry` (its shape/base), or
-# with entry == null create a new shaped entry cut from `shape_base`.
-func _open_entry_dialog(entry: PaletteEntry, shape_base: String) -> void:
+# The shared palette-entry dialog, from the palette editor: edit `entry`, or with entry ==
+# null create a new entry on the Shape tab, preset to `block`.
+func _open_entry_dialog(entry: PaletteEntry, block: String) -> void:
 	var pal := _editing_palette
 	if pal == null or pal.builtin:
 		return
@@ -1027,26 +1023,16 @@ func _open_entry_dialog(entry: PaletteEntry, shape_base: String) -> void:
 	if entry:
 		dlg.setup_edit(pal, entry)
 	else:
-		dlg.setup(pal, _unique_semantic_name("New"), shape_base)
-	dlg.created.connect(func(semantic_name: String, block_type_name: String):
-		var e := VoxelWorld.add_palette_entry(pal, semantic_name)
-		if e and not block_type_name.is_empty():
-			VoxelWorld.assign_palette_entry_block(pal, e, block_type_name)
-		_after_entry_dialog(semantic_name))
-	dlg.created_shaped.connect(func(semantic_name: String, shape_id: String, base_name: String):
+		dlg.setup(pal, _unique_semantic_name("New"), block, true)
+	dlg.created.connect(func(semantic_name: String, block_type_name: String, shape_id: String):
 		var e := VoxelWorld.add_palette_entry(pal, semantic_name)
 		if e:
-			VoxelWorld.set_palette_entry_shape(pal, e, shape_id, base_name)
+			VoxelWorld.set_palette_entry_picks(pal, e, block_type_name, shape_id)
 		_after_entry_dialog(semantic_name))
-	dlg.edited.connect(func(e: PaletteEntry, semantic_name: String, block_type_name: String):
+	dlg.edited.connect(func(e: PaletteEntry, semantic_name: String, block_type_name: String, shape_id: String):
 		if semantic_name != e.semantic_name:
 			VoxelWorld.rename_palette_entry(pal, e, semantic_name)
-		VoxelWorld.assign_palette_entry_block(pal, e, block_type_name)
-		_after_entry_dialog(e.semantic_name))
-	dlg.edited_shaped.connect(func(e: PaletteEntry, semantic_name: String, shape_id: String, base_name: String):
-		if semantic_name != e.semantic_name:
-			VoxelWorld.rename_palette_entry(pal, e, semantic_name)
-		VoxelWorld.set_palette_entry_shape(pal, e, shape_id, base_name)
+		VoxelWorld.set_palette_entry_picks(pal, e, block_type_name, shape_id)
 		_after_entry_dialog(e.semantic_name))
 	dlg.popup_centered(Vector2i(1200, 820))
 

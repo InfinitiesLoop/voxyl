@@ -5,7 +5,7 @@ not started.
 
 Where Part 1 lives: `scripts/core/ShapeCatalog.gd` (shapes, slots, grids), `ShapeRules.gd`
 (sharing rules), `ShapePlacement.gd` (click → part), `ShapeModels.gd` (generated textured
-geometry); `VoxelWorld` (`_resolve_semantic` follows shaped entries to their base,
+geometry); `VoxelWorld` (`_resolve_semantic` reports a shaped entry's shape,
 `add_part`/`remove_part`/`can_add_part`, `icon_block_type_for_shape`); `View3D` (part
 raycast, grid overlay, ghost, place/erase/pick); `View2DGrid._draw_part_footprints`;
 `NewPaletteEntryDialog` (Block / Shape kinds), `ShapeGlyph` (drawn shape art), inventory +
@@ -36,22 +36,21 @@ Reference source (read while designing — worth re-reading when porting behavio
 
 ## Decisions
 
-1. **A shape is picked on the palette entry.** A palette entry is either a *block entry*
-   (semantic → block type, as today) or a *shaped entry* (semantic → shape + base entry).
-   "Trim Strip", "Roof Tile", "Stone Pillar" are real semantics: intent, described
-   geometrically, with no reference to how they look. Quick UX: make the entry once, put
-   it on the hotbar, place it many times.
-2. **Shaped entries always take their material from a base entry** — never a block type
-   directly. The base must be a block entry (no shaped → shaped chains). The base is
-   resolved by name through the project's palette stack (last-wins), same as any
-   semantic, so an overlay palette that remaps "Trim" re-skins every Trim shape too.
-   One way to do it, and it organizes a palette into materials + the shapes cut from
-   them.
+1. **A shape is picked on the palette entry, next to its block type.** An entry maps a
+   semantic to a block type (as always) and optionally a shape; with a shape it places
+   that shape cut from its block instead of the whole block. "Trim Strip", "Roof Tile",
+   "Stone Pillar" are real semantics: intent, described geometrically. Quick UX: make the
+   entry once (Block / Shape tabs in the entry dialog), put it on the hotbar, place it
+   many times.
+2. **Shaped entries use their own block type.** (Part 1 first shipped with shapes cut
+   from *another* entry — a "base" — but picking block + shape on the one entry is more
+   natural; the user asked for it and chaining may come back later. Old palettes migrate
+   on load: `Palette.migrate_legacy_shapes` copies the base's block into the entry.)
 3. **Each placed part stores its own shape.** A part is `{semantic, shape, slot}`.
    Voxel data stays readable on its own: a palette edit, swap, stack change or removed
    palette can re-skin a build but never change its structure (Principles 2 & 3 —
    palettes are shared across projects, so this matters). Consequences:
-   - Change a shaped entry's **base** → every placed use re-skins immediately.
+   - Change a shaped entry's **block type** → every placed use re-skins immediately.
    - Change a shaped entry's **shape** → only future placements; placed parts keep
      theirs. (A "convert placed parts" dialog is deferred — Part 4.)
 4. **Block anything the mods couldn't build.** Validity is a pure function of the cell's
@@ -66,9 +65,9 @@ Reference source (read while designing — worth re-reading when porting behavio
 ```
 PaletteEntry
   semantic_name    String
-  block_type_name  String   # block entries only
-  shape_id         String   # "" → block entry; else a ShapeCatalog id → shaped entry
-  base_name        String   # shaped entries: the block entry supplying the material
+  block_type_name  String   # the material ("" = undecided)
+  shape_id         String   # "" → places the whole block; else a ShapeCatalog id
+  base_name        String   # legacy only (see decision 2); cleared on load
 
 BlockCell
   type_id, orientation, tags   # a native block (today's cell) — unchanged
@@ -135,12 +134,12 @@ just draw both.
 ## Rendering & materials
 
 - A part renders as a generated `BlockModel` (the shape's boxes at its slot) textured
-  with the base block's full-cube face textures, **projected by position** — a strip
+  with the entry's block's full-cube face textures, **projected by position** — a strip
   shows the matching slice of the texture and lines up with neighbors (what FMP and AC
   do). Generated models are addressable by id (`shape:<shape>:<slot>:<base model id>`)
   so the 3D view, previews and icon baker all reuse their normal model paths and caches.
-- An undecided base → the planning color, like any undecided block.
-- Icons: a shaped entry's icon is its shape in the base material (a synthetic block
+- An undecided block → the planning color, like any undecided block.
+- Icons: a shaped entry's icon is its shape in its block's material (a synthetic block
   type for the icon baker), shown in the inventory grid and hotbar.
 
 ## Placement (3D)
@@ -159,8 +158,8 @@ Ported from FMP (`MicroblockPlacement` + `PlacementGrids`):
 ## Parts (iterations)
 
 **Part 1 — Microblocks end-to-end** (first UX checkpoint)
-- Shaped palette entries: entry dialog gets Block / Shape modes; shape picker + base
-  entry picker.
+- Shaped palette entries: entry dialog gets Block / Shape tabs; shape picker beside the
+  block chooser.
 - Shape catalog + ShapeRules + part data (persistence, undo, copy/paste verbatim).
 - 3D: part rendering with projected textures, part raycast, FMP placement + grid overlay
   + ghost, erase/pick single part.
@@ -199,8 +198,8 @@ export time.
 
 ## Open questions
 
-- AC secondary materials (window glass, cladding): a second base entry on the shaped
+- AC secondary materials (window glass, cladding): a second block type on the shaped
   entry?
 - Should exact FMP sizes 3/5/6/7 be pickable directly as shapes, or only by stacking?
-- Connection height for walls next to part cells currently reads the base block
+- Connection height for walls next to part cells currently reads the entry's block
   (always "tall"); refine if it looks wrong.

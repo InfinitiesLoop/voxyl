@@ -14,6 +14,22 @@ extends Resource
 # Marks the code-seeded "Default" palette — undeletable, but otherwise a normal palette.
 @export var builtin := false
 
+# Fold the legacy "cut from another entry" link (PaletteEntry.base_name) into the entry's
+# own block type, so a shaped entry saved that way keeps its look. Returns whether anything
+# changed. Called on load.
+func migrate_legacy_shapes() -> bool:
+	var migrated := false
+	for e in entries:
+		if e.base_name.is_empty():
+			continue
+		if e.is_shaped() and e.block_type_name.is_empty():
+			var base := get_entry(e.base_name)
+			if base != null and not base.is_shaped():
+				e.block_type_name = base.block_type_name
+		e.base_name = ""
+		migrated = true
+	return migrated
+
 func get_entry(semantic_name: String) -> PaletteEntry:
 	for e in entries:
 		if e.semantic_name == semantic_name:
