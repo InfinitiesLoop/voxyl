@@ -57,14 +57,28 @@ var _drag_last := Vector2.ZERO
 var _rctrl_held := false
 var _ralt_held := false
 var _rshift_held := false
+# Left ctrl = "place on the far side" for shaped parts (Forge Microblocks' modifier). Right
+# ctrl stays fly-up, so the two never collide.
+var _lctrl_held := false
 
 # --- Raycast state ---
 var _target_hit := false
 var _target_block := Vector3i.ZERO
 var _target_place := Vector3i.ZERO
+var _target_point := Vector3.ZERO     # exact world point the ray hit
+var _target_normal := Vector3i.ZERO   # outward normal of the face that was hit
+var _target_part := -1                # hit shaped part's index in its cell; -1 = whole block
 var _floor_hit := false
 var _floor_place := Vector3i.ZERO
+var _floor_point := Vector3.ZERO      # exact world point on the floor plane
 var _floor_y := 0  # Y level of the virtual placement floor
+
+# --- Shaped-part placement preview ---
+# With a shaped entry in hand, the aimed face shows the family's placement grid (which
+# zone picks which slot) and a translucent copy of the exact part that would be placed.
+var _place_grid: MeshInstance3D
+var _part_ghost: MeshInstance3D
+var _part_ghost_key := ""
 
 # --- Nodes ---
 var _viewport: SubViewport
@@ -236,6 +250,9 @@ func _ready() -> void:
 	VoxelWorld.tool_changed.connect(func(_t): _close_tool_overlay_if_open())
 	VoxelWorld.brush_size_changed.connect(func(_s): _refresh_ghost_preview())
 	VoxelWorld.selection_changed.connect(func(_s): _refresh_ghost_preview())
+	# Shaped-part grid + ghost follow the hand and the tool too.
+	VoxelWorld.selection_changed.connect(func(_s): _refresh_shaped_preview())
+	VoxelWorld.tool_changed.connect(func(_t): _refresh_shaped_preview())
 	VoxelWorld.workspace_changed.connect(_on_workspace_changed)
 	# The region selection is shared across views; repaint the box whenever it changes.
 	VoxelWorld.region_selection_changed.connect(_update_selection_box)
@@ -381,6 +398,20 @@ func _setup_viewport() -> void:
 	_highlight.material_override = _highlight_mat
 	_highlight.visible = false
 	_viewport.add_child(_highlight)
+
+	# Shaped-part placement grid (drawn on the aimed face) + the part ghost.
+	var place_grid_mat := StandardMaterial3D.new()
+	place_grid_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	place_grid_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	place_grid_mat.albedo_color = Color(0.05, 0.05, 0.08, 0.9)
+	_place_grid = MeshInstance3D.new()
+	_place_grid.mesh = ImmediateMesh.new()
+	_place_grid.material_override = place_grid_mat
+	_place_grid.visible = false
+	_viewport.add_child(_place_grid)
+	_part_ghost = MeshInstance3D.new()
+	_part_ghost.visible = false
+	_viewport.add_child(_part_ghost)
 
 	# Slice-select: translucent sheet (with a cell grid) cutting through the slice.
 	_plane_sheet_mat = ShaderMaterial.new()
@@ -722,6 +753,9 @@ func _input(event: InputEvent) -> void:
 				KEY_CTRL:  _rctrl_held  = key.pressed
 				KEY_ALT:   _ralt_held   = key.pressed
 				KEY_SHIFT: _rshift_held = key.pressed
+		elif key.physical_keycode == KEY_CTRL and not key.echo and _lctrl_held != key.pressed:
+			_lctrl_held = key.pressed
+			_refresh_shaped_preview()   # the ghost jumps to the opposite slot while held
 
 		if key.pressed:
 			if key.keycode == KEY_TAB or key.keycode == KEY_ENTER or key.keycode == KEY_KP_ENTER:
@@ -883,8 +917,10 @@ func _release_cursor() -> void:
 	_rctrl_held = false
 	_ralt_held = false
 	_rshift_held = false
+	_lctrl_held = false
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 	_highlight.visible = false
+	_clear_shaped_preview()
 	if _paste_active:
 		# Mid-paste: MMB (see _input) called this to step out of fly mode and reveal the
 		# offset panel — the paste itself (ghost, aim, offset, lock) stays live, frozen at
@@ -1120,6 +1156,7 @@ func _on_workspace_changed() -> void:
 func _rebuild() -> void:
 	_dirty = false
 	_ghost_mesh_key = ""  # block appearance may have changed; rebuild the ghost mesh lazily
+	_part_ghost_key = ""
 	for child in _voxel_root.get_children():
 		_voxel_root.remove_child(child)
 		child.free()
@@ -1155,8 +1192,20 @@ func _rebuild() -> void:
 # flush full-block render. Shared by the full rebuild loop above and _update_cell_node's
 # single-cell incremental path, so both build identical nodes.
 func _build_cell_node(pos: Vector3i, cell: BlockCell, semantic: String) -> Node3D:
-	var parts := _resolve_cell_parts(pos, cell, semantic)
 	var center := Vector3(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5)
+	if cell.is_shaped():
+		# Shaped parts (covers, strips, …): one child per part, each its generated model —
+		# the part's own stored shape + slot, textured from whatever its semantic's base
+		# currently maps to. Geometry is already in place within the cell, so no rotation.
+		var holder := Node3D.new()
+		holder.position = center
+		for part in cell.parts:
+			var pmi := MeshInstance3D.new()
+			_apply_cell_appearance(pmi, str(part.get("semantic", "")), VoxelWorld.get_part_model(part))
+			pmi.transform = Transform3D(Basis().scaled(Vector3.ONE * VOXEL_SCALE), Vector3.ZERO)
+			holder.add_child(pmi)
+		return holder
+	var parts := _resolve_cell_parts(pos, cell, semantic)
 	var node: Node3D
 	if parts.size() == 1:
 		# Common case (every default-build cell): a single MeshInstance3D, placed
@@ -1429,26 +1478,37 @@ func _update_crosshair_target() -> void:
 	if not VoxelWorld.active_project:
 		_clear_ghost()
 		_clear_wand_box()
+		_clear_shaped_preview()
 		_highlight.visible = false
 		_overlay.queue_redraw()
 		return
 
 	var result := _raycast_grid(_camera_pos, _get_look_dir(), 20.0)
 	_target_hit = result.get("hit", false)
+	_target_part = -1
 
 	if _target_hit:
 		_target_block = result.pos
 		_target_place = result.prev_pos
-		var normal := _target_place - _target_block
+		_target_point = result.get("point", Vector3(_target_block))
+		_target_normal = result.get("normal", _target_place - _target_block)
+		_target_part = int(result.get("part", -1))
 		_highlight_mat.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
 		_highlight_mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
-		_draw_face_highlight(_target_block, normal)
+		if _target_part >= 0:
+			# Outline the face of the part itself, not the whole cell.
+			var part: Dictionary = VoxelWorld.active_project.data.get_cell(_target_block).parts[_target_part]
+			var b := ShapeCatalog.bounds(str(part["shape"]), int(part["slot"]))
+			_draw_face_highlight(_target_block, _target_normal, AABB(Vector3(_target_block) + b.position, b.size))
+		else:
+			_draw_face_highlight(_target_block, _target_place - _target_block)
 		_highlight.visible = true
 	else:
 		var floor_result := _raycast_floor_plane(_camera_pos, _get_look_dir())
 		_floor_hit = floor_result.get("hit", false)
 		if _floor_hit:
 			_floor_place = floor_result.pos
+			_floor_point = floor_result.get("point", Vector3(_floor_place))
 			_highlight_mat.albedo_color = Color(0.08, 0.75, 1.0, 0.22)
 			_highlight_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 			_draw_floor_fill(_floor_place)
@@ -1458,6 +1518,7 @@ func _update_crosshair_target() -> void:
 
 	_overlay.queue_redraw()
 	_refresh_ghost_preview()
+	_refresh_shaped_preview()
 
 func _draw_floor_fill(cell: Vector3i) -> void:
 	var y := float(cell.y) + 0.005
@@ -1479,9 +1540,11 @@ func _draw_floor_fill(cell: Vector3i) -> void:
 # a slab, …) would otherwise show its highlight floating above/outside the real geometry —
 # a bright gap that reads as a hole cut into the block (the reported "cutout on the chest
 # top", which turned out to be this highlight box, not the mesh itself).
-func _draw_face_highlight(block: Vector3i, normal: Vector3i) -> void:
+#
+# `box` (world space) overrides the bounds — used to outline a single shaped part's face.
+func _draw_face_highlight(block: Vector3i, normal: Vector3i, box := AABB()) -> void:
 	var n := Vector3(normal)
-	var bbox := _cell_world_aabb(block)
+	var bbox := box if box.size != Vector3.ZERO else _cell_world_aabb(block)
 	if bbox.size == Vector3.ZERO:
 		bbox = AABB(Vector3(block), Vector3.ONE)   # no rendered geometry found: fall back
 	var lo := bbox.position
@@ -1559,8 +1622,18 @@ func _raycast_grid(origin: Vector3, direction: Vector3, max_dist: float) -> Dict
 	var t := 0.0
 	while t < max_dist:
 		var cur := Vector3i(ix, iy, iz)
-		if not data.get_block(cur).is_empty():
-			return {hit = true, pos = cur, prev_pos = prev}
+		var cell := data.get_cell(cur)
+		if cell != null:
+			if cell.is_shaped():
+				# A part cell only blocks the ray where a part actually is — the gaps around
+				# a strip or through a hollow cover are see-through and clickable beyond.
+				var ph := _raycast_parts(origin, dir, cur, cell)
+				if not ph.is_empty():
+					return {hit = true, pos = cur, prev_pos = prev, point = ph["point"],
+						normal = ph["normal"], part = ph["part"]}
+			else:
+				return {hit = true, pos = cur, prev_pos = prev, point = origin + dir * t,
+					normal = prev - cur, part = -1}
 		prev = cur
 		if tx <= ty and tx <= tz:
 			t = tx; tx += dtx; ix += sx
@@ -1570,6 +1643,50 @@ func _raycast_grid(origin: Vector3, direction: Vector3, max_dist: float) -> Dict
 			t = tz; tz += dtz; iz += sz
 
 	return {hit = false}
+
+# The nearest shaped part of `cell` (at cell_pos) the ray hits: { point, normal, part } or {}.
+func _raycast_parts(origin: Vector3, dir: Vector3, cell_pos: Vector3i, cell: BlockCell) -> Dictionary:
+	var best := {}
+	var best_t := INF
+	for i in cell.parts.size():
+		var part: Dictionary = cell.parts[i]
+		for box in ShapeCatalog.boxes(str(part.get("shape", "")), int(part.get("slot", 0))):
+			var hit := _ray_box(origin, dir, AABB(Vector3(cell_pos) + box.position, box.size))
+			if not hit.is_empty() and float(hit["t"]) < best_t:
+				best_t = hit["t"]
+				best = {"point": origin + dir * best_t, "normal": hit["normal"], "part": i}
+	return best
+
+# Slab test: where a ray (unit `d`) enters `box`, as { t, normal } (the entered face's
+# outward normal), or {} on a miss / when the origin is already inside.
+static func _ray_box(o: Vector3, d: Vector3, box: AABB) -> Dictionary:
+	var tmin := -INF
+	var tmax := INF
+	var n_axis := -1
+	var n_sign := 0
+	for a in 3:
+		if absf(d[a]) < 1e-9:
+			if o[a] < box.position[a] or o[a] > box.end[a]:
+				return {}
+			continue
+		var t1: float = (box.position[a] - o[a]) / d[a]
+		var t2: float = (box.end[a] - o[a]) / d[a]
+		var sgn := -1                    # entering through the min face → normal is -axis
+		if t1 > t2:
+			var tmp := t1; t1 = t2; t2 = tmp
+			sgn = 1
+		if t1 > tmin:
+			tmin = t1
+			n_axis = a
+			n_sign = sgn
+		tmax = minf(tmax, t2)
+		if tmin > tmax:
+			return {}
+	if n_axis < 0 or tmin < 0.0:
+		return {}
+	var n := Vector3i.ZERO
+	n[n_axis] = n_sign
+	return {"t": tmin, "normal": n}
 
 func _raycast_floor_plane(origin: Vector3, direction: Vector3) -> Dictionary:
 	if not VoxelWorld.active_project:
@@ -1585,7 +1702,7 @@ func _raycast_floor_plane(origin: Vector3, direction: Vector3) -> Dictionary:
 	var data := VoxelWorld.active_project.data
 	if not data.get_block(cell).is_empty():
 		return {hit = false}
-	return {hit = true, pos = cell}
+	return {hit = true, pos = cell, point = hit_world}
 
 # ---------------------------------------------------------------------------
 # Block editing
@@ -1852,7 +1969,10 @@ func _refresh_ghost_preview() -> void:
 		_clear_wand_box()
 		_refresh_paste_ghost()
 		return
-	if not _fly_mode or not VoxelWorld.active_project or VoxelWorld.selected_semantic.is_empty():
+	if not _fly_mode or not VoxelWorld.active_project or VoxelWorld.selected_semantic.is_empty() \
+			or VoxelWorld.is_shaped_semantic(VoxelWorld.selected_semantic):
+		# (A shaped entry previews as a single part — _refresh_shaped_preview — and the
+		# whole-cell tools below never place one.)
 		_clear_ghost()
 		_clear_wand_box()
 		return
@@ -2106,8 +2226,110 @@ func _clear_placement_fx() -> void:
 		(fx["node"] as Node).queue_free()
 	_placement_fx.clear()
 
+# ---------------------------------------------------------------------------
+# Shaped parts: placement (Forge Microblocks' rules, via ShapePlacement), the placement
+# grid drawn on the aimed face, and the part ghost.
+# ---------------------------------------------------------------------------
+
+# Whether the hand holds a shaped entry with the plain place tool. The whole-cell tools
+# (build-to-me, wand, exchange) never place parts — VoxelWorld.set_block refuses shaped
+# semantics — so they show no part preview either.
+func _placing_shape() -> bool:
+	if not _fly_mode or _paste_active or not VoxelWorld.active_project:
+		return false
+	match VoxelWorld.active_tool:
+		VoxelWorld.Tool.BUILD_TO_ME, VoxelWorld.Tool.WAND, VoxelWorld.Tool.EXCHANGE, VoxelWorld.Tool.SELECT:
+			return false
+	return VoxelWorld.is_shaped_semantic(VoxelWorld.selected_semantic)
+
+# The aimed face in ShapePlacement's terms: { cell, side, vhit, point }, or {}. Aiming at
+# the ground plane counts as clicking the top face of the cell under the floor.
+func _shaped_aim() -> Dictionary:
+	if _target_hit:
+		if _target_normal == Vector3i.ZERO:
+			return {}
+		return {"cell": _target_block, "side": ShapeCatalog.side_from_normal(Vector3(_target_normal)),
+			"vhit": _target_point - Vector3(_target_block), "point": _target_point}
+	if _floor_hit:
+		var below := _floor_place + Vector3i(0, -1, 0)
+		var p := Vector3(_floor_point.x, float(_floor_place.y), _floor_point.z)
+		return {"cell": below, "side": 1, "vhit": p - Vector3(below), "point": p}
+	return {}
+
+func _shaped_placement(aim: Dictionary) -> Dictionary:
+	if aim.is_empty():
+		return {}
+	var semantic := VoxelWorld.selected_semantic
+	return ShapePlacement.resolve(semantic, VoxelWorld.get_shape_id_for_semantic(semantic),
+		aim["cell"], aim["vhit"], aim["side"], _lctrl_held)
+
+func _refresh_shaped_preview() -> void:
+	if not _placing_shape():
+		_clear_shaped_preview()
+		return
+	var aim := _shaped_aim()
+	if aim.is_empty():
+		_clear_shaped_preview()
+		return
+	_draw_place_grid(VoxelWorld.get_shape_id_for_semantic(VoxelWorld.selected_semantic), aim)
+	var placement := _shaped_placement(aim)
+	if placement.is_empty():
+		_part_ghost.visible = false   # nothing fits here: grid only, no ghost
+		return
+	var part: Dictionary = placement["part"]
+	var model := VoxelWorld.get_part_model(part)
+	var key := str(part["semantic"]) + "|" + _model_key(model)
+	if key != _part_ghost_key:
+		_part_ghost_key = key
+		_part_ghost.mesh = _build_ghost_mesh(str(part["semantic"]), model)
+	var pos: Vector3i = placement["pos"]
+	_part_ghost.transform = Transform3D(Basis().scaled(Vector3.ONE * VOXEL_SCALE),
+		Vector3(pos) + Vector3(0.5, 0.5, 0.5))
+	_part_ghost.visible = true
+
+func _clear_shaped_preview() -> void:
+	if _place_grid != null and _place_grid.visible:
+		(_place_grid.mesh as ImmediateMesh).clear_surfaces()
+		_place_grid.visible = false
+	if _part_ghost != null:
+		_part_ghost.visible = false
+
+# The shape family's placement zones drawn across the aimed cell face, at the hit's depth,
+# so you can see which zone picks which slot (Forge Microblocks' grid overlay).
+func _draw_place_grid(shape_id: String, aim: Dictionary) -> void:
+	var side: int = aim["side"]
+	var cell: Vector3i = aim["cell"]
+	var point: Vector3 = aim["point"]
+	var n: Vector3 = ShapeCatalog.SIDE_VECS[side]
+	var u_axis: Vector3 = ShapeCatalog.SIDE_VECS[(side + 2) % 6]
+	var v_axis: Vector3 = ShapeCatalog.SIDE_VECS[(side + 4) % 6]
+	var center := Vector3(cell) + Vector3(0.5, 0.5, 0.5)
+	var comp := 0 if absf(n.x) > 0.5 else (1 if absf(n.y) > 0.5 else 2)
+	center[comp] = point[comp]
+	center += n * 0.004   # just off the surface so it doesn't z-fight
+	var im := _place_grid.mesh as ImmediateMesh
+	im.clear_surfaces()
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	for seg in ShapeCatalog.grid_lines(shape_id):
+		for p2: Vector2 in seg:
+			im.surface_add_vertex(center + u_axis * p2.x + v_axis * p2.y)
+	im.surface_end()
+	_place_grid.visible = true
+
+func _place_shaped_part() -> void:
+	var placement := _shaped_placement(_shaped_aim())
+	if placement.is_empty():
+		return
+	VoxelWorld.begin_operation("Place")
+	VoxelWorld.add_part(placement["pos"], placement["part"])
+	VoxelWorld.end_operation()
+	_update_crosshair_target()
+
 func _place_targeted_block() -> void:
 	if not VoxelWorld.active_project or VoxelWorld.selected_semantic.is_empty():
+		return
+	if VoxelWorld.is_shaped_semantic(VoxelWorld.selected_semantic):
+		_place_shaped_part()
 		return
 	var place_pos: Vector3i
 	var face_normal: Vector3i
@@ -2118,6 +2340,10 @@ func _place_targeted_block() -> void:
 		place_pos = _floor_place
 		face_normal = Vector3i(0, 1, 0)  # standing on the ground plane
 	else:
+		return
+	# The ray may have passed through the open part of a part cell on its way to the target;
+	# a whole block never overwrites that.
+	if VoxelWorld.active_project.data.get_cell(place_pos) != null:
 		return
 	# Orient like Minecraft: a 6-way block (barrel, dispenser, a plain undecided/FULL
 	# cube, …) faces the way you placed it — the direction pointing out of the surface
@@ -2175,7 +2401,10 @@ func _erase_targeted_block() -> void:
 	if not _target_hit or not VoxelWorld.active_project:
 		return
 	VoxelWorld.begin_operation("Erase")
-	VoxelWorld.clear_block(_target_block)
+	if _target_part >= 0:
+		VoxelWorld.remove_part(_target_block, _target_part)   # just the aimed piece
+	else:
+		VoxelWorld.clear_block(_target_block)
 	VoxelWorld.end_operation()
 	_update_crosshair_target()
 
@@ -2186,7 +2415,10 @@ func _pick_targeted_block() -> void:
 		return
 	var cell := VoxelWorld.active_project.data.get_cell(_target_block)
 	if cell:
-		VoxelWorld.pick_block(cell.type_id)
+		if _target_part >= 0 and _target_part < cell.parts.size():
+			VoxelWorld.pick_block(str(cell.parts[_target_part]["semantic"]))
+		else:
+			VoxelWorld.pick_block(cell.type_id)
 
 # Rotate the crosshair-targeted block about the axis of the face you're looking at.
 # A 6-way block (barrel, dispenser, a plain undecided/FULL cube, …) cycles its facing
@@ -2199,8 +2431,8 @@ func _rotate_targeted_block(reverse: bool) -> void:
 	if not _target_hit or not VoxelWorld.active_project:
 		return
 	var cell := VoxelWorld.active_project.data.get_cell(_target_block)
-	if cell == null:
-		return
+	if cell == null or cell.is_shaped():
+		return   # rotating shaped parts is a later iteration (see .plans/shaped-parts.md)
 	var normal := _target_place - _target_block  # face pointing toward the camera
 	var steps := -1 if reverse else 1
 	var o := cell.orientation
@@ -2322,6 +2554,8 @@ func _commit_paste() -> void:
 				var src: BlockCell = clip[targets[pos]]
 				var cell := src.duplicate_cell()
 				cell.orientation = Orientation.rotate_rigid_cw(cell.orientation, _paste_rotation)
+				for part in cell.parts:   # shaped parts turn with the structure too
+					part["slot"] = ShapeCatalog.rotate_slot_y(str(part["shape"]), int(part["slot"]), _paste_rotation)
 				VoxelWorld.set_cell(pos, cell)
 			VoxelWorld.end_operation()
 			_animate_placement(_group_by_distance(targets.keys(), anchor))

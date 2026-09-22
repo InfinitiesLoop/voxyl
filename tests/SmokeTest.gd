@@ -2223,6 +2223,25 @@ func _test_shaped_parts() -> void:
 	var counts := VoxelWorld.active_project.semantic_counts()
 	_check("parts count per semantic", int(counts.get("TLoose", 0)) == 1)
 
+	# Placement (FMP rules): clicking a plain block's top face places into the cell above.
+	var r := ShapePlacement.resolve("TStrip", "face1", Vector3i(0, 0, 0), Vector3(0.5, 1.0, 0.5), 1, false)
+	_check("cover on a block's top lands in the cell above",
+		not r.is_empty() and r["pos"] == Vector3i(0, 1, 0) and int(r["part"]["slot"]) == 0)
+	r = ShapePlacement.resolve("TStrip", "face1", Vector3i(0, 0, 0), Vector3(0.5, 1.0, 0.5), 1, true)
+	_check("ctrl sends it to the far side", not r.is_empty() and int(r["part"]["slot"]) == 1)
+	r = ShapePlacement.resolve("TStrip", "edge2", Vector3i(0, 0, 0), Vector3(0.5, 1.0, 0.5), 1, false)
+	_check("post in a face's center stands centered",
+		not r.is_empty() and int(r["part"]["slot"]) == ShapeCatalog.CENTER_SLOT)
+	_check("strips have no centered form",
+		ShapePlacement.resolve("TStrip", "edge1", Vector3i(0, 0, 0), Vector3(0.5, 1.0, 0.5), 1, false).is_empty())
+	# Clicking the top of a bottom cover inside its own cell puts the new cover on top of
+	# that same cell (FMP's internal placement).
+	var cp := Vector3i(8, 0, 8)
+	VoxelWorld.add_part(cp, _p("TStrip", "face1", 0))
+	r = ShapePlacement.resolve("TStrip", "face1", cp, Vector3(0.5, 0.125, 0.5), 1, false)
+	_check("internal placement fills the same cell's top",
+		not r.is_empty() and r["pos"] == cp and int(r["part"]["slot"]) == 1)
+
 	# Pack / unpack round-trip (the on-disk mirror).
 	var d := VoxelData.new()
 	d.add_part(Vector3i(1, 1, 1), _p("A", "edge2", 13))

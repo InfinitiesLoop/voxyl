@@ -1,6 +1,16 @@
 # Shaped Parts — Microblocks & Architecture Shapes
 
-Status: **Part 1 in progress** (microblocks end-to-end). Parts 2–5 not started.
+Status: **Part 1 implemented, awaiting UX feedback** (microblocks end-to-end). Parts 2–5
+not started.
+
+Where Part 1 lives: `scripts/core/ShapeCatalog.gd` (shapes, slots, grids), `ShapeRules.gd`
+(sharing rules), `ShapePlacement.gd` (click → part), `ShapeModels.gd` (generated textured
+geometry); `VoxelWorld` (`_resolve_semantic` follows shaped entries to their base,
+`add_part`/`remove_part`/`can_add_part`, `icon_block_type_for_shape`); `View3D` (part
+raycast, grid overlay, ghost, place/erase/pick); `View2DGrid._draw_part_footprints`;
+`NewPaletteEntryDialog` (Block / Shape kinds), `ShapeGlyph` (drawn shape art), inventory +
+Home palette editor + hotbar icons. Tests: `_test_shape_catalog`, `_test_shape_rules`,
+`_test_shaped_parts` in `tests/SmokeTest.gd`.
 
 ## Goal
 

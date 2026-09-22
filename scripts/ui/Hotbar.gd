@@ -164,10 +164,16 @@ func _draw() -> void:
 			draw_string(font, rect.position + Vector2(SLOT * 0.5 - 4.0, SLOT * 0.5 + 6.0),
 				"+", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color(1, 1, 1, 0.18))
 		else:
-			var bt := VoxelWorld.get_block_type_object_for_semantic(semantic)
+			# A shaped entry's icon is its shape cut from its base (see
+			# VoxelWorld.icon_block_type_for_semantic); a plain one is its block.
+			var bt := VoxelWorld.icon_block_type_for_semantic(semantic)
 			var icon := _baker.icon_for(bt) if bt else null
+			var shape_id := VoxelWorld.get_shape_id_for_semantic(semantic)
 			if icon != null:
 				draw_texture_rect(icon, rect.grow(-3), false)
+			elif not shape_id.is_empty():
+				# Until the icon bakes: the shape drawn in the base's planning color.
+				ShapeGlyph.draw_into(self, rect.grow(-3), shape_id, VoxelWorld.get_color_for_semantic(semantic))
 			else:
 				# Until the icon bakes (or for an unmapped semantic): the planning color
 				# plus a shape silhouette, so the slot still reads at a glance.

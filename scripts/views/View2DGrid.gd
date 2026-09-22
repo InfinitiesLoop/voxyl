@@ -311,11 +311,20 @@ func _draw_grid() -> void:
 	var data := VoxelWorld.active_project.data
 	var origin := _draw_origin()
 	var cell_dim := Vector2(_cell_px - 1.0, _cell_px - 1.0)
+	var hd := _get_h_dir()
+	var vd := _get_v_dir()
 	for h in _get_grid_w():
 		for v in _get_grid_h():
 			var rect := Rect2(origin + Vector2(h, v) * _cell_px, cell_dim)
 			var world := _grid_to_world(h, v)
-			var semantic := data.get_block(world)
+			var cell := data.get_cell(world)
+			if cell != null and cell.is_shaped():
+				# Shaped parts: each part's footprint inside the cell, seen along the slice axis.
+				_grid_area.draw_rect(rect, Color(0.12, 0.12, 0.12))
+				_draw_part_footprints(rect, cell, hd, vd)
+				_grid_area.draw_rect(rect, Color(0.22, 0.22, 0.22), false)
+				continue
+			var semantic := cell.type_id if cell else ""
 			var fill: Color
 			if semantic.is_empty():
 				fill = Color(0.12, 0.12, 0.12)
@@ -347,6 +356,28 @@ func _draw_grid() -> void:
 
 	_draw_selection(origin)
 	_draw_hint()
+
+# Draw a part cell's shaped parts as their projections onto this view's plane (h right,
+# v down), each in its semantic's planning color with a darker outline so overlapping
+# pieces stay readable. Bigger footprints first, so small pieces (strips, nooks) end on top.
+func _draw_part_footprints(rect: Rect2, cell: BlockCell, hd: Vector3i, vd: Vector3i) -> void:
+	var ha := _dir_axis(hd)
+	var va := _dir_axis(vd)
+	var shapes: Array = []   # [Rect2, Color]
+	for part in cell.parts:
+		var col := VoxelWorld.get_color_for_semantic(str(part.get("semantic", "")))
+		for box in ShapeCatalog.boxes(str(part.get("shape", "")), int(part.get("slot", 0))):
+			var h0: float = box.position[ha] if hd[ha] > 0 else 1.0 - box.end[ha]
+			var h1: float = box.end[ha] if hd[ha] > 0 else 1.0 - box.position[ha]
+			var v0: float = box.position[va] if vd[va] > 0 else 1.0 - box.end[va]
+			var v1: float = box.end[va] if vd[va] > 0 else 1.0 - box.position[va]
+			shapes.append([Rect2(rect.position + Vector2(h0, v0) * rect.size,
+				Vector2(h1 - h0, v1 - v0) * rect.size), col])
+	shapes.sort_custom(func(a: Array, b: Array) -> bool:
+		return (a[0] as Rect2).get_area() > (b[0] as Rect2).get_area())
+	for s in shapes:
+		_grid_area.draw_rect(s[0], s[1])
+		_grid_area.draw_rect(s[0], (s[1] as Color).darkened(0.45), false, 1.0)
 
 # Outline the region selection where it crosses this slice. The cuboid projects to an
 # axis-aligned rect in grid space; drawn bright + filled when this slice is within the

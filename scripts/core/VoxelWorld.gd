@@ -283,9 +283,25 @@ func icon_block_type_for_semantic(semantic_name: String) -> BlockType:
 	var r := _resolve_semantic(semantic_name)
 	if not r.has("shape"):
 		return r.get("bt")
-	var shape_id := str(r["shape"])
-	var base_bt: BlockType = r.get("bt")
-	var base_model := get_model_for_semantic(semantic_name)
+	return icon_block_type_for_shape(str(r["shape"]), str(r.get("base", "")))
+
+# The synthetic icon block type for `shape_id` cut from the block entry `base_name` ("" or
+# unmapped → the undecided look). With `palette`, the base is looked up in that palette alone
+# (an editor listing one palette, possibly with no project open); otherwise through the
+# active project's palette stack, the way placed parts resolve.
+func icon_block_type_for_shape(shape_id: String, base_name: String, palette: Palette = null) -> BlockType:
+	if not ShapeCatalog.has(shape_id):
+		return null
+	var base_bt: BlockType = null
+	var base_model: BlockModel = null
+	if palette != null:
+		var be := palette.get_entry(base_name)
+		if be != null and not be.is_shaped() and not be.block_type_name.is_empty():
+			base_bt = workspace.resolve_block_type(be.block_type_name, palette.library_names)
+		base_model = _model_for_block_type(base_bt, palette.library_names)
+	else:
+		base_bt = _resolve_block_entry(base_name).get("bt") if active_project else null
+		base_model = get_model_for_semantic(base_name)
 	var model := ShapeModels.model_for(shape_id, ShapeCatalog.preview_slot(shape_id), base_model)
 	var key := "%s|%s" % [shape_id, model.id]
 	var bt: BlockType = _shape_icon_types.get(key, null)
@@ -619,8 +635,12 @@ func is_orientable_for_semantic(semantic_name: String) -> bool:
 # special-cases geometry.
 func get_model_for_semantic(semantic_name: String) -> BlockModel:
 	var r := _resolve_semantic(semantic_name)
-	var bt: BlockType = r.get("bt")
 	var libs: Array = (r["palette"] as Palette).library_names if r.has("palette") else []
+	return _model_for_block_type(r.get("bt"), libs)
+
+# A block type's render model within a library scope: its explicit model, else the built-in
+# for its shape (null block type → the built-in full cube).
+func _model_for_block_type(bt: BlockType, libs: Array) -> BlockModel:
 	if bt and not bt.model_id.is_empty():
 		var explicit := workspace.resolve_block_model(bt.model_id, libs)
 		if explicit:
