@@ -31,11 +31,11 @@ static func _windows() -> Array:
 			appdata.path_join(".minecraft/versions"), "file"),
 		_entry("Vanilla — resource packs (pick a .zip)",
 			appdata.path_join(".minecraft/resourcepacks"), "file"),
-		_entry("CurseForge — instances (open an instance's mods folder)",
+		_entry("CurseForge — instances (open an instance's folder)",
 			home.path_join("curseforge/minecraft/Instances"), "dir"),
 		_entry("CurseForge — vanilla version jars",
 			home.path_join("curseforge/minecraft/Install/versions"), "file"),
-		_entry("Prism — instances (open <instance>/.minecraft/mods)",
+		_entry("Prism — instances (open an instance's folder)",
 			appdata.path_join("PrismLauncher/instances"), "dir"),
 	]
 
@@ -47,11 +47,11 @@ static func _macos() -> Array:
 			support.path_join("minecraft/versions"), "file"),
 		_entry("Vanilla — resource packs (pick a .zip)",
 			support.path_join("minecraft/resourcepacks"), "file"),
-		_entry("CurseForge — instances (open an instance's mods folder)",
+		_entry("CurseForge — instances (open an instance's folder)",
 			home.path_join("Documents/curseforge/minecraft/Instances"), "dir"),
 		_entry("CurseForge — vanilla version jars",
 			home.path_join("Documents/curseforge/minecraft/Install/versions"), "file"),
-		_entry("Prism — instances (open <instance>/.minecraft/mods)",
+		_entry("Prism — instances (open an instance's folder)",
 			support.path_join("PrismLauncher/instances"), "dir"),
 	]
 
@@ -62,8 +62,8 @@ static func _linux() -> Array:
 			home.path_join(".minecraft/versions"), "file"),
 		_entry("Vanilla — resource packs (pick a .zip)",
 			home.path_join(".minecraft/resourcepacks"), "file"),
-		_entry("Prism — instances (open <instance>/.minecraft/mods)",
+		_entry("Prism — instances (open an instance's folder)",
 			home.path_join(".local/share/PrismLauncher/instances"), "dir"),
-		_entry("CurseForge — instances (open an instance's mods folder)",
+		_entry("CurseForge — instances (open an instance's folder)",
 			home.path_join("curseforge/minecraft/Instances"), "dir"),
 	]

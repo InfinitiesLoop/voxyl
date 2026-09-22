@@ -70,29 +70,91 @@ func touched_library_names() -> Array:
 #   - a `.zip` / `.jar` archive      → one zip source (a resource pack or mod jar),
 #   - a pack / install root          → the folder's `assets/` child,
 #   - a mods folder                  → one zip source per `.jar`/`.zip` inside,
+#   - a folder ABOVE any of those    → search a few levels down for every folder that
+#                                      matches one of those patterns and use them all
+#                                      (see _scan_for_sources) — so an instance root or
+#                                      its `.minecraft` still finds `mods/`, a vanilla
+#                                      `versions/<ver>/<ver>.jar`, `resourcepacks/*.zip`…
 #   - otherwise the folder itself    → treated as the assets root.
 # Returns [] when the path can't be opened, so the caller can report it.
 static func detect_sources(path: String) -> Array[MCAssetSource]:
-	var out: Array[MCAssetSource] = []
 	var lower := path.to_lower()
 	if lower.ends_with(".zip") or lower.ends_with(".jar"):
-		out.append(MCZipSource.new(path))
-		return out
+		var zip_out: Array[MCAssetSource] = []
+		zip_out.append(MCZipSource.new(path))
+		return zip_out
 	var dir := DirAccess.open(path)
 	if dir == null:
-		return out
+		return []
+	var direct := _sources_at(dir, path)
+	if not direct.is_empty():
+		return direct
+	var found := _scan_for_sources(path)
+	if not found.is_empty():
+		return found
+	# Best effort: assume the folder is itself an assets root.
+	var fallback: Array[MCAssetSource] = []
+	fallback.append(MCDirSource.new(path))
+	return fallback
+
+# The direct (non-recursive) checks against exactly `dir`: an `assets/` child, or archive
+# files sitting right inside it (a mods/resourcepacks folder). [] if neither matches.
+static func _sources_at(dir: DirAccess, path: String) -> Array[MCAssetSource]:
+	var out: Array[MCAssetSource] = []
 	if dir.get_directories().has("assets"):
 		out.append(MCDirSource.new(path.path_join("assets")))
 		return out
-	# A directory of archives → a mods folder.
 	for f in dir.get_files():
 		var fl := f.to_lower()
 		if fl.ends_with(".jar") or fl.ends_with(".zip"):
 			out.append(MCZipSource.new(path.path_join(f)))
-	if not out.is_empty():
-		return out
-	# Best effort: assume the folder is itself an assets root.
-	out.append(MCDirSource.new(path))
+	return out
+
+# Directory names never worth descending into while hunting for sources: either huge and
+# irrelevant (world saves, screenshots, crash logs, per-mod config trees) or, for
+# `libraries` specifically, full of unrelated loader/dependency jars that would
+# false-positive as a mods folder.
+const _SCAN_SKIP_DIRS := {
+	"saves": true, "screenshots": true, "logs": true, "crash-reports": true,
+	"backups": true, ".git": true, "libraries": true, "natives": true,
+	"shaderpacks": true, "server-resource-packs": true, "config": true, "cache": true,
+}
+
+# How deep the forgiving search descends below the chosen folder, and how many
+# directories it's willing to open — enough to reach `<instance>/.minecraft/mods` from an
+# instance root (2 levels down), but bounded so an unrelated folder tree can't hang the
+# picker.
+const _SCAN_MAX_DEPTH := 4
+const _SCAN_MAX_DIRS := 4000
+
+# Breadth-first search a few levels under `root` for every directory matching
+# _sources_at's patterns, so picking a folder ABOVE the right one — an instance root, or
+# its `.minecraft` — still finds `mods/`, a vanilla version jar, resource packs, etc.
+# A matched directory isn't descended into further (its sources are already captured);
+# every other branch keeps searching up to _SCAN_MAX_DEPTH. Sources from every match are
+# combined, so e.g. both `mods/` and `versions/<ver>/<ver>.jar` come back together.
+static func _scan_for_sources(root: String) -> Array[MCAssetSource]:
+	var out: Array[MCAssetSource] = []
+	var queue: Array = [{"path": root, "depth": 0}]
+	var visited := 0
+	while not queue.is_empty() and visited < _SCAN_MAX_DIRS:
+		var item = queue.pop_front()
+		var p: String = item["path"]
+		var depth: int = item["depth"]
+		var dir := DirAccess.open(p)
+		if dir == null:
+			continue
+		visited += 1
+		var here := _sources_at(dir, p)
+		if not here.is_empty():
+			out.append_array(here)
+			continue   # already a match — no need to hunt further inside it
+		if depth >= _SCAN_MAX_DEPTH:
+			continue
+		for sub in dir.get_directories():
+			if _SCAN_SKIP_DIRS.has(sub.to_lower()):
+				continue
+			queue.append({"path": p.path_join(sub), "depth": depth + 1})
 	return out
 
 # ---------------------------------------------------------------------------

@@ -38,6 +38,7 @@ func _ready() -> void:
 	_test_tint_resolver()
 	_test_asset_sources()
 	_test_import_service()
+	_test_forgiving_source_scan()
 	_test_incremental_import()
 	_test_import_split_by_namespace()
 	_test_flat_import()
@@ -1683,6 +1684,54 @@ func _test_import_service() -> void:
 	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(src_root)
 	AssetLibrary.ROOT = saved_root
+
+# detect_sources' forgiving fallback: picking a folder ABOVE the right one (an instance
+# root, or its .minecraft) instead of .minecraft/mods should still find every real
+# source underneath — the mods folder, the vanilla version jar, and a resource pack —
+# without pulling in the "libraries" folder's unrelated loader jars.
+func _test_forgiving_source_scan() -> void:
+	print("-- detect_sources forgiving scan (instance root / .minecraft)")
+	var inst := "user://__voxyl_forgiving_src__"
+	_rm_rf(inst)
+
+	var mc := inst.path_join(".minecraft")
+	_write_file(mc.path_join("mods/examplemod.jar"), "not a real zip, just needs to exist")
+	_write_file(mc.path_join("versions/1.7.10/1.7.10.jar"), "not a real zip, just needs to exist")
+	_write_file(mc.path_join("resourcepacks/pack.zip"), "not a real zip, just needs to exist")
+	# A loader/dependency jar that must NOT be picked up as a "mod".
+	_write_file(mc.path_join("libraries/com/example/lib/1.0/lib-1.0.jar"), "should be ignored")
+	# A big, irrelevant folder that must not be descended into.
+	_write_file(mc.path_join("saves/World1/level.dat"), "should be ignored")
+
+	var from_root := ImportService.detect_sources(inst)
+	_check("scanning the instance root finds mods + versions + resourcepacks (3 sources)",
+		from_root.size() == 3)
+
+	var from_mc := ImportService.detect_sources(mc)
+	_check("scanning .minecraft directly finds the same 3 sources", from_mc.size() == 3)
+
+	var paths := []
+	for s in from_root:
+		paths.append(s.archive_path())
+	var has_mod := false
+	var has_version := false
+	var has_pack := false
+	var has_library := false
+	for p in paths:
+		if p.ends_with("examplemod.jar"):
+			has_mod = true
+		if p.ends_with("1.7.10.jar"):
+			has_version = true
+		if p.ends_with("pack.zip"):
+			has_pack = true
+		if p.contains("/libraries/"):
+			has_library = true
+	_check("finds the mod jar", has_mod)
+	_check("finds the vanilla version jar", has_version)
+	_check("finds the resource pack zip", has_pack)
+	_check("never descends into libraries/", not has_library)
+
+	_rm_rf(inst)
 
 # The incremental import API the progress UI drives: begin_import → import_step per
 # block → end_import. Each step reports success, counts accrue, and the result + the
