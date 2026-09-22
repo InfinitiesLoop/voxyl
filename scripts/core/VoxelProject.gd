@@ -60,15 +60,25 @@ func unpack_history() -> void:
 func used_semantic_names() -> Array[String]:
 	var seen := {}
 	for cell: BlockCell in data.cells.values():
-		seen[cell.type_id] = true
+		if cell.is_shaped():
+			for p in cell.parts:
+				seen[str(p["semantic"])] = true
+		else:
+			seen[cell.type_id] = true
 	var result: Array[String] = []
 	result.assign(seen.keys())
 	return result
 
-# Semantic name → placed-cell count, for the project details breakdown. Reads the live
-# cells dictionary (already unpacked in memory), so it's cheap to call at listing time.
+# Semantic name → placed count (cells for plain blocks, parts for shaped ones), for the
+# project details breakdown. Reads the live cells dictionary (already unpacked in memory),
+# so it's cheap to call at listing time.
 func semantic_counts() -> Dictionary:
 	var counts := {}
 	for cell: BlockCell in data.cells.values():
-		counts[cell.type_id] = counts.get(cell.type_id, 0) + 1
+		if cell.is_shaped():
+			for p in cell.parts:
+				var s := str(p["semantic"])
+				counts[s] = counts.get(s, 0) + 1
+		else:
+			counts[cell.type_id] = counts.get(cell.type_id, 0) + 1
 	return counts

@@ -187,8 +187,14 @@ func _load_hotbar_from_project() -> void:
 
 # Place a block. Orientation is decided by the edit view at placement time
 # (2D: the clicked quadrant; 3D: how you place it), so it's always explicit here.
+#
+# A shaped semantic is never placed as a whole cell — shaped entries only exist as parts
+# (add_part), so every whole-cell tool (paint, line, fill, wand, …) in every view simply does
+# nothing with one in hand, instead of each view having to remember to check.
 func set_block(pos: Vector3i, semantic_name: String, orientation: int = 0) -> void:
 	if not active_project:
+		return
+	if not semantic_name.is_empty() and is_shaped_semantic(semantic_name):
 		return
 	var before: Variant = _encode_cell(active_project.data.get_cell(pos))
 	active_project.data.set_block(pos, semantic_name, orientation)
@@ -218,6 +224,82 @@ func clear_block(pos: Vector3i) -> void:
 	_record_change(pos, before, null, "Erase")
 	block_changed.emit(pos, "")
 	mark_dirty()
+
+# ---------------------------------------------------------------------------
+# Shaped parts (covers, strips, corners, … — see ShapeCatalog / .plans/shaped-parts.md).
+# A part is { semantic, shape, slot }. Validity is ShapeRules' call, made here once so
+# every view and tool gets the same answer and nothing unbuildable ever lands in the data.
+# ---------------------------------------------------------------------------
+
+# Whether `part` fits in the cell at pos: the cell must be empty or already hold parts
+# (never a plain block), and the parts must be able to coexist.
+func can_add_part(pos: Vector3i, part: Dictionary) -> bool:
+	if not active_project:
+		return false
+	var cell := active_project.data.get_cell(pos)
+	if cell != null and not cell.is_shaped():
+		return false
+	return ShapeRules.can_add(cell.parts if cell else [], part)
+
+# Validate and add one part. Returns whether it was placed.
+func add_part(pos: Vector3i, part: Dictionary) -> bool:
+	if not can_add_part(pos, part):
+		return false
+	var before: Variant = _encode_cell(active_project.data.get_cell(pos))
+	active_project.data.add_part(pos, part)
+	_record_change(pos, before, _encode_cell(active_project.data.get_cell(pos)), "Place")
+	block_changed.emit(pos, str(part.get("semantic", "")))
+	mark_dirty()
+	return true
+
+# Remove the part at `index` from the cell at pos (erasing the cell with its last part).
+func remove_part(pos: Vector3i, index: int) -> void:
+	if not active_project:
+		return
+	var cell := active_project.data.get_cell(pos)
+	if cell == null or index < 0 or index >= cell.parts.size():
+		return
+	var before: Variant = _encode_cell(cell)
+	active_project.data.remove_part(pos, index)
+	var after := active_project.data.get_cell(pos)
+	_record_change(pos, before, _encode_cell(after), "Erase")
+	block_changed.emit(pos, after.type_id if after else "")
+	mark_dirty()
+
+# The render geometry for one placed part: its stored shape + slot, cut from whatever block
+# the palette currently maps its semantic's base to (untextured while undecided).
+func get_part_model(part: Dictionary) -> BlockModel:
+	var base := get_model_for_semantic(str(part.get("semantic", "")))
+	return ShapeModels.model_for(str(part.get("shape", "")), int(part.get("slot", 0)), base)
+
+# A block type to draw a semantic's icon from (hotbar, inventory grid). Plain semantics get
+# their real block type; a shaped semantic gets a synthetic one whose model is its shape cut
+# from the base (so the icon shows a Strip of oak, not a cube of oak). The synthetic types
+# are cached by shape + base so the icon baker's own per-name cache stays warm. null when
+# there's nothing to draw (an unmapped plain semantic).
+var _shape_icon_types := {}
+
+func icon_block_type_for_semantic(semantic_name: String) -> BlockType:
+	var r := _resolve_semantic(semantic_name)
+	if not r.has("shape"):
+		return r.get("bt")
+	var shape_id := str(r["shape"])
+	var base_bt: BlockType = r.get("bt")
+	var base_model := get_model_for_semantic(semantic_name)
+	var model := ShapeModels.model_for(shape_id, ShapeCatalog.preview_slot(shape_id), base_model)
+	var key := "%s|%s" % [shape_id, model.id]
+	var bt: BlockType = _shape_icon_types.get(key, null)
+	if bt == null:
+		bt = BlockType.new()
+		# Stable across sessions (the icon baker's disk cache is keyed by name + a signature
+		# of the model's textures), unique per shape + base block.
+		bt.name = "shape-%s-%s-%s" % [shape_id, base_bt.name if base_bt else "undecided",
+			base_model.id if base_model else "none"]
+		bt.model_id = model.id
+		bt.color = base_bt.color if base_bt else Color(0.35, 0.35, 0.35)
+		bt.tint = base_bt.tint if base_bt else Color.WHITE
+		_shape_icon_types[key] = bt
+	return bt
 
 # Place a fully-formed cell (type + orientation + tags) verbatim, via VoxelData.set_cell
 # ("used when moving/duplicating cells verbatim"). Unlike set_block (semantic + orientation
@@ -340,13 +422,18 @@ func _record_change(pos: Vector3i, before: Variant, after: Variant, default_name
 # Encode a BlockCell into the plain-data tuple EditOperation stores (null = empty cell).
 # tags are deep-copied so a later in-place edit of the live cell can't mutate recorded
 # history. See EditOperation for the tuple contract.
+#
+# A 4th element carries the cell's shaped parts as packed [semantic, shape, slot] triples
+# (VoxelData.pack_parts); history saved before parts existed has only 3 and decodes as a
+# plain block.
 func _encode_cell(cell: BlockCell) -> Variant:
 	if cell == null:
 		return null
-	return [cell.type_id, cell.orientation, cell.tags.duplicate(true)]
+	return [cell.type_id, cell.orientation, cell.tags.duplicate(true), VoxelData.pack_parts(cell.parts)]
 
 func _decode_cell(encoded: Array) -> BlockCell:
-	return BlockCell.new(encoded[0], encoded[1], (encoded[2] as Dictionary).duplicate(true))
+	var parts: Array = VoxelData.unpack_parts(encoded[3]) if encoded.size() > 3 else []
+	return BlockCell.new(encoded[0], encoded[1], (encoded[2] as Dictionary).duplicate(true), parts)
 
 func get_block(pos: Vector3i) -> String:
 	return active_project.data.get_block(pos) if active_project else ""
@@ -356,23 +443,62 @@ func get_block(pos: Vector3i) -> String:
 # block-type name wins), then resolves that name → BlockType through THAT palette's
 # library stack (first-hit, basic fallback). Returns {} when no palette maps it, else
 # { palette, name, bt } where `bt` may be null if no library in scope defines the name.
+#
+# A shaped entry (PaletteEntry.shape_id set) wins the walk like any other entry, but its
+# material comes from its base entry, resolved by the same walk restricted to block entries.
+# Its result carries "shape" (the entry's ShapeCatalog id) and "base" (the base's semantic)
+# on top of the base's { palette, name, bt } — so color/tint/model/icon lookups on a shaped
+# semantic transparently show its base's material. An undecided block entry still doesn't
+# override an earlier mapped one; a shaped entry always counts (its shape is real intent
+# even while its base is undecided).
 func _resolve_semantic(semantic_name: String) -> Dictionary:
-	var result := {}
 	if not active_project:
+		return {}
+	var winner: PaletteEntry = null
+	for palette_name in active_project.palette_names:
+		var palette := workspace.get_palette(palette_name)
+		if not palette:
+			continue
+		var e := palette.get_entry(semantic_name)
+		if e == null or (not e.is_shaped() and e.block_type_name.is_empty()):
+			continue
+		winner = e
+	if winner == null:
+		return {}
+	if not winner.is_shaped():
+		return _resolve_block_entry(semantic_name)
+	var result := _resolve_block_entry(winner.base_name)
+	result["shape"] = winner.shape_id
+	result["base"] = winner.base_name
+	return result
+
+# The last-wins walk over block entries only (the plain-semantic case, and a shaped entry's
+# base): { palette, name, bt }, or {} when no palette maps it to a block type.
+func _resolve_block_entry(semantic_name: String) -> Dictionary:
+	var result := {}
+	if semantic_name.is_empty():
 		return result
 	for palette_name in active_project.palette_names:
 		var palette := workspace.get_palette(palette_name)
 		if not palette:
 			continue
-		var bt_name := palette.get_block_type_name(semantic_name)
-		if bt_name.is_empty():
+		var e := palette.get_entry(semantic_name)
+		if e == null or e.is_shaped() or e.block_type_name.is_empty():
 			continue
 		result = {
 			"palette": palette,
-			"name": bt_name,
-			"bt": workspace.resolve_block_type(bt_name, palette.library_names),
+			"name": e.block_type_name,
+			"bt": workspace.resolve_block_type(e.block_type_name, palette.library_names),
 		}
 	return result
+
+# The ShapeCatalog id a semantic's winning entry cuts its base into, or "" for a plain
+# block semantic. This is what the hand places; placed parts keep their own stored shape.
+func get_shape_id_for_semantic(semantic_name: String) -> String:
+	return str(_resolve_semantic(semantic_name).get("shape", ""))
+
+func is_shaped_semantic(semantic_name: String) -> bool:
+	return not get_shape_id_for_semantic(semantic_name).is_empty()
 
 # The winning palette's library stack for a semantic (for scoped model/texture
 # resolution), or [] when nothing maps it.
@@ -645,15 +771,37 @@ func rename_palette_entry(palette: Palette, entry: PaletteEntry, new_name: Strin
 	var n := new_name.strip_edges()
 	if n.is_empty() or n == entry.semantic_name or palette.get_entry(n) != null:
 		return false
+	# Shaped entries on this palette that cut from the renamed entry follow it.
+	for other in palette.entries:
+		if other.is_shaped() and other.base_name == entry.semantic_name:
+			other.base_name = n
 	entry.semantic_name = n
 	_save_palettes()
 	workspace_changed.emit()
 	return true
 
+# Make an entry a plain block entry mapped to `block_type_name` ("" = undecided), dropping
+# any shape it had.
 func assign_palette_entry_block(palette: Palette, entry: PaletteEntry, block_type_name: String) -> void:
 	if palette.builtin:
 		return
 	entry.block_type_name = block_type_name
+	entry.shape_id = ""
+	entry.base_name = ""
+	notify_block_type_changed()
+	_save_palettes()
+	workspace_changed.emit()
+
+# Make an entry a shaped entry: `shape_id` (a ShapeCatalog id) cut from the block entry named
+# `base_name` ("" = undecided). A shaped entry never names a block type itself. Changing the
+# shape only affects parts placed from now on (placed parts store their own shape);
+# changing the base re-skins every placed use, since parts resolve their material through it.
+func set_palette_entry_shape(palette: Palette, entry: PaletteEntry, shape_id: String, base_name: String) -> void:
+	if palette.builtin or not ShapeCatalog.has(shape_id):
+		return
+	entry.shape_id = shape_id
+	entry.base_name = base_name
+	entry.block_type_name = ""
 	notify_block_type_changed()
 	_save_palettes()
 	workspace_changed.emit()

@@ -87,6 +87,8 @@ func resolve_block_type(block_name: String, library_names: Array) -> BlockType:
 
 # Resolve a model id within the same scope (models referenced by a resolved block type).
 func resolve_block_model(model_id: String, library_names: Array) -> BlockModel:
+	if ShapeModels.is_shape_model_id(model_id):
+		return ShapeModels.get_by_id(model_id)
 	for lib in _scope(library_names):
 		var m := lib.get_block_model(model_id)
 		if m != null:
@@ -120,6 +122,9 @@ func get_block_type(block_name: String) -> BlockType:
 	return find_block_type(block_name)
 
 func get_block_model(model_id: String) -> BlockModel:
+	# Generated shaped-part geometry lives outside any library (see ShapeModels).
+	if ShapeModels.is_shape_model_id(model_id):
+		return ShapeModels.get_by_id(model_id)
 	for lib in libraries:
 		var m := lib.get_block_model(model_id)
 		if m != null:
@@ -164,6 +169,8 @@ func duplicate_palette(source_name: String, new_name: String) -> Palette:
 		var copy := PaletteEntry.new()
 		copy.semantic_name = e.semantic_name
 		copy.block_type_name = e.block_type_name
+		copy.shape_id = e.shape_id
+		copy.base_name = e.base_name
 		p.entries.append(copy)
 	return p
 

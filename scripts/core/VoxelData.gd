@@ -32,6 +32,12 @@ var _aabb_dirty := true
 # do — the cell's index into the arrays above, paired with its tags dictionary.
 @export var _packed_tag_indices: PackedInt32Array = PackedInt32Array()
 @export var _packed_tags: Array = []
+# Sparse shaped-part side-channel, same idea as tags: only part cells appear, as the cell's
+# index paired with its parts flattened to [semantic, shape, slot] triples. A project saved
+# before parts existed simply has none. The cell's _packed_type_ids entry is its primary
+# (first part's) semantic, so old readers still see an occupied cell.
+@export var _packed_part_indices: PackedInt32Array = PackedInt32Array()
+@export var _packed_parts: Array = []
 
 # Flatten `cells` into the @export packed mirror. Called by ProjectStore just before
 # saving so the written resource reflects the current grid.
@@ -41,6 +47,8 @@ func pack() -> void:
 	_packed_orientations = PackedInt32Array()
 	_packed_tag_indices = PackedInt32Array()
 	_packed_tags = []
+	_packed_part_indices = PackedInt32Array()
+	_packed_parts = []
 	var i := 0
 	for pos: Vector3i in cells:
 		var cell: BlockCell = cells[pos]
@@ -52,6 +60,9 @@ func pack() -> void:
 		if not cell.tags.is_empty():
 			_packed_tag_indices.append(i)
 			_packed_tags.append(cell.tags.duplicate(true))
+		if cell.is_shaped():
+			_packed_part_indices.append(i)
+			_packed_parts.append(pack_parts(cell.parts))
 		i += 1
 
 # Rebuild `cells` from the packed mirror. Called by ProjectStore after loading.
@@ -60,13 +71,53 @@ func unpack() -> void:
 	var tags_by_index := {}
 	for j in _packed_tag_indices.size():
 		tags_by_index[_packed_tag_indices[j]] = _packed_tags[j]
+	var parts_by_index := {}
+	for j in _packed_part_indices.size():
+		parts_by_index[_packed_part_indices[j]] = _packed_parts[j]
 	var count := _packed_type_ids.size()
 	for i in count:
 		var pos := Vector3i(
 			_packed_positions[i * 3], _packed_positions[i * 3 + 1], _packed_positions[i * 3 + 2])
 		var orientation := _packed_orientations[i] if i < _packed_orientations.size() else 0
 		var tags: Dictionary = tags_by_index.get(i, {})
-		cells[pos] = BlockCell.new(_packed_type_ids[i], orientation, tags)
+		var parts := unpack_parts(parts_by_index.get(i, []))
+		cells[pos] = BlockCell.new(_packed_type_ids[i], orientation, tags, parts)
+	_aabb_dirty = true
+
+# Parts ⇄ plain [semantic, shape, slot] triples (compact on disk and in undo history).
+static func pack_parts(parts: Array) -> Array:
+	var out: Array = []
+	for p in parts:
+		out.append([str(p.get("semantic", "")), str(p.get("shape", "")), int(p.get("slot", 0))])
+	return out
+
+static func unpack_parts(packed: Array) -> Array:
+	var out: Array = []
+	for t in packed:
+		out.append(BlockCell.make_part(str(t[0]), str(t[1]), int(t[2])))
+	return out
+
+# Add one shaped part to the cell at pos, creating a part cell if it's empty. Replaces a
+# plain block if one is there — validity (ShapeRules) is the caller's job (VoxelWorld).
+func add_part(pos: Vector3i, part: Dictionary) -> void:
+	var cell: BlockCell = cells.get(pos, null)
+	if cell == null or not cell.is_shaped():
+		cell = BlockCell.new()
+		cells[pos] = cell
+	cell.parts.append(part.duplicate(true))
+	cell.sync_type_id()
+	_aabb_dirty = true
+
+# Remove the part at `index`; the cell is erased once its last part goes.
+func remove_part(pos: Vector3i, index: int) -> void:
+	var cell: BlockCell = cells.get(pos, null)
+	if cell == null or index < 0 or index >= cell.parts.size():
+		return
+	cell.parts.remove_at(index)
+	if cell.parts.is_empty():
+		cells.erase(pos)
+	else:
+		cell.sync_type_id()
 	_aabb_dirty = true
 
 # Set (or update) the block at pos. An empty type_id erases. Orientation/tags

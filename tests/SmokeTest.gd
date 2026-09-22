@@ -44,6 +44,9 @@ func _ready() -> void:
 	_test_flat_import()
 	_test_import_service_flat()
 	_test_install_locations()
+	_test_shape_catalog()
+	_test_shape_rules()
+	_test_shaped_parts()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
@@ -2071,3 +2074,178 @@ func _rm_rf(path: String) -> void:
 	for d in dir.get_directories():
 		_rm_rf(path.path_join(d))
 	DirAccess.remove_absolute(path)
+
+# --- Shaped parts (.plans/shaped-parts.md) -----------------------------------------------
+
+func _box_is(b: AABB, lo: Vector3, hi: Vector3) -> bool:
+	return b.position.is_equal_approx(lo) and b.end.is_equal_approx(hi)
+
+func _test_shape_catalog() -> void:
+	print("-- shape catalog geometry + placement grids")
+	var e := 1.0 / 8.0
+	_check("cover on the bottom face",
+		_box_is(ShapeCatalog.boxes("face1", 0)[0], Vector3.ZERO, Vector3(1, e, 1)))
+	_check("slab on the east face",
+		_box_is(ShapeCatalog.boxes("face4", 5)[0], Vector3(0.5, 0, 0), Vector3.ONE))
+	_check("strip on edge 0 runs along Y at -X,-Z",
+		_box_is(ShapeCatalog.boxes("edge1", 0)[0], Vector3.ZERO, Vector3(e, 1, e)))
+	_check("strip on edge 5 runs along Z at +X,-Y",
+		_box_is(ShapeCatalog.boxes("edge1", 5)[0], Vector3(1 - e, 0, 0), Vector3(1, e, 1)))
+	_check("centered post along Z",
+		_box_is(ShapeCatalog.boxes("edge2", 13)[0], Vector3(0.375, 0.375, 0), Vector3(0.625, 0.625, 1)))
+	_check("notch in the +X+Y+Z corner",
+		_box_is(ShapeCatalog.boxes("corner4", 7)[0], Vector3(0.5, 0.5, 0.5), Vector3.ONE))
+	_check("hollow cover is a 4-box ring", ShapeCatalog.boxes("hollow1", 1).size() == 4)
+	_check("strips have no centered slots", ShapeCatalog.slot_count("edge1") == 12)
+	_check("posts have 3 centered slots", ShapeCatalog.slot_count("edge2") == 15)
+	# Clicking the top face (side 1): center → the slot against the clicked block.
+	_check("face grid center picks the near face",
+		ShapeCatalog.hit_slot("face1", Vector3(0.5, 1, 0.5), 1) == 0)
+	_check("face grid edge zone picks that side",
+		ShapeCatalog.hit_slot("face1", Vector3(0.95, 1, 0.5), 1) == 5)
+	_check("edge grid center is the centered zone",
+		ShapeCatalog.hit_slot("edge2", Vector3(0.5, 1, 0.5), 1) == -1)
+	_check("edge grid side zone picks the edge on that side",
+		ShapeCatalog.hit_slot("edge1", Vector3(0.95, 1, 0.5), 1) == 5)
+	_check("edge grid corner zone picks the vertical edge",
+		ShapeCatalog.hit_slot("edge1", Vector3(0.95, 1, 0.95), 1) == 3)
+	_check("corner grid quadrant picks that corner",
+		ShapeCatalog.hit_slot("corner1", Vector3(0.9, 1, 0.1), 1) == 4)
+	_check("opposite of a bottom cover is the top",
+		ShapeCatalog.opposite_slot("face1", 0, 1) == 1)
+	_check("rotating a north slab CW lands east", ShapeCatalog.rotate_slot_y("face4", 2, 1) == 5)
+	_check("rotating a Z post CW gives an X post", ShapeCatalog.rotate_slot_y("edge2", 13, 1) == 14)
+	_check("rotating a vertical edge 4 times is identity",
+		ShapeCatalog.rotate_slot_y("edge1", 2, 4) == 2)
+
+func _p(semantic: String, shape: String, slot: int) -> Dictionary:
+	return BlockCell.make_part(semantic, shape, slot)
+
+func _test_shape_rules() -> void:
+	print("-- shape rules (which parts can share a cell)")
+	_check("empty cell takes a cover", ShapeRules.can_add([], _p("A", "face1", 0)))
+	_check("one part per slot",
+		not ShapeRules.can_add([_p("A", "face1", 0)], _p("B", "face2", 0)))
+	_check("hollow and solid faces share slots",
+		not ShapeRules.can_add([_p("A", "hollow1", 0)], _p("A", "face1", 0)))
+	_check("top and bottom slabs coexist",
+		ShapeRules.can_add([_p("A", "face4", 0)], _p("B", "face4", 1)))
+	var three_strips := [_p("A", "edge1", 0), _p("A", "edge1", 1), _p("A", "edge1", 2)]
+	_check("strips on all four vertical edges", ShapeRules.can_add(three_strips, _p("A", "edge1", 3)))
+	_check("a nook buried in a cover is refused",
+		not ShapeRules.can_add([_p("A", "face1", 0)], _p("A", "corner1", 0)))
+	_check("a strip buried in a cover is refused",
+		not ShapeRules.can_add([_p("A", "face1", 0)], _p("A", "edge1", 4)))
+	_check("a post poking out of a cover is fine",
+		ShapeRules.can_add([_p("A", "face1", 0)], _p("A", "edge2", 4)))
+	_check("centered posts on different axes cross",
+		ShapeRules.can_add([_p("A", "edge2", 12)], _p("A", "edge2", 13)))
+	_check("two centered posts on one axis collide",
+		not ShapeRules.can_add([_p("A", "edge2", 12)], _p("B", "edge4", 12)))
+	_check("a centered pillar and a corner strip coexist",
+		ShapeRules.can_add([_p("A", "edge4", 12)], _p("A", "edge1", 0)))
+	_check("a face caps a post on its own axis",
+		ShapeRules.can_add([_p("A", "edge4", 13)], _p("A", "face4", 2)))
+	_check("a slab across a post's side collides",
+		not ShapeRules.can_add([_p("A", "edge4", 12)], _p("A", "face4", 2)))
+	_check("a post fits through a hollow cover",
+		ShapeRules.can_add([_p("A", "hollow1", 0)], _p("A", "edge2", 12)))
+	_check("a pillar fits through a hollow cover",
+		ShapeRules.can_add([_p("A", "hollow1", 0)], _p("A", "edge4", 12)))
+	_check("unknown shape refused", not ShapeRules.can_add([], _p("A", "nope", 0)))
+	_check("bad slot refused", not ShapeRules.can_add([], _p("A", "edge1", 12)))
+
+func _test_shaped_parts() -> void:
+	print("-- shaped palette entries + part cells")
+	VoxelWorld.reset_for_tests()
+	var ws := VoxelWorld.workspace
+	var project := ws.get_project("My First Build")
+	var pal := ws.add_palette("__shape_pal__")
+	pal.library_names = [VoxelWorkspace.BASIC_LIBRARY]
+	var base := PaletteEntry.new()
+	base.semantic_name = "TBase"
+	base.block_type_name = "plank"
+	pal.entries.append(base)
+	var strip := PaletteEntry.new()
+	strip.semantic_name = "TStrip"
+	strip.shape_id = "edge1"
+	strip.base_name = "TBase"
+	pal.entries.append(strip)
+	var loose := PaletteEntry.new()
+	loose.semantic_name = "TLoose"
+	loose.shape_id = "face1"          # shaped, but no base picked yet
+	pal.entries.append(loose)
+	project.palette_names.append("__shape_pal__")
+	VoxelWorld.open(project)
+
+	_check("shaped entry reports its shape", VoxelWorld.get_shape_id_for_semantic("TStrip") == "edge1")
+	_check("block entry has no shape", VoxelWorld.get_shape_id_for_semantic("TBase") == "")
+	_check("shaped entry takes its base's color",
+		VoxelWorld.get_color_for_semantic("TStrip") == VoxelWorld.get_color_for_semantic("TBase"))
+	_check("undecided shaped entry is still shaped", VoxelWorld.is_shaped_semantic("TLoose"))
+	_check("undecided shaped entry uses the planning color",
+		VoxelWorld.get_color_for_semantic("TLoose") == Color(0.35, 0.35, 0.35))
+
+	var pos := Vector3i(3, 0, 3)
+	VoxelWorld.set_block(pos, "TStrip")
+	_check("a shaped entry never paints a whole cell", VoxelWorld.active_project.data.get_cell(pos) == null)
+	VoxelWorld.set_block(Vector3i(0, 0, 0), "TBase")
+	_check("no parts into a plain block",
+		not VoxelWorld.add_part(Vector3i(0, 0, 0), _p("TStrip", "edge1", 0)))
+
+	_check("add a strip", VoxelWorld.add_part(pos, _p("TStrip", "edge1", 0)))
+	_check("add a cover beside it", VoxelWorld.add_part(pos, _p("TLoose", "face1", 1)))
+	_check("same slot twice refused", not VoxelWorld.add_part(pos, _p("TStrip", "edge1", 0)))
+	var cell := VoxelWorld.active_project.data.get_cell(pos)
+	_check("cell holds two parts", cell != null and cell.parts.size() == 2)
+	_check("part cell reads as occupied", VoxelWorld.get_block(pos) == "TStrip")
+
+	var model := VoxelWorld.get_part_model(cell.parts[0])
+	_check("part model is the strip's box", model != null and model.elements.size() == 1)
+	_check("part model resolves by id", ws.get_block_model(model.id) == model)
+	var icon_bt := VoxelWorld.icon_block_type_for_semantic("TStrip")
+	_check("shaped icon uses a generated model",
+		icon_bt != null and ShapeModels.is_shape_model_id(icon_bt.model_id))
+
+	_check("undo removes the cover",
+		VoxelWorld.undo() and VoxelWorld.active_project.data.get_cell(pos).parts.size() == 1)
+	_check("redo restores it",
+		VoxelWorld.redo() and VoxelWorld.active_project.data.get_cell(pos).parts.size() == 2)
+	VoxelWorld.remove_part(pos, 0)
+	cell = VoxelWorld.active_project.data.get_cell(pos)
+	_check("removing a part keeps the rest", cell != null and cell.parts.size() == 1)
+	_check("primary semantic follows the remaining part", cell != null and cell.type_id == "TLoose")
+	VoxelWorld.remove_part(pos, 0)
+	_check("removing the last part empties the cell", VoxelWorld.active_project.data.get_cell(pos) == null)
+	VoxelWorld.undo()
+	_check("undo brings the last part back", VoxelWorld.active_project.data.get_cell(pos) != null)
+
+	var counts := VoxelWorld.active_project.semantic_counts()
+	_check("parts count per semantic", int(counts.get("TLoose", 0)) == 1)
+
+	# Pack / unpack round-trip (the on-disk mirror).
+	var d := VoxelData.new()
+	d.add_part(Vector3i(1, 1, 1), _p("A", "edge2", 13))
+	d.add_part(Vector3i(1, 1, 1), _p("B", "face1", 0))
+	d.set_block(Vector3i(2, 1, 1), "C", 3)
+	d.pack()
+	var d2 := VoxelData.new()
+	d2._packed_positions = d._packed_positions
+	d2._packed_type_ids = d._packed_type_ids
+	d2._packed_orientations = d._packed_orientations
+	d2._packed_tag_indices = d._packed_tag_indices
+	d2._packed_tags = d._packed_tags
+	d2._packed_part_indices = d._packed_part_indices
+	d2._packed_parts = d._packed_parts
+	d2.unpack()
+	var rc := d2.get_cell(Vector3i(1, 1, 1))
+	_check("parts round-trip through pack", rc != null and rc.parts.size() == 2
+		and rc.parts[0]["shape"] == "edge2" and int(rc.parts[0]["slot"]) == 13)
+	var plain := d2.get_cell(Vector3i(2, 1, 1))
+	_check("plain cells still round-trip", plain != null and plain.type_id == "C" and not plain.is_shaped())
+	if rc != null:
+		var dup := rc.duplicate_cell()
+		dup.parts[0]["slot"] = 12
+		_check("duplicate_cell deep-copies parts", int(rc.parts[0]["slot"]) == 13)
+
+	VoxelWorld.reset_for_tests()

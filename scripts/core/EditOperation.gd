@@ -11,7 +11,9 @@ extends RefCounted
 # A "cell state" here is an encoded plain-data tuple, NOT a BlockCell object, so an op can
 # be serialized without embedding one sub-resource per voxel (same reason VoxelData packs):
 #   null                          — the cell was/became empty
-#   [type_id: String, orientation: int, tags: Dictionary]  — an occupied cell
+#   [type_id: String, orientation: int, tags: Dictionary, parts: Array]  — an occupied cell
+#     (parts = packed [semantic, shape, slot] triples, [] for a plain block; ops recorded
+#     before shaped parts existed have no 4th element — see VoxelWorld._decode_cell)
 # type_id is never "" for an occupied cell (VoxelData erases on empty type), so "" in the
 # packed form unambiguously means "no cell".
 
