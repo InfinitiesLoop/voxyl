@@ -308,7 +308,8 @@ static func _region_transform(args: Dictionary) -> Dictionary:
 	if rotate == 0 and mirror.is_empty():
 		return McpRegistry.fail("bad_argument", "give rotate (1-3) and/or mirror (x/z)")
 	var pivot: Vector3
-	if args.has("pivot"):
+	var explicit_pivot := args.has("pivot")
+	if explicit_pivot:
 		var p: Variant = args["pivot"]
 		if not (p is Array) or (p as Array).size() < 2:
 			return McpRegistry.fail("bad_argument", "pivot must be [x, z]")
@@ -320,6 +321,17 @@ static func _region_transform(args: Dictionary) -> Dictionary:
 		"x": b = Basis(Vector3(-1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, 1)) * b
 		"z": b = Basis(Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, -1)) * b
 	var t := SpatialXform.about(b, pivot)
+	# A quarter turn only maps cells onto cells when the pivot's x and z are both whole or
+	# both on a boundary (.5). A region with one even and one odd side has a mixed center:
+	# nudge that default pivot half a cell (the turned region lands half a cell off-center,
+	# which can't be avoided); an explicit mixed pivot is refused rather than rounded into
+	# a gapped, stretched result.
+	if not t.is_grid_aligned(mn):
+		if explicit_pivot:
+			return McpRegistry.fail("bad_argument",
+				"pivot %s puts cells between cells for this turn; use a pivot whose x and z are both whole or both .5" % str([pivot.x, pivot.z]))
+		pivot.z = floorf(pivot.z) if not is_equal_approx(pivot.z, roundf(pivot.z)) else pivot.z - 0.5
+		t = SpatialXform.about(b, pivot)
 	var cells := RegionOps.cells_in(data, mn, mx)
 	var edits: Array = []
 	var rejected: Array = []

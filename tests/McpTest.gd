@@ -350,6 +350,25 @@ func _test_build() -> void:
 	var pasted := await _tool("clipboard_paste", {"at": [20, 5, 20], "rotate": 1})
 	_check("clipboard_paste", int(pasted["placed"]) == cells_before)
 
+	# A 4x3 region (one even side, one odd): a quarter turn must stay a solid 3x4, not a
+	# gapped 3x5 from rounding half-cell offsets.
+	await _tool("region_fill", {"region": {"min": [60, 0, 60], "max": [63, 0, 62]}, "semantic": "Mass"})
+	await _tool("region_copy", {"region": {"min": [60, 0, 60], "max": [63, 0, 62]}})
+	await _tool("clipboard_paste", {"at": [70, 0, 60], "rotate": 1})
+	var pst := await _tool("region_stats", {"region": {"min": [69, 0, 59], "max": [74, 0, 65]}})
+	var pb: Array = pst["bounds"]
+	_check("rotated paste of a 4x3 box is a solid 3x4 at `at`", int(pst["cells"]) == 12
+		and int(pb[0][0]) == 70 and int(pb[0][2]) == 60 and int(pb[1][0]) == 72 and int(pb[1][2]) == 63)
+	var turned := await _tool("region_transform", {"region": {"min": [60, 0, 60], "max": [63, 0, 62]}, "rotate": 1})
+	_check("region_transform turns a 4x3 region", not turned["_is_error"] and int(turned["placed"]) == 12)
+	var tst := await _tool("region_stats", {"region": {"min": [58, 0, 58], "max": [65, 0, 64]}})
+	var tb: Array = tst["bounds"]
+	_check("…into a solid 3x4 (no gap, no stretch)", int(tst["cells"]) == 12
+		and int(tb[1][0]) - int(tb[0][0]) == 2 and int(tb[1][2]) - int(tb[0][2]) == 3)
+	var bad_pivot := await _tool("region_transform", {"region": {"min": [60, 0, 60], "max": [63, 0, 62]}, "rotate": 1, "pivot": [61.5, 61]})
+	_check("an explicit pivot that lands between cells is refused",
+		bad_pivot["_is_error"] and str(bad_pivot.get("code", "")) == "bad_argument")
+
 	McpServer.paused = true
 	var paused := await _tool("cells_set", {"semantic": "Mass", "positions": [[0, 20, 0]]})
 	_check("paused → paused_by_user", paused["_is_error"] and str(paused.get("code", "")) == "paused_by_user")

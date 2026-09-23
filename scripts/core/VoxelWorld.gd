@@ -729,6 +729,29 @@ func get_block(pos: Vector3i) -> String:
 func _resolve_semantic(semantic_name: String) -> Dictionary:
 	if not active_project:
 		return {}
+	if _resolve_memo_depth > 0 and _resolve_memo.has(semantic_name):
+		return _resolve_memo[semantic_name]
+	var result := _resolve_semantic_uncached(semantic_name)
+	if _resolve_memo_depth > 0:
+		_resolve_memo[semantic_name] = result
+	return result
+
+# A resolution memo for bulk readers that resolve the same few semantics over and over with
+# nothing changing in between — a 3D rebuild asks several times per cell, for ~100k cells.
+# Only live between begin/end (synchronous code), so a palette edit can never see a stale
+# entry. Nestable.
+var _resolve_memo := {}
+var _resolve_memo_depth := 0
+
+func begin_resolve_memo() -> void:
+	_resolve_memo_depth += 1
+
+func end_resolve_memo() -> void:
+	_resolve_memo_depth = maxi(0, _resolve_memo_depth - 1)
+	if _resolve_memo_depth == 0:
+		_resolve_memo.clear()
+
+func _resolve_semantic_uncached(semantic_name: String) -> Dictionary:
 	var result := {}
 	for palette_name in active_project.palette_names:
 		var palette := workspace.get_palette(palette_name)

@@ -63,7 +63,8 @@ func render(pose: Dictionary, render_spec: Dictionary, size: Vector2i, marker: A
 		_view.set_marker_box(marker[0], marker[1])
 	else:
 		_view.set_marker_box(null)
-	await get_tree().process_frame   # layout + the view's deferred mesh flush
+	_view.flush_pending()   # the offscreen view defers its rebuilds until a capture needs them
+	await get_tree().process_frame   # layout
 	_view.render_once()
 	if not await wait_draw():
 		return null

@@ -24,6 +24,7 @@ func _ready() -> void:
 	_test_undo_redo()
 	_test_selection()
 	_test_clipboard()
+	_test_paste_rotation_parity()
 	_test_asset_library()
 	_test_library_serialization()
 	_test_project_persistence()
@@ -622,6 +623,37 @@ func _test_selection() -> void:
 # Clipboard (copy/cut/paste support): deep-cloning a selection, tags isolation, cut as one
 # undo step, set_cell's tag-preserving verbatim write, and cross-project persistence (the
 # clipboard lives on VoxelWorld, not the project, so it must survive switching projects).
+# RegionOps.paste_edits turning a box whose x and z sizes differ in parity. It used to
+# rotate about the box center, so the offsets landed on half cells and rounding split the
+# paste: a one-cell gap in the middle and a result one cell too long.
+func _test_paste_rotation_parity() -> void:
+	print("-- paste rotation (mixed-parity box)")
+	var clip := {}
+	for x in 4:
+		for z in 3:
+			clip[Vector3i(x, 0, z)] = BlockCell.new("Base")
+	var quarter := Basis(Vector3.UP, deg_to_rad(-90.0))
+	for turns in [1, 2, 3]:
+		var b := Basis()
+		for _i in turns:
+			b = quarter * b
+		b = Basis(b.x.round(), b.y.round(), b.z.round())
+		var r := RegionOps.paste_edits(clip, Vector3i(4, 1, 3), Vector3i(10, 0, 20), b)
+		var got := {}
+		var lo := Vector3i(1 << 30, 0, 1 << 30)
+		var hi := Vector3i(-(1 << 30), 0, -(1 << 30))
+		for e: Dictionary in r["edits"]:
+			var p: Vector3i = e["pos"]
+			got[p] = true
+			lo = Vector3i(mini(lo.x, p.x), 0, mini(lo.z, p.z))
+			hi = Vector3i(maxi(hi.x, p.x), 0, maxi(hi.z, p.z))
+		var want_size := Vector3i(3, 1, 4) if turns % 2 == 1 else Vector3i(4, 1, 3)
+		var span := hi - lo + Vector3i.ONE
+		_check("%d quarter turn(s): every cell lands on its own spot" % turns, got.size() == 12)
+		_check("%d quarter turn(s): result is a solid %dx%d box" % [turns, want_size.x, want_size.z],
+			span.x == want_size.x and span.z == want_size.z)
+		_check("%d quarter turn(s): min corner lands on `at`" % turns, lo == Vector3i(10, 0, 20))
+
 func _test_clipboard() -> void:
 	print("-- clipboard (copy/cut)")
 	var saved_root := ProjectStore.ROOT

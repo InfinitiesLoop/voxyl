@@ -1351,21 +1351,65 @@ func _mark_dirty(_arg = null) -> void:
 # of how many blocks the project holds — this is the fix for per-edit cost scaling with
 # total project size instead of with edit size.
 func _mark_cell_dirty(pos: Vector3i) -> void:
-	_dirty_positions[pos] = true
-	for dir in BlockMesher.DIR_NORMALS:
-		_dirty_positions[pos + Vector3i(BlockMesher.DIR_NORMALS[dir])] = true
+	if not _full_rebuild_pending:   # a pending full rebuild already covers every cell
+		_dirty_positions[pos] = true
+		for dir in BlockMesher.DIR_NORMALS:
+			_dirty_positions[pos + Vector3i(BlockMesher.DIR_NORMALS[dir])] = true
 	_schedule_flush()
 
+# The offscreen view (CaptureService's) only has to be current when a capture is taken, so
+# it holds its changes until flush_pending() rather than rebuilding alongside the visible
+# views on every edit and palette change — at ~100k cells that doubled every rebuild.
 func _schedule_flush() -> void:
+	if offscreen:
+		_dirty = true
+		return
 	if not _dirty:
 		_dirty = true
 		call_deferred("_flush_dirty")
+
+# Bring the view up to date now (the capture path calls this before it renders).
+func flush_pending() -> void:
+	if _dirty:
+		_flush_dirty()
 
 # Coalesces however many _mark_dirty/_mark_cell_dirty calls happened this frame (e.g. a
 # bulk tool or a multi-block undo/redo step, each emitting block_changed per cell) into
 # one deferred flush. A pending full rebuild wins outright since it already covers every
 # dirty position.
 func _flush_dirty() -> void:
+	# Every cell asks the palette what its semantic resolves to (several times over) and looks
+	# its model up by id; nothing can change mid-flush, so each is resolved once per pass.
+	VoxelWorld.begin_resolve_memo()
+	_flush_memo_live = true
+	_flush_dirty_inner()
+	_flush_memo_live = false
+	_flush_memo.clear()
+	VoxelWorld.end_resolve_memo()
+
+# Per-flush lookups (see _flush_dirty). Outside a flush they go straight through.
+var _flush_memo := {}
+var _flush_memo_live := false
+
+# A model by id, catalog-wide (a state map's variant/part model). The workspace searches
+# every library for it, which at ~140 libraries was most of a cell's build cost.
+func _block_model_by_id(model_id: String) -> BlockModel:
+	if not _flush_memo_live:
+		return VoxelWorld.workspace.get_block_model(model_id)
+	var key := "m:" + model_id
+	if not _flush_memo.has(key):
+		_flush_memo[key] = VoxelWorld.workspace.get_block_model(model_id)
+	return _flush_memo[key]
+
+func _semantic_model(semantic: String) -> BlockModel:
+	if not _flush_memo_live:
+		return VoxelWorld.get_model_for_semantic(semantic)
+	var key := "s:" + semantic
+	if not _flush_memo.has(key):
+		_flush_memo[key] = VoxelWorld.get_model_for_semantic(semantic)
+	return _flush_memo[key]
+
+func _flush_dirty_inner() -> void:
 	_dirty = false
 	if _full_rebuild_pending:
 		_full_rebuild_pending = false
@@ -1664,7 +1708,7 @@ func _resolve_cell_parts(pos: Vector3i, cell: BlockCell, semantic: String) -> Ar
 		var conns := _cell_connections(pos)
 		var out: Array = []
 		for part in sm.resolve_parts(conns):
-			var m := VoxelWorld.workspace.get_block_model(str(part.get("model_id", "")))
+			var m := _block_model_by_id(str(part.get("model_id", "")))
 			if m != null:
 				out.append({"model": m, "basis": BlockMesher.rotation_basis(int(part.get("x_rot", 0)), int(part.get("y_rot", 0)))})
 		if not out.is_empty():
@@ -1675,12 +1719,12 @@ func _resolve_cell_parts(pos: Vector3i, cell: BlockCell, semantic: String) -> Ar
 	elif sm != null and not sm.is_empty():
 		var entry := sm.resolve(cell.orientation)
 		if not entry.is_empty():
-			var m := VoxelWorld.workspace.get_block_model(str(entry.get("model_id", "")))
+			var m := _block_model_by_id(str(entry.get("model_id", "")))
 			if m != null:
 				return [{"model": m, "basis": BlockMesher.rotation_basis(int(entry.get("x_rot", 0)), int(entry.get("y_rot", 0)))}]
 	# Plain block (and the safety net if a state_map's model went missing): the
 	# resolved model rotated by the cell's own orientation.
-	return [{"model": VoxelWorld.get_model_for_semantic(semantic), "basis": Orientation.basis_of(cell.orientation)}]
+	return [{"model": _semantic_model(semantic), "basis": Orientation.basis_of(cell.orientation)}]
 
 # Connection state per direction for a cell: "none" when the neighbor cell is empty,
 # else the neighbor's connect-height classification ("low"/"tall", derived from its
@@ -1754,14 +1798,22 @@ func _apply_cell_appearance(mi: MeshInstance3D, semantic: String, model: BlockMo
 		return
 	var entry := _textured_mesh_for_model(model)
 	mi.mesh = entry["mesh"]
-	var keys: Array = entry["keys"]
-	var tinted: Array = entry["tinted"]
-	# The biome tint is per block type (semantic); WHITE leaves the surface as-is, so
-	# the default/untinted build renders byte-for-byte as before.
-	var tint: Color = VoxelWorld.get_tint_for_semantic(semantic)
-	for i in keys.size():
-		mi.set_surface_override_material(i,
-			_surface_material(semantic, model, keys[i], resolved, bool(tinted[i]), tint))
+	# The whole per-surface material list for this semantic + model, built once per rebuild
+	# (like _surface_mats, which it's stored in) instead of re-keying every surface of every
+	# cell — thousands of identical cells share it.
+	var set_key := semantic + "||" + _model_key(model)
+	var mats: Array = _surface_mats.get(set_key, [])
+	if mats.is_empty():
+		var keys: Array = entry["keys"]
+		var tinted: Array = entry["tinted"]
+		# The biome tint is per block type (semantic); WHITE leaves the surface as-is, so
+		# the default/untinted build renders byte-for-byte as before.
+		var tint: Color = VoxelWorld.get_tint_for_semantic(semantic)
+		for i in keys.size():
+			mats.append(_surface_material(semantic, model, keys[i], resolved, bool(tinted[i]), tint))
+		_surface_mats[set_key] = mats
+	for i in mats.size():
+		mi.set_surface_override_material(i, mats[i])
 	mi.set_meta("textured", true)
 
 # Base color material for a semantic (the planning/"undecided" path). Cached in

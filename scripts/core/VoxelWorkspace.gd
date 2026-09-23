@@ -17,10 +17,22 @@ const BASIC_LIBRARY := "basic"
 
 # --- Library catalog --------------------------------------------------------
 
+# name -> BlockLibrary. Resolution calls get_library for every library in a palette's scope
+# on every block lookup, and a linear scan over the whole catalog (~140 libraries in a GTNH
+# workspace) made that the dominant cost of a 3D rebuild. An entry is only trusted while
+# the library still carries that name (LibraryStore's rename changes lib.name in place);
+# anything else falls back to the scan, which re-indexes.
+var _lib_index := {}
+
 func get_library(library_name: String) -> BlockLibrary:
+	var hit: BlockLibrary = _lib_index.get(library_name)
+	if hit != null and hit.name == library_name:
+		return hit
 	for lib in libraries:
 		if lib.name == library_name:
+			_lib_index[library_name] = lib
 			return lib
+	_lib_index.erase(library_name)
 	return null
 
 # Get the named library, creating an empty one if it doesn't exist yet.
@@ -40,6 +52,7 @@ func remove_library(library_name: String) -> void:
 			if libraries[i].builtin:
 				return
 			libraries.remove_at(i)
+			_lib_index.erase(library_name)
 			return
 
 func list_libraries() -> Array[String]:

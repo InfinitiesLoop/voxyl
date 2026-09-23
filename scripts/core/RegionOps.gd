@@ -111,15 +111,20 @@ static func move_edits(data: VoxelData, mn: Vector3i, mx: Vector3i, offset: Vect
 	return out
 
 # Paste clipboard cells (keyed relative to their box's min corner, box `size`) so the
-# pasted box's min corner lands on `at`, after `xform_basis` (a rotation / mirror about the
-# box center). Parts without a mirror image are returned in `rejected`.
+# pasted box's min corner lands on `at`, after `xform_basis` (a rotation / mirror).
+# Parts without a mirror image are returned in `rejected`.
+#
+# The basis is applied about the box's min corner, not its center: an axis-aligned basis maps
+# integer offsets to integer offsets exactly, and the box_lo renormalization below puts the
+# result's min corner on `at` either way. Turning about the center broke boxes whose x and z
+# sizes differ in parity (e.g. 22 x 3): the offsets landed on half cells and rounding them
+# left a one-cell gap in the middle of the paste and stretched it by a cell.
 static func paste_edits(clip: Dictionary, size: Vector3i, at: Vector3i, xform_basis := Basis()) -> Dictionary:
-	var center := Vector3(size - Vector3i.ONE) * 0.5
-	var t := SpatialXform.about(xform_basis, center)
+	var t := SpatialXform.about(xform_basis, Vector3.ZERO)
 	var moved := {}
 	var rejected: Array = []
 	for rel: Vector3i in clip:
-		var q := Vector3i((t.basis * (Vector3(rel) - center) + center).round())
+		var q := Vector3i((t.basis * Vector3(rel)).round())
 		var cell := t.apply_cell(clip[rel])
 		if cell == null:
 			rejected.append({"pos": at + rel, "reason": "no_mirror_image"})
@@ -129,7 +134,7 @@ static func paste_edits(clip: Dictionary, size: Vector3i, at: Vector3i, xform_ba
 	var box_lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
 	for i in 8:
 		var c := Vector3((size.x - 1) * (i & 1), (size.y - 1) * ((i >> 1) & 1), (size.z - 1) * ((i >> 2) & 1))
-		var q := Vector3i((t.basis * (c - center) + center).round())
+		var q := Vector3i((t.basis * c).round())
 		box_lo = Vector3i(mini(box_lo.x, q.x), mini(box_lo.y, q.y), mini(box_lo.z, q.z))
 	var out: Array = []
 	for q: Vector3i in moved:
