@@ -27,6 +27,7 @@ static func register(reg: McpRegistry) -> void:
 		"render": {"type": "object", "description": _RENDER_DESC},
 		"size": {"type": "array", "items": {"type": "integer"}, "description": "[w, h], default [1280, 720]"},
 		"bbox": {"type": "boolean", "description": "Outline the framed region"},
+		"cutaway": _CUTAWAY_PROP,
 		"format": {"type": "string", "enum": ["png", "jpeg"]},
 	})
 	reg.add("capture",
@@ -46,6 +47,7 @@ static func register(reg: McpRegistry) -> void:
 			"tile": {"type": "array", "items": {"type": "integer"}, "description": "[w, h] per tile, default [560, 380]"},
 			"cols": {"type": "integer"},
 			"bbox": {"type": "boolean"},
+			"cutaway": _CUTAWAY_PROP,
 			"format": {"type": "string", "enum": ["png", "jpeg"]},
 		}}, _capture_sheet)
 	reg.add("view_set",
@@ -55,6 +57,13 @@ static func register(reg: McpRegistry) -> void:
 			"camera": {"type": "object", "description": _CAMERA_DESC},
 			"render": {"type": "object", "description": "mode / lighting / projection / background"},
 		}}, _view_set, {"mutates": true})
+	reg.add("cutaway",
+		"The user's cutaway: a box of cells hidden in their 3D views (and passed through by clicks) so they can see and build inside — a roof lifted off, a wall sliced away. Set it to hand them a view inside something you built; they can nudge each face, toggle it (H / End) or clear it. No arguments reads it. Captures don't use it unless asked (capture's own `cutaway`).",
+		{"properties": {
+			"region": {"description": "Region to cut away (switches it on)"},
+			"enabled": {"type": "boolean", "description": "Switch the existing cutaway off/on without forgetting it"},
+			"clear": {"type": "boolean", "description": "Forget the cutaway"},
+		}}, _cutaway, {"mutates": true})
 	reg.add("screenshot",
 		"Voxyl's window exactly as the user sees it right now (UI included), to check what they're looking at.",
 		{"properties": {
@@ -142,6 +151,40 @@ static func _view_set(args: Dictionary) -> Dictionary:
 	return {"view": args.get("view", "focused"), "camera": {"pos": st["camera_pos"], "looking": view.camera_info()["dir"]},
 		"render": st["render"]}
 
+const _CUTAWAY_PROP := {"description": "Region of cells to leave out of the render, to see inside (e.g. {min:[..], max:[..]} over the roof), or \"user\" for the user's current cutaway"}
+
+static func cutaway_json() -> Variant:
+	if not VoxelWorld.has_cutaway:
+		return null
+	return {"min": VoxelWorld.cutaway_min, "max": VoxelWorld.cutaway_max, "enabled": VoxelWorld.cutaway_enabled}
+
+static func _cutaway(args: Dictionary) -> Variant:
+	if VoxelWorld.active_project == null:
+		return McpRegistry.fail("no_project", "no project is open")
+	if bool(args.get("clear", false)):
+		VoxelWorld.clear_cutaway()
+	elif args.has("region"):
+		var r: Variant = McpArgs.region(args["region"])
+		if McpRegistry.is_error(r):
+			return r
+		VoxelWorld.set_cutaway(r["min"], r["max"])
+	if args.has("enabled") and not bool(args.get("clear", false)):
+		if not VoxelWorld.has_cutaway:
+			return McpRegistry.fail("no_cutaway", "there's no cutaway to switch; give a region")
+		VoxelWorld.set_cutaway_enabled(bool(args["enabled"]))
+	return {"cutaway": cutaway_json()}
+
+# A capture's `cutaway` argument → [min, max] or [] (none). "user" borrows the user's box.
+static func _capture_cutaway(spec: Variant) -> Variant:
+	if spec == null or (spec is bool and not spec):
+		return []
+	if spec is String and spec == "user":
+		return VoxelWorld.cutaway_box()
+	var r: Variant = McpArgs.region(spec)
+	if McpRegistry.is_error(r):
+		return r
+	return [r["min"], r["max"]]
+
 # --- Camera specs -------------------------------------------------------------------
 
 # A CameraSpec → pose { pos, target, fov, ortho_size, from (compass), elevation, region?, box? }.
@@ -203,7 +246,10 @@ static func _capture(args: Dictionary) -> Variant:
 	var pose: Variant = resolve_camera(args, CaptureService.aspect_of(size))
 	if McpRegistry.is_error(pose):
 		return pose
-	var tile: Variant = await _render_tile(cs, pose, render, size, _caption(pose, render, size), bool(args.get("bbox", false)))
+	var cut: Variant = _capture_cutaway(args.get("cutaway"))
+	if McpRegistry.is_error(cut):
+		return cut
+	var tile: Variant = await _render_tile(cs, pose, render, size, _caption(pose, render, size), bool(args.get("bbox", false)), cut)
 	if McpRegistry.is_error(tile):
 		return tile
 	var img: Image = await cs.compose([tile], 1, size)
@@ -215,11 +261,11 @@ static func _capture(args: Dictionary) -> Variant:
 		McpRegistry.IMAGES_KEY: [McpRegistry.image(img, str(args.get("format", "png")))]}
 
 # One rendered tile: { image, caption, gizmo, legend }.
-static func _render_tile(cs: CaptureService, pose: Dictionary, render: Dictionary, size: Vector2i, caption: String, bbox: bool) -> Variant:
+static func _render_tile(cs: CaptureService, pose: Dictionary, render: Dictionary, size: Vector2i, caption: String, bbox: bool, cutaway: Array = []) -> Variant:
 	var marker: Array = []
 	if bbox and pose.get("region") is Dictionary:
 		marker = [pose["region"]["min"], pose["region"]["max"]]
-	var img: Image = await cs.render(pose, render, size, marker)
+	var img: Image = await cs.render(pose, render, size, marker, cutaway)
 	if img == null:
 		return _not_drawing()
 	var info := cs.camera_basis()
@@ -335,6 +381,9 @@ static func _capture_sheet(args: Dictionary) -> Variant:
 		return McpRegistry.fail("bad_argument", "give a preset or views")
 	if specs.size() > 16:
 		return McpRegistry.fail("too_large", "at most 16 tiles per sheet")
+	var cut: Variant = _capture_cutaway(args.get("cutaway"))
+	if McpRegistry.is_error(cut):
+		return cut
 	var tiles: Array = []
 	var cams: Array = []
 	for s: Dictionary in specs:
@@ -348,7 +397,7 @@ static func _capture_sheet(args: Dictionary) -> Variant:
 		var pose: Variant = resolve_camera(s, CaptureService.aspect_of(tile_size))
 		if McpRegistry.is_error(pose):
 			return pose
-		var t: Variant = await _render_tile(cs, pose, render, tile_size, _caption(pose, render, tile_size, str(s.get("label", ""))), bool(args.get("bbox", false)))
+		var t: Variant = await _render_tile(cs, pose, render, tile_size, _caption(pose, render, tile_size, str(s.get("label", ""))), bool(args.get("bbox", false)), cut)
 		if McpRegistry.is_error(t):
 			return t
 		tiles.append(t)

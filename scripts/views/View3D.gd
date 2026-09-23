@@ -233,7 +233,19 @@ var _tool_overlay_ids := {}       # VoxelWorld.Tool -> overlay id (a tool's opt-
 var _tool_overlay_open := false
 const _PASTE_OVERLAY := "paste"
 const _SELECTION_OVERLAY := "selection"
+const _CUTAWAY_OVERLAY := "cutaway"
 var _selection_overlay: ToolOverlayPanel   # kept typed so its refresh can rebuild the list
+
+# Cutaway (see VoxelWorld.set_cutaway): cells inside _cut_box are hidden and clicks pass
+# through them. On-screen views follow VoxelWorld's box; the offscreen capture view is
+# given its own through set_cutaway_override, so an agent's renders never depend on (or
+# disturb) what the user has cut away.
+var _cut_box: Array = []              # [min, max] Vector3i, or [] = nothing cut
+var _cut_override: Variant = null     # null = follow VoxelWorld; else the box to use ([] = none)
+var _cutaway_panel_open := false      # the cutaway bounds panel is showing (cursor free)
+var _cut_frame: MeshInstance3D        # outline of the cut box, shown while its panel is open
+var _cut_value_labels := {}           # "x0"/"x1"/... -> Label (panel read-outs)
+var _cut_toggle_btn: Button
 
 # An offscreen instance (CaptureService's private camera for agent renders): never takes
 # input, never bakes the project thumbnail, and moving its camera isn't a project change.
@@ -272,6 +284,7 @@ func _ready() -> void:
 	VoxelWorld.region_selection_changed.connect(_update_selection_box)
 	# Keep a visible selection overlay's dimensions/counts current as the region changes.
 	VoxelWorld.region_selection_changed.connect(_update_tool_overlay_visibility)
+	VoxelWorld.cutaway_changed.connect(_refresh_cutaway)
 	visibility_changed.connect(_on_visibility_changed)
 	set_process(true)
 	# A view created while a project is already open (e.g. spawned during a layout
@@ -494,6 +507,19 @@ func _setup_viewport() -> void:
 	_sel_box.material_override = _sel_box_mat
 	_sel_box.visible = false
 	_viewport.add_child(_sel_box)
+
+	# Cutaway frame: the same show-through recipe in red, so the cut's edges read even where
+	# the build around them hides them.
+	var cut_behind := _sel_box_mat.duplicate() as StandardMaterial3D
+	cut_behind.albedo_color = Color(1.0, 0.35, 0.3, 0.3)
+	var cut_front := sel_front.duplicate() as StandardMaterial3D
+	cut_front.albedo_color = Color(1.0, 0.45, 0.35, 1.0)
+	cut_behind.next_pass = cut_front
+	_cut_frame = MeshInstance3D.new()
+	_cut_frame.mesh = ImmediateMesh.new()
+	_cut_frame.material_override = cut_behind
+	_cut_frame.visible = false
+	_viewport.add_child(_cut_frame)
 
 	# Paste box: same show-through recipe as the selection box above, marking the pasted
 	# region's full bounds so it reads clearly even where the (now fully opaque) ghost
@@ -810,6 +836,12 @@ func _input(event: InputEvent) -> void:
 					return
 			if key.keycode == KEY_B:
 				_cycle_sky()
+			# H / End: switch the cutaway off and on (End for the right hand, near the arrows).
+			if (key.keycode == KEY_H or key.keycode == KEY_END) and not key.echo \
+					and VoxelWorld.has_cutaway:
+				VoxelWorld.set_cutaway_enabled(not VoxelWorld.cutaway_enabled)
+				get_viewport().set_input_as_handled()
+				return
 			# BACKSPACE erases the selected region (one undo step), but only while the Select
 			# tool is active — otherwise a stray selection would hijack the key in every tool.
 			# Handled here in _input so it wins over any lower-priority BACKSPACE binding.
@@ -952,6 +984,9 @@ func _capture_cursor() -> void:
 	# Recapturing the cursor always dismisses a tool overlay (the paste modal itself stays
 	# live — only its panel hides, since panels only show while the cursor is free).
 	_tool_overlay_open = false
+	if _cutaway_panel_open:
+		_cutaway_panel_open = false
+		_update_cut_frame()
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 	_overlay.visible = true
 	_update_tool_overlay_visibility()
@@ -1444,6 +1479,7 @@ func _update_cell_node(pos: Vector3i, data: VoxelData) -> void:
 	if cell == null or cell.type_id.is_empty():
 		return
 	var node := _build_cell_node(pos, cell, cell.type_id)
+	node.visible = not _in_cut(pos)
 	_voxel_root.add_child(node)
 	_cell_nodes[pos] = node
 
@@ -1478,12 +1514,16 @@ func _rebuild() -> void:
 	if not VoxelWorld.active_project:
 		return
 	var data := VoxelWorld.active_project.data
+	_cut_box = _wanted_cut_box()
+	var cut_on := not _cut_box.is_empty()
 	for pos: Vector3i in data.cells.keys():
 		var cell: BlockCell = data.cells[pos]
 		var semantic: String = cell.type_id
 		if semantic.is_empty():
 			continue
 		var node := _build_cell_node(pos, cell, semantic)
+		if cut_on and _in_cut(pos):
+			node.visible = false
 		_voxel_root.add_child(node)
 		_cell_nodes[pos] = node
 	# Re-apply emphasis if a rebuild happened while choosing a slice (e.g. an edit
@@ -1522,7 +1562,7 @@ func _rebuild_wire_lines() -> void:
 		for pos: Vector3i in data.cells.keys():
 			var cell: BlockCell = data.cells[pos]
 			var semantic: String = cell.type_id
-			if semantic.is_empty():
+			if semantic.is_empty() or _in_cut(pos):
 				continue
 			var center := Vector3(pos) + Vector3(0.5, 0.5, 0.5)
 			if cell.is_shaped():
@@ -1628,7 +1668,7 @@ func _is_simple_full_cube(model: BlockModel) -> bool:
 func _neighbor_hides_face(data: VoxelData, pos: Vector3i, dir: int) -> bool:
 	var npos := pos + Vector3i(BlockMesher.DIR_NORMALS[dir])
 	var ncell: BlockCell = data.get_cell(npos)
-	if ncell == null or ncell.type_id.is_empty() or ncell.is_shaped():
+	if ncell == null or ncell.type_id.is_empty() or ncell.is_shaped() or _in_cut(npos):
 		return false
 	var nparts := _resolve_cell_parts(npos, ncell, ncell.type_id)
 	return nparts.size() == 1 and (nparts[0]["basis"] as Basis).is_equal_approx(Basis()) \
@@ -2112,7 +2152,7 @@ func _raycast_grid(origin: Vector3, direction: Vector3, max_dist: float) -> Dict
 	while t < max_dist:
 		var cur := Vector3i(ix, iy, iz)
 		var cell := data.get_cell(cur)
-		if cell != null:
+		if cell != null and not _in_cut(cur):
 			if cell.is_shaped():
 				# A part cell only blocks the ray where a part actually is — the gaps around
 				# a strip or through a hollow cover are see-through and clickable beyond.
@@ -3249,6 +3289,8 @@ func _setup_tool_overlays() -> void:
 	_selection_overlay = _build_selection_overlay()
 	_register_tool_overlay(_SELECTION_OVERLAY, _selection_overlay, _refresh_selection_overlay,
 		[VoxelWorld.Tool.SELECT])
+	var cut_panel := _build_cutaway_overlay()
+	_register_tool_overlay(_CUTAWAY_OVERLAY, cut_panel, _update_cutaway_panel)
 
 func _register_tool_overlay(id: String, panel: ToolOverlayPanel, refresh: Callable,
 		tools: Array = []) -> void:
@@ -3269,6 +3311,8 @@ func _visible_overlay_id() -> String:
 		return ""
 	if _paste_active:
 		return _PASTE_OVERLAY
+	if _cutaway_panel_open:
+		return _CUTAWAY_OVERLAY
 	if _tool_overlay_open:
 		return _tool_overlay_ids.get(VoxelWorld.active_tool, "")
 	return ""
@@ -3452,6 +3496,13 @@ func _refresh_selection_overlay() -> void:
 			VoxelWorld.get_color_for_semantic(semantic), semantic, counts[semantic]))
 	# Air last, with a hollow swatch — it's a tally of what's NOT there, not a block type.
 	content.add_child(_selection_count_row(Color.TRANSPARENT, "Air", stats["air"], true))
+	content.add_child(HSeparator.new())
+	var cut_btn := _overlay_button("Cut away this region")
+	cut_btn.tooltip_text = "Hide these cells in the 3D views so you can see and build inside"
+	cut_btn.pressed.connect(func():
+		VoxelWorld.set_cutaway(VoxelWorld.selection_min, VoxelWorld.selection_max)
+		open_cutaway_panel())
+	content.add_child(cut_btn)
 
 # One "[swatch] name … count" row. `hollow` dims the text and outlines the swatch (used for
 # the air row) so the count of empty cells reads as distinct from the placed block types.
@@ -3533,6 +3584,208 @@ func _grouped(n: int) -> String:
 		if c % 3 == 0 and i > 0:
 			out = "," + out
 	return ("-" if n < 0 else "") + out
+
+# ---------------------------------------------------------------------------
+# Cutaway — hide a box of cells to see and build inside (VoxelWorld owns the box; see
+# set_cutaway there). Nodes inside it are simply made invisible, so switching it on/off or
+# nudging a face never rebuilds geometry; the raycast and the wire overlay skip them too.
+# ---------------------------------------------------------------------------
+
+# The capture view's own cutaway: a [min, max] box, [] for none, or null to follow the user's.
+func set_cutaway_override(box: Variant) -> void:
+	_cut_override = box
+	_refresh_cutaway()
+
+func _wanted_cut_box() -> Array:
+	if _cut_override != null:
+		return _cut_override
+	return VoxelWorld.cutaway_box()
+
+func _in_cut(pos: Vector3i) -> bool:
+	if _cut_box.is_empty():
+		return false
+	var lo: Vector3i = _cut_box[0]
+	var hi: Vector3i = _cut_box[1]
+	return pos.x >= lo.x and pos.x <= hi.x and pos.y >= lo.y and pos.y <= hi.y \
+		and pos.z >= lo.z and pos.z <= hi.z
+
+# Re-apply the cutaway after it changed: only nodes whose inside/outside state can have
+# flipped are touched — those in the old or new box, walked by volume when that's smaller
+# than the node count (a face nudge on a small cut), else by scanning every node.
+func _refresh_cutaway() -> void:
+	var old := _cut_box
+	var new_box := _wanted_cut_box()
+	if old == new_box:
+		_update_cut_frame()
+		_update_cutaway_panel()
+		return
+	_cut_box = new_box
+	var vol := 0
+	for b in [old, new_box]:
+		if not b.is_empty():
+			var d: Vector3i = (b[1] as Vector3i) - (b[0] as Vector3i) + Vector3i.ONE
+			vol += d.x * d.y * d.z
+	if vol < _cell_nodes.size():
+		for b in [old, new_box]:
+			if b.is_empty():
+				continue
+			var lo: Vector3i = b[0]
+			var hi: Vector3i = b[1]
+			for x in range(lo.x, hi.x + 1):
+				for y in range(lo.y, hi.y + 1):
+					for z in range(lo.z, hi.z + 1):
+						var node = _cell_nodes.get(Vector3i(x, y, z))
+						if node != null:
+							(node as Node3D).visible = not _in_cut(Vector3i(x, y, z))
+	else:
+		for pos: Vector3i in _cell_nodes:
+			(_cell_nodes[pos] as Node3D).visible = not _in_cut(pos)
+	_rebuild_wire_lines()
+	_update_cut_frame()
+	_update_cutaway_panel()
+	if _target_hit or _fly_mode:
+		_update_crosshair_target()
+	if _overlay:
+		_overlay.queue_redraw()
+
+# Show the cutaway panel (from the selection overlay or the toolbar). Frees the cursor so its
+# buttons are clickable; recapturing it (MMB, a click on the view, Done) hides it again.
+func open_cutaway_panel() -> void:
+	if not VoxelWorld.has_cutaway or offscreen:
+		return
+	_tool_overlay_open = false
+	_cutaway_panel_open = true
+	if _fly_mode:
+		_release_cursor()
+	else:
+		_update_tool_overlay_visibility()
+	_update_cut_frame()
+
+# Toolbar shortcut: cut away everything above the camera over the whole build, the quick
+# "lift the roof off" section. The box starts one cell above eye level.
+func cut_above_camera() -> void:
+	if not VoxelWorld.active_project:
+		return
+	var aabb := VoxelWorld.active_project.data.get_used_aabb()
+	if aabb.is_empty():
+		return
+	var lo: Vector3i = aabb[0]
+	var hi: Vector3i = aabb[1]
+	var y := clampi(int(floor(_camera_pos.y)) + 1, lo.y, hi.y)
+	VoxelWorld.set_cutaway(Vector3i(lo.x - 1, y, lo.z - 1), Vector3i(hi.x + 1, hi.y + 1, hi.z + 1))
+
+func _update_cut_frame() -> void:
+	if _cut_frame == null:
+		return
+	var shown := _cutaway_panel_open and VoxelWorld.has_cutaway
+	_cut_frame.visible = shown
+	if not shown:
+		return
+	var lo := Vector3(VoxelWorld.cutaway_min)
+	var hi := Vector3(VoxelWorld.cutaway_max) + Vector3.ONE
+	var im := _cut_frame.mesh as ImmediateMesh
+	im.clear_surfaces()
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	for a in 3:
+		var b := (a + 1) % 3
+		var c := (a + 2) % 3
+		for i in 4:
+			var p := lo
+			p[b] = hi[b] if i & 1 else lo[b]
+			p[c] = hi[c] if i & 2 else lo[c]
+			var q := p
+			q[a] = hi[a]
+			im.surface_add_vertex(p)
+			im.surface_add_vertex(q)
+	im.surface_end()
+
+# Panel: per axis, the min face and the max face each with -/+ (Shift = 5 cells), like the
+# paste offset rows; then Show/Hide, Clear and Done.
+func _build_cutaway_overlay() -> ToolOverlayPanel:
+	var panel := ToolOverlayPanel.new("Cutaway")
+	var content := panel.content
+	var hint := _overlay_note("Move each face of the cut box.  Shift+click: 5 cells")
+	hint.add_theme_font_size_override("font_size", 13)
+	hint.add_theme_color_override("font_color", Color(0.72, 0.76, 0.84))
+	content.add_child(hint)
+	for axis in 3:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 4)
+		var label := Label.new()
+		label.text = (["X", "Y", "Z"] as Array)[axis] + ":"
+		label.add_theme_font_size_override("font_size", 16)
+		label.custom_minimum_size = Vector2(22, 0)
+		row.add_child(label)
+		for max_side in [false, true]:
+			if max_side:
+				var dash := Label.new()
+				dash.text = "to"
+				dash.add_theme_color_override("font_color", Color(0.72, 0.76, 0.84))
+				row.add_child(dash)
+			row.add_child(_cut_nudge_button("-", axis, max_side, -1))
+			var value := Label.new()
+			value.add_theme_font_size_override("font_size", 16)
+			value.custom_minimum_size = Vector2(48, 0)
+			value.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			row.add_child(value)
+			_cut_value_labels["%d%d" % [axis, int(max_side)]] = value
+			row.add_child(_cut_nudge_button("+", axis, max_side, 1))
+		content.add_child(row)
+	var buttons := HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 8)
+	content.add_child(buttons)
+	_cut_toggle_btn = _overlay_button("Show all")
+	_cut_toggle_btn.tooltip_text = "Switch the cutaway off and on (H / End while flying)"
+	_cut_toggle_btn.pressed.connect(func(): VoxelWorld.set_cutaway_enabled(not VoxelWorld.cutaway_enabled))
+	buttons.add_child(_cut_toggle_btn)
+	var clear_btn := _overlay_button("Clear")
+	clear_btn.tooltip_text = "Forget the cut box"
+	clear_btn.pressed.connect(func():
+		VoxelWorld.clear_cutaway()
+		_close_cutaway_panel())
+	buttons.add_child(clear_btn)
+	var done_btn := _overlay_button("Done")
+	done_btn.pressed.connect(_close_cutaway_panel)
+	buttons.add_child(done_btn)
+	return panel
+
+# Hide the panel but stay where you are (orbiting, or with the cursor free); a click on the
+# view resumes flying as usual. MMB on the panel instead goes straight back to flying.
+func _close_cutaway_panel() -> void:
+	_cutaway_panel_open = false
+	_update_cut_frame()
+	_update_tool_overlay_visibility()
+
+func _cut_nudge_button(text: String, axis: int, max_side: bool, dir: int) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	b.custom_minimum_size = Vector2(34, 34)
+	b.add_theme_font_size_override("font_size", 18)
+	b.pressed.connect(func():
+		var step := 5 if Input.is_key_pressed(KEY_SHIFT) else 1
+		VoxelWorld.nudge_cutaway_face(axis, max_side, dir * step))
+	return b
+
+func _overlay_button(text: String) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	b.custom_minimum_size = Vector2(0, 38)
+	b.add_theme_font_size_override("font_size", 15)
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	return b
+
+func _update_cutaway_panel() -> void:
+	if _cut_value_labels.is_empty():
+		return
+	for axis in 3:
+		(_cut_value_labels["%d0" % axis] as Label).text = str(VoxelWorld.cutaway_min[axis])
+		(_cut_value_labels["%d1" % axis] as Label).text = str(VoxelWorld.cutaway_max[axis])
+	_cut_toggle_btn.text = "Show all" if VoxelWorld.cutaway_enabled else "Cut away"
+	if _cutaway_panel_open and not VoxelWorld.has_cutaway:
+		_cutaway_panel_open = false
+		_update_tool_overlay_visibility()
 
 # ---------------------------------------------------------------------------
 # Slice-select mode
@@ -3921,6 +4174,9 @@ func _draw_overlay() -> void:
 		var sky_name: String = _skyboxes[_current_sky]["name"]
 		_overlay.draw_string(font, Vector2(_overlay.size.x * 0.5, 32.0),
 			"Sky: " + sky_name, HORIZONTAL_ALIGNMENT_CENTER, -1, 16, Color(1,1,1,0.85))
+	if not _cut_box.is_empty():
+		_overlay.draw_string(font, Vector2(_overlay.size.x - 14.0, 30.0), "Cutaway on  ·  H/End to show all",
+			HORIZONTAL_ALIGNMENT_RIGHT, -1, 14, Color(1.0, 0.6, 0.5, 0.9))
 	var hint := "WASD move  ·  Space/RCtrl up · Shift// down  ·  LMB erase · RMB place · MMB pick  ·  R rotate (look at face)  ·  Tab slice · 1–0 slot · E inventory · Esc"
 	_overlay.draw_string(font, Vector2(10.0, _overlay.size.y - 10.0),
 		hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1,1,1,0.45))

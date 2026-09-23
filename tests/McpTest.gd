@@ -369,6 +369,19 @@ func _test_build() -> void:
 	_check("an explicit pivot that lands between cells is refused",
 		bad_pivot["_is_error"] and str(bad_pivot.get("code", "")) == "bad_argument")
 
+	var cut := await _tool("cutaway", {"region": {"min": [0, 3, 0], "max": [9, 1, 9]}})
+	_check("cutaway sets the user's cut box", not cut["_is_error"] and cut["cutaway"] is Dictionary
+		and int(cut["cutaway"]["min"][1]) == 1 and bool(cut["cutaway"]["enabled"]))
+	var cut_off := await _tool("cutaway", {"enabled": false})
+	_check("…switches it off", not cut_off["_is_error"] and not bool(cut_off["cutaway"]["enabled"])
+		and VoxelWorld.cutaway_box().is_empty())
+	var st_cut := await _tool("status", {})
+	_check("…and status reports it", st_cut.get("cutaway") is Dictionary)
+	var cut_clear := await _tool("cutaway", {"clear": true})
+	_check("…and clears it", not cut_clear["_is_error"] and cut_clear["cutaway"] == null)
+	var cut_none := await _tool("cutaway", {"enabled": true})
+	_check("switching a missing cutaway is refused", cut_none["_is_error"] and str(cut_none.get("code", "")) == "no_cutaway")
+
 	McpServer.paused = true
 	var paused := await _tool("cells_set", {"semantic": "Mass", "positions": [[0, 20, 0]]})
 	_check("paused → paused_by_user", paused["_is_error"] and str(paused.get("code", "")) == "paused_by_user")

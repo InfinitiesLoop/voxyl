@@ -58,6 +58,7 @@ func _run() -> void:
 	VoxelWorld.clear_block(Vector3i(0, 1, 0))
 
 	_check_ceiling_slab_placement(v3d)
+	_check_cutaway(v3d)
 
 	_check_textured_render(v3d)
 	_check_imported_render(v3d)
@@ -214,6 +215,34 @@ func _check_ceiling_slab_placement(v3d: Node) -> void:
 		is_equal_approx(box.position.y, 4.5) and is_equal_approx(box.position.y + box.size.y, 5.0))
 	VoxelWorld.clear_block(Vector3i(2, 5, 2))
 	VoxelWorld.clear_block(Vector3i(2, 4, 2))
+
+# Cutaway: cells in the box are hidden (not rebuilt), the crosshair ray passes through them
+# to what's behind, the bounds panel opens over the view, and clearing brings them back.
+func _check_cutaway(v3d: Node) -> void:
+	VoxelWorld.set_block(Vector3i(2, 5, 2), "Slab")
+	VoxelWorld.set_block(Vector3i(2, 8, 2), "Slab")
+	v3d.call("_rebuild")
+	VoxelWorld.set_cutaway(Vector3i(0, 5, 0), Vector3i(4, 6, 4))
+	var nodes: Dictionary = v3d.get("_cell_nodes")
+	_check("cutaway hides the cells inside it", not (nodes[Vector3i(2, 5, 2)] as Node3D).visible
+		and (nodes[Vector3i(2, 8, 2)] as Node3D).visible)
+	v3d.set("_camera_pos", Vector3(2.5, 4.5, 2.5))
+	v3d.set("_yaw", 0.0)
+	v3d.set("_pitch", 89.0)
+	v3d.call("_update_crosshair_target")
+	_check("the crosshair ray passes through cut cells to the one beyond",
+		v3d.get("_target_hit") and v3d.get("_target_block") == Vector3i(2, 8, 2))
+	v3d.call("_rebuild")
+	_check("a full rebuild keeps them hidden", not ((v3d.get("_cell_nodes") as Dictionary)[Vector3i(2, 5, 2)] as Node3D).visible)
+	v3d.call("open_cutaway_panel")
+	_check("the cutaway panel opens", v3d.call("_visible_overlay_id") == "cutaway")
+	VoxelWorld.nudge_cutaway_face(1, false, 1)
+	_check("nudging the bottom face above a cell shows it again",
+		((v3d.get("_cell_nodes") as Dictionary)[Vector3i(2, 5, 2)] as Node3D).visible)
+	VoxelWorld.clear_cutaway()
+	_check("clearing closes the panel", v3d.call("_visible_overlay_id") != "cutaway")
+	VoxelWorld.clear_block(Vector3i(2, 5, 2))
+	VoxelWorld.clear_block(Vector3i(2, 8, 2))
 
 # Phase 1: a textured/animated block must render through the new per-face texture
 # path — a real PNG on disk, resolved via the workspace library into per-surface

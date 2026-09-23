@@ -35,6 +35,7 @@ func _ready() -> void:
 	_view = View3D.new()
 	_view.offscreen = true
 	_host.add_child(_view)
+	_view.set_cutaway_override([])   # captures never inherit the user's cutaway
 	_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_view.set_active(false)
 	_stage = SubViewport.new()
@@ -50,9 +51,12 @@ func is_rendering_available() -> bool:
 
 # Render the live build. `pose` = { pos, target, fov, ortho_size (0 = perspective) },
 # `render` = RenderSpec ({mode, lighting, background, ...}), `marker` = [min, max] cells to
-# outline or []. Returns the Image, or null if the window isn't drawing.
-func render(pose: Dictionary, render_spec: Dictionary, size: Vector2i, marker: Array = []) -> Image:
+# outline or [], `cutaway` = [min, max] cells to leave out (see View3D's cutaway) or [].
+# Returns the Image, or null if the window isn't drawing.
+func render(pose: Dictionary, render_spec: Dictionary, size: Vector2i, marker: Array = [],
+		cutaway: Array = []) -> Image:
 	_host.size = size
+	_view.set_cutaway_override(cutaway)
 	_view.set_viewport_size(size)
 	var opts := ViewOptions.defaults()
 	opts["projection"] = "orthographic" if float(pose.get("ortho_size", 0.0)) > 0.0 else "perspective"

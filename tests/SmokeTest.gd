@@ -615,6 +615,34 @@ func _test_selection() -> void:
 	VoxelWorld.clear_selection()
 	_check("clear_selection() empties the selection", not VoxelWorld.has_selection)
 
+	# Cutaway: a box of cells the 3D views hide. Same lifecycle as the selection.
+	var cut_signals := [0]
+	var on_cut := func(): cut_signals[0] += 1
+	VoxelWorld.cutaway_changed.connect(on_cut)
+	_check("fresh project has no cutaway", not VoxelWorld.has_cutaway and VoxelWorld.cutaway_box().is_empty())
+	VoxelWorld.set_cutaway(Vector3i(5, 9, 0), Vector3i(0, 4, 3))
+	_check("set_cutaway normalizes corners",
+		VoxelWorld.cutaway_box() == [Vector3i(0, 4, 0), Vector3i(5, 9, 3)])
+	VoxelWorld.nudge_cutaway_face(1, false, -2)
+	VoxelWorld.nudge_cutaway_face(0, true, 3)
+	_check("nudging faces moves just that face",
+		VoxelWorld.cutaway_min == Vector3i(0, 2, 0) and VoxelWorld.cutaway_max == Vector3i(8, 9, 3))
+	VoxelWorld.nudge_cutaway_face(2, false, 50)
+	_check("a face can't cross its opposite", VoxelWorld.cutaway_min.z == 3 and VoxelWorld.cutaway_max.z == 3)
+	VoxelWorld.set_cutaway_enabled(false)
+	_check("switched off: no box to hide, but it's remembered",
+		VoxelWorld.cutaway_box().is_empty() and VoxelWorld.has_cutaway)
+	VoxelWorld.save_active_project()
+	var ws3 := VoxelWorkspace.new()
+	ProjectStore.load_persisted(ws3)
+	var q3 := ws3.get_project("Sel Test")
+	_check("cutaway persists across reload", q3 != null and q3.has_cutaway and not q3.cutaway_enabled
+		and q3.cutaway_min == Vector3i(0, 2, 3) and q3.cutaway_max == Vector3i(8, 9, 3))
+	VoxelWorld.clear_cutaway()
+	_check("clear_cutaway() forgets it", not VoxelWorld.has_cutaway)
+	_check("every change signals the views", cut_signals[0] == 6)
+	VoxelWorld.cutaway_changed.disconnect(on_cut)
+
 	VoxelWorld.workspace.remove_project("Sel Test")
 	VoxelWorld.active_project = null
 	_rm_rf(ProjectStore.ROOT)

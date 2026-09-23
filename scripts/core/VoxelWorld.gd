@@ -21,6 +21,9 @@ signal selection_changed(semantic_name: String)
 # the palette/semantic "in hand" selection. Every view repaints its selection outline
 # from this; carries no payload — listeners read selection_box()/has_selection.
 signal region_selection_changed()
+# Fired when the cutaway box is set, moved, toggled or cleared (and on project open). Every
+# 3D view hides the cells inside cutaway_box(); carries no payload.
+signal cutaway_changed()
 signal tool_changed(tool: Tool)
 # Brush size (edge length of a tool's footprint, in cells). Only tools that opt in
 # via tool_uses_brush() honor it; the rest place a single cell. View/UI reflect this.
@@ -68,6 +71,16 @@ var has_selection: bool = false
 var selection_min: Vector3i = Vector3i.ZERO
 var selection_max: Vector3i = Vector3i.ZERO
 var _selection_anchor: Variant = null  # Vector3i first corner, or null between cycles
+
+# Cutaway: an inclusive box of cells the 3D views hide, to see into (and build inside) a
+# closed-in space — a roof lifted off, a wall sliced away, everything above a floor. Like the
+# selection it's project-tied editor state that names positions only (Principle 2): the data
+# is untouched, every 3D view is a lens that leaves those cells out, and clicks pass through
+# them. `cutaway_enabled` toggles it without forgetting the box.
+var has_cutaway: bool = false
+var cutaway_min: Vector3i = Vector3i.ZERO
+var cutaway_max: Vector3i = Vector3i.ZERO
+var cutaway_enabled: bool = true
 
 # Clipboard for copy/cut/paste of the region selection above. Deliberately a plain in-memory
 # field — never @exported, never touched by VoxelProject — so it's editor scratch state, not
@@ -152,6 +165,10 @@ func _flush_save() -> void:
 	active_project.has_selection = has_selection
 	active_project.selection_min = selection_min
 	active_project.selection_max = selection_max
+	active_project.has_cutaway = has_cutaway
+	active_project.cutaway_min = cutaway_min
+	active_project.cutaway_max = cutaway_max
+	active_project.cutaway_enabled = cutaway_enabled
 	about_to_save.emit(active_project)
 	ProjectStore.save_project(active_project)   # a no-op for a scratch project
 
@@ -223,6 +240,8 @@ func reset_for_tests() -> void:
 	active_slot = 0
 	has_selection = false
 	_selection_anchor = null
+	has_cutaway = false
+	cutaway_enabled = true
 	_populate_defaults()
 	workspace_changed.emit()
 
@@ -234,6 +253,10 @@ func open(project: VoxelProject) -> void:
 	selection_min = project.selection_min
 	selection_max = project.selection_max
 	_selection_anchor = null
+	has_cutaway = project.has_cutaway
+	cutaway_min = project.cutaway_min
+	cutaway_max = project.cutaway_max
+	cutaway_enabled = project.cutaway_enabled
 	var names := merged_semantic_names()
 	selected_semantic = hotbar[active_slot] if not hotbar[active_slot].is_empty() \
 		else (names[0] if not names.is_empty() else "")
@@ -242,6 +265,7 @@ func open(project: VoxelProject) -> void:
 	active_slot_changed.emit(active_slot)
 	history_changed.emit()
 	region_selection_changed.emit()
+	cutaway_changed.emit()
 
 # Restore this project's saved hotbar into the shared live hotbar, then fill any still-
 # empty slots from the palette so a project saved before it had a full bar is still
@@ -1269,6 +1293,53 @@ func selection_box() -> Array:
 		return [selection_min, selection_max]
 	if _selection_anchor != null:
 		return [_selection_anchor, _selection_anchor]
+	return []
+
+# ---------------------------------------------------------------------------
+# Cutaway — see the field comments above. Set from a selection or any box, then nudged
+# face by face; views read cutaway_box() and hide what's inside.
+# ---------------------------------------------------------------------------
+
+# Cut away an inclusive box (corners in any order) and switch the cutaway on.
+func set_cutaway(a: Vector3i, b: Vector3i) -> void:
+	cutaway_min = Vector3i(mini(a.x, b.x), mini(a.y, b.y), mini(a.z, b.z))
+	cutaway_max = Vector3i(maxi(a.x, b.x), maxi(a.y, b.y), maxi(a.z, b.z))
+	has_cutaway = true
+	cutaway_enabled = true
+	cutaway_changed.emit()
+	mark_dirty()
+
+# Move one face of the cutaway box by `delta` cells: axis 0/1/2 = x/y/z, `max_side` picks
+# the max face. A face can't cross its opposite one (the box stays at least one cell thick).
+func nudge_cutaway_face(axis: int, max_side: bool, delta: int) -> void:
+	if not has_cutaway:
+		return
+	if max_side:
+		cutaway_max[axis] = maxi(cutaway_min[axis], cutaway_max[axis] + delta)
+	else:
+		cutaway_min[axis] = mini(cutaway_max[axis], cutaway_min[axis] + delta)
+	cutaway_changed.emit()
+	mark_dirty()
+
+func set_cutaway_enabled(on: bool) -> void:
+	if cutaway_enabled == on:
+		return
+	cutaway_enabled = on
+	cutaway_changed.emit()
+	mark_dirty()
+
+func clear_cutaway() -> void:
+	if not has_cutaway:
+		return
+	has_cutaway = false
+	cutaway_enabled = true
+	cutaway_changed.emit()
+	mark_dirty()
+
+# The box the views should hide, [min, max], or [] when there's none or it's switched off.
+func cutaway_box() -> Array:
+	if has_cutaway and cutaway_enabled:
+		return [cutaway_min, cutaway_max]
 	return []
 
 # ---------------------------------------------------------------------------

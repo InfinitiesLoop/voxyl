@@ -6,7 +6,7 @@ const ViewTools := preload("res://scripts/automation/tools/ViewTools.gd")
 
 static func register(reg: McpRegistry) -> void:
 	reg.add("status",
-		"What Voxyl is showing right now: the open project (name, scratch?, size, palette stack), the user's views, the region selection, the hotbar, undo/redo depth and whether the user paused agent edits. Call this first.",
+		"What Voxyl is showing right now: the open project (name, scratch?, size, palette stack), the user's views, the region selection, the cutaway, the hotbar, undo/redo depth and whether the user paused agent edits. Call this first.",
 		{}, _status)
 	reg.add("logs",
 		"Recent Voxyl log lines (errors and warnings by default), plus this server's recent tool calls. Use when something looks wrong.",
@@ -50,6 +50,7 @@ static func _status(_args: Dictionary) -> Dictionary:
 		out["selection"] = null
 		if VoxelWorld.has_selection:
 			out["selection"] = {"min": VoxelWorld.selection_min, "max": VoxelWorld.selection_max}
+		out["cutaway"] = ViewTools.cutaway_json()
 		var h := VoxelWorld.history_entries()
 		out["history"] = {"steps": (h["entries"] as Array).size(), "current": h["current"],
 			"can_undo": VoxelWorld.can_undo(), "can_redo": VoxelWorld.can_redo()}

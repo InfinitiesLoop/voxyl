@@ -33,6 +33,13 @@ extends Resource
 @export var selection_min: Vector3i = Vector3i.ZERO
 @export var selection_max: Vector3i = Vector3i.ZERO
 
+# The cutaway box (see VoxelWorld.set_cutaway): cells inside it are hidden from the 3D views
+# so you can see and build inside. Editor state like the selection, never voxel data.
+@export var has_cutaway: bool = false
+@export var cutaway_min: Vector3i = Vector3i.ZERO
+@export var cutaway_max: Vector3i = Vector3i.ZERO
+@export var cutaway_enabled: bool = true
+
 # Undo/redo history for this build's voxel edits. `history` is the live runtime object
 # (an EditHistory of EditOperation deltas); `_history_data` is its packed on-disk mirror,
 # the ONLY thing persisted — exactly the split VoxelData uses for `cells` vs its packed

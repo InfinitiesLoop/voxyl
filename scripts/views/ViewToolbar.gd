@@ -17,8 +17,11 @@ const CAMERA_PRESETS := [
 	["Iso", "se", "iso"],
 ]
 
+enum { CUT_ABOVE, CUT_SELECTION, CUT_EDIT, CUT_TOGGLE, CUT_CLEAR }
+
 var view: View3D
 var _pickers := {}   # option id -> OptionButton
+var _cut_menu: MenuButton
 
 func _init(p_view: View3D) -> void:
 	view = p_view
@@ -48,6 +51,20 @@ func _ready() -> void:
 		cam.get_popup().add_item(p[0])
 	cam.get_popup().id_pressed.connect(_on_camera_preset)
 	add_child(cam)
+	_cut_menu = MenuButton.new()
+	_cut_menu.text = "Cutaway ▾"
+	_cut_menu.flat = true
+	_cut_menu.focus_mode = Control.FOCUS_NONE
+	_cut_menu.tooltip_text = "Hide part of the build to see inside. Or select a region and choose \"Cut away\" from its panel (MMB)."
+	var cp := _cut_menu.get_popup()
+	cp.add_item("Cut above camera", CUT_ABOVE)
+	cp.add_item("Cut away selection", CUT_SELECTION)
+	cp.add_item("Adjust bounds…", CUT_EDIT)
+	cp.add_check_item("Cutaway on  (H / End)", CUT_TOGGLE)
+	cp.add_item("Clear", CUT_CLEAR)
+	cp.about_to_popup.connect(_sync_cut_menu)
+	cp.id_pressed.connect(_on_cut_item)
+	add_child(_cut_menu)
 	var bg := StyleBoxFlat.new()
 	bg.bg_color = Color(0.05, 0.05, 0.08, 0.55)
 	bg.set_corner_radius_all(4)
@@ -69,3 +86,29 @@ func _on_camera_preset(i: int) -> void:
 	if aabb.is_empty():
 		aabb = [Vector3i(-4, 0, -4), Vector3i(4, 4, 4)]
 	view.frame_cells(aabb[0], aabb[1], CameraFraming.bearing(p[1]), p[2])
+
+# Cutaway menu: the box itself lives in VoxelWorld (shared by every 3D view); the view owns
+# the bounds panel.
+func _sync_cut_menu() -> void:
+	var cp := _cut_menu.get_popup()
+	var has := VoxelWorld.has_cutaway
+	cp.set_item_disabled(cp.get_item_index(CUT_SELECTION), not VoxelWorld.has_selection)
+	cp.set_item_disabled(cp.get_item_index(CUT_EDIT), not has)
+	cp.set_item_disabled(cp.get_item_index(CUT_TOGGLE), not has)
+	cp.set_item_disabled(cp.get_item_index(CUT_CLEAR), not has)
+	cp.set_item_checked(cp.get_item_index(CUT_TOGGLE), has and VoxelWorld.cutaway_enabled)
+
+func _on_cut_item(id: int) -> void:
+	match id:
+		CUT_ABOVE:
+			view.cut_above_camera()
+			view.open_cutaway_panel()
+		CUT_SELECTION:
+			VoxelWorld.set_cutaway(VoxelWorld.selection_min, VoxelWorld.selection_max)
+			view.open_cutaway_panel()
+		CUT_EDIT:
+			view.open_cutaway_panel()
+		CUT_TOGGLE:
+			VoxelWorld.set_cutaway_enabled(not VoxelWorld.cutaway_enabled)
+		CUT_CLEAR:
+			VoxelWorld.clear_cutaway()
