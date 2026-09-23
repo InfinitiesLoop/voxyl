@@ -16,6 +16,25 @@ Built so far (branch `shaped-parts`):
   named regions, `region_transform` / `region_stamp`, SSE, workspace lock file.
 - Fixed on the way: every View3D now has its own 3D world (they used to share the root world,
   so split panes each rendered every pane's meshes).
+- Verified: `tests/McpTest.gd` (real HTTP, headless, sandboxed) plus a sandboxed windowed run
+  driven over HTTP (captures, review/elevation sheets, intent mode, swatches, palette render,
+  view toolbar, `view_set`, `screenshot`). Claude Code (desktop app) connects and lists the
+  tools.
+
+Connecting (learned the hard way, 2026-09-22):
+- Register at **user scope**: `claude mcp add --scope user --transport http voxyl
+  http://127.0.0.1:47823/mcp --header "Authorization: Bearer <token>"` (Settings → Copy setup
+  command produces exactly this). The default "local" scope ties the server to whichever
+  folder the command ran in.
+- Plain `http://127.0.0.1` is fine. The desktop app's Connectors "Add" form insists on HTTPS,
+  but that's only for remote connectors; `~/.claude.json` servers load into Code-tab sessions.
+- A session loads its MCP servers when it starts; `/mcp` → reconnect can't add one to a running
+  session. In the desktop app `/mcp` opens the Connectors screen, which doesn't list
+  `~/.claude.json` servers — ask the session about its voxyl tools instead.
+- Start Voxyl (with agent connections on) before the session.
+
+**Next:** the P1 acceptance run (§7) in a fresh session with Voxyl open — rebuild the Conduit
+Pillar from nothing through the tools. Fix whatever it trips over, then move on to P2.
 
 Origin: the "Conduit Pillar" experiment. Claude designed a 5x5 sci-fi pillar inside Voxyl, looking
 at renders as it went. It worked well (the result is the `Conduit Pillar` project + palette), but
