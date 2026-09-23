@@ -1547,12 +1547,21 @@ func _accumulate_wire_edges(edges: Dictionary, model: BlockModel, basis: Basis, 
 			for i in 4:
 				_add_edge(edges, world_corners[i], world_corners[(i + 1) % 4], world_normal, semantic)
 
+# A line sitting exactly on the triangle surface beneath it z-fights (flickers, fades at
+# grazing angles) once depth test is on — visible in outline, which needs depth test for
+# correct hidden-line removal. Nudging it off the surface along the first face normal that
+# touches it (an edge's later touches, if any, only ever add a differing-normal crease, so the
+# offset direction doesn't need to reconcile more than one) fixes it without being visible at
+# normal viewing distances.
+const _EDGE_OFFSET := 0.006
+
 func _add_edge(edges: Dictionary, a: Vector3, b: Vector3, n: Vector3, semantic: String) -> void:
 	var ka := "%.4f,%.4f,%.4f" % [a.x, a.y, a.z]
 	var kb := "%.4f,%.4f,%.4f" % [b.x, b.y, b.z]
 	var key := (ka + "|" + kb) if ka < kb else (kb + "|" + ka)
 	if not edges.has(key):
-		edges[key] = {"a": a, "b": b, "dirs": [], "semantic": semantic}
+		var off := n * _EDGE_OFFSET
+		edges[key] = {"a": a + off, "b": b + off, "dirs": [], "semantic": semantic}
 	(edges[key]["dirs"] as Array).append(n)
 
 # True for a model that's exactly one axis-aligned, unrotated box spanning the whole cell —
