@@ -2156,6 +2156,40 @@ func _test_shape_rules() -> void:
 	_check("unknown shape refused", not ShapeRules.can_add([], _p("A", "nope", 0)))
 	_check("bad slot refused", not ShapeRules.can_add([], _p("A", "edge1", 12)))
 
+	# Shrink rendering: overlapping parts are trimmed so no two faces share a plane.
+	var e := 1.0 / 8.0
+	var north := _p("A", "face2", 2)
+	var west := _p("B", "face2", 4)
+	var east := _p("B", "face2", 5)
+	var nb := ShapeRules.render_boxes(north, [west])
+	_check("the lower slot of two equal panels yields at the corner",
+		nb.size() == 1 and is_equal_approx(nb[0].position.x, 2 * e))
+	_check("the winner keeps its full box",
+		ShapeRules.render_boxes(west, [north])[0] == ShapeCatalog.boxes("face2", 4)[0])
+	var cb := ShapeRules.render_boxes(_p("A", "face1", 1), [north])
+	_check("a thinner cover yields to a panel", is_equal_approx(cb[0].position.z, 2 * e))
+	var sb := ShapeRules.render_boxes(_p("A", "edge2", 4), [_p("A", "face1", 0)])
+	_check("a strip yields to the cover it lies on", is_equal_approx(sb[0].position.y, e))
+	var pb := ShapeRules.render_boxes(_p("A", "edge4", 12), [_p("A", "face4", 0)])
+	_check("a centered pillar stops at the slab capping it", is_equal_approx(pb[0].position.y, 0.5))
+	_check("a lower-priority crossing post splits in two",
+		ShapeRules.render_boxes(_p("A", "edge2", 13), [_p("A", "edge2", 12)]).size() == 2)
+	_check("parts that don't overlap stay whole",
+		ShapeRules.render_boxes(_p("A", "face1", 1), [_p("A", "face1", 0)])[0] == ShapeCatalog.boxes("face1", 1)[0])
+	# The U of three panels (a pillar's cut-out face): no two render boxes overlap.
+	var u := [north, west, east]
+	var drawn: Array = []
+	for i in u.size():
+		var others := u.duplicate()
+		others.remove_at(i)
+		drawn.append_array(ShapeRules.render_boxes(u[i], others))
+	var overlap := false
+	for i in drawn.size():
+		for j in range(i + 1, drawn.size()):
+			if (drawn[i] as AABB).intersection(drawn[j]).has_volume():
+				overlap = true
+	_check("three panels in a U draw without overlapping", not overlap)
+
 func _test_shaped_parts() -> void:
 	print("-- shaped palette entries + part cells")
 	VoxelWorld.reset_for_tests()

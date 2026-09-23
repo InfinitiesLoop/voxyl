@@ -40,6 +40,148 @@ static func can_add(existing: Array, part: Dictionary) -> bool:
 	all.append(part)
 	return _partial_occlusion_ok(all)
 
+# --- Shrink rendering (FMP's MicroOcclusion.recalcBounds / PostMicroblockClient) ------
+#
+# Parts may legally overlap (a panel's end runs into the panel beside it, a strip lies along
+# a cover). Drawn at full size, those overlaps put two faces in the same plane and they
+# z-fight. Like Forge Microblocks, rendering trims the lower-priority part back to where the
+# other begins, so no two faces ever coincide. Render-only: rules, aiming and footprints keep
+# every part's full boxes.
+#
+# Priority (who yields): strips yield to corners, corners to faces; between two faces the
+# thinner yields; between equals the lower slot yields (arbitrary but stable). A face only
+# ever trims against other faces, a corner against faces and corners, a strip against all.
+# Centered posts are trimmed by the faces capping their ends, and a post crossing another
+# of higher priority is split into two pieces either side of it.
+
+# The boxes to draw for `part` given the other parts in its cell.
+static func render_boxes(part: Dictionary, others: Array) -> Array[AABB]:
+	var shape := str(part.get("shape", ""))
+	var slot := int(part.get("slot", -1))
+	var full := ShapeCatalog.boxes(shape, slot)
+	if others.is_empty() or ShapeCatalog.is_exclusive(shape):
+		return full
+	if _is_post(part):
+		return _post_render_boxes(part, others)
+	var s1 := fmp_slot(part)
+	if s1 < 0:
+		return full
+	var limit := 6 if s1 < 6 else (15 if s1 < 15 else 27)
+	# Walk the others in slot order (as FMP walks its part map), so results don't depend on
+	# the order parts happen to be stored in.
+	var rivals: Array = []
+	for o in others:
+		var s2 := fmp_slot(o)
+		if s2 >= 0 and s2 < limit and s2 != s1:
+			rivals.append(o)
+	rivals.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return fmp_slot(a) < fmp_slot(b))
+	var rb := ShapeCatalog.bounds(shape, slot)
+	for o in rivals:
+		if _shrinks(part, o):
+			rb = _shrunk(rb, ShapeCatalog.bounds(str(o["shape"]), int(o["slot"])), _shrink_side(s1, fmp_slot(o)))
+	if _family(part) == ShapeCatalog.Family.HOLLOW:
+		# The ring's boxes, clipped to the trimmed slab.
+		var out: Array[AABB] = []
+		for b in full:
+			var c := b.intersection(rb)
+			if c.has_volume():
+				out.append(c)
+		return out
+	var single: Array[AABB] = [rb]
+	return single
+
+# FMP's shrinkTest: whether `a` yields to `b` where they overlap.
+static func _shrinks(a: Dictionary, b: Dictionary) -> bool:
+	var s1 := fmp_slot(a)
+	var s2 := fmp_slot(b)
+	var p1 := _shape_priority(s1)
+	var p2 := _shape_priority(s2)
+	if p1 != p2:
+		return p1 < p2
+	if _size(a) != _size(b):
+		return _size(a) < _size(b)
+	return s1 < s2
+
+# FMP's shrinkSide: which side of `s1`'s box to trim back against `s2` (-1 = none).
+static func _shrink_side(s1: int, s2: int) -> int:
+	if s2 < 6:
+		return s2
+	if s1 < 15:   # both corners
+		var c2 := s2 - 7
+		match (s1 - 7) ^ c2:
+			1: return c2 & 1
+			2: return 2 | (c2 & 2) >> 1
+			4: return 4 | (c2 & 4) >> 2
+		return -1
+	var e1 := s1 - 15
+	var e1bits := ShapeCatalog.unpack_edge_bits(e1)
+	if s2 < 15:   # edge vs corner
+		var c := s2 - 7
+		if (c & ShapeCatalog.edge_axis_mask(e1)) != e1bits:
+			return -1
+		return (e1 & 0xC) >> 1 | (c & ~e1bits) >> (e1 >> 2)
+	var e2 := s2 - 15   # both edges
+	var e2bits := ShapeCatalog.unpack_edge_bits(e2)
+	if (e1 & 0xC) == (e2 & 0xC):
+		match e1bits ^ e2bits:
+			1: return 0 if (e2bits & 1) == 0 else 1
+			2: return 2 if (e2bits & 2) == 0 else 3
+			4: return 4 if (e2bits & 4) == 0 else 5
+		return -1
+	var mask := ShapeCatalog.edge_axis_mask(e1) & ShapeCatalog.edge_axis_mask(e2)
+	if (e1bits & mask) != (e2bits & mask):
+		return -1
+	match e1 >> 2:
+		0: return 0 if (e2bits & 1) == 0 else 1
+		1: return 2 if (e2bits & 2) == 0 else 3
+	return 4 if (e2bits & 4) == 0 else 5
+
+# `rb` trimmed on `side` so it stops where `b` starts (MicroOcclusion.shrink). A trim that
+# would leave nothing is skipped (placement rules already guarantee every part keeps some
+# volume of its own, so this is only a guard).
+static func _shrunk(rb: AABB, b: AABB, side: int) -> AABB:
+	if side < 0:
+		return rb
+	var lo := rb.position
+	var hi := rb.end
+	match side:
+		0: lo.y = maxf(lo.y, b.end.y)
+		1: hi.y = minf(hi.y, b.position.y)
+		2: lo.z = maxf(lo.z, b.end.z)
+		3: hi.z = minf(hi.z, b.position.z)
+		4: lo.x = maxf(lo.x, b.end.x)
+		5: hi.x = minf(hi.x, b.position.x)
+	if hi.x - lo.x <= 0.0001 or hi.y - lo.y <= 0.0001 or hi.z - lo.z <= 0.0001:
+		return rb
+	return AABB(lo, hi - lo)
+
+# A centered post: trimmed by (solid) faces capping its ends, and split in two around any
+# post of higher priority crossing it.
+static func _post_render_boxes(part: Dictionary, others: Array) -> Array[AABB]:
+	var axis := int(part["slot"]) - ShapeCatalog.CENTER_SLOT
+	var rb := ShapeCatalog.bounds(str(part["shape"]), int(part["slot"]))
+	for o in others:
+		if _family(o) == ShapeCatalog.Family.FACE and (int(o["slot"]) >> 1) == axis:
+			rb = _shrunk(rb, ShapeCatalog.bounds(str(o["shape"]), int(o["slot"])), int(o["slot"]))
+	var pieces: Array[AABB] = [rb]
+	for o in others:
+		if _is_post(o) and _post_shrinks(part, o):
+			var ob := ShapeCatalog.bounds(str(o["shape"]), int(o["slot"]))
+			var split: Array[AABB] = []
+			for piece in pieces:
+				var below := _shrunk(piece, ob, axis * 2 + 1)
+				var above := _shrunk(piece, ob, axis * 2)
+				split.append(below)
+				if not above.is_equal_approx(below):
+					split.append(above)
+			pieces = split
+	return pieces
+
+static func _post_shrinks(a: Dictionary, b: Dictionary) -> bool:
+	if _size(a) != _size(b):
+		return _size(a) < _size(b)
+	return int(a["slot"]) > int(b["slot"])
+
 # Whether a whole list of parts is a valid cell (each added in turn).
 static func is_valid_cell(parts: Array) -> bool:
 	var acc: Array = []

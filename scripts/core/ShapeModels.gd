@@ -32,15 +32,22 @@ static func get_by_id(model_id: String) -> BlockModel:
 static func clear_cache() -> void:
 	_by_id.clear()
 
-static func id_for(shape_id: String, slot: int, base: BlockModel) -> String:
+static func id_for(shape_id: String, slot: int, base: BlockModel, boxes: Array = []) -> String:
 	var base_id := "none"
 	if base != null:
 		base_id = "%s@%d.%d" % [base.id, base.get_instance_id(), base.revision]
-	return "%s%s:%d:%s" % [ID_PREFIX, shape_id, slot, base_id]
+	var mid := "%s%s:%d:%s" % [ID_PREFIX, shape_id, slot, base_id]
+	if not boxes.is_empty():
+		mid += ":" + str(boxes).md5_text().substr(0, 12)   # trimmed render boxes (see render_boxes)
+	return mid
 
 # The model for one part of `shape_id` at `slot`, textured from `base` (null → untextured).
-static func model_for(shape_id: String, slot: int, base: BlockModel) -> BlockModel:
-	var mid := id_for(shape_id, slot, base)
+# `boxes` overrides a microblock's boxes with its trimmed render boxes when it shares a cell
+# (ShapeRules.render_boxes); [] = the shape's own full boxes.
+static func model_for(shape_id: String, slot: int, base: BlockModel, boxes: Array = []) -> BlockModel:
+	if not boxes.is_empty() and boxes == ShapeCatalog.boxes(shape_id, slot):
+		boxes = []   # untrimmed: share the plain model
+	var mid := id_for(shape_id, slot, base, boxes)
 	var hit: BlockModel = _by_id.get(mid, null)
 	if hit != null:
 		return hit
@@ -50,17 +57,18 @@ static func model_for(shape_id: String, slot: int, base: BlockModel) -> BlockMod
 	if ShapeCatalog.family_of(shape_id) == ShapeCatalog.Family.ARCH:
 		m.elements = _arch_elements(shape_id, slot, bindings)
 	else:
-		m.elements = _box_elements(shape_id, slot, bindings)
+		m.elements = _box_elements(boxes if not boxes.is_empty() else ShapeCatalog.boxes(shape_id, slot), bindings)
 	if base != null:
 		m.textures = base.textures.duplicate()
 		m.ambient_occlusion = base.ambient_occlusion
 	_by_id[mid] = m
 	return m
 
-# A microblock's boxes, every face bound to the base's texture for its direction.
-static func _box_elements(shape_id: String, slot: int, bindings: Dictionary) -> Array:
+# A microblock's boxes, every face bound to the base's texture for its direction (UVs by
+# position, so a trimmed box shows exactly the texels the full one did there).
+static func _box_elements(boxes: Array, bindings: Dictionary) -> Array:
 	var elements: Array = []
-	for box in ShapeCatalog.boxes(shape_id, slot):
+	for box in boxes:
 		var faces := {}
 		for d in BlockModel.ALL_DIRS:
 			var b: Dictionary = bindings.get(d, {})

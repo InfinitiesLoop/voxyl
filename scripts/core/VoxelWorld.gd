@@ -267,10 +267,13 @@ func remove_part(pos: Vector3i, index: int) -> void:
 	mark_dirty()
 
 # The render geometry for one placed part: its stored shape + slot, cut from whatever block
-# the palette currently maps its semantic to (untextured while undecided).
-func get_part_model(part: Dictionary) -> BlockModel:
+# the palette currently maps its semantic to (untextured while undecided). `others` are the
+# rest of the parts in its cell: where they overlap, the part is trimmed so faces never
+# z-fight (ShapeRules.render_boxes).
+func get_part_model(part: Dictionary, others: Array = []) -> BlockModel:
 	var base := get_model_for_semantic(str(part.get("semantic", "")))
-	return ShapeModels.model_for(str(part.get("shape", "")), int(part.get("slot", 0)), base)
+	var boxes: Array = ShapeRules.render_boxes(part, others) if not others.is_empty() else []
+	return ShapeModels.model_for(str(part.get("shape", "")), int(part.get("slot", 0)), base, boxes)
 
 # A block type to draw a semantic's icon from (hotbar, inventory grid). Plain semantics get
 # their real block type; a shaped semantic gets a synthetic one whose model is its shape cut

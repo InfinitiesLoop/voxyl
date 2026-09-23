@@ -138,6 +138,11 @@ just draw both.
   shows the matching slice of the texture and lines up with neighbors (what FMP and AC
   do). Generated models are addressable by id (`shape:<shape>:<slot>:<base model id>`)
   so the 3D view, previews and icon baker all reuse their normal model paths and caches.
+- Overlapping microblocks are trimmed at render time (FMP's "shrink rendering",
+  `ShapeRules.render_boxes`): the lower-priority part stops where the other begins, so no
+  two faces share a plane (no z-fighting). Strips yield to corners, corners to faces, the
+  thinner face to the thicker, then the lower slot; posts are capped by end faces and split
+  around crossing posts. Rules, aiming and 2D footprints still use the full boxes.
 - An undecided block → the planning color, like any undecided block.
 - Icons: a shaped entry's icon is its shape in its block's material (a synthetic block
   type for the icon baker), shown in the inventory grid and hotbar.

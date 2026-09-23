@@ -1215,9 +1215,12 @@ func _build_cell_node(pos: Vector3i, cell: BlockCell, semantic: String) -> Node3
 		# currently maps to. Geometry is already in place within the cell, so no rotation.
 		var holder := Node3D.new()
 		holder.position = center
-		for part in cell.parts:
+		for i in cell.parts.size():
+			var part: Dictionary = cell.parts[i]
+			var others := cell.parts.duplicate()
+			others.remove_at(i)   # overlaps with these are trimmed away (no z-fighting)
 			var pmi := MeshInstance3D.new()
-			_apply_cell_appearance(pmi, str(part.get("semantic", "")), VoxelWorld.get_part_model(part))
+			_apply_cell_appearance(pmi, str(part.get("semantic", "")), VoxelWorld.get_part_model(part, others))
 			pmi.transform = Transform3D(Basis().scaled(Vector3.ONE * VOXEL_SCALE), Vector3.ZERO)
 			holder.add_child(pmi)
 		return holder
@@ -2296,7 +2299,9 @@ func _refresh_shaped_preview() -> void:
 		_part_ghost.visible = false   # nothing fits here: grid only, no ghost
 		return
 	var part: Dictionary = placement["part"]
-	var model := VoxelWorld.get_part_model(part)
+	# Trimmed against what's already in the target cell, like the placed part will be.
+	var target := VoxelWorld.active_project.data.get_cell(placement["pos"])
+	var model := VoxelWorld.get_part_model(part, target.parts if target else [])
 	var key := str(part["semantic"]) + "|" + _model_key(model)
 	if key != _part_ghost_key:
 		_part_ghost_key = key
