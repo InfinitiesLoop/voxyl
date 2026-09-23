@@ -389,6 +389,12 @@ func _setup_viewport() -> void:
 	_voxel_root = Node3D.new()
 	_viewport.add_child(_voxel_root)
 
+	# Feature-edge overlay for outline/xray/wire — a single merged line mesh, sibling to
+	# _voxel_root (never freed by _rebuild's per-cell clear), rebuilt in _rebuild_wire_lines.
+	_wire_mi = MeshInstance3D.new()
+	_wire_mi.visible = false
+	_viewport.add_child(_wire_mi)
+
 	# Placement-FX layer: transient blue placeholders live here, above the voxel meshes
 	# and untouched by _rebuild (which only clears _voxel_root).
 	_fx_root = Node3D.new()
@@ -1028,6 +1034,9 @@ var _sun: DirectionalLight3D
 var _fill: DirectionalLight3D
 var _under_light: DirectionalLight3D
 var _mode_mats := {}   # semantic -> material for the intent / clay lenses
+var _xray_mats := {}   # semantic -> translucent material for the xray lens
+var _wire_mats := {}   # mode -> line material (outline / xray / wire)
+var _wire_mi: MeshInstance3D   # merged feature-edge geometry for outline / xray / wire
 var _marker_box: MeshInstance3D
 var _toolbar: Control
 
@@ -1044,6 +1053,7 @@ func set_render_options(opts: Dictionary) -> void:
 	_apply_lighting()
 	_apply_projection()
 	_mode_mats.clear()
+	_xray_mats.clear()
 	_mark_dirty()
 	if not _applying_state and not offscreen:
 		VoxelWorld.mark_dirty()   # the layout (with this view's settings) is saved with the project
@@ -1105,6 +1115,21 @@ func _mode_material(semantic: String) -> StandardMaterial3D:
 		mat.albedo_color = Color(0.78, 0.76, 0.72)
 		mat.roughness = 0.9
 	_mode_mats[semantic] = mat
+	return mat
+
+# The translucent fill material a semantic gets in the xray lens: its intent color at low
+# opacity, both sides drawn so interior faces show through instead of being backface-culled.
+func _xray_material(semantic: String) -> StandardMaterial3D:
+	if _xray_mats.has(semantic):
+		return _xray_mats[semantic]
+	var mat := StandardMaterial3D.new()
+	var c := intent_color(semantic)
+	c.a = 0.15
+	mat.albedo_color = c
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_xray_mats[semantic] = mat
 	return mat
 
 # The intent-lens color of a semantic (also what a capture's legend shows).
@@ -1361,6 +1386,7 @@ func _flush_dirty() -> void:
 	if _slice_active:
 		_update_slice_visuals()
 	_refresh_guide()
+	_rebuild_wire_lines()
 
 # Rebuild exactly one cell's render node in place — the incremental counterpart to the
 # per-cell body of _rebuild()'s loop below (kept in sync via _build_cell_node).
@@ -1400,6 +1426,7 @@ func _rebuild() -> void:
 	_faded_mats.clear()
 	_onplane_mats.clear()
 	_mode_mats.clear()
+	_xray_mats.clear()
 	# Per-rebuild material caches (pick up palette / block-type edits); the heavy
 	# ImageTexture cache and shared geometry/shaders persist across rebuilds.
 	_model_tex_cache.clear()
@@ -1420,6 +1447,149 @@ func _rebuild() -> void:
 	if _slice_active:
 		_update_slice_visuals()
 	_refresh_guide()  # the guide plane spans the build, so resize it on rebuild
+	_rebuild_wire_lines()
+
+# ---------------------------------------------------------------------------
+# Feature-edge overlay (outline / xray / wire)
+#
+# A single merged PRIMITIVE_LINES mesh covering the whole build, recomputed on every
+# rebuild (full or incremental — any single cell's edit can change a neighbor's
+# dedup, so there's no cheaper correct incremental path at this build size). No-ops
+# immediately when the current mode doesn't use it.
+#
+# Edges are collected in WORLD space, keyed by their two rounded endpoints, each
+# tagged with every face's world-space outward normal that touches it. An edge
+# touched by exactly two faces with the same normal is an interior seam between two
+# coplanar visible faces (a flat run of a mass, a strip lying on a cover) and is
+# dropped; anything else — one face only (a silhouette boundary) or two differing
+# normals (a real corner/crease) — is kept. `xray` skips the drop and keeps every
+# edge ("all edges" per the design). Free-form mesh elements (architecture shapes:
+# roof tiles, stairs, arches, …) are skipped for now — a known v1 gap, not a bug.
+# ---------------------------------------------------------------------------
+
+func _rebuild_wire_lines() -> void:
+	var mode := str(render_options["mode"])
+	if mode != "outline" and mode != "xray" and mode != "wire":
+		_wire_mi.visible = false
+		return
+	var edges := {}   # "x,y,z|x,y,z" -> {a: Vector3, b: Vector3, dirs: Array[Vector3], semantic: String}
+	if VoxelWorld.active_project:
+		var data := VoxelWorld.active_project.data
+		for pos: Vector3i in data.cells.keys():
+			var cell: BlockCell = data.cells[pos]
+			var semantic: String = cell.type_id
+			if semantic.is_empty():
+				continue
+			var center := Vector3(pos) + Vector3(0.5, 0.5, 0.5)
+			if cell.is_shaped():
+				for i in cell.parts.size():
+					var part: Dictionary = cell.parts[i]
+					var others := cell.parts.duplicate()
+					others.remove_at(i)
+					var m := VoxelWorld.get_part_model(part, others)
+					if m != null:
+						_accumulate_wire_edges(edges, m, Basis(), center, str(part.get("semantic", semantic)), null, pos)
+			else:
+				var resolved := _resolve_cell_parts(pos, cell, semantic)
+				# Only a lone full-cube part is eligible for neighbor face culling: a rotated,
+				# multipart or non-cube model's faces don't necessarily align with a neighbor's,
+				# so they always draw in full (and lean on the dedup pass below instead).
+				var simple := resolved.size() == 1 and _is_simple_full_cube(resolved[0]["model"]) \
+					and (resolved[0]["basis"] as Basis).is_equal_approx(Basis())
+				for p in resolved:
+					_accumulate_wire_edges(edges, p["model"], p["basis"], center, semantic, data if simple else null, pos)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_LINES)
+	var dedup := mode != "xray"
+	var colored := mode != "outline"
+	var any := false
+	for key in edges:
+		var e: Dictionary = edges[key]
+		var dirs: Array = e["dirs"]
+		if dedup and dirs.size() == 2 and (dirs[0] as Vector3).is_equal_approx(dirs[1]):
+			continue
+		st.set_color(intent_color(str(e["semantic"])) if colored else Color(0.05, 0.05, 0.05))
+		st.add_vertex(e["a"])
+		st.add_vertex(e["b"])
+		any = true
+	_wire_mi.mesh = st.commit() if any else null
+	_wire_mi.material_override = _wire_material_for(mode)
+	_wire_mi.visible = any
+
+# All box-element edges of one rendered part (a plain block, a multipart side, or a shaped
+# part), transformed into world space exactly like its triangle mesh (see BlockMesher.color_mesh
+# + the mi.transform applied in _build_cell_node), and folded into `edges`. `data`/`pos` — only
+# ever passed for a lone full-cube cell — enable neighbor face culling: without it, a face
+# shared by two solid neighbors would still add its own two edges on top of the two the
+# neighbor adds for the same seam, so a shared edge ends up touched 3-4 times instead of the
+# clean 2 the dedup pass in _rebuild_wire_lines depends on.
+func _accumulate_wire_edges(edges: Dictionary, model: BlockModel, basis: Basis, center: Vector3,
+		semantic: String, data: VoxelData, pos: Vector3i) -> void:
+	if model == null:
+		return
+	var recenter := Transform3D(Basis(), -Vector3(0.5, 0.5, 0.5))
+	for element in model.elements:
+		if element.has("mesh"):
+			continue   # free-form (architecture) geometry: not covered in v1
+		var from: Vector3 = element["from"]
+		var to: Vector3 = element["to"]
+		var xform := BlockMesher.element_xform(element)
+		var nbasis := xform.basis.inverse().transposed()
+		for dir in BlockMesher.DIR_NORMALS:
+			if data != null and _neighbor_hides_face(data, pos, dir):
+				continue
+			var corners := BlockMesher.face_corners(dir, from, to)
+			var world_corners: Array[Vector3] = []
+			for c in corners:
+				var local: Vector3 = recenter * (xform * (c as Vector3))
+				world_corners.append(center + basis * (local * VOXEL_SCALE))
+			var world_normal := (basis * (nbasis * (BlockMesher.DIR_NORMALS[dir] as Vector3))).normalized()
+			for i in 4:
+				_add_edge(edges, world_corners[i], world_corners[(i + 1) % 4], world_normal, semantic)
+
+func _add_edge(edges: Dictionary, a: Vector3, b: Vector3, n: Vector3, semantic: String) -> void:
+	var ka := "%.4f,%.4f,%.4f" % [a.x, a.y, a.z]
+	var kb := "%.4f,%.4f,%.4f" % [b.x, b.y, b.z]
+	var key := (ka + "|" + kb) if ka < kb else (kb + "|" + ka)
+	if not edges.has(key):
+		edges[key] = {"a": a, "b": b, "dirs": [], "semantic": semantic}
+	(edges[key]["dirs"] as Array).append(n)
+
+# True for a model that's exactly one axis-aligned, unrotated box spanning the whole cell —
+# the shape whose silhouette is identical regardless of which semantic or block it renders,
+# and the only shape _neighbor_hides_face can reason about without doing full mesh-overlap math.
+func _is_simple_full_cube(model: BlockModel) -> bool:
+	if model == null or model.elements.size() != 1:
+		return false
+	var el: Dictionary = model.elements[0]
+	if el.has("mesh") or el.has("rotation"):
+		return false
+	var from: Vector3 = el.get("from", Vector3.ONE)
+	var to: Vector3 = el.get("to", Vector3.ZERO)
+	return from.is_equal_approx(Vector3.ZERO) and to.is_equal_approx(Vector3.ONE)
+
+# Whether `pos`'s neighbor in `dir` is itself a lone, unrotated full cube — i.e. whether it
+# fully covers the face `pos` shares with it, regardless of the two semantics involved (this
+# is a structural/silhouette lens, not a material one). Conservative: a shaped, multipart,
+# rotated or otherwise non-cube neighbor never hides a face, so real geometry is never lost.
+func _neighbor_hides_face(data: VoxelData, pos: Vector3i, dir: int) -> bool:
+	var npos := pos + Vector3i(BlockMesher.DIR_NORMALS[dir])
+	var ncell: BlockCell = data.get_cell(npos)
+	if ncell == null or ncell.type_id.is_empty() or ncell.is_shaped():
+		return false
+	var nparts := _resolve_cell_parts(npos, ncell, ncell.type_id)
+	return nparts.size() == 1 and (nparts[0]["basis"] as Basis).is_equal_approx(Basis()) \
+		and _is_simple_full_cube(nparts[0]["model"])
+
+func _wire_material_for(mode: String) -> StandardMaterial3D:
+	if _wire_mats.has(mode):
+		return _wire_mats[mode]
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.no_depth_test = mode != "outline"   # outline hides behind nearer geometry; xray/wire see through
+	_wire_mats[mode] = mat
+	return mat
 
 # A cell resolves to one or more render parts (geometry + a model rotation). A plain
 # block is a single part; a connecting/multipart block is its post plus a side part per
@@ -1548,9 +1718,21 @@ func _model_key(model: BlockModel) -> String:
 # tells slice-mode how to restore the base look afterward.
 func _apply_cell_appearance(mi: MeshInstance3D, semantic: String, model: BlockModel) -> void:
 	mi.set_meta("semantic", semantic)
-	if render_options["mode"] != "textured":
-		# Intent / clay lenses: the same geometry, one flat material per semantic (or one for
-		# all), ignoring textures entirely.
+	var mode := str(render_options["mode"])
+	if mode == "wire":
+		# Wire draws no fill at all — the feature-edge overlay (_wire_mi) is the whole picture.
+		mi.mesh = null
+		mi.set_meta("textured", false)
+		return
+	if mode == "xray":
+		mi.mesh = _mesh_for_model(model)
+		mi.material_override = _xray_material(semantic)
+		mi.set_meta("textured", false)
+		return
+	if mode != "textured":
+		# Intent / clay / outline lenses: the same geometry, one flat material per semantic (or
+		# one for all), ignoring textures entirely. Outline's dark feature edges are drawn on
+		# top by the _wire_mi overlay, so its fill is identical to clay's.
 		mi.mesh = _mesh_for_model(model)
 		mi.material_override = _mode_material(semantic)
 		mi.set_meta("textured", false)

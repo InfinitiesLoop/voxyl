@@ -11,6 +11,9 @@ const OPTIONS := [
 		["textured", "Textured", "Blocks as the palette maps them"],
 		["intent", "Intent", "Each semantic in its own flat color — structure, no materials"],
 		["clay", "Clay", "One neutral material: form and shadow only"],
+		["outline", "Outline", "Flat fill with dark feature edges - hidden-line drawing"],
+		["xray", "X-ray", "Faces at low opacity plus every edge - see the interior"],
+		["wire", "Wire", "Feature edges only, drawn through everything, colored by semantic"],
 	]},
 	{"id": "lighting", "label": "Lighting", "default": "app", "choices": [
 		["app", "App", "Voxyl's night lighting"],

@@ -5,7 +5,7 @@ extends RefCounted
 # legend in intent mode — because the model can't hover.
 
 const _CAMERA_DESC := "CameraSpec: frame (a Region, default {all:true}, or a point [x,y,z]), from (n ne e se s sw w nw, or a bearing in degrees clockwise from north; default se), elevation (degrees above the horizon, or top/high/iso/mid/low/level/eye; eye = standing on the build's floor; default 30), fov (vertical degrees, default 50; the app uses 75), ortho (true = orthographic), distance / margin (fit, default 1.12), or explicit pos + look_at."
-const _RENDER_DESC := "RenderSpec: mode textured|intent|clay (intent = each semantic in its own flat color, with a legend — the clearest view of structure), lighting app|studio|flat (studio lights undersides), background app|plain."
+const _RENDER_DESC := "RenderSpec: mode textured|intent|clay|outline|xray|wire (intent = each semantic in its own flat color, with a legend — the clearest view of structure; outline = flat fill + dark feature edges; xray = faces at low opacity + every edge, see inside; wire = feature edges only, colored by semantic, drawn through everything), lighting app|studio|flat (studio lights undersides), background app|plain."
 
 static func register(reg: McpRegistry) -> void:
 	reg.add("view_list",

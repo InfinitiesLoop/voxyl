@@ -1,6 +1,7 @@
 # Voxyl MCP — Agent Tooling Plan
 
-Status: **P1 accepted** (2026-09-22) — the acceptance run (§7) passed in a real Claude session. Next up: P2.
+Status: **P1 accepted** (2026-09-22). **P2 in progress** (2026-09-23): render modes `outline` /
+`xray` / `wire` and `region_transform` landed; the rest of P2 (§7) is still open.
 
 Built so far (branch `shaped-parts`):
 - Server, Settings dialog (Home + editor bar ⚙), Pause button + presence badge, `--sandbox` /
@@ -389,7 +390,27 @@ needed.
   had to be inferred from perspective shots.
 - Exposed through the toolbar's Projection and Camera dropdowns.
 
-**D. Render modes** (P2; neon in P3). These are the Render dropdown's entries.
+**D. Render modes** (P2; neon in P3). These are the Render dropdown's entries. `outline`/`xray`/
+`wire` done (2026-09-23), verified in a sandboxed run + full test suite:
+- Feature edges are computed fresh each rebuild (full and incremental) in `View3D`, in WORLD
+  space: for each rendered box element, collect its 4 face-edges tagged by world outward normal
+  into a merged map keyed by rounded endpoints; an edge touched by exactly two faces with the
+  *same* normal is an interior seam (a flat run, a strip on a cover) and drops; anything else
+  (one face, or two differing normals) is a real silhouette/crease and stays. One merged
+  `PRIMITIVE_LINES` mesh (`_wire_mi`) per view, vertex-colored for `wire`/`xray` (semantic intent
+  color), fixed dark for `outline`. `xray` skips the drop (draws every edge, per spec) and uses
+  no depth test like `wire`; `outline` keeps depth test on, so edges hide behind nearer geometry
+  (true hidden-line drawing).
+- The first cut just drew every cell's 6 faces and leaned on that dedup rule alone — wrong: two
+  solid neighbor cells each contribute a face *and* the neighbor's matching face at the same
+  seam, so a shared edge gets 3-4 touches instead of 2 and the "exactly 2 same-normal" rule never
+  fires. Fixed by adding real face culling first (`_neighbor_hides_face`): a lone, unrotated
+  full-cube cell skips accumulating a face at all when its neighbor in that direction is also one
+  — only *then* does the remaining-face dedup pass work. Caught by comparing an `outline` capture
+  against unmodified `clay` (same scene, no grid artifact there) rather than trusting the first
+  render.
+- Known v1 gap: free-form mesh elements (architecture shapes — roof tiles, stairs, arches, …)
+  contribute no edges yet, only their normal fill. Not a correctness bug, just not covered.
 - `intent`: every semantic in its own flat, distinct color (golden-ratio hues), plus a legend.
   Structure, independent of materials. This is Principle 1 made visible, and it's the best mode
   for a model to read.
@@ -441,7 +462,16 @@ for a model to see and author structure. It works in both directions.
   sub-cell occupancy, for checking slabs, rods and notches. Also works along X or Z, giving text
   elevations.
 
-**H. Region ops in core** (fill/replace/move P1; transforms/array P2).
+**H. Region ops in core** (fill/replace/move P1; `region_transform` done 2026-09-23; array/stamp
+still open).
+- `region_transform`: rotate (90° steps) / mirror a region about a pivot, in place — no
+  copy/paste round trip. Reuses `SpatialXform.about()` directly (the same machinery symmetry
+  groups compose from), rather than going through `RegionOps.paste_edits`'s box-relative
+  placement math, since "in place about a pivot" doesn't need a destination box at all. One
+  undo step: clear the region, then re-place every cell through the transform. Verified: a
+  marked asymmetric shape's corner lands where the rotation/mirror predicts, orientation and
+  parts' slots turn with it, and `rotate:0, mirror:""` (a no-op request) is rejected rather than
+  silently doing nothing.
 - Fill styles: `solid`, `hollow`, `walls`, `frame` (edges only), `floor`.
 - Also: replace (the exchange tool), move, rotate Y by 90° steps, mirror X/Z, array/stamp.
 - **Mirroring parts.** Microblocks remap by bounds, as `mirror_diag_slot` did in the driver.
@@ -575,7 +605,7 @@ conflicts) and `animate`. Each call is one undo step.
 | `selection_set` / `selection_get` / `selection_clear` | The shared region selection all views show | P1 |
 | `region_move` | Offset a region (cut + paste in one step) | P1 |
 | `region_copy` / `clipboard_paste` | Paste takes `at`, `rotate`, `mirror` | P1 |
-| `region_transform` | Rotate Y (90° steps) / mirror in place about a pivot | P2 |
+| `region_transform` | Rotate Y (90° steps) / mirror in place about a pivot | **done** |
 | `region_stamp` | Copy to `to: [...]` or `array: Repeat`; optionally across projects | P2 |
 | `region_name` / `regions_list` / `region_forget` | Named regions | P2 |
 
