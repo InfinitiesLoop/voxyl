@@ -24,6 +24,11 @@ func _ready() -> void:
 	VoxelWorld.history_changed.connect(_refresh_history_buttons)
 	VoxelWorld.project_opened.connect(func(_p): _refresh_history_buttons())
 	_refresh_history_buttons()
+	# An agent opening a project shows the editor, as a double-click on the Home screen does.
+	VoxelWorld.open_project_requested.connect(func(p: VoxelProject):
+		if VoxelWorld.active_project != p:
+			VoxelWorld.save_active_project()
+		_open_editor(p))
 	_go_home()
 
 # App-level edit shortcuts: Ctrl/Cmd+Z undo, Ctrl+Shift+Z or Ctrl+Y redo. Handled in
@@ -104,6 +109,40 @@ func _build_layout_controls() -> void:
 	_add_bar_button("Cols", func(): _shell.apply_preset(MultiViewShell.Preset.COLUMNS))
 	_add_bar_button("Rows", func(): _shell.apply_preset(MultiViewShell.Preset.ROWS))
 	_add_bar_button("2×2", func(): _shell.apply_preset(MultiViewShell.Preset.GRID))
+	_bar.add_child(VSeparator.new())
+	_build_agent_controls()
+	_add_bar_button("⚙", func(): SettingsDialog.open(self)).tooltip_text = "Settings"
+
+# Agent presence in the editor bar: a badge while an agent is connected / building, and a
+# Pause button that makes its edits fail until resumed. Hidden while connections are off.
+var _agent_badge: Label
+var _pause_btn: Button
+
+func _build_agent_controls() -> void:
+	_agent_badge = Label.new()
+	_agent_badge.add_theme_color_override("font_color", Color(0.55, 0.85, 1.0))
+	_agent_badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_bar.add_child(_agent_badge)
+	_pause_btn = _add_bar_button("Pause agent", func(): McpServer.paused = not McpServer.paused)
+	_pause_btn.toggle_mode = true
+	_pause_btn.tooltip_text = "While paused, agent edits are refused (they can still look)"
+	McpServer.status_changed.connect(_refresh_agent_controls)
+	McpServer.call_started.connect(func(_t): _refresh_agent_controls())
+	McpServer.call_finished.connect(func(_t): _refresh_agent_controls())
+	_refresh_agent_controls()
+
+func _refresh_agent_controls() -> void:
+	var on := McpServer.is_listening()
+	_agent_badge.visible = on
+	_pause_btn.visible = on
+	_pause_btn.set_pressed_no_signal(McpServer.paused)
+	_pause_btn.text = "Resume agent" if McpServer.paused else "Pause agent"
+	if McpServer.paused:
+		_agent_badge.text = "● agent paused"
+	elif McpServer.is_busy():
+		_agent_badge.text = "● agent is building…"
+	else:
+		_agent_badge.text = "● agent connections on"
 
 # The always-visible hotbar, with a read-only badge showing the active tool to its
 # left (kept centered by Hotbar.centered_row — see there). The tool itself can only be

@@ -400,6 +400,116 @@ static func grid_lines(shape_id: String) -> Array:
 				out.append([Vector2(-0.5, k), Vector2(0.5, k)])
 	return out
 
+# --- Slot names ---------------------------------------------------------------------
+#
+# Words for slots, so nobody needs the numbering by heart (agents, tooltips, text dumps):
+#   face / hollow   the side it lies against: down up north south west east
+#   edge            the two sides it runs between, vertical-first: north-west (a vertical
+#                   edge), down-south (runs along X), up-east (runs along Z)
+#   centered post   center-y, center-z, center-x (the axis it runs along)
+#   corner          three sides: down-north-west
+#   architecture    see ArchShapes.slot_name ("up=up facing=south")
+# Word order is always y, then z, then x; slot_from_name accepts any order.
+
+const SIDE_NAMES := ["down", "up", "north", "south", "west", "east"]
+const _SIDE_ALIASES := {"-y": 0, "+y": 1, "-z": 2, "+z": 3, "-x": 4, "+x": 5,
+	"bottom": 0, "top": 1}
+
+# Side index (0..5) for a direction word or axis alias, or -1.
+static func side_from_name(word: String) -> int:
+	var w := word.strip_edges().to_lower()
+	var i := SIDE_NAMES.find(w)
+	if i >= 0:
+		return i
+	return int(_SIDE_ALIASES.get(w, -1))
+
+static func slot_name(shape_id: String, slot: int) -> String:
+	if not is_valid_slot(shape_id, slot):
+		return str(slot)
+	match family_of(shape_id):
+		Family.ARCH:
+			return ArchShapes.slot_name(shape_id, slot)
+		Family.FACE, Family.HOLLOW:
+			return SIDE_NAMES[slot]
+		Family.CORNER:
+			return _bits_name(slot, 0)
+		Family.EDGE:
+			if slot >= CENTER_SLOT:
+				return "center-" + ["y", "z", "x"][slot - CENTER_SLOT]
+			return _bits_name(unpack_edge_bits(slot), [1, 2, 4][slot >> 2])
+	return str(slot)
+
+# "down-north-west"-style name for an axis-bit mask (Y=1, Z=2, X=4 set = positive side),
+# skipping the axis bit `skip` (an edge's own run axis).
+static func _bits_name(bits: int, skip: int) -> String:
+	var words: PackedStringArray = []
+	if skip != 1:
+		words.append("up" if bits & 1 else "down")
+	if skip != 2:
+		words.append("south" if bits & 2 else "north")
+	if skip != 4:
+		words.append("east" if bits & 4 else "west")
+	return "-".join(words)
+
+# The slot a name (or a plain number) means for this shape, or -1.
+static func slot_from_name(shape_id: String, slot_name_or_number: Variant) -> int:
+	if typeof(slot_name_or_number) == TYPE_INT or typeof(slot_name_or_number) == TYPE_FLOAT:
+		var n := int(slot_name_or_number)
+		return n if is_valid_slot(shape_id, n) else -1
+	var text := str(slot_name_or_number).strip_edges().to_lower()
+	if text.is_valid_int():
+		return slot_from_name(shape_id, text.to_int())
+	if family_of(shape_id) == Family.ARCH:
+		return ArchShapes.slot_from_name(shape_id, text)
+	var single := side_from_name(text)
+	if single >= 0:
+		text = SIDE_NAMES[single]
+	var want := _canonical_words(text)
+	for s in slot_count(shape_id):
+		if _canonical_words(slot_name(shape_id, s)) == want:
+			return s
+	return -1
+
+static func _canonical_words(text: String) -> String:
+	var words := Array(text.replace("_", "-").replace(" ", "-").split("-", false))
+	words.sort()
+	return "-".join(words)
+
+static func slot_names(shape_id: String) -> PackedStringArray:
+	var out: PackedStringArray = []
+	for s in slot_count(shape_id):
+		out.append(slot_name(shape_id, s))
+	return out
+
+# --- Rigid transforms (paste, symmetry, mirroring) -----------------------------------
+
+# A part moved through `basis` — an axis-aligned rotation or reflection of the whole
+# structure (entries 0/±1), applied about the cell's center. Returns the new part, or {}
+# when its shape has no slot matching the result (a chiral architecture shape mirrored,
+# with no left/right twin to swap to). Microblocks match by bounds; architecture shapes by
+# their actual placed geometry (ArchShapes.transform_part).
+static func transform_part(part: Dictionary, basis: Basis) -> Dictionary:
+	var shape := str(part.get("shape", ""))
+	var slot := int(part.get("slot", -1))
+	if not is_valid_slot(shape, slot):
+		return {}
+	if family_of(shape) == Family.ARCH:
+		var r := ArchShapes.transform_part(shape, slot, basis)
+		if r.is_empty():
+			return {}
+		return BlockCell.make_part(str(part.get("semantic", "")), str(r["shape"]), int(r["slot"]))
+	var b := bounds(shape, slot)
+	var c := Vector3(0.5, 0.5, 0.5)
+	var p0 := basis * (b.position - c)
+	var p1 := basis * (b.end - c)
+	var lo := Vector3(minf(p0.x, p1.x), minf(p0.y, p1.y), minf(p0.z, p1.z)) + c
+	var hi := Vector3(maxf(p0.x, p1.x), maxf(p0.y, p1.y), maxf(p0.z, p1.z)) + c
+	for s in slot_count(shape):
+		var cand := bounds(shape, s)
+		if cand.position.is_equal_approx(lo) and cand.end.is_equal_approx(hi):
+			return BlockCell.make_part(str(part.get("semantic", "")), shape, s)
+	return {}
+
 # --- Rigid rotation (paste) --------------------------------------------------------
 
 # The slot a part lands in after the whole structure turns `steps` quarter-turns clockwise

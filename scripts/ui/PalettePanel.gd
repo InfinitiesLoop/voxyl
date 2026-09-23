@@ -28,6 +28,7 @@ func _ready() -> void:
 	VoxelWorld.project_opened.connect(func(_p): _rebuild())
 	VoxelWorld.palette_stack_changed.connect(_rebuild)
 	VoxelWorld.block_type_changed.connect(_rebuild)
+	VoxelWorld.workspace_changed.connect(_rebuild)
 	_rebuild()
 
 # Called by the host (InventoryScreen) when the grid's own search box changes, so typing

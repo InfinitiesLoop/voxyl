@@ -35,6 +35,16 @@ signal active_slot_changed(slot: int)
 # that VoxelWorld doesn't hold itself (the view layout, owned by MultiViewShell) can
 # write their current snapshot into the project first. See _flush_save.
 signal about_to_save(project: VoxelProject)
+# The project list changed: one was created, renamed, deleted, or saved for the first time
+# (a scratch project promoted). The Home screen's project list refreshes from this.
+signal projects_changed()
+# Someone other than the Home screen (an agent) asked to open a project in the editor. Main
+# owns the editor chrome, so it answers by showing the editor; see request_open_project.
+signal open_project_requested(project: VoxelProject)
+# A batch of cells was just placed by a non-view caller (apply_edits with animate), grouped
+# into reveal steps. 3D views play their placement reveal for it, exactly as for the user's
+# own build tools.
+signal placement_fx_requested(cells_by_step: Array)
 
 const HOTBAR_SIZE := 12
 # Debounce window for autosave: a burst of edits (a paint drag, an orbit) collapses
@@ -89,6 +99,8 @@ var _op_depth := 0
 var _applying_history := false
 
 func _ready() -> void:
+	# A --sandbox run must repoint the stores before anything is loaded.
+	AppSettings.apply_command_line()
 	workspace = VoxelWorkspace.new()
 	hotbar.resize(HOTBAR_SIZE)
 	hotbar.fill("")
@@ -141,7 +153,64 @@ func _flush_save() -> void:
 	active_project.selection_min = selection_min
 	active_project.selection_max = selection_max
 	about_to_save.emit(active_project)
-	ProjectStore.save_project(active_project)
+	ProjectStore.save_project(active_project)   # a no-op for a scratch project
+
+# ---------------------------------------------------------------------------
+# Project lifecycle (used by the Home screen's dialogs and by agents alike)
+# ---------------------------------------------------------------------------
+
+# Create a project subscribed to `palettes` (["Default"] when empty). A scratch project
+# lives in memory only — it's listed (marked unsaved) but never written until promoted
+# with save_project_as. Returns null if the name is empty or taken.
+func create_project(project_name: String, palettes: Array = [], scratch := false) -> VoxelProject:
+	var n := project_name.strip_edges()
+	if n.is_empty() or workspace.get_project(n) != null:
+		return null
+	var project := workspace.add_project(n)
+	project.scratch = scratch
+	for p in (palettes if not palettes.is_empty() else ["Default"]):
+		project.palette_names.append(str(p))
+	ProjectStore.save_project(project)
+	projects_changed.emit()
+	return project
+
+# Save a project, optionally under a new name (which also promotes a scratch project to a
+# real one). Returns "" or an error code: name_taken, empty_name, write_failed.
+func save_project_as(project: VoxelProject, new_name := "") -> String:
+	var n := new_name.strip_edges()
+	if not n.is_empty() and n != project.name:
+		if workspace.get_project(n) != null:
+			return "name_taken"
+		if project.scratch:
+			project.name = n
+		elif not ProjectStore.rename_project(workspace, project.name, n):
+			return "write_failed"
+	var was_scratch := project.scratch
+	project.scratch = false
+	if project == active_project:
+		_flush_save()
+	elif ProjectStore.save_project(project) != OK:
+		return "write_failed"
+	if was_scratch or not n.is_empty():
+		projects_changed.emit()
+	return ""
+
+# Delete a project from memory and disk (file + thumbnail). The caller keeps it from being
+# the open one.
+func delete_project(project: VoxelProject) -> void:
+	workspace.remove_project(project.name)
+	ProjectStore.delete_project(project.name)
+	projects_changed.emit()
+	workspace_changed.emit()
+
+# Open a project in the editor. With the app's chrome listening (Main), that shows the
+# editor exactly as clicking the project on the Home screen does; without it (tests,
+# headless), the project just becomes the active one.
+func request_open_project(project: VoxelProject) -> void:
+	if open_project_requested.get_connections().is_empty():
+		open(project)
+	else:
+		open_project_requested.emit(project)
 
 # Rebuild a pristine workspace from code alone. Tests call this first so they run
 # against the code-seeded defaults regardless of whatever LibraryStore loaded at
@@ -328,6 +397,198 @@ func set_cell(pos: Vector3i, cell: BlockCell) -> void:
 	active_project.data.set_cell(pos, cell)
 	_record_change(pos, before, _encode_cell(cell), "Place")
 	block_changed.emit(pos, cell.type_id if cell else "")
+	mark_dirty()
+
+# ---------------------------------------------------------------------------
+# Batch edits — many cells as one validated, undoable step. Agent tools commit through
+# here; it's view-agnostic, so a future bulk UI tool can too.
+#
+# Each edit is a Dictionary with a Vector3i `pos` and an `op`:
+#   block  {semantic, orientation?}  a whole block (refused for a shaped semantic)
+#   part   {part}                     add one shaped part ({semantic, shape, slot})
+#   cell   {cell: BlockCell}          replace the cell verbatim (validated like the rest)
+#   clear                             empty the cell
+#   reset                             empty the cell, unless this batch already wrote it (a
+#                                     text-layer "this cell is exactly these parts" char)
+# Edits apply in order against a simulated copy, so two parts into one cell, or a move
+# (clear, then write), behave as if applied one by one. Nothing unbuildable lands.
+#
+# opts: only_air  — skip placing into occupied cells
+#       dry_run   — validate and report, change nothing
+#       animate   — play the placement reveal in 3D views
+# Returns { placed, cleared, skipped, rejected: [{pos, reason, detail?, part?}], changed }.
+# ---------------------------------------------------------------------------
+
+func apply_edits(edits: Array, op_name: String, opts := {}) -> Dictionary:
+	var report := {"placed": 0, "cleared": 0, "skipped": 0, "rejected": [], "changed": 0}
+	if not active_project:
+		report["rejected"].append({"reason": "no_project", "detail": "no project is open"})
+		return report
+	var data := active_project.data
+	var sim := {}       # pos -> BlockCell (or null = emptied) — the batch's view of the world
+	var written := {}   # positions this batch has put something into
+	var only_air := bool(opts.get("only_air", false))
+	for e: Dictionary in edits:
+		var pos: Vector3i = e["pos"]
+		var cur: BlockCell = sim[pos] if sim.has(pos) else data.get_cell(pos)
+		match str(e.get("op", "")):
+			"clear", "reset":
+				if str(e["op"]) == "reset" and written.has(pos):
+					continue
+				if cur != null:
+					report["cleared"] += 1
+				sim[pos] = null
+			"block":
+				var sem := str(e.get("semantic", ""))
+				if sem.is_empty():
+					_reject(report, pos, "empty_semantic", "a block needs a semantic")
+					continue
+				if is_shaped_semantic(sem):
+					_reject(report, pos, "shaped_semantic_needs_part",
+						"'%s' is a shaped entry (%s): place it as a part with a slot" % [sem, get_shape_id_for_semantic(sem)])
+					continue
+				if only_air and cur != null:
+					report["skipped"] += 1
+					continue
+				sim[pos] = BlockCell.new(sem, int(e.get("orientation", 0)))
+				written[pos] = true
+				report["placed"] += 1
+			"part":
+				var part: Dictionary = e["part"]
+				if only_air and cur != null:
+					report["skipped"] += 1
+					continue
+				var why := _part_reason(cur, part)
+				if not why.is_empty():
+					_reject(report, pos, why, _part_reason_detail(why, cur, part), part)
+					continue
+				var next := cur.duplicate_cell() if cur != null else BlockCell.new()
+				next.parts.append(part.duplicate(true))
+				next.sync_type_id()
+				sim[pos] = next
+				written[pos] = true
+				report["placed"] += 1
+			"cell":
+				var cell: BlockCell = e.get("cell")
+				if only_air and cur != null:
+					report["skipped"] += 1
+					continue
+				if cell != null:
+					var why := ""
+					if cell.is_shaped():
+						why = ShapeRules.cell_reason(cell.parts)
+					elif is_shaped_semantic(cell.type_id):
+						why = "shaped_semantic_needs_part"
+					if not why.is_empty():
+						_reject(report, pos, why, "the copied cell isn't valid here")
+						continue
+					cell = cell.duplicate_cell()
+				sim[pos] = cell
+				written[pos] = true
+				report["placed"] += 1
+			_:
+				_reject(report, pos, "bad_op", "unknown edit op '%s'" % e.get("op", ""))
+	if bool(opts.get("dry_run", false)):
+		report["changed"] = sim.size()
+		return report
+	begin_operation(op_name)
+	var placed_cells: Array = []
+	for pos: Vector3i in sim:
+		var final: BlockCell = sim[pos]
+		var cur := data.get_cell(pos)
+		if final == null:
+			if cur != null:
+				clear_block(pos)
+				report["changed"] += 1
+		elif cur == null or _encode_cell(cur) != _encode_cell(final):
+			set_cell(pos, final)
+			placed_cells.append(pos)
+			report["changed"] += 1
+	end_operation()
+	if bool(opts.get("animate", false)) and not placed_cells.is_empty():
+		placement_fx_requested.emit(_fx_steps(placed_cells))
+	return report
+
+# Why a part can't go into `cell` (the simulated current cell), or "".
+func _part_reason(cell: BlockCell, part: Dictionary) -> String:
+	if cell != null and not cell.is_shaped():
+		return "native_block"
+	return ShapeRules.reject_reason(cell.parts if cell else [], part)
+
+func _part_reason_detail(why: String, cell: BlockCell, part: Dictionary) -> String:
+	var shape := str(part.get("shape", ""))
+	var here := ""
+	if cell != null:
+		if not cell.is_shaped():
+			return "the cell holds a whole block ('%s'); clear it first" % cell.type_id
+		var names: PackedStringArray = []
+		for p in cell.parts:
+			names.append("%s %s@%s" % [p["semantic"], p["shape"], ShapeCatalog.slot_name(str(p["shape"]), int(p["slot"]))])
+		here = " (cell has: %s)" % ", ".join(names)
+	match why:
+		"invalid_slot": return "%s has no slot %s (%d slots)" % [shape, part.get("slot"), ShapeCatalog.slot_count(shape)]
+		"arch_exclusive": return "architecture shapes need the cell to themselves" + here
+		"slot_taken": return "that slot is already used" + here
+		"opposite_faces": return "thick faces on opposite sides would overlap" + here
+		"micro_conflict": return "collides with a part of a different semantic where they meet" + here
+		"hard_box_overlap": return "would cut into a centered post or a hollow face's frame" + here
+		"fully_occluded": return "some part would be completely covered" + here
+	return why + here
+
+func _reject(report: Dictionary, pos: Variant, reason: String, detail := "", part := {}) -> void:
+	var r := {"pos": pos, "reason": reason}
+	if not detail.is_empty():
+		r["detail"] = detail
+	if not part.is_empty():
+		r["part"] = part
+	(report["rejected"] as Array).append(r)
+
+# Reveal steps for a placed batch: bottom layer first, so a build rises into view.
+func _fx_steps(cells: Array) -> Array:
+	if cells.size() > 4000:
+		return []
+	var by_y := {}
+	for p: Vector3i in cells:
+		if not by_y.has(p.y):
+			by_y[p.y] = []
+		by_y[p.y].append(p)
+	var ys := by_y.keys()
+	ys.sort()
+	var out: Array = []
+	for y in ys:
+		out.append(by_y[y])
+	return out
+
+# Whether a user action is mid-flight (a paint drag, an open operation). Callers that
+# aren't the user (agents) wait for this to clear so the two never merge into one step.
+func is_mid_operation() -> bool:
+	return _op_depth > 0
+
+# Copy the cells of an inclusive box into the clipboard (the Select tool's copy, for any box).
+func copy_region(mn: Vector3i, mx: Vector3i) -> int:
+	if not active_project:
+		return 0
+	var data := active_project.data
+	var clip := {}
+	for x in range(mn.x, mx.x + 1):
+		for y in range(mn.y, mx.y + 1):
+			for z in range(mn.z, mx.z + 1):
+				var pos := Vector3i(x, y, z)
+				var cell := data.get_cell(pos)
+				if cell != null:
+					clip[pos - mn] = cell.duplicate_cell()
+	_clipboard = clip
+	_clipboard_size = mx - mn + Vector3i.ONE
+	_has_clipboard = true
+	return clip.size()
+
+# Set the region selection to an inclusive box (what two Select-tool clicks do).
+func set_selection_box(a: Vector3i, b: Vector3i) -> void:
+	selection_min = Vector3i(mini(a.x, b.x), mini(a.y, b.y), mini(a.z, b.z))
+	selection_max = Vector3i(maxi(a.x, b.x), maxi(a.y, b.y), maxi(a.z, b.z))
+	_selection_anchor = null
+	has_selection = true
+	region_selection_changed.emit()
 	mark_dirty()
 
 # ---------------------------------------------------------------------------
@@ -684,6 +945,15 @@ func merged_semantic_names() -> Array[String]:
 				result.append(entry.semantic_name)
 	return result
 
+# Replace a project's whole palette stack (bottom → top; the last palette wins).
+func set_palette_stack(project: VoxelProject, palette_names: Array) -> void:
+	project.palette_names.assign(palette_names)
+	if project == active_project:
+		# Newly available semantics fill any empty hotbar slots, as they would on open.
+		_seed_hotbar_from_palette()
+		hotbar_changed.emit()
+	_after_stack_change(project)
+
 func add_palette_to_stack(project: VoxelProject, palette_name: String) -> void:
 	project.palette_names.append(palette_name)
 	_after_stack_change(project)
@@ -717,15 +987,13 @@ func _after_stack_change(project: VoxelProject) -> void:
 
 func add_palette(palette_name: String) -> Palette:
 	var p := workspace.add_palette(palette_name)
-	_save_palettes()
-	workspace_changed.emit()
+	_palettes_changed(p)
 	return p
 
 func duplicate_palette(source: Palette, new_name: String) -> Palette:
 	var p := workspace.duplicate_palette(source.name, new_name)
 	if p != null:
-		_save_palettes()
-		workspace_changed.emit()
+		_palettes_changed(p)
 	return p
 
 func rename_palette(palette: Palette, new_name: String) -> bool:
@@ -742,8 +1010,9 @@ func rename_palette(palette: Palette, new_name: String) -> bool:
 		for i in project.palette_names.size():
 			if project.palette_names[i] == old_name:
 				project.palette_names[i] = n
-	_save_palettes()
-	workspace_changed.emit()
+	# Palettes are saved under their name: drop the old file or it comes back next launch.
+	LibraryStore.delete_palette(old_name)
+	_palettes_changed(palette)
 	return true
 
 func remove_palette(palette: Palette) -> void:
@@ -751,8 +1020,7 @@ func remove_palette(palette: Palette) -> void:
 		return
 	workspace.remove_palette(palette.name)
 	LibraryStore.delete_palette(palette.name)
-	_save_palettes()
-	workspace_changed.emit()
+	_palettes_changed()
 
 func add_palette_entry(palette: Palette, semantic_name: String) -> PaletteEntry:
 	if palette.builtin:
@@ -760,8 +1028,7 @@ func add_palette_entry(palette: Palette, semantic_name: String) -> PaletteEntry:
 	var e := PaletteEntry.new()
 	e.semantic_name = semantic_name
 	palette.entries.append(e)
-	_save_palettes()
-	workspace_changed.emit()
+	_palettes_changed(palette)
 	return e
 
 func rename_palette_entry(palette: Palette, entry: PaletteEntry, new_name: String) -> bool:
@@ -771,8 +1038,7 @@ func rename_palette_entry(palette: Palette, entry: PaletteEntry, new_name: Strin
 	if n.is_empty() or n == entry.semantic_name or palette.get_entry(n) != null:
 		return false
 	entry.semantic_name = n
-	_save_palettes()
-	workspace_changed.emit()
+	_palettes_changed(palette)
 	return true
 
 # Map an entry to `block_type_name` ("" = undecided). A shaped entry keeps its shape — every
@@ -782,8 +1048,7 @@ func assign_palette_entry_block(palette: Palette, entry: PaletteEntry, block_typ
 		return
 	entry.block_type_name = block_type_name
 	notify_block_type_changed()
-	_save_palettes()
-	workspace_changed.emit()
+	_palettes_changed(palette)
 
 # Give an entry a shape (a ShapeCatalog id), or "" to make it place whole blocks again. Only
 # affects what's placed from now on: placed parts store their own shape.
@@ -797,39 +1062,82 @@ func set_palette_entry_picks(palette: Palette, entry: PaletteEntry, block_type_n
 	entry.block_type_name = block_type_name
 	entry.shape_id = shape_id
 	notify_block_type_changed()
-	_save_palettes()
-	workspace_changed.emit()
+	_palettes_changed(palette)
 
 func remove_palette_entry(palette: Palette, entry: PaletteEntry) -> void:
 	if palette.builtin:
 		return
 	palette.entries.erase(entry)
-	_save_palettes()
-	workspace_changed.emit()
+	_palettes_changed(palette)
 
 func add_palette_library(palette: Palette, library_name: String) -> void:
 	if palette.builtin:
 		return
 	palette.library_names.append(library_name)
-	_save_palettes()
-	workspace_changed.emit()
+	_palettes_changed(palette)
 
 func remove_palette_library(palette: Palette, index: int) -> void:
 	if palette.builtin:
 		return
 	palette.library_names.remove_at(index)
-	_save_palettes()
-	workspace_changed.emit()
+	_palettes_changed(palette)
+
+# Replace a palette's whole library stack (first match wins).
+func set_palette_libraries(palette: Palette, library_names: Array) -> void:
+	if palette.builtin:
+		return
+	palette.library_names.assign(library_names)
+	notify_block_type_changed()
+	_palettes_changed(palette)
 
 func move_palette_library(palette: Palette, from_idx: int, to_idx: int) -> void:
 	if palette.builtin:
 		return
 	palette.library_names.insert(to_idx, palette.library_names.pop_at(from_idx))
-	_save_palettes()
+	_palettes_changed(palette)
+
+# Several palette edits as one save + one refresh (an agent's bulk palette_create /
+# palette_update). Nestable; the refresh fires when the outermost batch ends.
+var _palette_batch_depth := 0
+var _palette_batch_dirty := {}   # Palette -> true; the key null means "save them all"
+var _palette_batch_pending := false
+
+func begin_palette_batch() -> void:
+	_palette_batch_depth += 1
+
+func end_palette_batch() -> void:
+	_palette_batch_depth = maxi(0, _palette_batch_depth - 1)
+	if _palette_batch_depth > 0 or not _palette_batch_pending:
+		return
+	_palette_batch_pending = false
+	var dirty := _palette_batch_dirty
+	_palette_batch_dirty = {}
+	if dirty.has(null):
+		_save_palettes()
+	else:
+		_save_palettes(dirty.keys())
 	workspace_changed.emit()
 
-func _save_palettes() -> void:
-	LibraryStore.save_palettes(workspace)
+# The shared tail of every palette mutator: persist, then tell every surface to refresh.
+# Saves only the palette that changed (null = all of them); deferred while batching.
+func _palettes_changed(palette: Palette = null) -> void:
+	if _palette_batch_depth > 0:
+		_palette_batch_pending = true
+		_palette_batch_dirty[palette] = true
+		return
+	if palette == null:
+		_save_palettes()
+	else:
+		_save_palettes([palette])
+	workspace_changed.emit()
+
+func _save_palettes(only: Variant = null) -> void:
+	if only == null:
+		LibraryStore.save_palettes(workspace)
+		return
+	for p: Palette in only:
+		if p != null and workspace.palettes.has(p):
+			LibraryStore.save_palette(p)
 
 func select_semantic(semantic_name: String) -> void:
 	selected_semantic = semantic_name
@@ -961,18 +1269,7 @@ func clipboard_cells() -> Dictionary:
 func copy_selection() -> void:
 	if not has_selection or not active_project:
 		return
-	var data := active_project.data
-	var clip := {}
-	for x in range(selection_min.x, selection_max.x + 1):
-		for y in range(selection_min.y, selection_max.y + 1):
-			for z in range(selection_min.z, selection_max.z + 1):
-				var pos := Vector3i(x, y, z)
-				var cell := data.get_cell(pos)
-				if cell != null:
-					clip[pos - selection_min] = cell.duplicate_cell()
-	_clipboard = clip
-	_clipboard_size = selection_max - selection_min + Vector3i.ONE
-	_has_clipboard = true
+	copy_region(selection_min, selection_max)
 
 # Erase every block in the selection as one undo step — a delete without the clipboard copy
 # that cut_selection makes. The selection itself is kept (so DELETE can be followed by more

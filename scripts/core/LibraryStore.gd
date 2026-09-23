@@ -63,16 +63,27 @@ static func save_library(library: BlockLibrary) -> Error:
 # a code-owned floor, always rebuilt fresh on launch, so a code change to the seed always
 # takes effect. Durable customization belongs in a separate named palette layered on top.
 static func save_palettes(workspace: VoxelWorkspace) -> Error:
-	var err := AssetLibrary.ensure_dir(PALETTES_DIR)
+	var err := _ensure_palettes_dir()
 	if err != OK:
 		return err
 	for palette in workspace.palettes:
 		if palette.builtin:
 			continue
-		err = _save(palette, PALETTES_DIR, palette.name)
+		err = _save_palette_file(palette)
 		if err != OK:
 			return err
 	return OK
+
+# Persist just one palette (the usual case: an edit touches one palette, so there's no
+# reason to rewrite every other palette file — and a second process's palettes are left
+# alone). Builtin palettes are never written, as above.
+static func save_palette(palette: Palette) -> Error:
+	if palette.builtin:
+		return OK
+	var err := _ensure_palettes_dir()
+	if err != OK:
+		return err
+	return _save_palette_file(palette)
 
 # Persist the whole workspace material layer: every library + every palette. The
 # convenient "save everything" used after edits/imports when the caller doesn't want to
@@ -177,11 +188,35 @@ static func _purge_worker(trash_abs: String) -> void:
 # VoxelWorkspace.remove_palette. The built-in Default is never saved in the first place
 # (see save_palettes), so this is a no-op for it either way. Missing file → OK.
 static func delete_palette(palette_name: String) -> Error:
-	var rel := PALETTES_DIR.path_join(palette_name.validate_filename() + ".tres")
-	var abs_path := AssetLibrary.path_for(rel)
+	var abs_path := palettes_dir().path_join(palette_name.validate_filename() + ".tres")
 	if not FileAccess.file_exists(abs_path):
 		return OK
 	return DirAccess.remove_absolute(abs_path)
+
+# Where palettes live: ROOT/palettes, unless a sandboxed run moved them (palettes_root).
+static var palettes_root := ""
+
+static func palettes_dir() -> String:
+	return palettes_root if not palettes_root.is_empty() else AssetLibrary.path_for(PALETTES_DIR)
+
+static func _ensure_palettes_dir() -> Error:
+	return DirAccess.make_dir_recursive_absolute(palettes_dir())
+
+static func _save_palette_file(palette: Palette) -> Error:
+	return ResourceSaver.save(palette, palettes_dir().path_join(palette.name.validate_filename() + ".tres"))
+
+static func _load_palettes() -> Array:
+	var out: Array = []
+	var dir := DirAccess.open(palettes_dir())
+	if dir == null:
+		return out
+	for file_name in dir.get_files():
+		if not file_name.ends_with(".tres"):
+			continue
+		var res := ResourceLoader.load(palettes_dir().path_join(file_name), "", ResourceLoader.CACHE_MODE_IGNORE)
+		if res is Palette:
+			out.append(res)
+	return out
 
 # Recursively delete an absolute directory and everything under it.
 static func _rm_rf(abs_path: String) -> Error:
@@ -299,7 +334,7 @@ static func load_persisted(workspace: VoxelWorkspace) -> void:
 		_merge_library(target, load_library(name))
 	# Keep the built-in shape models present even if an old on-disk basic lacked them.
 	workspace.register_builtin_models()
-	for palette in _load_dir(PALETTES_DIR):
+	for palette in _load_palettes():
 		if palette.builtin:
 			continue
 		palette.migrate_legacy_shapes()

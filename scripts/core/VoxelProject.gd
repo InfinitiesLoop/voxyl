@@ -41,6 +41,10 @@ extends Resource
 var history: EditHistory
 @export var _history_data: Dictionary = {}
 
+# A scratch project lives in memory only: ProjectStore never writes it until it's promoted
+# (VoxelWorld.save_project_as clears this). Not exported — a saved project is never scratch.
+var scratch := false
+
 func _init() -> void:
 	data = VoxelData.new()
 	history = EditHistory.new()

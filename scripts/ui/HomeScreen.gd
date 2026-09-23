@@ -55,6 +55,8 @@ func _ready() -> void:
 	tabs.add_child(_build_block_types_tab())
 
 	VoxelWorld.workspace_changed.connect(_refresh)
+	# Projects created / saved / deleted by anyone (an agent included) show up right away.
+	VoxelWorld.projects_changed.connect(func(): if _projects_container: _rebuild_projects())
 	# Returning from the editor bakes a fresh thumbnail during save_active_project but
 	# fires no workspace_changed, so rebuild the project cards on show to pick up the new
 	# preview (and any last-edited re-sort).
@@ -96,6 +98,11 @@ func _build_projects_tab() -> Control:
 	new_btn.text = "New Project"
 	new_btn.pressed.connect(_on_new_project)
 	header.add_child(new_btn)
+
+	var settings_btn := Button.new()
+	settings_btn.text = "⚙ Settings"
+	settings_btn.pressed.connect(func(): SettingsDialog.open(self))
+	header.add_child(settings_btn)
 
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -195,6 +202,15 @@ func _make_project_header(project: VoxelProject, expanded: bool) -> Control:
 	name_lbl.add_theme_font_size_override("font_size", 15)
 	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	header.add_child(name_lbl)
+
+	if project.scratch:
+		var scratch_lbl := Label.new()
+		scratch_lbl.text = "unsaved scratch"
+		scratch_lbl.tooltip_text = "Kept in memory only — it's gone when Voxyl quits unless it's saved under a name."
+		scratch_lbl.add_theme_color_override("font_color", Color(0.95, 0.75, 0.35))
+		scratch_lbl.add_theme_font_size_override("font_size", 12)
+		scratch_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		header.add_child(scratch_lbl)
 
 	var edited_lbl := Label.new()
 	edited_lbl.text = "edited " + _relative_time(project.modified_at)
@@ -301,8 +317,7 @@ func _confirm_delete_project(project: VoxelProject) -> void:
 	dialog.title = "Delete Project"
 	dialog.dialog_text = "Delete \"%s\"? This can't be undone." % project.name
 	dialog.confirmed.connect(func():
-		VoxelWorld.workspace.remove_project(project.name)
-		ProjectStore.delete_project(project.name)  # also drop the on-disk file + thumbnail
+		VoxelWorld.delete_project(project)
 		if _expanded_project_name == project.name:
 			_expanded_project_name = ""
 		VoxelWorld.workspace_changed.emit()

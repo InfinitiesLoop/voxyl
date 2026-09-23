@@ -43,6 +43,9 @@ func _ready() -> void:
 	VoxelWorld.project_opened.connect(func(_p): if visible: _on_stack_changed())
 	VoxelWorld.palette_stack_changed.connect(func(): if visible: _on_stack_changed())
 	VoxelWorld.block_type_changed.connect(func(): if visible: _refresh_items())
+	# Palette edits from anywhere (the Home palette editor, an agent) — entries added, renamed,
+	# libraries changed — refresh the open grid too.
+	VoxelWorld.workspace_changed.connect(func(): if visible: _on_stack_changed())
 
 # ---------------------------------------------------------------------------
 # Construction

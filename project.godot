@@ -19,6 +19,7 @@ config/main_scene="res://scenes/Main.tscn"
 [autoload]
 
 VoxelWorld="*res://scripts/core/VoxelWorld.gd"
+McpServer="*res://scripts/automation/McpServer.gd"
 
 [configuration]
 

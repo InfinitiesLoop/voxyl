@@ -14,31 +14,58 @@ extends RefCounted
 
 # Whether `part` can be added to a cell already holding `existing` parts.
 static func can_add(existing: Array, part: Dictionary) -> bool:
+	return reject_reason(existing, part).is_empty()
+
+# Why `part` can't be added to a cell holding `existing` parts, or "" when it can. Codes:
+#   invalid_slot      — the shape has no such slot (or the shape is unknown)
+#   arch_exclusive    — an architecture shape needs the cell to itself (or one is already there)
+#   slot_taken        — another part already sits in the same slot
+#   opposite_faces    — two thick faces on opposite sides would overlap
+#   micro_conflict    — two slotted parts of different semantics collide where they meet
+#   hard_box_overlap  — a centered post or a hollow face's frame would be cut into
+#   fully_occluded    — some part would end up with no sub-voxel of its own
+static func reject_reason(existing: Array, part: Dictionary) -> String:
 	var shape := str(part.get("shape", ""))
 	var slot := int(part.get("slot", -1))
 	if not ShapeCatalog.is_valid_slot(shape, slot):
-		return false
+		return "invalid_slot"
 	# Architecture shapes (roofs, stairs, …) take a whole cell, like the mod's own blocks:
 	# nothing shares a cell with one.
 	if ShapeCatalog.is_exclusive(shape):
-		return existing.is_empty()
+		return "" if existing.is_empty() else "arch_exclusive"
 	for p in existing:
 		if ShapeCatalog.is_exclusive(str(p.get("shape", ""))):
-			return false
+			return "arch_exclusive"
 	# One part per slot (faces and hollow faces share the six face slots).
 	var fslot := fmp_slot(part)
 	if fslot >= 0:
 		for p in existing:
 			if fmp_slot(p) == fslot:
-				return false
+				return "slot_taken"
 	# Pairwise tests, both directions (TileMultipart.occlusionTest).
 	for p in existing:
-		if not _occlusion_test(p, part) or not _occlusion_test(part, p):
-			return false
+		var why := _pair_reason(p, part)
+		if why.is_empty():
+			why = _pair_reason(part, p)
+		if not why.is_empty():
+			return why
 	# Every part must stay at least partly visible.
 	var all := existing.duplicate()
 	all.append(part)
-	return _partial_occlusion_ok(all)
+	return "" if _partial_occlusion_ok(all) else "fully_occluded"
+
+# _occlusion_test's verdict as a reason code ("" = compatible).
+static func _pair_reason(a: Dictionary, b: Dictionary) -> String:
+	if _occlusion_test(a, b):
+		return ""
+	if _is_post(a) or _is_post(b) or _family(a) == ShapeCatalog.Family.HOLLOW:
+		if not _normal_test(a, b):
+			return "hard_box_overlap"
+	var s1 := fmp_slot(a)
+	var s2 := fmp_slot(b)
+	if s1 >= 0 and s2 >= 0 and s1 < 6 and s2 == (s1 ^ 1):
+		return "opposite_faces"
+	return "micro_conflict"
 
 # --- Shrink rendering (FMP's MicroOcclusion.recalcBounds / PostMicroblockClient) ------
 #
@@ -184,12 +211,17 @@ static func _post_shrinks(a: Dictionary, b: Dictionary) -> bool:
 
 # Whether a whole list of parts is a valid cell (each added in turn).
 static func is_valid_cell(parts: Array) -> bool:
+	return cell_reason(parts).is_empty()
+
+# The first reason a whole list of parts isn't a valid cell, or "".
+static func cell_reason(parts: Array) -> String:
 	var acc: Array = []
 	for p in parts:
-		if not can_add(acc, p):
-			return false
+		var why := reject_reason(acc, p)
+		if not why.is_empty():
+			return why
 		acc.append(p)
-	return true
+	return ""
 
 # FMP's slot index for a slotted part (faces 0-5, corners 7-14, edges 15-26), or -1 for a
 # centered post, which isn't slotted.

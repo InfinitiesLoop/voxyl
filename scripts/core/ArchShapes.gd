@@ -362,6 +362,270 @@ static func profiles_match(p1: String, p2: String) -> bool:
 		return _OPPOSITE_PROFILES[p1] == p2
 	return p1 == p2
 
+# --- Orientation vocabulary ------------------------------------------------------
+#
+# A slot described in world words instead of side*4+turn:
+#   up     — where the shape's top points (its base sits on the opposite face). A shape that
+#            naturally hangs (arches) has up = down in its right-side-up pose.
+#   facing — the side its open / low side looks toward: the downhill side of a roof tile,
+#            the walk-up side of stairs, the outside of a corner (two words for a diagonal).
+#            Found from where the shape's mass sits: facing points away from it. Shapes
+#            that look the same every way round (cylinders) have no facing; their slots
+#            are named by turn instead.
+#   shift  — banisters only: which way the half-block offset goes.
+# Names read "up=up facing=north", "up=up turn=2", "up=up facing=north shift=east".
+
+static var _facing_cache := {}   # id -> Vector3 (shape frame, turn 0), ZERO = none
+static var _sig_cache := {}      # "id|slot" -> String (placed geometry signature)
+static var _xform_cache := {}    # "id|slot|basis" -> { shape, slot } or {}
+
+# The shape's facing in its own frame (turn 0, base on -Y), or ZERO when it has none.
+static func facing_local(id: String) -> Vector3:
+	if _facing_cache.has(id):
+		return _facing_cache[id]
+	var f := Vector3.ZERO
+	if has(id) and symmetry_of(id) != QUAD:
+		var c := _box_centroid(id)
+		if Vector2(c.x, c.z).length() < 0.02:
+			c = _surface_centroid(id)
+		f = Vector3(-_snap_sign(c.x), 0.0, -_snap_sign(c.z))
+	_facing_cache[id] = f
+	return f
+
+static func _snap_sign(v: float) -> float:
+	return 0.0 if absf(v) < 0.02 else signf(v)
+
+static func _box_centroid(id: String) -> Vector3:
+	var sum := Vector3.ZERO
+	var vol := 0.0
+	for b: AABB in local_geometry(id).get("boxes", []):
+		var v := b.get_volume()
+		sum += b.get_center() * v
+		vol += v
+	return sum / vol if vol > 0.0 else Vector3.ZERO
+
+static func _surface_centroid(id: String) -> Vector3:
+	var sum := Vector3.ZERO
+	var area := 0.0
+	for f in local_geometry(id).get("faces", []):
+		var pos: PackedVector3Array = f["pos"]
+		for t in range(0, pos.size() - 2, 3):
+			var a := 0.5 * (pos[t + 1] - pos[t]).cross(pos[t + 2] - pos[t]).length()
+			sum += (pos[t] + pos[t + 1] + pos[t + 2]) / 3.0 * a
+			area += a
+	return sum / area if area > 0.0 else Vector3.ZERO
+
+# World words for a direction with 0/±1 components ("up", "south-east", "" for ZERO).
+static func dir_words(v: Vector3) -> String:
+	var words: PackedStringArray = []
+	if absf(v.y) > 0.5:
+		words.append("up" if v.y > 0.0 else "down")
+	if absf(v.z) > 0.5:
+		words.append("south" if v.z > 0.0 else "north")
+	if absf(v.x) > 0.5:
+		words.append("east" if v.x > 0.0 else "west")
+	return "-".join(words)
+
+# { up, facing ("" = none), turn, shift ("" unless a banister) } for a slot.
+static func slot_info(id: String, slot: int) -> Dictionary:
+	var b := rotation(side_of(slot), turn_of(slot))
+	var info := {
+		"up": dir_words((b * Vector3.UP).round()),
+		"facing": dir_words((b * facing_local(id)).round()),
+		"turn": turn_of(slot),
+		"shift": "",
+	}
+	if flags_of(id) & OFFSET:
+		info["shift"] = dir_words((b * Vector3(-1.0 if slot >= 24 else 1.0, 0, 0)).round())
+	return info
+
+static func slot_name(id: String, slot: int) -> String:
+	var i := slot_info(id, slot)
+	var s := "up=%s " % i["up"]
+	s += ("facing=%s" % i["facing"]) if not str(i["facing"]).is_empty() else ("turn=%d" % i["turn"])
+	if not str(i["shift"]).is_empty():
+		s += " shift=%s" % i["shift"]
+	return s
+
+# The slot a name means ("up=up facing=north", also accepts ":" for "="), or -1. When the
+# words match more than one slot (a diagonal facing given as one word) the first is taken;
+# use orient() to see them all.
+static func slot_from_name(id: String, text: String) -> int:
+	var spec := {}
+	for tok in text.replace(",", " ").split(" ", false):
+		var kv := tok.replace(":", "=").split("=")
+		if kv.size() == 2:
+			spec[kv[0].strip_edges()] = kv[1].strip_edges()
+	var r := orient(id, spec)
+	return int(r["slots"][0]) if not (r["slots"] as Array).is_empty() else -1
+
+# Slots matching orientation constraints:
+#   up      — a direction word
+#   facing  — a direction word or diagonal ("south-east"); a single word also matches the
+#             diagonals that contain it (an outer corner "facing south")
+#   turn    — 0..3
+#   shift   — banisters: a direction word
+#   normals — face normals the placed shape must have, e.g. [[0,1,-1]]
+# Returns { slots: Array[int], exact: bool } — exact is false when only partial facing
+# matches were found (then every candidate is listed).
+static func orient(id: String, spec: Dictionary) -> Dictionary:
+	var exact: Array = []
+	var partial: Array = []
+	if not has(id):
+		return {"slots": [], "exact": false}
+	var want_up := _norm_words(str(spec.get("up", "")))
+	var want_facing := _norm_words(str(spec.get("facing", "")))
+	var want_shift := _norm_words(str(spec.get("shift", "")))
+	var want_turn := int(spec["turn"]) if spec.has("turn") and str(spec["turn"]).is_valid_int() else -1
+	var normals: Array = spec.get("normals", [])
+	for slot in slot_count(id):
+		var i := slot_info(id, slot)
+		if not want_up.is_empty() and _norm_words(i["up"]) != want_up:
+			continue
+		if want_turn >= 0 and int(i["turn"]) != want_turn:
+			continue
+		if not want_shift.is_empty() and _norm_words(i["shift"]) != want_shift:
+			continue
+		if not normals.is_empty() and not _has_normals(id, slot, normals):
+			continue
+		var f := _norm_words(i["facing"])
+		if want_facing.is_empty() or f == want_facing:
+			exact.append(slot)
+		elif not f.is_empty() and _words_contain(f, want_facing):
+			partial.append(slot)
+	if not exact.is_empty():
+		return {"slots": exact, "exact": true}
+	return {"slots": partial, "exact": false}
+
+static func _norm_words(text: String) -> String:
+	var t := text.strip_edges().to_lower()
+	var side := ShapeCatalog.side_from_name(t)
+	if side >= 0:
+		return ShapeCatalog.SIDE_NAMES[side]
+	var words := Array(t.replace("_", "-").replace(" ", "-").split("-", false))
+	words.sort()
+	return "-".join(words)
+
+static func _words_contain(have: String, want: String) -> bool:
+	for w in want.split("-", false):
+		if not w in have.split("-", false):
+			return false
+	return true
+
+static func _has_normals(id: String, slot: int, normals: Array) -> bool:
+	var have: Array = []
+	for f in placed_faces(id, slot):
+		var nrm: PackedVector3Array = f["nrm"]
+		for t in range(0, nrm.size() - 2, 3):
+			have.append((nrm[t] + nrm[t + 1] + nrm[t + 2]).normalized())
+	for n in normals:
+		var want := Vector3(float(n[0]), float(n[1]), float(n[2])).normalized()
+		var found := false
+		for h: Vector3 in have:
+			if h.dot(want) > 0.99:
+				found = true
+				break
+		if not found:
+			return false
+	return true
+
+# A human description of the shape's orientation words, for agents and tooltips.
+static func describe(id: String) -> Dictionary:
+	var d := {
+		"symmetry": ["corner (4 distinct turns)", "straight (2 distinct directions)",
+			"round (all turns alike)", "none"][symmetry_of(id)],
+		"hangs": (flags_of(id) & UNDERNEATH) != 0,
+		"has_facing": facing_local(id) != Vector3.ZERO,
+		"offset": (flags_of(id) & OFFSET) != 0,
+	}
+	var text := "up = where the top points (base on the opposite face). "
+	if d["has_facing"]:
+		text += "facing = the side its open/low side looks toward (away from its mass): " \
+			+ "the downhill side of a roof, the walk-up side of stairs, the outside of a corner. "
+	else:
+		text += "No facing (looks the same every way round); slots are named by turn. "
+	if d["hangs"]:
+		text += "Right side up it hangs from above: up=down. "
+	if d["offset"]:
+		text += "Sits half a block off-center; shift = which way. "
+	d["text"] = text.strip_edges()
+	return d
+
+# A placed architecture part moved through `basis` (an axis-aligned rotation or reflection
+# of the whole structure, about the cell center): { shape, slot }, or {} when no slot of the
+# shape (or its left/right twin, for a reflection) reproduces the moved geometry.
+static func transform_part(id: String, slot: int, basis: Basis) -> Dictionary:
+	var key := "%s|%d|%s" % [id, slot, str(basis)]
+	if _xform_cache.has(key):
+		return _xform_cache[key]
+	var want := _signature(placed_faces(id, slot), basis)
+	var result := {}
+	var candidates := [id]
+	if basis.determinant() < 0.0:
+		var twin := _twin_of(id)
+		if not twin.is_empty():
+			candidates.push_front(twin)   # a mirrored LH is an RH, when the pair exists
+	for cand in candidates:
+		for s in slot_count(cand):
+			if _placed_signature(cand, s) == want:
+				result = {"shape": cand, "slot": s}
+				break
+		if not result.is_empty():
+			break
+	if result.is_empty():
+		# The mod's left/right model pairs aren't always exact mirrors of each other (a
+		# vertex or two differ), so fall back to the closest surface, if it's close.
+		var wset := {}
+		for k in want.split("|"):
+			wset[k] = true
+		var best := 0.85
+		for cand in candidates:
+			for s in slot_count(cand):
+				var have := _placed_signature(cand, s).split("|")
+				var hit := 0
+				for k in have:
+					if wset.has(k):
+						hit += 1
+				var f := float(hit) / maxf(wset.size(), have.size())
+				if f > best:
+					best = f
+					result = {"shape": cand, "slot": s}
+	_xform_cache[key] = result
+	return result
+
+static func _twin_of(id: String) -> String:
+	for pair in [["_lh", "_rh"], ["_rh", "_lh"]]:
+		var i := id.find(pair[0])
+		if i >= 0:
+			var t: String = id.substr(0, i) + pair[1] + id.substr(i + 3)
+			if has(t):
+				return t
+	return ""
+
+static func _placed_signature(id: String, slot: int) -> String:
+	var key := "%s|%d" % [id, slot]
+	if not _sig_cache.has(key):
+		_sig_cache[key] = _signature(placed_faces(id, slot), Basis())
+	return _sig_cache[key]
+
+# Fingerprint of a shape's surface (cell space) after `basis` about the cell center: the set
+# of distinct (vertex, face normal) pairs. Independent of triangle order and of how a quad
+# was split into triangles — a mirrored twin model is often triangulated the other way.
+static func _signature(faces: Array, basis: Basis) -> String:
+	var c := Vector3(0.5, 0.5, 0.5)
+	var keys := {}
+	for f in faces:
+		var pos: PackedVector3Array = f["pos"]
+		for t in range(0, pos.size() - 2, 3):
+			var n := (basis * (pos[t + 1] - pos[t]).cross(pos[t + 2] - pos[t])).normalized() * 16.0
+			var nk := "%d,%d,%d" % [roundi(n.x), roundi(n.y), roundi(n.z)]
+			for k in 3:
+				var p := (basis * (pos[t + k] - c) + c) * 256.0
+				keys["%d,%d,%d/%s" % [roundi(p.x), roundi(p.y), roundi(p.z), nk]] = true
+	var out := PackedStringArray(keys.keys())
+	out.sort()
+	return "|".join(out)
+
 # --- Geometry -----------------------------------------------------------------
 
 # The shape's faces placed in a cell (0..1 space) at `slot`: an Array of

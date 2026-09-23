@@ -29,6 +29,7 @@ var _last_active_id := 0
 var _focus_from_layout: ViewPane = null
 
 func _ready() -> void:
+	add_to_group("view_shell")   # how agent tools find the user's views
 	_focus_overlay = Control.new()
 	_focus_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_focus_overlay.draw.connect(_draw_focus_overlay)
@@ -565,6 +566,25 @@ func _all_views() -> Array:
 			views.append(c)
 	return views
 
+
+# ---------------------------------------------------------------------------
+# Public view access (agents list and aim views through this; see ViewTools)
+# ---------------------------------------------------------------------------
+
+# Every view in every pane, in pane order.
+func all_views() -> Array:
+	return _all_views()
+
+# The focused pane's current view, or null.
+func focused_view() -> Control:
+	if is_instance_valid(focused_pane):
+		return focused_pane.get_current_tab_control()
+	return null
+
+# Whether a view is on screen (its pane shows it as the current tab).
+func is_view_shown(view: Control) -> bool:
+	var pane := view.get_parent() as ViewPane
+	return pane != null and pane.get_current_tab_control() == view
 func _first_pane() -> ViewPane:
 	var panes := _all_panes()
 	return panes[0] if not panes.is_empty() else null

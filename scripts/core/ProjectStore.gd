@@ -21,6 +21,8 @@ static var ROOT := "res://projects"
 # Persist one project. Flattens its voxel data into the packed on-disk mirror first
 # (VoxelData keeps a live BlockCell dictionary at runtime), then writes ROOT/<name>.tres.
 static func save_project(project: VoxelProject) -> Error:
+	if project.scratch:
+		return OK   # in memory only until promoted (VoxelWorld.save_project_as)
 	var err := _ensure_root()
 	if err != OK:
 		return err

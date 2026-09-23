@@ -235,11 +235,17 @@ const _PASTE_OVERLAY := "paste"
 const _SELECTION_OVERLAY := "selection"
 var _selection_overlay: ToolOverlayPanel   # kept typed so its refresh can rebuild the list
 
+# An offscreen instance (CaptureService's private camera for agent renders): never takes
+# input, never bakes the project thumbnail, and moving its camera isn't a project change.
+var offscreen := false
+
 func _ready() -> void:
 	_setup_viewport()
 	_setup_overlay()
 	_setup_tool_overlays()
 	VoxelWorld.project_opened.connect(_on_project_opened)
+	# Batches placed by agents (VoxelWorld.apply_edits) get the same reveal as the user's own.
+	VoxelWorld.placement_fx_requested.connect(func(steps: Array): if not offscreen: _animate_placement(steps))
 	VoxelWorld.about_to_save.connect(_on_about_to_save)
 	VoxelWorld.block_changed.connect(func(p, _s): _mark_cell_dirty(p))
 	VoxelWorld.palette_stack_changed.connect(func(): _mark_dirty(); if _fly_mode: _overlay.queue_redraw())
@@ -290,7 +296,7 @@ func _on_visibility_changed() -> void:
 const THUMB_MAX_SIDE := 320
 
 func _on_about_to_save(project: VoxelProject) -> void:
-	if project == null or _viewport == null:
+	if project == null or _viewport == null or project.scratch or offscreen:
 		return
 	var img := _viewport.get_texture().get_image()
 	if img == null or img.is_empty():
@@ -1071,7 +1077,7 @@ func _update_camera() -> void:
 		_sky_sphere.position = _camera_pos
 	# Camera moved → the project's saved viewpoint is stale. Cheap debounce restart;
 	# skipped while we're applying a loaded state (that's not a user change).
-	if not _applying_state:
+	if not _applying_state and not offscreen:
 		VoxelWorld.mark_dirty()
 
 func _get_look_dir() -> Vector3:
