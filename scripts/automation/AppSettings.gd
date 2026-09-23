@@ -68,7 +68,7 @@ static func regenerate_token() -> String:
 
 # The command that registers Voxyl with Claude Code.
 static func setup_command() -> String:
-	var cmd := "claude mcp add --transport http voxyl http://127.0.0.1:%d/mcp" % agent_port()
+	var cmd := "claude mcp add --scope user --transport http voxyl http://127.0.0.1:%d/mcp" % agent_port()
 	if agent_require_token():
 		cmd += " --header \"Authorization: Bearer %s\"" % agent_token()
 	return cmd

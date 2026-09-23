@@ -247,6 +247,8 @@ func _reason(code: int) -> String:
 
 func _handle_rpc(msg: Dictionary, _headers: Dictionary, extra: Dictionary) -> Variant:
 	var id: Variant = msg.get("id")
+	if typeof(id) == TYPE_FLOAT and is_equal_approx(id, roundf(id)):
+		id = int(id)   # JSON numbers parse as floats; echo the id back as it was sent
 	var params: Dictionary = msg.get("params", {}) if msg.get("params") is Dictionary else {}
 	match str(msg["method"]):
 		"initialize":
