@@ -44,6 +44,18 @@ func _ready() -> void:
 	_stage.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	add_child(_stage)
 
+# One image job at a time (see ViewTools._one_at_a_time): acquire() waits for the current
+# holder to release().
+var _busy := false
+
+func acquire() -> void:
+	while _busy:
+		await get_tree().process_frame
+	_busy = true
+
+func release() -> void:
+	_busy = false
+
 func is_rendering_available() -> bool:
 	return DisplayServer.get_name() != "headless"
 

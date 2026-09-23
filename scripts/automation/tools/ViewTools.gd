@@ -32,7 +32,7 @@ static func register(reg: McpRegistry) -> void:
 	})
 	reg.add("capture",
 		"Render the build offscreen from any camera — the user's views don't move. Returns a labeled image (caption, compass gizmo, legend in intent mode), a capture_id and the camera used, and saves the PNG. Orthographic shots default to a plain background. " + _CAMERA_DESC + " " + _RENDER_DESC,
-		{"properties": capture_props}, _capture)
+		{"properties": capture_props}, _one_at_a_time(_capture))
 	reg.add("capture_sheet",
 		"Several labeled views in one image. preset: review (hero, eye-level, front and side elevations, top, back three-quarter), elevations (4 orthographic sides), turntable (8 bearings), compare (the same camera over each of `regions`, for variants). Or views: [CameraSpec + {label, render}]. frame/render apply to every tile unless a view overrides them; orthographic tiles default to studio lighting on a plain background.",
 		{"properties": {
@@ -49,7 +49,7 @@ static func register(reg: McpRegistry) -> void:
 			"bbox": {"type": "boolean"},
 			"cutaway": _CUTAWAY_PROP,
 			"format": {"type": "string", "enum": ["png", "jpeg"]},
-		}}, _capture_sheet)
+		}}, _one_at_a_time(_capture_sheet))
 	reg.add("view_set",
 		"Change one of the user's 3D views: move its camera (CameraSpec) and/or its lens settings (render: mode, lighting, projection, background). Its toolbar updates live. Use to hand the user a view of what you built — they see it move.",
 		{"properties": {
@@ -69,17 +69,17 @@ static func register(reg: McpRegistry) -> void:
 		{"properties": {
 			"scale": {"type": "number", "description": "Resize factor, default 0.6"},
 			"format": {"type": "string", "enum": ["png", "jpeg"]},
-		}}, _screenshot)
+		}}, _one_at_a_time(_screenshot))
 	reg.add("block_swatches",
 		"An image of blocks as lit cubes with their names, to judge materials side by side before choosing (use names from block_search).",
 		{"properties": {
 			"blocks": {"type": "array", "description": "Block names, or {name, library}"},
 			"format": {"type": "string", "enum": ["png", "jpeg"]},
-		}, "required": ["blocks"]}, _block_swatches)
+		}, "required": ["blocks"]}, _one_at_a_time(_block_swatches))
 	reg.add("palette_render",
 		"An image of a palette: every entry's block (cut to its shape, if it has one) with its semantic name.",
 		{"properties": {"name": {"type": "string"}, "format": {"type": "string", "enum": ["png", "jpeg"]}},
-		"required": ["name"]}, _palette_render)
+		"required": ["name"]}, _one_at_a_time(_palette_render))
 
 # --- The user's views ------------------------------------------------------------------
 
@@ -184,6 +184,17 @@ static func _capture_cutaway(spec: Variant) -> Variant:
 	if McpRegistry.is_error(r):
 		return r
 	return [r["min"], r["max"]]
+
+# Every image tool shares CaptureService's one offscreen view and compositing stage, and
+# each awaits frames midway, so two calls in flight at once would render each other's
+# camera. Queue them: a call waits for the one before it to finish.
+static func _one_at_a_time(fn: Callable) -> Callable:
+	return func(args: Dictionary) -> Variant:
+		var cs: CaptureService = McpServer.capture_service()
+		await cs.acquire()
+		var out: Variant = await fn.call(args)
+		cs.release()
+		return out
 
 # --- Camera specs -------------------------------------------------------------------
 
