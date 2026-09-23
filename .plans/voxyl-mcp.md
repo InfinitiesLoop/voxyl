@@ -1,6 +1,6 @@
 # Voxyl MCP — Agent Tooling Plan
 
-Status: **P1 built** (2026-09-22), awaiting the acceptance run (§7) from a real Claude session.
+Status: **P1 accepted** (2026-09-22) — the acceptance run (§7) passed in a real Claude session. Next up: P2.
 
 Built so far (branch `shaped-parts`):
 - Server, Settings dialog (Home + editor bar ⚙), Pause button + presence badge, `--sandbox` /
@@ -33,8 +33,30 @@ Connecting (learned the hard way, 2026-09-22):
   `~/.claude.json` servers — ask the session about its voxyl tools instead.
 - Start Voxyl (with agent connections on) before the session.
 
-**Next:** the P1 acceptance run (§7) in a fresh session with Voxyl open — rebuild the Conduit
-Pillar from nothing through the tools. Fix whatever it trips over, then move on to P2.
+**Acceptance run result (2026-09-22):** rebuilt the pillar as "Conduit Pillar Replay" — read the
+original's palette + full text-codec dump first (read-only, `palette_get`/`region_stats`/
+`region_text`), then rebuilt it from a fresh scratch project through `block_search`,
+`block_swatches`, `palette_create`, `project_create`, `region_fill`, `cells_place_layers`
+(symmetry `rotate4` + `repeat` for the shaft courses), `parts_add` (verified `rotate4` remaps
+microblock slots correctly — SE corner → SW/NE/NW as expected), `capture_sheet`/`capture`
+(textured review sheet + intent mode), a colonnade check (`region_copy` + `clipboard_paste` with
+`repeat`, then `history undo` to drop it before saving), and `project_save`. Diffed the rebuild
+against the original's `region_text` dump programmatically (byte-exact match, 690 cells) and
+confirmed `region_stats` counts matched exactly. Also confirmed rejection reasons work
+(`shaped_semantic_needs_part`, `slot_taken`) via `dry_run` probes.
+~34 tool calls total, in range. Two mistakes surfaced, both mine (hand-transcribing the text
+dump), not tool bugs — the codec's round-trip via `region_text` is what caught them:
+- Filled the y=0 plinth base as 5×5 instead of the original's 7×7 (`region_fill` region size
+  error). Fixed with a corrective `region_fill`.
+- One off-by-one character in the crown's z=-8 row when copying it by hand. Fixed with
+  `cells_clear` + `cells_set`.
+No server-side bugs, no rejected placements in the real build, no leaked files, nothing written
+outside Voxyl's own saves. `logs` showed a clean `ok` trail for every call.
+
+**Next:** P2 — SSE, render modes (clay/outline/xray/wire) + full toolbar, ortho/elevations,
+studio lighting, section/isolate, transforms, array/stamp, symmetry editing mode for users, named
+regions, checkpoints, BOM, `capture_pick`, presence basics, sub-cell text resolution, remaining
+CRUD (see §7).
 
 Origin: the "Conduit Pillar" experiment. Claude designed a 5x5 sci-fi pillar inside Voxyl, looking
 at renders as it went. It worked well (the result is the `Conduit Pillar` project + palette), but
