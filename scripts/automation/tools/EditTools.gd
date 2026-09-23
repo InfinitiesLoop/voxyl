@@ -73,6 +73,14 @@ static func register(reg: McpRegistry) -> void:
 			"mirror": {"type": "string", "enum": ["x", "z"]},
 			"overwrite": {"type": "boolean"},
 		}, ["at"]), _clipboard_paste, {"mutates": true})
+	reg.add("region_transform",
+		"Rotate (90° steps, clockwise from above) and/or mirror (x/z) a region in place about a pivot — the paste-rotation math applied without a copy/paste round trip. Default pivot is the region's own center; pivot:[x,z] uses the same cell-coordinate convention as symmetry centers (.5 = on a cell boundary). Parts without a mirror image come back rejected with a reason, same as clipboard_paste.",
+		_props({
+			"region": McpArgs.s_region(),
+			"rotate": {"type": "integer", "description": "0-3 quarter turns clockwise (from above)"},
+			"mirror": {"type": "string", "enum": ["x", "z"]},
+			"pivot": {"type": "array", "items": {"type": "number"}, "description": "[x, z]; default the region's own center"},
+		}, ["region"]), _region_transform, {"mutates": true})
 	reg.add("selection_set",
 		"Set the region selection every view shows (the Select tool's box).",
 		{"properties": {"region": McpArgs.s_region()}, "required": ["region"]}, _selection_set, {"mutates": true})
@@ -284,6 +292,47 @@ static func _clipboard_paste(args: Dictionary) -> Dictionary:
 	if not bool(args.get("overwrite", false)):
 		a["only_air"] = true
 	return McpArgs.commit("clipboard_paste", r["edits"], a, r["rejected"])
+
+static func _region_transform(args: Dictionary) -> Dictionary:
+	var pv: Variant = McpArgs.project(args)
+	if McpRegistry.is_error(pv):
+		return pv
+	var data := (pv as VoxelProject).data
+	var r: Variant = McpArgs.region(args.get("region"))
+	if McpRegistry.is_error(r):
+		return r
+	var mn: Vector3i = r["min"]
+	var mx: Vector3i = r["max"]
+	var rotate := int(args.get("rotate", 0)) % 4
+	var mirror := str(args.get("mirror", ""))
+	if rotate == 0 and mirror.is_empty():
+		return McpRegistry.fail("bad_argument", "give rotate (1-3) and/or mirror (x/z)")
+	var pivot: Vector3
+	if args.has("pivot"):
+		var p: Variant = args["pivot"]
+		if not (p is Array) or (p as Array).size() < 2:
+			return McpRegistry.fail("bad_argument", "pivot must be [x, z]")
+		pivot = Vector3(float(p[0]), 0.0, float(p[1]))
+	else:
+		pivot = Vector3((mn.x + mx.x) / 2.0, 0.0, (mn.z + mx.z) / 2.0)
+	var b := Basis(Vector3.UP, deg_to_rad(-90.0 * rotate))
+	match mirror:
+		"x": b = Basis(Vector3(-1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, 1)) * b
+		"z": b = Basis(Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, -1)) * b
+	var t := SpatialXform.about(b, pivot)
+	var cells := RegionOps.cells_in(data, mn, mx)
+	var edits: Array = []
+	var rejected: Array = []
+	for p in cells:
+		edits.append({"pos": p, "op": "clear"})
+	for p in cells:
+		var np := t.apply_pos(p)
+		var nc := t.apply_cell(data.get_cell(p))
+		if nc == null:
+			rejected.append({"pos": p, "reason": "no_mirror_image", "detail": "a part here has no mirror image"})
+			continue
+		edits.append({"pos": np, "op": "cell", "cell": nc})
+	return McpArgs.commit("region_transform", edits, args, rejected)
 
 static func _selection_set(args: Dictionary) -> Dictionary:
 	if VoxelWorld.active_project == null:
