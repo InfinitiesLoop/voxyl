@@ -251,6 +251,28 @@ var _cut_toggle_btn: Button
 # input, never bakes the project thumbnail, and moving its camera isn't a project change.
 var offscreen := false
 
+# What this view draws: null = the open build (VoxelWorld.active_project); set, a stand-in
+# project it renders instead — a prefab wrapped with its preferred palettes, for thumbnails
+# and previews. Semantics then resolve through that project's stack (VoxelWorld.
+# begin_resolve_as around each rebuild), and edits to the open build are ignored. Only
+# offscreen views take a source: an on-screen one would still edit the open build.
+var source_project: VoxelProject = null
+
+func _project() -> VoxelProject:
+	return source_project if source_project != null else VoxelWorld.active_project
+
+func set_source_project(p: VoxelProject) -> void:
+	source_project = p
+	_mark_dirty()
+
+func _begin_source() -> void:
+	if source_project != null:
+		VoxelWorld.begin_resolve_as(source_project)
+
+func _end_source() -> void:
+	if source_project != null:
+		VoxelWorld.end_resolve_as()
+
 func _ready() -> void:
 	_setup_viewport()
 	_setup_overlay()
@@ -263,7 +285,7 @@ func _ready() -> void:
 		_toolbar.position = Vector2(6, 6)
 		add_child(_toolbar)
 	VoxelWorld.about_to_save.connect(_on_about_to_save)
-	VoxelWorld.block_changed.connect(func(p, _s): _mark_cell_dirty(p))
+	VoxelWorld.block_changed.connect(func(p, _s): if source_project == null: _mark_cell_dirty(p))
 	VoxelWorld.palette_stack_changed.connect(func(): _mark_dirty(); if _fly_mode: _overlay.queue_redraw())
 	VoxelWorld.block_type_changed.connect(func(): _mark_dirty(); if _fly_mode: _overlay.queue_redraw())
 	VoxelWorld.selection_changed.connect(func(_s): if _fly_mode: _overlay.queue_redraw())
@@ -290,7 +312,7 @@ func _ready() -> void:
 	# A view created while a project is already open (e.g. spawned during a layout
 	# restore, after project_opened has already fired) must render the current build
 	# itself — otherwise it stays blank until the next block_changed signal.
-	if VoxelWorld.active_project:
+	if _project():
 		_mark_dirty()
 	_update_selection_box()
 
@@ -325,6 +347,8 @@ func _on_about_to_save(project: VoxelProject) -> void:
 	ProjectStore.save_thumbnail(project.name, img)
 
 func _on_project_opened(_p: VoxelProject) -> void:
+	if source_project != null:
+		return
 	_clear_placement_fx()  # drop any in-flight reveal from the previous build
 	_mark_dirty()
 	# Position camera to see the whole scene on first open
@@ -1306,7 +1330,7 @@ func set_guide(desc: Dictionary) -> void:
 func _refresh_guide() -> void:
 	if not _guide_plane:
 		return
-	if _guide.is_empty() or not VoxelWorld.active_project:
+	if _guide.is_empty() or not _project():
 		_guide_plane.visible = false
 		return
 	var axis: int = _guide["axis"]
@@ -1325,7 +1349,7 @@ func _refresh_guide() -> void:
 func _guide_bounds() -> Array:
 	var lo := Vector3i(-8, -8, -8)
 	var hi := Vector3i(8, 8, 8)
-	var aabb := VoxelWorld.active_project.data.get_used_aabb()
+	var aabb := _project().data.get_used_aabb()
 	if not aabb.is_empty():
 		lo = aabb[0]
 		hi = aabb[1]
@@ -1363,9 +1387,9 @@ func _get_look_dir() -> Vector3:
 	)
 
 func _get_world_center() -> Vector3:
-	if not VoxelWorld.active_project:
+	if not _project():
 		return Vector3.ZERO
-	var aabb := VoxelWorld.active_project.data.get_used_aabb()
+	var aabb := _project().data.get_used_aabb()
 	if aabb.is_empty():
 		return Vector3.ZERO
 	var mn: Vector3i = aabb[0]; var mx: Vector3i = aabb[1]
@@ -1415,12 +1439,14 @@ func flush_pending() -> void:
 func _flush_dirty() -> void:
 	# Every cell asks the palette what its semantic resolves to (several times over) and looks
 	# its model up by id; nothing can change mid-flush, so each is resolved once per pass.
+	_begin_source()
 	VoxelWorld.begin_resolve_memo()
 	_flush_memo_live = true
 	_flush_dirty_inner()
 	_flush_memo_live = false
 	_flush_memo.clear()
 	VoxelWorld.end_resolve_memo()
+	_end_source()
 
 # Per-flush lookups (see _flush_dirty). Outside a flush they go straight through.
 var _flush_memo := {}
@@ -1455,9 +1481,9 @@ func _flush_dirty_inner() -> void:
 		return
 	var positions := _dirty_positions.keys()
 	_dirty_positions.clear()
-	if not VoxelWorld.active_project:
+	if not _project():
 		return
-	var data := VoxelWorld.active_project.data
+	var data := _project().data
 	for pos: Vector3i in positions:
 		_update_cell_node(pos, data)
 	# Re-apply emphasis/guide the same way a full rebuild would (both are cheap: emphasis
@@ -1511,9 +1537,9 @@ func _rebuild() -> void:
 	# ImageTexture cache and shared geometry/shaders persist across rebuilds.
 	_model_tex_cache.clear()
 	_surface_mats.clear()
-	if not VoxelWorld.active_project:
+	if not _project():
 		return
-	var data := VoxelWorld.active_project.data
+	var data := _project().data
 	_cut_box = _wanted_cut_box()
 	var cut_on := not _cut_box.is_empty()
 	for pos: Vector3i in data.cells.keys():
@@ -1556,9 +1582,14 @@ func _rebuild_wire_lines() -> void:
 	if mode != "outline" and mode != "xray" and mode != "wire":
 		_wire_mi.visible = false
 		return
+	_begin_source()
+	_rebuild_wire_lines_inner(mode)
+	_end_source()
+
+func _rebuild_wire_lines_inner(mode: String) -> void:
 	var edges := {}   # "x,y,z|x,y,z" -> {a: Vector3, b: Vector3, dirs: Array[Vector3], semantic: String}
-	if VoxelWorld.active_project:
-		var data := VoxelWorld.active_project.data
+	if _project():
+		var data := _project().data
 		for pos: Vector3i in data.cells.keys():
 			var cell: BlockCell = data.cells[pos]
 			var semantic: String = cell.type_id
@@ -1773,7 +1804,7 @@ func _resolve_cell_parts(pos: Vector3i, cell: BlockCell, semantic: String) -> Ar
 # clauses. Computed fresh every rebuild from neighbor occupancy + shape — nothing
 # about connections is ever stored on the cell (data stores intent only).
 func _cell_connections(pos: Vector3i) -> Dictionary:
-	var data := VoxelWorld.active_project.data
+	var data := _project().data
 	var conns := {}
 	for dir in BlockMesher.DIR_NORMALS:
 		var npos := pos + Vector3i(BlockMesher.DIR_NORMALS[dir])

@@ -25,6 +25,7 @@ func _ready() -> void:
 	_test_selection()
 	_test_clipboard()
 	_test_paste_rotation_parity()
+	_test_prefabs()
 	_test_asset_library()
 	_test_library_serialization()
 	_test_project_persistence()
@@ -756,6 +757,108 @@ func _test_clipboard() -> void:
 	VoxelWorld.active_project = null
 	_rm_rf(ProjectStore.ROOT)
 	ProjectStore.ROOT = saved_root
+
+# Prefabs: save a region (cells keyed to its min corner), persist + reload, place turned about
+# the anchor, missing-semantics detection, palettes added to the bottom of the stack, palette
+# renames repointing the prefab, and the prefabs folder never read as a library.
+func _test_prefabs() -> void:
+	print("-- prefabs")
+	var saved_prefabs := PrefabStore.root
+	var saved_palettes := LibraryStore.palettes_root
+	var saved_projects := ProjectStore.ROOT
+	PrefabStore.root = "user://__voxyl_prefabtest__/prefabs"
+	LibraryStore.palettes_root = "user://__voxyl_prefabtest__/palettes"
+	ProjectStore.ROOT = "user://__voxyl_prefabtest__/projects"
+	_rm_rf("user://__voxyl_prefabtest__")
+
+	var pal := VoxelWorld.add_palette("Prefab Pal")
+	VoxelWorld.add_palette_entry(pal, "Arch Stone")
+	var project := VoxelWorld.workspace.add_project("Prefab Test")
+	project.palette_names.append("Default")
+	project.palette_names.append("Prefab Pal")
+	VoxelWorld.open(project)
+	VoxelWorld.set_block(Vector3i(10, 0, 10), "Wall", Orientation.make(Orientation.Facing.EAST))
+	VoxelWorld.set_block(Vector3i(12, 0, 10), "Arch Stone")
+	VoxelWorld.set_block(Vector3i(10, 1, 11), "Trim")
+
+	var res: Variant = VoxelWorld.save_prefab_from_region("Arch", Vector3i(10, 0, 10), Vector3i(12, 1, 11))
+	_check("save_prefab_from_region returns the prefab", res is Prefab)
+	var prefab: Prefab = res if res is Prefab else Prefab.new()
+	_check("cells are keyed to the region's min corner",
+		prefab.data.get_block(Vector3i.ZERO) == "Wall" and prefab.data.get_block(Vector3i(2, 0, 0)) == "Arch Stone"
+		and prefab.data.get_block(Vector3i(0, 1, 1)) == "Trim" and prefab.cell_count() == 3)
+	_check("size is the region box", prefab.size == Vector3i(3, 2, 2))
+	_check("default palettes are the stack's palettes that define its semantics (in order)",
+		Array(prefab.palette_names) == ["Default", "Prefab Pal"])
+	_check("a taken name is refused",
+		str(VoxelWorld.save_prefab_from_region("Arch", Vector3i(10, 0, 10), Vector3i(10, 0, 10))) == "name_taken")
+	_check("an empty region is refused",
+		str(VoxelWorld.save_prefab_from_region("Nothing", Vector3i(50, 0, 50), Vector3i(51, 0, 51))) == "empty_region")
+	_check("its file is written", FileAccess.file_exists(PrefabStore.path_for("Arch")))
+
+	var ws2 := VoxelWorkspace.new()
+	PrefabStore.load_persisted(ws2)
+	var back := ws2.get_prefab("Arch")
+	_check("prefab reloads from disk", back != null and back.cell_count() == 3 and back.size == Vector3i(3, 2, 2))
+	_check("…with orientation intact",
+		back != null and back.data.get_orientation(Vector3i.ZERO) == Orientation.make(Orientation.Facing.EAST))
+
+	# Anchor bottom-center (1,0,0); a quarter turn clockwise about it: (+1,0,0) → (0,0,+1).
+	VoxelWorld.update_prefab(prefab, {"anchor": prefab.bottom_center()})
+	_check("bottom_center anchor", prefab.anchor == Vector3i(1, 0, 0))
+	var placed := RegionOps.place_edits(prefab.data.cells, prefab.anchor, Vector3i(0, 5, 0), RegionOps.turn_basis(1))
+	var at := {}
+	for e in placed["edits"]:
+		at[e["pos"]] = e["cell"]
+	_check("the anchor cell's neighbor turns about the anchor",
+		at.has(Vector3i(0, 5, 1)) and (at[Vector3i(0, 5, 1)] as BlockCell).type_id == "Arch Stone")
+	_check("orientation turns with it (east → south)",
+		at.has(Vector3i(0, 5, -1)) and (at[Vector3i(0, 5, -1)] as BlockCell).orientation == Orientation.make(Orientation.Facing.SOUTH))
+	var mirrored := RegionOps.place_edits(prefab.data.cells, Vector3i.ZERO, Vector3i.ZERO, RegionOps.turn_basis(0, "x"))
+	var mx := {}
+	for e in mirrored["edits"]:
+		mx[e["pos"]] = true
+	_check("mirror x flips east-west about the anchor", mx.has(Vector3i(-2, 0, 0)) and mx.has(Vector3i(0, 1, 1)))
+	var renamed := RegionOps.place_edits(prefab.data.cells, Vector3i.ZERO, Vector3i.ZERO, Basis(), {"Arch Stone": "Accent"})
+	_check("remap renames semantics on the way in",
+		(renamed["edits"] as Array).any(func(e: Dictionary) -> bool: return (e["cell"] as BlockCell).type_id == "Accent"))
+
+	# Another project that only has Default: "Arch Stone" is missing, "Prefab Pal" defines it.
+	var other := VoxelWorld.workspace.add_project("Prefab Test 2")
+	other.palette_names.append("Default")
+	var m := VoxelWorld.prefab_missing(prefab, other)
+	_check("missing semantics are the ones no stack palette has", Array(m["missing"]) == ["Arch Stone"])
+	_check("…and the preferred palettes that define them are offered", Array(m["palettes"]) == ["Prefab Pal"])
+	VoxelWorld.add_prefab_palettes(other, m["palettes"])
+	_check("add_prefab_palettes puts them at the bottom of the stack", Array(other.palette_names) == ["Prefab Pal", "Default"])
+	_check("nothing missing afterwards", (VoxelWorld.prefab_missing(prefab, other)["missing"] as Array).is_empty())
+
+	VoxelWorld.rename_palette(pal, "Prefab Pal 2")
+	_check("a palette rename repoints the prefab's preference", Array(prefab.palette_names) == ["Default", "Prefab Pal 2"])
+
+	_check("rename via update_prefab", VoxelWorld.update_prefab(prefab, {"name": "Arch 2"}).is_empty()
+		and VoxelWorld.workspace.get_prefab("Arch 2") == prefab)
+	_check("…moves its file", FileAccess.file_exists(PrefabStore.path_for("Arch 2")) and not FileAccess.file_exists(PrefabStore.path_for("Arch")))
+	VoxelWorld.delete_prefab(prefab)
+	_check("delete removes it from memory and disk",
+		VoxelWorld.workspace.get_prefab("Arch 2") == null and not FileAccess.file_exists(PrefabStore.path_for("Arch 2")))
+
+	# The prefabs folder under the library root is never mistaken for a library.
+	var saved_asset_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_prefabtest__/lib"
+	DirAccess.make_dir_recursive_absolute(AssetLibrary.path_for(PrefabStore.DIR))
+	DirAccess.make_dir_recursive_absolute(AssetLibrary.path_for("real_lib"))
+	_check("list_libraries skips the prefabs folder", Array(LibraryStore.list_libraries()) == ["real_lib"])
+	AssetLibrary.ROOT = saved_asset_root
+
+	VoxelWorld.workspace.remove_project("Prefab Test")
+	VoxelWorld.workspace.remove_project("Prefab Test 2")
+	VoxelWorld.remove_palette(VoxelWorld.workspace.get_palette("Prefab Pal 2"))
+	VoxelWorld.active_project = null
+	_rm_rf("user://__voxyl_prefabtest__")
+	PrefabStore.root = saved_prefabs
+	LibraryStore.palettes_root = saved_palettes
+	ProjectStore.ROOT = saved_projects
 
 func _test_asset_library() -> void:
 	print("-- asset library (storage accessor)")

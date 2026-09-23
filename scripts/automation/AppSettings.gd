@@ -8,7 +8,7 @@ extends RefCounted
 # Command-line overrides (after Godot's `--` separator), for scripted runs and tests:
 #   --mcp-port=N        enable agent connections on port N for this run (not saved)
 #   --mcp-token=T       use access token T for this run (not saved)
-#   --sandbox=DIR       keep projects, palettes, captures and settings under DIR instead of
+#   --sandbox=DIR       keep projects, palettes, prefabs, captures and settings under DIR instead of
 #                       the real workspace (libraries are still read from the shared folder)
 
 const SECTION_AGENT := "agent"
@@ -100,6 +100,7 @@ static func use_sandbox(dir: String) -> void:
 	DirAccess.make_dir_recursive_absolute(d)
 	ProjectStore.ROOT = d.path_join("projects")
 	LibraryStore.palettes_root = d.path_join("palettes")
+	PrefabStore.root = d.path_join("prefabs")
 	captures_dir = d.path_join("captures")
 	path = d.path_join("settings.cfg")
 	_cfg = null

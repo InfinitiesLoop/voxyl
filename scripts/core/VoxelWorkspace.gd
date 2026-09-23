@@ -14,6 +14,8 @@ const BASIC_LIBRARY := "basic"
 @export var libraries: Array[BlockLibrary] = []
 @export var palettes: Array[Palette] = []
 @export var projects: Array[VoxelProject] = []
+# Named, reusable pieces of builds (see Prefab), global like the palettes.
+@export var prefabs: Array[Prefab] = []
 
 # --- Library catalog --------------------------------------------------------
 
@@ -198,6 +200,33 @@ func remove_palette(palette_name: String) -> void:
 			if palettes[i].builtin:
 				return
 			palettes.remove_at(i)
+			return
+
+# --- Prefabs ----------------------------------------------------------------
+
+func add_prefab(prefab_name: String) -> Prefab:
+	var p := Prefab.new()
+	p.name = prefab_name
+	var max_id := 0
+	for q in prefabs:
+		max_id = maxi(max_id, q.id)
+	p.id = max_id + 1
+	var now := int(Time.get_unix_time_from_system())
+	p.created_at = now
+	p.modified_at = now
+	prefabs.append(p)
+	return p
+
+func get_prefab(prefab_name: String) -> Prefab:
+	for p in prefabs:
+		if p.name == prefab_name:
+			return p
+	return null
+
+func remove_prefab(prefab_name: String) -> void:
+	for i in prefabs.size():
+		if prefabs[i].name == prefab_name:
+			prefabs.remove_at(i)
 			return
 
 # --- Projects ---------------------------------------------------------------

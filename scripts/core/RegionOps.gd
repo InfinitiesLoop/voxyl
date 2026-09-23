@@ -141,6 +141,47 @@ static func paste_edits(clip: Dictionary, size: Vector3i, at: Vector3i, xform_ba
 		out.append({"pos": at + (q - box_lo), "op": "cell", "cell": moved[q]})
 	return {"edits": out, "rejected": rejected}
 
+# Place cells keyed relative to a box (a prefab) so its `anchor` cell lands on `at`, after
+# `xform_basis` turns / mirrors them about that anchor. `renames` renames semantics on the way
+# in ({from: to}). Parts without a mirror image come back in `rejected`.
+static func place_edits(cells: Dictionary, anchor: Vector3i, at: Vector3i, xform_basis := Basis(), renames := {}) -> Dictionary:
+	var t := SpatialXform.about(xform_basis, Vector3.ZERO)
+	var out: Array = []
+	var rejected: Array = []
+	for rel: Vector3i in cells:
+		var src: BlockCell = cells[rel]
+		if not renames.is_empty():
+			src = remap_cell(src, renames)
+		var pos := at + t.apply_pos(rel - anchor)
+		var cell := t.apply_cell(src)
+		if cell == null:
+			rejected.append({"pos": pos, "reason": "no_mirror_image"})
+			continue
+		out.append({"pos": pos, "op": "cell", "cell": cell})
+	return {"edits": out, "rejected": rejected}
+
+# A copy of `cell` with its semantics renamed through `renames` ({from: to}).
+static func remap_cell(cell: BlockCell, renames: Dictionary) -> BlockCell:
+	var out := cell.duplicate_cell()
+	if out.is_shaped():
+		for part in out.parts:
+			var s := str(part["semantic"])
+			if renames.has(s):
+				part["semantic"] = str(renames[s])
+		out.sync_type_id()
+	elif renames.has(out.type_id):
+		out.type_id = str(renames[out.type_id])
+	return out
+
+# The basis for `rotate` quarter turns clockwise seen from above, then an optional mirror
+# ("x" flips east-west, "z" flips north-south) — what paste and prefab placement take.
+static func turn_basis(rotate: int, mirror := "") -> Basis:
+	var b := Basis(Vector3.UP, deg_to_rad(-90.0 * (posmod(rotate, 4))))
+	match mirror:
+		"x": b = Basis(Vector3(-1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, 1)) * b
+		"z": b = Basis(Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, -1)) * b
+	return b
+
 # Counts inside the box: whole blocks by semantic, parts by "semantic|shape", and the
 # bounds of what's there.
 static func stats(data: VoxelData, mn: Vector3i, mx: Vector3i) -> Dictionary:

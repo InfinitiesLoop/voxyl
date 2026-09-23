@@ -47,6 +47,7 @@ func _run() -> void:
 	_check("server listens on the test port", McpServer.is_listening())
 	await _test_http()
 	await _test_build()
+	await _test_prefabs()
 	McpServer.stop()
 
 func _cleanup() -> void:
@@ -399,6 +400,67 @@ func _test_build() -> void:
 	_check("save as promotes the scratch project", not save["_is_error"] and not VoxelWorld.active_project.scratch)
 	_check("…and writes it", FileAccess.file_exists(ProjectStore.ROOT.path_join("MCP Test Saved.tres")))
 
+# --- Prefabs --------------------------------------------------------------------------
+
+func _test_prefabs() -> void:
+	print("-- prefabs through tools")
+	await _tool("cells_clear", {"region": {"all": true}})
+	await _tool("cells_set", {"cells": [
+		{"pos": [0, 0, 0], "semantic": "Mass"}, {"pos": [1, 0, 0], "semantic": "Mass"},
+		{"pos": [2, 0, 0], "semantic": "Mass"}, {"pos": [1, 1, 0], "semantic": "Core"}]})
+	var saved := await _tool("prefab_save", {"name": "Bench", "region": {"min": [0, 0, 0], "max": [2, 1, 0]},
+		"anchor": "bottom-center", "tags": ["furniture"]})
+	_check("prefab_save", not saved["_is_error"] and int(saved["cells"]) == 4)
+	_check("…bottom-center anchor", _ints(saved.get("anchor")) == [1, 0, 0])
+	_check("…default palettes from the project's stack", saved.get("palettes") == ["Pillar Test"])
+	_check("…written to the sandbox", PrefabStore.dir().begins_with(_sandbox) and FileAccess.file_exists(PrefabStore.path_for("Bench")))
+	var dup := await _tool("prefab_save", {"name": "Bench", "region": {"min": [0, 0, 0], "max": [2, 1, 0]}})
+	_check("saving over a name needs replace", dup["_is_error"] and str(dup.get("code", "")) == "name_taken")
+	var listed := await _tool("prefab_list", {"query": "furn"})
+	_check("prefab_list finds it by tag", (listed["prefabs"] as Array).size() == 1)
+
+	# A quarter turn about the anchor, repeated three times along +X.
+	var placed := await _tool("prefab_place", {"name": "Bench", "at": [10, 0, 0], "rotate": 1,
+		"repeat": {"count": 3, "step": [5, 0, 0]}})
+	_check("prefab_place with repeat", not placed["_is_error"] and int(placed["placed"]) == 12)
+	_check("…as one undo step", str(placed.get("undo_step", "")) == "Claude: prefab_place")
+	var data := VoxelWorld.active_project.data
+	_check("the anchor lands on `at`", data.get_block(Vector3i(10, 1, 0)) == "Core" and data.get_block(Vector3i(20, 1, 0)) == "Core")
+	_check("turned about the anchor (runs north-south now)",
+		data.get_block(Vector3i(10, 0, -1)) == "Mass" and data.get_block(Vector3i(10, 0, 1)) == "Mass"
+		and data.get_block(Vector3i(11, 0, 0)).is_empty())
+	_check("nothing missing when the project maps it all", not placed.has("missing_semantics"))
+	var kept := await _tool("prefab_place", {"name": "Bench", "at": [10, 0, 0], "rotate": 1})
+	_check("keeps occupied cells unless overwrite", int(kept["placed"]) == 0 and int(kept.get("skipped", 0)) == 4)
+
+	# A prefab whose semantic only its own palette defines.
+	await _tool("palette_create", {"name": "Bench Pal", "entries": [{"semantic": "Seat", "block": "base"}]})
+	await _tool("project_palettes_set", {"palettes": ["Pillar Test", "Bench Pal"]})
+	await _tool("cells_set", {"cells": [{"pos": [0, 5, 0], "semantic": "Seat"}, {"pos": [1, 5, 0], "semantic": "Mass"}]})
+	await _tool("prefab_save", {"name": "Seat Bench", "region": {"min": [0, 5, 0], "max": [1, 5, 0]}})
+	await _tool("project_palettes_set", {"palettes": ["Pillar Test"]})
+	var lacking := await _tool("prefab_place", {"name": "Seat Bench", "at": [30, 0, 0]})
+	_check("placing still happens with a missing semantic", int(lacking.get("placed", 0)) == 2)
+	_check("…and names it", lacking.get("missing_semantics") == ["Seat"] and lacking.get("palettes_available") == ["Bench Pal"])
+	var filled := await _tool("prefab_place", {"name": "Seat Bench", "at": [30, 0, 3], "add_palettes": true})
+	_check("add_palettes adds the palette to the bottom of the stack", filled.get("palettes_added") == ["Bench Pal"]
+		and Array(VoxelWorld.active_project.palette_names) == ["Bench Pal", "Pillar Test"] and not filled.has("missing_semantics"))
+	var remapped := await _tool("prefab_place", {"name": "Seat Bench", "at": [30, 0, 6], "remap": {"Seat": "Core"}})
+	_check("remap renames on the way in", data.get_block(Vector3i(30, 0, 6)) == "Core" and not remapped.has("missing_semantics"))
+
+	var got := await _tool("prefab_get", {"name": "Seat Bench"})
+	_check("prefab_get lists semantics", (got["semantics"] as Dictionary).has("Seat") and (got["semantics"] as Dictionary).has("Mass"))
+	var upd := await _tool("prefab_update", {"name": "Seat Bench", "rename": "Seat Bench 2", "anchor": [1, 0, 0], "notes": "two cells"})
+	_check("prefab_update renames and re-anchors", not upd["_is_error"] and upd["name"] == "Seat Bench 2" and _ints(upd["anchor"]) == [1, 0, 0])
+	var render := await _tool("prefab_render", {"name": "Bench"})
+	_check("prefab_render without a display says so", render["_is_error"] and str(render.get("code", "")) == "no_renderer")
+	var no_confirm := await _tool("prefab_delete", {"name": "Bench", "confirm": false})
+	_check("delete needs confirm", no_confirm["_is_error"] and str(no_confirm.get("code", "")) == "needs_confirm")
+	var deleted := await _tool("prefab_delete", {"name": "Bench", "confirm": true})
+	_check("prefab_delete", not deleted["_is_error"] and VoxelWorld.workspace.get_prefab("Bench") == null
+		and not FileAccess.file_exists(PrefabStore.path_for("Bench")))
+	_check("placed copies stay", data.get_block(Vector3i(10, 1, 0)) == "Core")
+
 func _rm_rf(path: String) -> void:
 	var d := DirAccess.open(path)
 	if d == null:
@@ -409,3 +471,7 @@ func _rm_rf(path: String) -> void:
 	for f in d.get_files():
 		d.remove(f)
 	DirAccess.remove_absolute(path)
+
+# JSON numbers come back as floats; compare vectors as ints.
+func _ints(v: Variant) -> Array:
+	return (v as Array).map(func(x: Variant) -> int: return int(x)) if v is Array else []

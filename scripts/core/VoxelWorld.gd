@@ -48,6 +48,12 @@ signal open_project_requested(project: VoxelProject)
 # into reveal steps. 3D views play their placement reveal for it, exactly as for the user's
 # own build tools.
 signal placement_fx_requested(cells_by_step: Array)
+# A prefab was saved, changed, renamed or deleted (the Prefabs browser and inventory page
+# refresh from this).
+signal prefabs_changed()
+# Someone asked to place a prefab interactively (the inventory's Prefabs page): the focused
+# 3D view answers by entering its paste mode with the prefab as the source.
+signal prefab_paste_requested(prefab: Prefab)
 
 const HOTBAR_SIZE := 12
 # Debounce window for autosave: a burst of edits (a paint drag, an orbit) collapses
@@ -131,6 +137,7 @@ func _ready() -> void:
 	ProjectStore.load_persisted(workspace)
 	if workspace.projects.is_empty():
 		_seed_default_project()
+	PrefabStore.load_persisted(workspace)
 	_setup_autosave()
 	workspace_changed.emit()
 
@@ -751,7 +758,7 @@ func get_block(pos: Vector3i) -> String:
 # undecided plain entry doesn't override an earlier mapped one, but a shaped entry always
 # counts: its shape is real intent even while its block is undecided ({ shape } alone).
 func _resolve_semantic(semantic_name: String) -> Dictionary:
-	if not active_project:
+	if not _resolve_project():
 		return {}
 	if _resolve_memo_depth > 0 and _resolve_memo.has(semantic_name):
 		return _resolve_memo[semantic_name]
@@ -775,9 +782,27 @@ func end_resolve_memo() -> void:
 	if _resolve_memo_depth == 0:
 		_resolve_memo.clear()
 
+# Resolve as another project for a while: a view rendering something that isn't the open
+# build (a prefab through its preferred palettes) wraps its rebuild in these, so every
+# semantic lookup inside walks that project's palette stack instead. Synchronous use only;
+# nestable. The memo is dropped on both edges so the two contexts never share entries.
+var _resolve_as: Array[VoxelProject] = []
+
+func begin_resolve_as(project: VoxelProject) -> void:
+	_resolve_as.append(project)
+	_resolve_memo.clear()
+
+func end_resolve_as() -> void:
+	if not _resolve_as.is_empty():
+		_resolve_as.pop_back()
+	_resolve_memo.clear()
+
+func _resolve_project() -> VoxelProject:
+	return _resolve_as.back() if not _resolve_as.is_empty() else active_project
+
 func _resolve_semantic_uncached(semantic_name: String) -> Dictionary:
 	var result := {}
-	for palette_name in active_project.palette_names:
+	for palette_name in _resolve_project().palette_names:
 		var palette := workspace.get_palette(palette_name)
 		if not palette:
 			continue
@@ -980,9 +1005,10 @@ func _builtin_model_id_for_shape(shape: BlockType.Shape) -> String:
 func merged_semantic_names() -> Array[String]:
 	var seen := {}
 	var result: Array[String] = []
-	if not active_project:
+	var project := _resolve_project()
+	if not project:
 		return result
-	for palette_name in active_project.palette_names:
+	for palette_name in project.palette_names:
 		var palette := workspace.get_palette(palette_name)
 		if not palette:
 			continue
@@ -1057,6 +1083,12 @@ func rename_palette(palette: Palette, new_name: String) -> bool:
 		for i in project.palette_names.size():
 			if project.palette_names[i] == old_name:
 				project.palette_names[i] = n
+	# …and every prefab's preferred stack.
+	for prefab in workspace.prefabs:
+		var at := prefab.palette_names.find(old_name)
+		if at >= 0:
+			prefab.palette_names[at] = n
+			PrefabStore.save_prefab(prefab)
 	# Palettes are saved under their name: drop the old file or it comes back next launch.
 	LibraryStore.delete_palette(old_name)
 	_palettes_changed(palette)
@@ -1389,6 +1421,131 @@ func cut_selection() -> void:
 			for z in range(selection_min.z, selection_max.z + 1):
 				clear_block(Vector3i(x, y, z))
 	end_operation()
+
+# ---------------------------------------------------------------------------
+# Prefabs — named, reusable pieces of builds, global to the workspace (see Prefab). Saved
+# from a region of the open project; placed back through the same edit path as a paste.
+# Every mutation persists (PrefabStore) and fires prefabs_changed.
+# ---------------------------------------------------------------------------
+
+# Save the cells of an inclusive box as a prefab. `palettes` is its preferred stack; empty
+# takes the open project's palettes that define any semantic the cells use (same order, so
+# they resolve exactly as they do here). `anchor` is relative to the box's min corner (null
+# = the min corner). `replace` overwrites a prefab of the same name. Returns the prefab, or
+# an error code: empty_name, name_taken, empty_region, no_project.
+func save_prefab_from_region(prefab_name: String, mn: Vector3i, mx: Vector3i, palettes: Array = [],
+		anchor: Variant = null, replace := false) -> Variant:
+	var n := prefab_name.strip_edges()
+	if n.is_empty():
+		return "empty_name"
+	if not active_project:
+		return "no_project"
+	var existing := workspace.get_prefab(n)
+	if existing != null and not replace:
+		return "name_taken"
+	var cells := {}
+	for p in RegionOps.cells_in(active_project.data, mn, mx):
+		cells[p - mn] = active_project.data.get_cell(p).duplicate_cell()
+	if cells.is_empty():
+		return "empty_region"
+	var prefab := existing if existing != null else workspace.add_prefab(n)
+	prefab.data = VoxelData.new()
+	for rel: Vector3i in cells:
+		prefab.data.set_cell(rel, cells[rel])
+	prefab.size = mx - mn + Vector3i.ONE
+	prefab.anchor = anchor if anchor is Vector3i else Vector3i.ZERO
+	var names: Array[String] = []
+	if palettes.is_empty():
+		var used := {}
+		for s in prefab.used_semantics():
+			used[s] = true
+		for pn in active_project.palette_names:
+			var pal := workspace.get_palette(pn)
+			if pal != null and pal.entries.any(func(e: PaletteEntry) -> bool: return used.has(e.semantic_name)):
+				names.append(pn)
+	else:
+		for pn in palettes:
+			names.append(str(pn))
+	prefab.palette_names = names
+	prefab.modified_at = int(Time.get_unix_time_from_system())
+	PrefabStore.save_prefab(prefab)
+	prefabs_changed.emit()
+	return prefab
+
+# Change a prefab's name / preferred palettes / anchor / tags / notes. `changes` holds only
+# the keys to change: name (String), palettes (Array), anchor (Vector3i), tags (Array),
+# notes (String). Returns "" or an error code: empty_name, name_taken.
+func update_prefab(prefab: Prefab, changes: Dictionary) -> String:
+	if changes.has("name"):
+		var n := str(changes["name"]).strip_edges()
+		if n.is_empty():
+			return "empty_name"
+		if n != prefab.name:
+			if workspace.get_prefab(n) != null:
+				return "name_taken"
+			var old := prefab.name
+			prefab.name = n
+			PrefabStore.move_files(old, prefab)
+	if changes.has("palettes"):
+		prefab.palette_names.assign((changes["palettes"] as Array).map(func(x: Variant) -> String: return str(x)))
+	if changes.get("anchor") is Vector3i:
+		prefab.anchor = changes["anchor"]
+	if changes.has("tags"):
+		prefab.tags.assign((changes["tags"] as Array).map(func(x: Variant) -> String: return str(x).strip_edges()).filter(
+			func(t: String) -> bool: return not t.is_empty()))
+	if changes.has("notes"):
+		prefab.notes = str(changes["notes"])
+	prefab.modified_at = int(Time.get_unix_time_from_system())
+	PrefabStore.save_prefab(prefab)
+	prefabs_changed.emit()
+	return ""
+
+func delete_prefab(prefab: Prefab) -> void:
+	workspace.remove_prefab(prefab.name)
+	PrefabStore.delete_prefab(prefab.name)
+	prefabs_changed.emit()
+
+# What placing `prefab` into `project` would leave unmapped: the semantics it uses that no
+# palette in the project's stack has an entry for (they'd render undecided), and which of the
+# prefab's preferred palettes define any of them and aren't in the stack yet — the ones
+# add_prefab_palettes would add. { missing: Array[String], palettes: Array[String] }.
+func prefab_missing(prefab: Prefab, project: VoxelProject) -> Dictionary:
+	var known := {}
+	for pn in project.palette_names:
+		var pal := workspace.get_palette(pn)
+		if pal != null:
+			for e in pal.entries:
+				known[e.semantic_name] = true
+	var missing: Array[String] = []
+	for s in prefab.used_semantics():
+		if not known.has(s):
+			missing.append(s)
+	var offer: Array[String] = []
+	for pn in prefab.palette_names:
+		if project.palette_names.has(pn):
+			continue
+		var pal := workspace.get_palette(pn)
+		if pal != null and missing.any(func(s: String) -> bool: return pal.get_entry(s) != null):
+			offer.append(pn)
+	return {"missing": missing, "palettes": offer}
+
+# Add palettes to the BOTTOM of a project's stack (in the given order), so the project's own
+# palettes keep winning for anything they already map. Skips ones already in the stack.
+func add_prefab_palettes(project: VoxelProject, palette_names: Array) -> void:
+	var stack: Array = []
+	for pn in palette_names:
+		if not project.palette_names.has(pn) and workspace.get_palette(str(pn)) != null:
+			stack.append(str(pn))
+	if stack.is_empty():
+		return
+	stack.append_array(project.palette_names)
+	set_palette_stack(project, stack)
+
+# Ask the focused 3D view to start placing `prefab` (its paste mode, with the prefab as the
+# source instead of the clipboard).
+func request_prefab_paste(prefab: Prefab) -> void:
+	if prefab != null and active_project != null:
+		prefab_paste_requested.emit(prefab)
 
 const BRUSH_SIZE_MAX := 15
 

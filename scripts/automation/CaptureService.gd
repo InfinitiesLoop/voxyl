@@ -67,28 +67,104 @@ func is_rendering_available() -> bool:
 # Returns the Image, or null if the window isn't drawing.
 func render(pose: Dictionary, render_spec: Dictionary, size: Vector2i, marker: Array = [],
 		cutaway: Array = []) -> Image:
-	_host.size = size
-	_view.set_cutaway_override(cutaway)
-	_view.set_viewport_size(size)
+	return await _render_with(_host, _view, pose, render_spec, size, marker, cutaway)
+
+func _render_with(host: SubViewport, view: View3D, pose: Dictionary, render_spec: Dictionary, size: Vector2i,
+		marker: Array = [], cutaway: Array = []) -> Image:
+	_last_view = view
+	host.size = size
+	view.set_cutaway_override(cutaway)
+	view.set_viewport_size(size)
 	var opts := ViewOptions.defaults()
 	opts["projection"] = "orthographic" if float(pose.get("ortho_size", 0.0)) > 0.0 else "perspective"
 	opts.merge(render_spec, true)
-	_view.set_render_options(opts)
-	_view.set_camera_pose(pose["pos"], pose["target"], float(pose.get("fov", 50.0)), float(pose.get("ortho_size", 0.0)))
+	view.set_render_options(opts)
+	view.set_camera_pose(pose["pos"], pose["target"], float(pose.get("fov", 50.0)), float(pose.get("ortho_size", 0.0)))
 	if marker.size() == 2:
-		_view.set_marker_box(marker[0], marker[1])
+		view.set_marker_box(marker[0], marker[1])
 	else:
-		_view.set_marker_box(null)
-	_view.flush_pending()   # the offscreen view defers its rebuilds until a capture needs them
+		view.set_marker_box(null)
+	view.flush_pending()   # the offscreen view defers its rebuilds until a capture needs them
 	await get_tree().process_frame   # layout
-	_view.render_once()
+	view.render_once()
 	if not await wait_draw():
 		return null
-	var img := _view.viewport_image()
+	var img := view.viewport_image()
 	return img if img != null and not img.is_empty() else null
 
+# The camera axes of whichever view rendered last (for the gizmo drawn over it).
+var _last_view: View3D
+
 func camera_basis() -> Dictionary:
-	return _view.camera_info()
+	return (_last_view if _last_view != null else _view).camera_info()
+
+# --- Prefab renders -----------------------------------------------------------------
+# A prefab isn't part of any open build, so it gets its own offscreen view whose source is a
+# stand-in project: the prefab's cells under its preferred palette stack. The stand-in is
+# kept while the same prefab (unchanged) is rendered again, so a sheet rebuilds it once.
+
+const THUMB_SIZE := Vector2i(256, 256)
+const THUMB_RENDER := {"background": "plain", "lighting": "studio"}
+
+var _prefab_host: SubViewport
+var _prefab_view: View3D
+var _prefab_key := ""
+
+# A stand-in project for rendering `prefab` (never listed, never saved).
+static func prefab_stage(prefab: Prefab) -> VoxelProject:
+	var p := VoxelProject.new()
+	p.name = "prefab:" + prefab.name
+	p.scratch = true
+	p.data = prefab.data
+	p.palette_names.assign(prefab.palette_names)
+	return p
+
+func _ensure_prefab_view(prefab: Prefab) -> void:
+	if _prefab_view == null:
+		_prefab_host = SubViewport.new()
+		_prefab_host.size = THUMB_SIZE
+		_prefab_host.render_target_update_mode = SubViewport.UPDATE_DISABLED
+		add_child(_prefab_host)
+		_prefab_view = View3D.new()
+		_prefab_view.offscreen = true
+		_prefab_host.add_child(_prefab_view)
+		_prefab_view.set_cutaway_override([])
+		_prefab_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		_prefab_view.set_active(false)
+	var key := "%s|%d|%d|%s" % [prefab.name, prefab.get_instance_id(), prefab.modified_at, ",".join(prefab.palette_names)]
+	if key != _prefab_key:
+		_prefab_key = key
+		_prefab_view.set_source_project(prefab_stage(prefab))
+
+# The camera pose framing a prefab's whole box (see CameraFraming.frame for the arguments).
+static func prefab_pose(prefab: Prefab, bearing: Variant, elevation: Variant, size: Vector2i, ortho := false, fov := 40.0) -> Dictionary:
+	var box := AABB(Vector3.ZERO, Vector3(prefab.size))
+	var pose := CameraFraming.frame(box, CameraFraming.bearing(bearing), elevation, fov, aspect_of(size), 1.08, ortho, -1.0, 0.0)
+	pose["from"] = CameraFraming.compass_word(CameraFraming.bearing(bearing))
+	pose["box"] = box
+	return pose
+
+# Render a prefab. The caller holds the capture lock (acquire / release).
+func render_prefab(prefab: Prefab, pose: Dictionary, render_spec: Dictionary, size: Vector2i) -> Image:
+	_ensure_prefab_view(prefab)
+	return await _render_with(_prefab_host, _prefab_view, pose, render_spec, size)
+
+# Its card thumbnail: a three-quarter view on a plain backdrop. The caller holds the lock.
+func prefab_thumbnail(prefab: Prefab) -> Image:
+	var pose := prefab_pose(prefab, "se", 30, THUMB_SIZE)
+	return await render_prefab(prefab, pose, THUMB_RENDER, THUMB_SIZE)
+
+# Render and store a prefab's thumbnail (takes the capture lock itself). False when the
+# window can't draw — the card keeps its placeholder until the next try.
+func bake_prefab_thumbnail(prefab: Prefab) -> bool:
+	if not is_rendering_available() or prefab == null:
+		return false
+	await acquire()
+	var img: Image = await prefab_thumbnail(prefab)
+	release()
+	if img == null:
+		return false
+	return PrefabStore.save_thumbnail(prefab.name, img) == OK
 
 # The aspect of an output size (for framing).
 static func aspect_of(size: Vector2i) -> float:

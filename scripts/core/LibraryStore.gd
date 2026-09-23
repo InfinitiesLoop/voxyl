@@ -237,14 +237,14 @@ static func _rm_rf(abs_path: String) -> Error:
 # --- Load -------------------------------------------------------------------
 
 # The library folder names present under ROOT (every child dir except the reserved
-# palettes folder).
+# palettes, prefabs and trash folders).
 static func list_libraries() -> PackedStringArray:
 	var out := PackedStringArray()
 	var dir := DirAccess.open(AssetLibrary.path_for())
 	if dir == null:
 		return out
 	for d in dir.get_directories():
-		if d != PALETTES_DIR and d != TRASH_DIR:
+		if d != PALETTES_DIR and d != TRASH_DIR and d != PrefabStore.DIR:
 			out.append(d)
 	return out
 

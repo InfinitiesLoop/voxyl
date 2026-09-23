@@ -23,6 +23,8 @@ Edit tools accept symmetry ({rotate4:{center:[x,z]}}, mirror_x, mirror_z, mirror
 
 Text layers (region_text / cells_place_layers): {origin, axis:"y", legend, layers}. axis y: layers go up from origin.y, rows run north->south from origin.z, characters west->east from origin.x. Legend: char -> "Semantic" | {semantic, facing, top} | [{semantic, slot}, ...] (a cell of parts). "." = untouched, "_" = clear. region_text writes the same format, so dumps round-trip.
 
+Prefabs: named, reusable pieces (a pillar, a bay module, a tree), global to the workspace like palettes and shared with the user's Prefabs browser. prefab_save a region once, then prefab_place it as often as needed (rotate, mirror, repeat, symmetry) instead of clipboard round trips. A prefab stores semantics, never materials, plus a preferred palette stack for its own previews; placed into a project, it resolves through that project's palettes. prefab_place reports semantics the project doesn't map and which preferred palettes would; pass add_palettes:true to add those to the bottom of the stack.
+
 Seeing the build: capture renders offscreen from any camera without touching the user's views ({frame: Region, from: "se"|yaw, elevation: "low"|"eye"|"high"|"top"|deg}); capture_sheet gives labeled multi-view sheets; region_text is the cheapest exact view. view_set moves the user's own camera (only when handing a view over).
 
 Workflow that works: block_search / block_swatches to pick materials -> palette_create -> project_create (scratch:true for experiments) -> build with cells_place_layers + symmetry -> capture_sheet {preset:"review"} -> fix -> project_save. Use status first to see what's open."""
