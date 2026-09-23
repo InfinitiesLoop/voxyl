@@ -959,6 +959,7 @@ func _refresh_entry_detail() -> void:
 		chooser.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		vbox.add_child(chooser)
 		chooser.configure(_editing_palette, entry.block_type_name)
+		chooser.set_preview_shape(entry.shape_id)   # preview what the entry places
 		# The inline editor has no OK button, so exploring commits live (as the old flat grid
 		# did). Refresh the left entry grid + the chooser's "Current:" chip, but *not* the whole
 		# detail — a full rebuild would tear down the chooser and lose its browse/preview state.

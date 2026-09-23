@@ -57,9 +57,13 @@ var _drag_last := Vector2.ZERO
 var _rctrl_held := false
 var _ralt_held := false
 var _rshift_held := false
-# Left ctrl = "place on the far side" for shaped parts (Forge Microblocks' modifier). Right
-# ctrl stays fly-up, so the two never collide.
+# Alternate placement for shaped parts, held while clicking: a microblock goes on the far
+# side (Forge Microblocks' Ctrl), an architecture shape goes base-against-the-wall
+# (ArchitectureCraft's sneak). Two ways to hold it, so it works for either hand:
+#   left Ctrl          — right-handed keyboard (right Ctrl stays fly-up)
+#   mouse thumb button — back or forward, either hand
 var _lctrl_held := false
+var _alt_mouse_held := false
 
 # --- Raycast state ---
 var _target_hit := false
@@ -823,6 +827,17 @@ func _input(event: InputEvent) -> void:
 	# While flying we own all mouse input — consume it so an unconsumed click
 	# can't fall through to GUI hit-testing (at the captured/centre position) and
 	# steal focus into another pane.
+	# Either mouse thumb button (back/forward) held = alternate placement for shaped parts,
+	# the handedness-neutral twin of left Ctrl (see _alt_placement). Tracked on press AND
+	# release, so it's checked before the pressed-only click handling below.
+	if event is InputEventMouseButton and ((event as InputEventMouseButton).button_index == MOUSE_BUTTON_XBUTTON1 \
+			or (event as InputEventMouseButton).button_index == MOUSE_BUTTON_XBUTTON2):
+		var thumb := (event as InputEventMouseButton).pressed
+		if thumb != _alt_mouse_held:
+			_alt_mouse_held = thumb
+			_refresh_shaped_preview()
+		get_viewport().set_input_as_handled()
+		return
 	if event is InputEventMouseMotion:
 		var motion := event as InputEventMouseMotion
 		_yaw -= motion.relative.x * 0.18
@@ -918,6 +933,7 @@ func _release_cursor() -> void:
 	_ralt_held = false
 	_rshift_held = false
 	_lctrl_held = false
+	_alt_mouse_held = false
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 	_highlight.visible = false
 	_clear_shaped_preview()
@@ -2256,12 +2272,15 @@ func _shaped_aim() -> Dictionary:
 		return {"cell": below, "side": 1, "vhit": p - Vector3(below), "point": p}
 	return {}
 
+func _alt_placement() -> bool:
+	return _lctrl_held or _alt_mouse_held
+
 func _shaped_placement(aim: Dictionary) -> Dictionary:
 	if aim.is_empty():
 		return {}
 	var semantic := VoxelWorld.selected_semantic
 	return ShapePlacement.resolve(semantic, VoxelWorld.get_shape_id_for_semantic(semantic),
-		aim["cell"], aim["vhit"], aim["side"], _lctrl_held)
+		aim["cell"], aim["vhit"], aim["side"], _alt_placement())
 
 func _refresh_shaped_preview() -> void:
 	if not _placing_shape():

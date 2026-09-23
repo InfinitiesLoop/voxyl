@@ -27,6 +27,7 @@ var _all_items: Array = []
 var _owner_by_key: Dictionary = {}   # block name -> owning library name (its first-hit owner)
 var _current_block: String = ""      # the committed assignment (drives the "Current:" chip)
 var _selected_block: String = ""     # the explored block (what get_selected returns)
+var _preview_shape: String = ""      # shape the preview cuts the block into ("" = whole block)
 
 var _rail: LibraryList
 var _grid: BlockGrid
@@ -122,7 +123,7 @@ func configure(palette: Palette, current_block_name: String) -> void:
 				_all_items.append(BlockGrid.block_item(bt, lib_name, lib_name))
 	_rebuild_rail()
 	_apply_filter([])          # empty = All blocks
-	_preview.set_block(_resolve(_selected_block))
+	_update_preview()
 	_refresh_current_chip()
 
 # The explored block (what a host commits). Starts at the entry's current assignment.
@@ -186,8 +187,23 @@ func _apply_filter(selected_libs: Array) -> void:
 func _on_item_explored(key: String) -> void:
 	_selected_block = key
 	_grid.set_selected(key)
-	_preview.set_block(_resolve(key))
+	_update_preview()
 	selection_changed.emit(key)
+
+# Show the explored block cut into `shape_id` (a ShapeCatalog id) in the preview, or the
+# whole block for "" — so a shaped palette entry previews as what it will actually place.
+# Works while the block is still undecided too (the shape in the planning color).
+func set_preview_shape(shape_id: String) -> void:
+	if shape_id == _preview_shape:
+		return
+	_preview_shape = shape_id
+	_update_preview()
+
+func _update_preview() -> void:
+	if _preview_shape.is_empty():
+		_preview.set_block(_resolve(_selected_block))
+	else:
+		_preview.set_block(VoxelWorld.icon_block_type_for_shape(_preview_shape, _selected_block, _palette))
 
 func _resolve(block_name: String) -> BlockType:
 	if block_name.is_empty() or _palette == null:

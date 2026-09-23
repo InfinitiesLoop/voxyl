@@ -265,6 +265,10 @@ func _on_picks_changed() -> void:
 	var ok := get_ok_button()
 	if ok:
 		ok.disabled = _kind == Kind.SHAPE and _shape_id.is_empty()
+	# The big preview shows exactly what the entry will place: the block, or the shape cut
+	# from it.
+	if _chooser and _palette:
+		_chooser.set_preview_shape(_shape_id if _kind == Kind.SHAPE else "")
 
 # "minecraft:oak_planks" / "sets/azur/azur_ (14)" → "Oak Planks" / "Azur (14)".
 static func _pretty_block_name(block: String) -> String:
