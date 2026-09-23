@@ -1,6 +1,21 @@
 # Voxyl MCP — Agent Tooling Plan
 
-Status: **proposal** (2026-09-22). To be built in a dedicated MCP tooling session.
+Status: **P1 built** (2026-09-22), awaiting the acceptance run (§7) from a real Claude session.
+
+Built so far (branch `shaped-parts`):
+- Server, Settings dialog (Home + editor bar ⚙), Pause button + presence badge, `--sandbox` /
+  `--mcp-port` / `--mcp-token` command-line flags for scripted runs.
+- Core: `VoxelWorld.apply_edits` (validated batches, rejection reasons), `SpatialXform`
+  (symmetry, repeat, part-slot transforms incl. LH/RH twins), `RegionOps`, `RegionCodec`,
+  slot names + orientation words, scratch projects, per-palette saves.
+- CaptureService stage 1 (private offscreen View3D + 2D compositing stage), `CameraFraming`,
+  `ViewOptions` registry + per-view toolbar with Render (Textured / Intent / Clay), Lighting
+  (App / Studio / Flat), Projection (Perspective / Orthographic) and Camera presets.
+- Tools: everything marked P1 in §6, plus `screenshot`, `palette_delete`, `project_delete`,
+  capture_sheet presets `elevations` / `turntable`. Not yet: `capture_pick`, `checkpoint`,
+  named regions, `region_transform` / `region_stamp`, SSE, workspace lock file.
+- Fixed on the way: every View3D now has its own 3D world (they used to share the root world,
+  so split panes each rendered every pane's meshes).
 
 Origin: the "Conduit Pillar" experiment. Claude designed a 5x5 sci-fi pillar inside Voxyl, looking
 at renders as it went. It worked well (the result is the `Conduit Pillar` project + palette), but

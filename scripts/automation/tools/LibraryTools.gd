@@ -83,7 +83,7 @@ static func _block_search(args: Dictionary) -> Dictionary:
 				return str(a[1]) < str(b[1])
 			var ba: BlockType = a[2]
 			var bb: BlockType = b[2]
-			return ba.order < bb.order if ba.order != bb.order else ba.name < bb.name)
+			return ba.order < bb.order if ba.order != bb.order else ba.name.naturalnocasecmp_to(bb.name) < 0)
 	var results: Array = []
 	for h in hits.slice(offset, offset + limit):
 		var bt: BlockType = h[2]

@@ -65,6 +65,7 @@ func _run() -> void:
 	_check_block_render3d_multipart()
 	_check_tinted_render(v3d)
 	_check_flat_render(v3d)
+	_check_render_options(v3d)
 	await _check_import_progress()
 	_check_library_rename()
 
@@ -741,3 +742,24 @@ func _panes(shell: MultiViewShell) -> Array:
 
 func _views(shell: MultiViewShell) -> Array:
 	return shell._all_views()
+
+# Per-view render options (the view toolbar's dropdowns): they change only that view, ride
+# along in its saved state, and tell the toolbar.
+func _check_render_options(v3d: Node) -> void:
+	var view := v3d as View3D
+	_check("a 3D view has its toolbar", view.get("_toolbar") is ViewToolbar)
+	var fired := [0]
+	var cb := func(): fired[0] += 1
+	view.settings_changed.connect(cb)
+	view.set_render_options({"mode": "intent", "lighting": "studio"})
+	_check("render options change and tell the toolbar", view.render_options["mode"] == "intent" and fired[0] == 1)
+	_check("…and are saved with the view state", view.get_view_state()["render"]["lighting"] == "studio")
+	view.set_render_options({"mode": "neon"})
+	_check("unknown values are ignored", view.render_options["mode"] == "intent" and fired[0] == 1)
+	var fresh := View3D.new()
+	add_child(fresh)
+	fresh.apply_view_state(view.get_view_state())
+	_check("a view restored from that state gets the same lens", fresh.render_options["mode"] == "intent")
+	fresh.queue_free()
+	view.set_render_options(ViewOptions.defaults())
+	view.settings_changed.disconnect(cb)

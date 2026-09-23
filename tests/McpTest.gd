@@ -38,6 +38,7 @@ func _run() -> void:
 	_test_arch_orientation()
 	_test_symmetry()
 	_test_codec()
+	_test_camera_framing()
 	AppSettings.set_value(AppSettings.SECTION_AGENT, "enabled", true)
 	AppSettings.set_value(AppSettings.SECTION_AGENT, "port", PORT)
 	AppSettings.set_value(AppSettings.SECTION_AGENT, "require_token", true)
@@ -137,6 +138,31 @@ func _test_codec() -> void:
 	_check("layer 0 row 0 is Mass then Core", str(t["layers"][0][0]) == "MC")
 	_check("layer 1 row 1 has a part char", str(t["layers"][1][1]).substr(1, 1) == "g")
 	_check("legend part slot by name", str(t["legend"]["g"][0]["slot"]) == "south")
+
+func _test_camera_framing() -> void:
+	print("-- camera framing + view options")
+	_check("compass words", CameraFraming.bearing("se") == 135.0 and CameraFraming.bearing(90) == 90.0 and is_nan(CameraFraming.bearing("up")))
+	var box := AABB(Vector3(-2, 0, -2), Vector3(5, 18, 5))
+	var pose := CameraFraming.frame(box, 135.0, 30, 50.0, 16.0 / 9.0)
+	var p: Vector3 = pose["pos"]
+	_check("a south-east camera stands south-east of the box", p.x > 0.5 and p.z > 0.5 and p.y > box.get_center().y)
+	_check("at the asked elevation", absf(float(pose["elevation"]) - 30.0) < 0.5)
+	var basis := Basis.looking_at((pose["target"] - p).normalized(), Vector3.UP)
+	var tan_v := tan(deg_to_rad(25.0))
+	var inside := true
+	for i in 8:
+		var c := box.position + box.size * Vector3(i & 1, (i >> 1) & 1, (i >> 2) & 1)
+		var q := c - p
+		var depth := -q.dot(basis.z)
+		if absf(q.dot(basis.y)) > tan_v * depth + 0.01 or absf(q.dot(basis.x)) > tan_v * 16.0 / 9.0 * depth + 0.01:
+			inside = false
+	_check("the whole box is in frame", inside)
+	var eye := CameraFraming.frame(box, 225.0, "eye", 70.0, 1.5, 1.1, false, -1.0, 0.0)
+	_check("eye level stands at eye height", is_equal_approx((eye["pos"] as Vector3).y, CameraFraming.EYE_HEIGHT))
+	var ortho := CameraFraming.frame(box, 180.0, 0, 50.0, 1.0, 1.0, true)
+	_check("an orthographic front view is tall enough for the box", float(ortho["ortho_size"]) >= 18.0)
+	_check("ViewOptions accepts known values", ViewOptions.check({"mode": "intent", "lighting": "studio"}).is_empty())
+	_check("ViewOptions rejects unknown ones", not ViewOptions.check({"mode": "neon"}).is_empty() and not ViewOptions.check({"shiny": "yes"}).is_empty())
 
 # --- HTTP transport -------------------------------------------------------------------
 
@@ -333,6 +359,9 @@ func _test_build() -> void:
 
 	var guard := await _tool("cells_set", {"project": "Other", "semantic": "Mass", "positions": [[0, 20, 0]]})
 	_check("project guard", guard["_is_error"] and str(guard.get("code", "")) == "project_changed")
+
+	var cap := await _tool("capture", {})
+	_check("capture without a display says so", cap["_is_error"] and str(cap.get("code", "")) == "no_renderer")
 
 	var save := await _tool("project_save", {"as": "MCP Test Saved"})
 	_check("save as promotes the scratch project", not save["_is_error"] and not VoxelWorld.active_project.scratch)

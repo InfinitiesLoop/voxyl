@@ -35,9 +35,10 @@ bash tests/run_tests.sh          # functional smoke tests against the real autol
 ```
 scripts/core/       — data model (VoxelData, VoxelProject, VoxelWorkspace, VoxelWorld autoload)
 scripts/views/      — view implementations (View2DGrid, future 3D view, etc.)
-scripts/ui/         — UI components (HomeScreen, PalettePanel, LibraryList, Main)
+scripts/ui/         — UI components (HomeScreen, PalettePanel, LibraryList, Main, SettingsDialog)
+scripts/automation/ — the in-app MCP server (McpServer autoload), its tools (tools/), CaptureService
 scenes/             — Godot scene files
-tests/              — SmokeTest.gd + run_tests.sh
+tests/              — SmokeTest, ShellTest, McpTest (+ run_tests.sh)
 tools/              — validate-scripts.sh
 ```
 

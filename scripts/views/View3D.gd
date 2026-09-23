@@ -246,6 +246,10 @@ func _ready() -> void:
 	VoxelWorld.project_opened.connect(_on_project_opened)
 	# Batches placed by agents (VoxelWorld.apply_edits) get the same reveal as the user's own.
 	VoxelWorld.placement_fx_requested.connect(func(steps: Array): if not offscreen: _animate_placement(steps))
+	if not offscreen:
+		_toolbar = ViewToolbar.new(self)
+		_toolbar.position = Vector2(6, 6)
+		add_child(_toolbar)
 	VoxelWorld.about_to_save.connect(_on_about_to_save)
 	VoxelWorld.block_changed.connect(func(p, _s): _mark_cell_dirty(p))
 	VoxelWorld.palette_stack_changed.connect(func(): _mark_dirty(); if _fly_mode: _overlay.queue_redraw())
@@ -331,6 +335,10 @@ func _setup_viewport() -> void:
 
 	_viewport = SubViewport.new()
 	_viewport.transparent_bg = false
+	# Each view gets its own 3D world. A SubViewport otherwise draws into the shared root
+	# world, so every 3D view (split panes, the agent's offscreen camera) would render every
+	# other view's meshes, lights and sky on top of its own.
+	_viewport.own_world_3d = true
 	svc.add_child(_viewport)
 
 	_world_env = WorldEnvironment.new()
@@ -339,12 +347,14 @@ func _setup_viewport() -> void:
 	_init_skyboxes()
 	_apply_sky()
 
-	var sun := DirectionalLight3D.new()
+	_sun = DirectionalLight3D.new()
+	var sun := _sun
 	sun.rotation_degrees = Vector3(-50, 45, 0)
 	sun.light_energy = 1.0
 	_viewport.add_child(sun)
 
-	var fill := DirectionalLight3D.new()
+	_fill = DirectionalLight3D.new()
+	var fill := _fill
 	fill.rotation_degrees = Vector3(40, -135, 0)
 	fill.light_color = Color(1.0, 1.0, 1.0)
 	fill.light_energy = 0.35
@@ -703,7 +713,7 @@ func _cycle_sky() -> void:
 	if _skyboxes.size() <= 1:
 		return
 	_current_sky = (_current_sky + 1) % _skyboxes.size()
-	_apply_sky()
+	_apply_lighting()
 	_sky_label_timer = 2.5
 	_overlay.queue_redraw()
 
@@ -746,6 +756,8 @@ func _process(delta: float) -> void:
 # ---------------------------------------------------------------------------
 
 func _input(event: InputEvent) -> void:
+	if offscreen:
+		return
 	if not _active or _suspended or not is_visible_in_tree():
 		return
 
@@ -877,6 +889,8 @@ func _input(event: InputEvent) -> void:
 
 # Non-captured mouse: drag-to-look + scroll-to-dolly
 func _on_svc_input(event: InputEvent) -> void:
+	if offscreen:
+		return
 	if _suspended:
 		return
 	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed and not _active:
@@ -901,11 +915,17 @@ func _on_svc_input(event: InputEvent) -> void:
 		elif mb.button_index == MOUSE_BUTTON_MIDDLE and mb.pressed and _visible_overlay_id() != "":
 			_close_tool_overlay()  # closes the overlay and resumes flying, mirroring MMB in _input
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP:
-			# Dolly forward along look direction
-			_camera_pos += _get_look_dir() * DOLLY_STEP
+			# Dolly forward along look direction (orthographic: zoom, since distance does nothing)
+			if _camera.projection == Camera3D.PROJECTION_ORTHOGONAL:
+				_camera.size = maxf(1.0, _camera.size / 1.1)
+			else:
+				_camera_pos += _get_look_dir() * DOLLY_STEP
 			_update_camera()
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			_camera_pos -= _get_look_dir() * DOLLY_STEP
+			if _camera.projection == Camera3D.PROJECTION_ORTHOGONAL:
+				_camera.size = minf(500.0, _camera.size * 1.1)
+			else:
+				_camera_pos -= _get_look_dir() * DOLLY_STEP
 			_update_camera()
 	elif event is InputEventMouseMotion and _drag_looking:
 		var motion := event as InputEventMouseMotion
@@ -977,6 +997,8 @@ func get_view_state() -> Dictionary:
 		"yaw": _yaw,
 		"pitch": _pitch,
 		"sky": _current_sky,
+		"render": render_options.duplicate(),
+		"ortho_size": _camera.size if _camera else 20.0,
 	}
 
 func apply_view_state(state: Dictionary) -> void:
@@ -985,11 +1007,202 @@ func apply_view_state(state: Dictionary) -> void:
 	_pitch = state.get("pitch", _pitch)
 	_current_sky = int(state.get("sky", _current_sky))
 	_applying_state = true
+	if state.get("render") is Dictionary:
+		set_render_options(state["render"])
+	if _camera != null and state.has("ortho_size"):
+		_camera.size = float(state["ortho_size"])
 	if _world_env != null:
-		_apply_sky()
+		_apply_lighting()
 	if _camera != null:
 		_update_camera()
 	_applying_state = false
+
+# ---------------------------------------------------------------------------
+# Render options (see ViewOptions) — per view, saved with the layout like the camera.
+# ---------------------------------------------------------------------------
+
+signal settings_changed()
+
+var render_options := ViewOptions.defaults()
+var _sun: DirectionalLight3D
+var _fill: DirectionalLight3D
+var _under_light: DirectionalLight3D
+var _mode_mats := {}   # semantic -> material for the intent / clay lenses
+var _marker_box: MeshInstance3D
+var _toolbar: Control
+
+# Change some render options ({id: value}; unknown ids/values are ignored — check them with
+# ViewOptions.check first). Rebuilds what the change affects and tells the toolbar.
+func set_render_options(opts: Dictionary) -> void:
+	var changed := false
+	for k in opts:
+		if render_options.has(k) and str(opts[k]) in ViewOptions.values(str(k)) and render_options[k] != str(opts[k]):
+			render_options[k] = str(opts[k])
+			changed = true
+	if not changed:
+		return
+	_apply_lighting()
+	_apply_projection()
+	_mode_mats.clear()
+	_mark_dirty()
+	if not _applying_state and not offscreen:
+		VoxelWorld.mark_dirty()   # the layout (with this view's settings) is saved with the project
+	settings_changed.emit()
+
+func _apply_lighting() -> void:
+	if _world_env == null:
+		return
+	var env := _world_env.environment
+	var lighting := str(render_options["lighting"])
+	var plain := str(render_options["background"]) == "plain"
+	_apply_sky()
+	_sky_sphere.visible = not plain
+	_grid_plane.visible = not plain
+	if plain:
+		env.background_color = Color(0.17, 0.18, 0.2)
+	if _under_light == null:
+		_under_light = DirectionalLight3D.new()
+		_under_light.rotation_degrees = Vector3(70, 30, 0)   # shines upward, onto undersides
+		_viewport.add_child(_under_light)
+	match lighting:
+		"studio":
+			env.ambient_light_color = Color(0.92, 0.92, 0.95)
+			env.ambient_light_energy = 0.55
+			_sun.light_energy = 0.85
+			_fill.light_energy = 0.45
+			_under_light.light_energy = 0.4
+			_under_light.visible = true
+		"flat":
+			env.ambient_light_color = Color.WHITE
+			env.ambient_light_energy = 1.0
+			_sun.light_energy = 0.0
+			_fill.light_energy = 0.0
+			_under_light.visible = false
+		_:
+			_sun.light_energy = 1.0
+			_fill.light_energy = 0.35
+			_under_light.visible = false
+
+func _apply_projection() -> void:
+	if _camera == null:
+		return
+	var ortho := str(render_options["projection"]) == "orthographic"
+	_camera.projection = Camera3D.PROJECTION_ORTHOGONAL if ortho else Camera3D.PROJECTION_PERSPECTIVE
+	if ortho and _camera.size < 1.0:
+		_camera.size = 20.0
+
+# The flat material a semantic gets in the intent / clay lenses. Intent colors are spread
+# around the hue wheel by golden ratio in the project's palette order, so neighbors differ.
+func _mode_material(semantic: String) -> StandardMaterial3D:
+	if _mode_mats.has(semantic):
+		return _mode_mats[semantic]
+	var mat := StandardMaterial3D.new()
+	if render_options["mode"] == "intent":
+		mat.albedo_color = intent_color(semantic)
+		if render_options["lighting"] == "flat":
+			mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	else:
+		mat.albedo_color = Color(0.78, 0.76, 0.72)
+		mat.roughness = 0.9
+	_mode_mats[semantic] = mat
+	return mat
+
+# The intent-lens color of a semantic (also what a capture's legend shows).
+static func intent_color(semantic: String) -> Color:
+	var names := VoxelWorld.merged_semantic_names()
+	var i := names.find(semantic)
+	if i < 0:
+		i = names.size() + absi(semantic.hash()) % 17
+	return Color.from_hsv(fposmod(0.08 + i * 0.618034, 1.0), 0.62, 0.92)
+
+# Aim the camera: stand at `pos` looking at `target`. fov < 0 keeps the current one;
+# ortho_size > 0 switches to an orthographic camera of that height, 0 to perspective.
+func set_camera_pose(pos: Vector3, target: Vector3, fov := -1.0, ortho_size := -1.0) -> void:
+	var dir := (target - pos).normalized()
+	_camera_pos = pos
+	_yaw = rad_to_deg(atan2(dir.x, dir.z))
+	_pitch = clampf(rad_to_deg(asin(clampf(dir.y, -1.0, 1.0))), -89.0, 89.0)
+	if _camera != null:
+		if fov > 0.0:
+			_camera.fov = fov
+		if ortho_size > 0.0:
+			render_options["projection"] = "orthographic"
+			_camera.size = ortho_size
+			_apply_projection()
+			settings_changed.emit()
+		elif ortho_size == 0.0 and render_options["projection"] != "perspective":
+			render_options["projection"] = "perspective"
+			_apply_projection()
+			settings_changed.emit()
+	_update_camera()
+
+# The camera as plain numbers: position, look direction, vertical fov, ortho size (0 when
+# perspective), and its right/up axes (for drawing an axes gizmo over a render).
+func camera_info() -> Dictionary:
+	var ortho := _camera.projection == Camera3D.PROJECTION_ORTHOGONAL
+	return {"pos": _camera_pos, "dir": _get_look_dir(), "fov": _camera.fov,
+		"ortho_size": _camera.size if ortho else 0.0,
+		"right": _camera.global_transform.basis.x, "up": _camera.global_transform.basis.y}
+
+func camera_node() -> Camera3D:
+	return _camera
+
+# Frame a box of cells (inclusive min/max) from a compass bearing and elevation, keeping
+# this view's projection. Used by the toolbar's camera presets and by agents.
+func frame_cells(mn: Vector3i, mx: Vector3i, from_bearing: float, elevation: Variant) -> void:
+	var box := AABB(Vector3(mn), Vector3(mx - mn + Vector3i.ONE))
+	var aspect := float(_viewport.size.x) / maxf(1.0, float(_viewport.size.y))
+	var ortho := str(render_options["projection"]) == "orthographic"
+	var floor_y := float(mn.y)
+	var pose := CameraFraming.frame(box, from_bearing, elevation, _camera.fov, aspect, 1.15, ortho, -1.0, floor_y)
+	set_camera_pose(pose["pos"], pose["target"], -1.0, float(pose["ortho_size"]) if ortho else -1.0)
+
+# Offscreen rendering (CaptureService): draw the next frame, then read it back.
+func render_once() -> void:
+	_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+
+func viewport_image() -> Image:
+	return _viewport.get_texture().get_image()
+
+func set_viewport_size(s: Vector2i) -> void:
+	size = Vector2(s)
+	_viewport.size = s
+
+# A wireframe box around cells [mn, mx] (a capture's framed region), or hidden with null.
+func set_marker_box(mn: Variant, mx: Variant = null, color := Color(1.0, 0.85, 0.3)) -> void:
+	if _marker_box == null:
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.vertex_color_use_as_albedo = true
+		mat.no_depth_test = true
+		_marker_box = MeshInstance3D.new()
+		_marker_box.mesh = ImmediateMesh.new()
+		_marker_box.material_override = mat
+		_viewport.add_child(_marker_box)
+	var im := _marker_box.mesh as ImmediateMesh
+	im.clear_surfaces()
+	if mn == null:
+		_marker_box.visible = false
+		return
+	var lo := Vector3(mn as Vector3i)
+	var hi := Vector3(mx as Vector3i) + Vector3.ONE
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	for a in 3:
+		for i in 4:
+			var p := lo
+			var q := lo
+			var b := (a + 1) % 3
+			var c := (a + 2) % 3
+			p[b] = hi[b] if i & 1 else lo[b]
+			p[c] = hi[c] if i & 2 else lo[c]
+			q = p
+			q[a] = hi[a]
+			im.surface_set_color(color)
+			im.surface_add_vertex(p)
+			im.surface_set_color(color)
+			im.surface_add_vertex(q)
+	im.surface_end()
+	_marker_box.visible = true
 
 func set_active(active: bool) -> void:
 	if _active == active:
@@ -1186,6 +1399,7 @@ func _rebuild() -> void:
 	_normal_mats.clear()
 	_faded_mats.clear()
 	_onplane_mats.clear()
+	_mode_mats.clear()
 	# Per-rebuild material caches (pick up palette / block-type edits); the heavy
 	# ImageTexture cache and shared geometry/shaders persist across rebuilds.
 	_model_tex_cache.clear()
@@ -1334,6 +1548,13 @@ func _model_key(model: BlockModel) -> String:
 # tells slice-mode how to restore the base look afterward.
 func _apply_cell_appearance(mi: MeshInstance3D, semantic: String, model: BlockModel) -> void:
 	mi.set_meta("semantic", semantic)
+	if render_options["mode"] != "textured":
+		# Intent / clay lenses: the same geometry, one flat material per semantic (or one for
+		# all), ignoring textures entirely.
+		mi.mesh = _mesh_for_model(model)
+		mi.material_override = _mode_material(semantic)
+		mi.set_meta("textured", false)
+		return
 	var resolved := _resolve_model_textures(model)
 	if resolved.is_empty():
 		mi.mesh = _mesh_for_model(model)
