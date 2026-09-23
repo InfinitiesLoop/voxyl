@@ -23,7 +23,7 @@ The user should be able to build an entire scene without ever choosing a specifi
 
 ## Development Workflow
 
-**Godot version:** 4.6 — binary at `/Applications/Godot.app/Contents/MacOS/Godot`
+**Godot version:** 4.7 — binary at `/Applications/Godot.app/Contents/MacOS/Godot` (macOS) or `C:\godot.exe` (Windows). Scripts in `tools/` and `tests/` auto-detect whichever is present; override with the `GODOT_EXECUTABLE` env var (`tools/validate-scripts.sh`) or `GODOT` env var (`tests/run_tests.sh`) if it lives elsewhere.
 
 **Before committing any code change, always run both:**
 ```bash

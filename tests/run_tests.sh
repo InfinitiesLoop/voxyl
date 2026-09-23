@@ -2,7 +2,16 @@
 # Usage: bash tests/run_tests.sh
 # Runs the headless test scenes and exits non-zero if any of them fail.
 
-GODOT="${GODOT:-/Applications/Godot.app/Contents/MacOS/godot}"
+if [[ -n "${GODOT:-}" ]]; then
+    : # explicit override wins
+elif [[ -f "/Applications/Godot.app/Contents/MacOS/Godot" ]]; then
+    GODOT="/Applications/Godot.app/Contents/MacOS/Godot"
+elif [[ -f "/c/godot.exe" ]]; then
+    GODOT="/c/godot.exe"
+else
+    echo "ERROR: Godot executable not found. Set GODOT to its path." >&2
+    exit 1
+fi
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 run_scene() {

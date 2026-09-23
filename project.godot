@@ -31,6 +31,8 @@ file_logging/log_path="res://.logs/godot.log"
 
 [display]
 
-window/size/viewport_width=1280
-window/size/viewport_height=800
+window/size/viewport_width=1920
+window/size/viewport_height=1200
 window/size/mode=2
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
