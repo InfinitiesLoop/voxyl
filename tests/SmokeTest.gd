@@ -1775,6 +1775,9 @@ func _test_tint_resolver() -> void:
 # a resource pack the same way it reads an unzipped folder.
 func _test_asset_sources() -> void:
 	print("-- mc asset sources (dir + zip parity)")
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_srclib__"
+	_rm_rf(AssetLibrary.ROOT)
 	var base := "user://__voxyl_src__"
 	_rm_rf(base)
 	var assets := base + "/assets"
@@ -1821,7 +1824,9 @@ func _test_asset_sources() -> void:
 		and ws.get_block_model("minecraft:block/stone") != null)
 
 	zsrc.close()
+	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(base)
+	AssetLibrary.ROOT = saved_root
 
 # Phase 5: the import service — detect sources from a chosen path, browse the blocks
 # they offer, import a selected subset, dedup/namespace colliding ids, and persist
@@ -2146,12 +2151,15 @@ func _test_nei_roster_import() -> void:
 
 	# item.csv: widget/machine/wool are blocks; gadget is an item-only row (must be filtered
 	# out even though itempanel.csv lists it too, exactly like a tool/food item would).
+	# "gear" mimics an old-style modid registry name ("BuildCraft|Core") whose real assets/
+	# folder is a sanitized "buildcraftcore" — pipes/case aren't legal in a resource path.
 	_write_file(dumps + "/item.csv", "\n".join([
 		"Name,ID,Has Block,Mod,Class,Display Name",
 		"testmod:widget,100,true,TestMod,some.Class,Widget",
 		"testmod:machine,101,true,TestMod,some.Class,Machine",
 		"testmod:wool,102,true,TestMod,some.Class,Wool",
 		"testmod:gadget,103,false,TestMod,some.Class,Gadget",
+		"BuildCraft|Core:gear,104,true,BuildCraft|Core,some.Class,Gear",
 	]))
 	# itempanel.csv: the confirmed per-subtype roster. "machine" gets two metas with no
 	# texture at all (the GT single-block-machine shape); "wool" is meta-packed with real
@@ -2165,12 +2173,14 @@ func _test_nei_roster_import() -> void:
 		"testmod:wool,102,0,false,White Wool",
 		"testmod:wool,102,1,false,Orange Wool",
 		"testmod:gadget,103,0,false,Gadget",
+		"BuildCraft|Core:gear,104,0,false,Gear",
 	]))
 
 	_write_solid(blocks + "/widget.png", Color(0.2, 0.6, 0.9))
 	_write_solid(blocks + "/wool_0.png", Color(0.95, 0.95, 0.95))
 	_write_solid(blocks + "/wool_1.png", Color(0.9, 0.5, 0.1))
 	# No "machine" texture anywhere — the GT-machine shape: confirmed identity, no visual yet.
+	_write_solid(assets + "/buildcraftcore/textures/blocks/gear.png", Color(0.6, 0.6, 0.1))
 
 	var ws := VoxelWorkspace.new()
 	var lib := ws.get_or_add_library("nei")
@@ -2178,7 +2188,7 @@ func _test_nei_roster_import() -> void:
 	var nri := NeiRosterImporter.new([src_asset], lib)
 
 	_check("load_dumps succeeds against the real column format", nri.load_dumps(dumps) == "")
-	_check("mods lists the one mod present", Array(nri.mods) == ["TestMod"])
+	_check("mods lists both mods present", Array(nri.mods) == ["BuildCraft|Core", "TestMod"])
 	var rows := nri.entries("TestMod")
 	_check("Has Block:false rows are dropped even though itempanel.csv lists them",
 		rows.size() == 5)   # widget + machine(x2 metas) + wool(x2 metas) — gadget excluded
@@ -2223,6 +2233,13 @@ func _test_nei_roster_import() -> void:
 
 	_check("reimporting the same (registry, meta) reuses the existing block type",
 		nri.import_entry(widget_row) == widget_bt)
+
+	var gear_rows := nri.entries("BuildCraft|Core")
+	_check("old-style modid namespace is its own mod entry", gear_rows.size() == 1)
+	var gear_bt := nri.import_entry(gear_rows[0])
+	_check("normalized-namespace fallback finds textures under the real (sanitized) folder",
+		not gear_bt.model_id.is_empty()
+		and ws.get_block_model(gear_bt.model_id).elements[0]["faces"][BlockModel.Dir.UP]["texture_key"] == "buildcraftcore:blocks/gear")
 
 	var bad := NeiRosterImporter.new([src_asset], ws.get_or_add_library("bad"))
 	_check("a missing dumps folder fails with a descriptive message, not a crash",

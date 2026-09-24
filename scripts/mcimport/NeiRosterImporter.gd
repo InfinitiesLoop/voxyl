@@ -34,7 +34,8 @@ const _ITEM_HEADER := ["Name", "ID", "Has Block", "Mod", "Class", "Display Name"
 const _ITEMPANEL_HEADER := ["Item Name", "Item ID", "Item meta", "Has NBT", "Display Name"]
 
 var _library: BlockLibrary
-var _sources_by_ns := {}     # lowercased namespace -> MCAssetSource
+var _sources_by_ns := {}     # lowercased real namespace -> MCAssetSource
+var _real_ns_by_norm := {}   # _norm(real namespace) -> the real namespace string (see _norm)
 var _by_identity := {}       # "registry@meta" -> existing BlockType (for idempotent reimport)
 var _warned_missing_ns := {} # namespace -> true (warn once per mod, not once per row)
 
@@ -51,6 +52,7 @@ func _init(sources: Array, library: BlockLibrary) -> void:
 	for s in sources:
 		for ns in s.list_namespaces():
 			_sources_by_ns[ns.to_lower()] = s
+			_real_ns_by_norm[_norm(ns)] = ns
 	for bt in library.block_types:
 		if McId.has_registry(bt):
 			_by_identity["%s@%d" % [McId.get_registry(bt), McId.get_mc_meta(bt)]] = bt
@@ -130,7 +132,29 @@ func _read_item_panel(path: String):
 # The asset source backing a namespace, or null — lets a caller (ImportService, wiring the
 # post-import extension pass) find the same source this importer's texture-attachment used.
 func source_for(ns: String) -> MCAssetSource:
-	return _sources_by_ns.get(ns.to_lower())
+	return _resolve_source(ns).get("source")
+
+# {source, ns} for a namespace, or {} if none matches — tried exact first, then normalized
+# (letters+digits only, case-insensitive). Many older 1.7.10 mods register blocks under their
+# raw @Mod modid ("BuildCraft|Core", "AWWayofTime"), which isn't a legal resource-folder name;
+# the real assets/ folder is a sanitized version ("buildcraftcore"). Returning the REAL
+# namespace (not just the source) matters — callers build texture paths from it.
+func _resolve_source(ns: String) -> Dictionary:
+	if _sources_by_ns.has(ns.to_lower()):
+		return {"source": _sources_by_ns[ns.to_lower()], "ns": ns}
+	var real: String = _real_ns_by_norm.get(_norm(ns), "")
+	if real.is_empty():
+		return {}
+	return {"source": _sources_by_ns[real.to_lower()], "ns": real}
+
+# Letters and digits only, lowercased — collapses "BuildCraft|Core" and "buildcraftcore" (or
+# "AWWayofTime" and "aw_way_of_time") to the same key.
+static func _norm(s: String) -> String:
+	var out := ""
+	for ch in s.to_lower():
+		if (ch >= "a" and ch <= "z") or (ch >= "0" and ch <= "9"):
+			out += ch
+	return out
 
 func entries(mod: String) -> Array:
 	return _rows_by_mod.get(mod, [])
@@ -199,22 +223,26 @@ const _STATES := {
 
 func _attach_texture(bt: BlockType, row: Dictionary) -> void:
 	var ns := str(row["ns"])
-	var source: MCAssetSource = _sources_by_ns.get(ns.to_lower())
-	if source == null:
+	var resolved := _resolve_source(ns)
+	if resolved.is_empty():
+		resolved = _resolve_source(str(row["mod"]))   # second guess: NEI's own mod label
+	if resolved.is_empty():
 		if not _warned_missing_ns.has(ns):
 			_warned_missing_ns[ns] = true
 			warnings.append("no assets found for mod namespace '%s' — its blocks import textureless" % ns)
 		return
+	var source: MCAssetSource = resolved["source"]
+	var real_ns: String = resolved["ns"]
 	var base_token := _base_token(str(row["registry"]))
 	if base_token.is_empty():
 		return
-	var candidates := _matching_files(source, ns, base_token)
+	var candidates := _matching_files(source, real_ns, base_token)
 	if candidates.is_empty():
 		return
 	var faces := _resolve_faces(candidates, int(row["meta"]))
 	if faces.is_empty():
 		return
-	_bind_model(bt, ns, source, faces)
+	_bind_model(bt, real_ns, source, faces)
 
 # "tile.korpBlock" -> "korp"; "gt.blockmachines" -> "blockmachines". Strips a leading "tile."
 # and a trailing "block"/"blocks", case-insensitively — the common ztones/vanilla-ish pattern;
