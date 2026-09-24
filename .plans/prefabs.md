@@ -1,10 +1,10 @@
 # Prefabs + Schematica import/export
 
-Status: **ready to build** (not started). Asked for 2026-09-23 while building the scaled-up
-Conduit Factory, where the same pieces were copied dozens of times (pillar, bay module,
-walkway section, tree, farm level) through a single-slot clipboard shared with the user.
-The user answered the first round of questions the same day (see "Decisions" and
-"What the sample schematic shows"); implementation starts in a fresh session.
+Status: **Phases 1-2 built** (2026-09-23, branch shaped-parts): prefab core + MCP tools,
+Home Prefabs tab, save-selection dialog (with per-semantic exclude and trim), inventory
+Prefabs page, paste-modal placement with R/M and the missing-palettes question. The Select
+panel also got per-face bounds nudging. Schematica (Phases 3-5) not started. First prefabs,
+cut from the Conduit Factory: Conduit Pillar, Conduit Pillar (upper), Machine Bay.
 
 ## Goal
 
