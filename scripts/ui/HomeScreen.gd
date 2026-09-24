@@ -52,6 +52,9 @@ func _ready() -> void:
 
 	tabs.add_child(_build_projects_tab())
 	tabs.add_child(_build_palettes_tab())
+	var prefabs: Control = PrefabBrowser.new()
+	prefabs.name = "Prefabs"
+	tabs.add_child(prefabs)
 	tabs.add_child(_build_block_types_tab())
 
 	VoxelWorld.workspace_changed.connect(_refresh)

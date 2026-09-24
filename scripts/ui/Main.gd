@@ -31,7 +31,8 @@ func _ready() -> void:
 		_open_editor(p))
 	_go_home()
 
-# App-level edit shortcuts: Ctrl/Cmd+Z undo, Ctrl+Shift+Z or Ctrl+Y redo. Handled in
+# App-level edit shortcuts: Ctrl/Cmd+Z undo, Ctrl+Shift+Z or Ctrl+Y redo, C / X copy / cut
+# the selection, P save it as a prefab. Handled in
 # _shortcut_input (before UI focus navigation, after a view could consume it — no view
 # binds these), and only while the editor is up. Undo/redo route through VoxelWorld so the
 # active project's history is the single source of truth (Principle 2).
@@ -56,6 +57,10 @@ func _shortcut_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		KEY_X:
 			VoxelWorld.cut_selection()
+			get_viewport().set_input_as_handled()
+		KEY_P:   # save the selection as a prefab (P sits on the right, for either hand)
+			if not _inventory.visible:
+				SavePrefabDialog.open(self)
 			get_viewport().set_input_as_handled()
 
 func _refresh_history_buttons() -> void:

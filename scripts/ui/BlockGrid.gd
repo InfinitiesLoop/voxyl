@@ -42,6 +42,7 @@ class Item extends RefCounted:
 	var search_text: String = ""
 	var caption: String = ""              # optional text drawn under the icon
 	var block_type: BlockType = null      # baked for the icon; null → placeholder
+	var texture: Texture2D = null         # a ready image instead of a baked block (prefab thumbnails)
 	var placeholder_color := Color(0.5, 0.5, 0.5)
 	var is_add: bool = false              # draws a "+" glyph instead of an icon
 	# Optional group name. Items must be contiguous by section (callers populate them
@@ -503,7 +504,8 @@ func _draw_cell(cell: Control, item: Item) -> void:
 	if item.is_add:
 		_draw_add_glyph(cell, icon_rect)
 	else:
-		var icon := _baker.icon_for(item.block_type) if item.block_type != null else null
+		var icon: Texture2D = item.texture if item.texture != null \
+			else (_baker.icon_for(item.block_type) if item.block_type != null else null)
 		if icon != null:
 			cell.draw_texture_rect(icon, icon_rect, false)
 		else:

@@ -16,6 +16,7 @@ extends Control
 #   • click the "+" tile  → open a dialog to add a new entry to the selected palette
 #   • right-click a tile  → delete that entry
 #   • click a hotbar slot→ make it the active (target) slot   (1–9 / 0 also work)
+#   • Prefabs page        → click a prefab to close and start placing it in the 3D view
 #
 # Opening while a 3D view is in fly mode does NOT leave that mode: the shell suspends
 # the view (freeing the cursor) and restores it on close, so editing resumes in place.
@@ -33,6 +34,16 @@ var _lib_section: VBoxContainer
 var _armed := false  # only react to the open keys while the editor is on screen
 
 var _selected_palette_name: String = ""
+
+# Pages: "blocks" (palette entries → hotbar) or "prefabs" (pick one to place it).
+const _BLOCKS_HINT := "Click a block to load the active slot  ·  E / Del / Esc to close"
+const _PREFABS_HINT := "Click a prefab to place it (R rotate · M mirror · RMB place)  ·  E / Del / Esc to close"
+var _page := "blocks"
+var _page_buttons := {}
+var _blocks_body: Control
+var _prefab_grid: BlockGrid
+var _prefab_empty: Label
+var _hint: Label
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -97,6 +108,24 @@ func _build_ui() -> void:
 	body.add_theme_constant_override("separation", 10)
 	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	vbox.add_child(body)
+	_blocks_body = body
+
+	# The Prefabs page: every prefab as a thumbnail; picking one closes the inventory and
+	# starts placing it in the 3D view (the paste modal, with the prefab as its source).
+	_prefab_grid = BlockGrid.new()
+	_prefab_grid.show_captions = true
+	_prefab_grid.cell_size = Vector2(112, 112)
+	_prefab_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_prefab_grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_prefab_grid.visible = false
+	_prefab_grid.item_selected.connect(_on_prefab_picked)
+	vbox.add_child(_prefab_grid)
+	_prefab_empty = Label.new()
+	_prefab_empty.text = "No prefabs yet. Select a region with the Select tool, then press Ctrl+P to save it as one."
+	_prefab_empty.modulate = Color(1, 1, 1, 0.6)
+	_prefab_empty.visible = false
+	vbox.add_child(_prefab_empty)
+	VoxelWorld.prefabs_changed.connect(func(): if visible and _page == "prefabs": _refresh_prefabs())
 
 	_stack = PalettePanel.new()
 	_stack.item_selected.connect(_on_palette_selected)
@@ -144,8 +173,26 @@ func _build_header(parent: Control) -> void:
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(title)
 
+	# Page switch: the palette blocks (the hotbar loader) or the prefabs.
+	var pages := HBoxContainer.new()
+	pages.add_theme_constant_override("separation", 4)
+	var group := ButtonGroup.new()
+	for page in [["blocks", "Blocks"], ["prefabs", "Prefabs"]]:
+		var b := Button.new()
+		b.text = page[1]
+		b.toggle_mode = true
+		b.button_group = group
+		b.focus_mode = Control.FOCUS_NONE
+		b.button_pressed = page[0] == _page
+		b.pressed.connect(func(): _set_page(page[0]))
+		pages.add_child(b)
+		_page_buttons[page[0]] = b
+	row.add_child(pages)
+	row.add_child(VSeparator.new())
+
 	var hint := Label.new()
-	hint.text = "Click a block to load the active slot  ·  E / Del / Esc to close"
+	_hint = hint
+	hint.text = _BLOCKS_HINT
 	hint.add_theme_font_size_override("font_size", 12)
 	hint.modulate = Color(1, 1, 1, 0.6)
 	hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -377,9 +424,54 @@ func _unique_semantic_name(palette: Palette, base: String) -> String:
 func tool_strip() -> ToolsPanel:
 	return _tool_strip
 
+# ---------------------------------------------------------------------------
+# Prefabs page
+# ---------------------------------------------------------------------------
+
+func _set_page(page: String) -> void:
+	_page = page
+	if _page_buttons.has(page):
+		(_page_buttons[page] as Button).set_pressed_no_signal(true)
+	var prefabs := page == "prefabs"
+	_blocks_body.visible = not prefabs
+	_prefab_grid.visible = prefabs
+	_hint.text = _PREFABS_HINT if prefabs else _BLOCKS_HINT
+	if prefabs:
+		_refresh_prefabs()
+	else:
+		_prefab_empty.visible = false
+
+func _refresh_prefabs() -> void:
+	var list := VoxelWorld.workspace.prefabs.duplicate()
+	list.sort_custom(func(a: Prefab, b: Prefab) -> bool: return a.name.naturalnocasecmp_to(b.name) < 0)
+	var items: Array = []
+	for p: Prefab in list:
+		var it := BlockGrid.Item.new()
+		it.key = p.name
+		it.caption = p.name
+		it.label = "%s — %d×%d×%d" % [p.name, p.size.x, p.size.y, p.size.z]
+		it.search_text = "%s %s %s" % [p.name, " ".join(p.tags), p.notes]
+		it.texture = PrefabThumbs.texture_for(p, 128)
+		it.placeholder_color = Color(0.4, 0.45, 0.55)
+		items.append(it)
+	_prefab_grid.populate_items(items)
+	_prefab_empty.visible = items.is_empty()
+
+# Close, then hand the prefab to the focused 3D view's paste mode (closing first resumes the
+# view, so it can capture the cursor for aiming).
+func _on_prefab_picked(key: String) -> void:
+	var p := VoxelWorld.workspace.get_prefab(key)
+	if p == null:
+		return
+	_prefab_grid.set_selected("")
+	close()
+	VoxelWorld.request_prefab_paste(p)
+
 func open() -> void:
 	if visible:
 		return
+	if _page == "prefabs":
+		_refresh_prefabs()
 	_on_stack_changed()
 	visible = true
 	opened.emit()
@@ -412,13 +504,13 @@ func _input(event: InputEvent) -> void:
 			delta = -1
 		if delta != 0:
 			# Over the grid (and not forced): let the event fall through to scroll it.
-			if not mb.shift_pressed and _grid.is_in_scroll_area(mb.global_position):
+			if not mb.shift_pressed and _page_grid().is_in_scroll_area(mb.global_position):
 				return
 			_cycle_slot(delta)
 			get_viewport().set_input_as_handled()
 	elif event is InputEventKey and (event as InputEventKey).pressed \
 			and (event as InputEventKey).keycode == KEY_TAB:
-		_grid.focus_search()
+		_page_grid().focus_search()
 		get_viewport().set_input_as_handled()
 
 func _cycle_slot(delta: int) -> void:
@@ -440,3 +532,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if VoxelWorld.active_project:
 			open()
 			get_viewport().set_input_as_handled()
+
+# The grid on the current page (wheel scrolling and Tab-to-search follow the page).
+func _page_grid() -> BlockGrid:
+	return _prefab_grid if _page == "prefabs" else _grid

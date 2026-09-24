@@ -201,6 +201,15 @@ var _paste_rotation := 0   # quarter-turns (0-3) applied around Y, see Orientati
 # the player can look around freely without the paste drifting off the spot they lined up.
 var _paste_locked := false
 var _paste_locked_base := Vector3i.ZERO
+# The source: null = the clipboard (Ctrl+V); a prefab when placing one (the inventory's
+# Prefabs page). A prefab places its anchor cell on the aim and turns about it; the clipboard
+# is anchored at its min corner.
+var _paste_prefab: Prefab = null
+# M toggles an east-west flip, applied after the turn (so R then M covers all eight images).
+var _paste_mirror := false
+var _paste_panel: ToolOverlayPanel
+# The missing-palettes question is up for a prefab placement (input waits for it).
+var _paste_asking := false
 # One MultiMeshInstance3D per distinct semantic in the clipboard — unlike the single-semantic
 # _ghost_mm above (build-to-me/wand only ever preview ONE block type), a pasted region can mix
 # many, so each gets its own draw call.
@@ -307,6 +316,7 @@ func _ready() -> void:
 	# Keep a visible selection overlay's dimensions/counts current as the region changes.
 	VoxelWorld.region_selection_changed.connect(_update_tool_overlay_visibility)
 	VoxelWorld.cutaway_changed.connect(_refresh_cutaway)
+	VoxelWorld.prefab_paste_requested.connect(_on_prefab_paste_requested)
 	visibility_changed.connect(_on_visibility_changed)
 	set_process(true)
 	# A view created while a project is already open (e.g. spawned during a layout
@@ -880,6 +890,10 @@ func _input(event: InputEvent) -> void:
 				if _paste_active and kc == KEY_R:
 					_paste_rotation = (_paste_rotation + 1) % 4
 					_refresh_ghost_preview()
+					get_viewport().set_input_as_handled()
+					return
+				if _paste_active and kc == KEY_M:
+					_toggle_paste_mirror()
 					get_viewport().set_input_as_handled()
 					return
 				if kc >= KEY_1 and kc <= KEY_9:
@@ -3080,19 +3094,25 @@ func _update_selection_box() -> void:
 #   MMB   — open/close the offset popup (releases/re-captures the cursor to do it — see
 #           _release_cursor/_capture_cursor; also reachable by clicking the bare viewport)
 #   R     — rotate 90°
+#   M     — mirror (east-west flip, after the turn)
 #   Esc   — cancel outright, flying or not; never a "back out one level" step, so it can't be
 #           pressed by reflex while reaching for the popup and lose the whole paste
 # Entering/exiting never touches VoxelWorld.active_tool — this is purely a View3D-local modal
-# layered over whatever tool/fly state was already active.
+# layered over whatever tool/fly state was already active. The same modal places a prefab
+# (VoxelWorld.request_prefab_paste): only the source cells and the anchor differ.
 # ---------------------------------------------------------------------------
 
-func _enter_paste_mode() -> void:
-	if not VoxelWorld.active_project or not VoxelWorld.has_clipboard():
+func _enter_paste_mode(prefab: Prefab = null) -> void:
+	if not VoxelWorld.active_project or (prefab == null and not VoxelWorld.has_clipboard()):
 		return
+	_paste_prefab = prefab
 	_paste_active = true
 	_paste_offset = Vector3i.ZERO
 	_paste_rotation = 0
+	_paste_mirror = false
 	_paste_locked = false
+	if _paste_panel != null:
+		_paste_panel.set_title("Place: " + prefab.name if prefab != null else "Paste")
 	if not _fly_mode:
 		_capture_cursor()  # also refreshes the crosshair aim + ghost
 	else:
@@ -3101,36 +3121,129 @@ func _enter_paste_mode() -> void:
 	_overlay.visible = true
 	_overlay.queue_redraw()
 
+# The inventory picked a prefab: the focused 3D view places it. With a 2D view focused, the
+# first 3D view on screen takes it (and focus), so picking one never silently does nothing.
+func _on_prefab_paste_requested(prefab: Prefab) -> void:
+	if offscreen or source_project != null or not is_visible_in_tree():
+		return
+	if not _active:
+		var sh := _shell()
+		if sh == null or sh.focused_view() is View3D:
+			return
+		for v in sh.all_views():
+			if v is View3D and sh.is_view_shown(v) and not (v as View3D).offscreen:
+				if v != self:
+					return
+				break
+		focus_requested.emit()
+		if not _active:
+			return
+	if _paste_active:
+		_cancel_paste()
+	_enter_paste_mode(prefab)
+
+func _shell() -> MultiViewShell:
+	var host: Node = get_parent()
+	while host != null and not (host is MultiViewShell):
+		host = host.get_parent()
+	return host as MultiViewShell
+
 func _cancel_paste() -> void:
 	if not _paste_active:
 		return
 	_paste_active = false
+	_paste_prefab = null
 	_clear_paste_ghost()
 	_update_tool_overlay_visibility()
 	_overlay.queue_redraw()
 
-# Clone the clipboard into the world at the current aim/offset/rotation, skipping any cell
-# that's already occupied (never overwrite), as one undo step. No-op if nothing is aimed at
-# or every target cell is already occupied.
+func _toggle_paste_mirror() -> void:
+	_paste_mirror = not _paste_mirror
+	_refresh_ghost_preview()
+	_overlay.queue_redraw()
+
+# --- Paste source: the clipboard or a prefab, and how it's turned -----------------------
+
+func _paste_cells() -> Dictionary:
+	return _paste_prefab.data.cells if _paste_prefab != null else VoxelWorld.clipboard_cells()
+
+func _paste_box_size() -> Vector3i:
+	return _paste_prefab.size if _paste_prefab != null else VoxelWorld.clipboard_size()
+
+# The source cell that lands on the aimed cell (and that turns pivot about).
+func _paste_handle() -> Vector3i:
+	return _paste_prefab.anchor if _paste_prefab != null else Vector3i.ZERO
+
+func _paste_basis() -> Basis:
+	return RegionOps.turn_basis(_paste_rotation, "x" if _paste_mirror else "")
+
+func _paste_xform() -> SpatialXform:
+	return SpatialXform.about(_paste_basis(), Vector3.ZERO)
+
+# Place the source at the current aim/offset/turn, skipping any cell that's already occupied
+# (never overwrite), as one undo step. A prefab using semantics this project's palettes don't
+# have first asks whether to add the prefab's palettes that define them (bottom of the stack).
+# No-op if nothing is aimed at.
 func _commit_paste() -> void:
-	if not _paste_active:
+	if not _paste_active or _paste_asking:
 		return
 	var anchor = _paste_anchor()
-	if anchor != null:
-		var targets := _paste_targets(anchor)
-		if not targets.is_empty():
-			var clip := VoxelWorld.clipboard_cells()
-			VoxelWorld.begin_operation("Paste")
-			for pos: Vector3i in targets:
-				var src: BlockCell = clip[targets[pos]]
-				var cell := src.duplicate_cell()
-				cell.orientation = Orientation.rotate_rigid_cw(cell.orientation, _paste_rotation)
-				for part in cell.parts:   # shaped parts turn with the structure too
-					part["slot"] = ShapeCatalog.rotate_slot_y(str(part["shape"]), int(part["slot"]), _paste_rotation)
+	if anchor == null:
+		_finish_paste()
+		return
+	if _paste_prefab != null:
+		var m := VoxelWorld.prefab_missing(_paste_prefab, VoxelWorld.active_project)
+		if not (m["palettes"] as Array).is_empty():
+			_ask_prefab_palettes(m, anchor)
+			return
+	_place_paste(anchor)
+
+# The yes/no before placing a prefab whose semantics this project doesn't map. Yes adds the
+# palettes then places; No places anyway (those cells render undecided); closing the dialog
+# cancels this placement and leaves the paste live to try again.
+func _ask_prefab_palettes(missing: Dictionary, anchor: Vector3i) -> void:
+	_paste_asking = true
+	set_input_suspended(true)
+	var names: Array = missing["palettes"]
+	var n := (missing["missing"] as Array).size()
+	var d := AcceptDialog.new()
+	d.title = "Missing palettes"
+	d.dialog_text = "\"%s\" uses %d semantic%s this project doesn't map (%s).\nAdd palette%s %s to the bottom of this project's stack?" % [
+		_paste_prefab.name, n, "" if n == 1 else "s", ", ".join(missing["missing"]),
+		"" if names.size() == 1 else "s", ", ".join(names.map(func(x: String) -> String: return "\"%s\"" % x))]
+	d.ok_button_text = "Yes"
+	d.add_button("No", true, "no")
+	var done := func(place: bool, add: bool) -> void:
+		d.queue_free()
+		_paste_asking = false
+		if add:
+			VoxelWorld.add_prefab_palettes(VoxelWorld.active_project, names)
+		if place and _paste_active:
+			_place_paste(anchor)
+		set_input_suspended(false)
+	d.confirmed.connect(func(): done.call(true, true))
+	d.custom_action.connect(func(_a: StringName): done.call(true, false))
+	d.canceled.connect(func(): done.call(false, false))
+	add_child(d)
+	d.popup_centered()
+
+func _place_paste(anchor: Vector3i) -> void:
+	var targets := _paste_targets(anchor)
+	if not targets.is_empty():
+		var t := _paste_xform()
+		var cells := _paste_cells()
+		VoxelWorld.begin_operation("Place " + _paste_prefab.name if _paste_prefab != null else "Paste")
+		for pos: Vector3i in targets:
+			var cell := t.apply_cell(cells[targets[pos]])
+			if cell != null:   # a chiral part with no mirror image is left out
 				VoxelWorld.set_cell(pos, cell)
-			VoxelWorld.end_operation()
-			_animate_placement(_group_by_distance(targets.keys(), anchor))
+		VoxelWorld.end_operation()
+		_animate_placement(_group_by_distance(targets.keys(), anchor))
+	_finish_paste()
+
+func _finish_paste() -> void:
 	_paste_active = false
+	_paste_prefab = null
 	_clear_paste_ghost()
 	_update_tool_overlay_visibility()
 	_update_crosshair_target()
@@ -3194,10 +3307,11 @@ func _toggle_paste_lock() -> void:
 # the source cell once per surviving hit. Shared by both so they can't disagree.
 func _paste_targets(anchor: Vector3i) -> Dictionary:
 	var data := VoxelWorld.active_project.data
-	var clip := VoxelWorld.clipboard_cells()
+	var t := _paste_xform()
+	var handle := _paste_handle()
 	var out := {}
-	for rel: Vector3i in clip:
-		var pos := anchor + Orientation.rotate_offset_cw(rel, _paste_rotation)
+	for rel: Vector3i in _paste_cells():
+		var pos := anchor + t.apply_pos(rel - handle)
 		if data.get_block(pos).is_empty():
 			out[pos] = rel
 	return out
@@ -3214,24 +3328,25 @@ func _refresh_paste_ghost() -> void:
 		return
 	_update_paste_box(anchor)
 	var targets := _paste_targets(anchor)
-	var clip := VoxelWorld.clipboard_cells()
+	var cells := _paste_cells()
+	var t := _paste_xform()
 	var by_semantic := {}   # semantic -> Array[{"pos": Vector3i, "o": int}]
 	for pos: Vector3i in targets:
-		var src: BlockCell = clip[targets[pos]]
-		var o := Orientation.rotate_rigid_cw(src.orientation, _paste_rotation)
+		var src: BlockCell = cells[targets[pos]]
+		var o := t.apply_orientation(src.orientation)
 		if not by_semantic.has(src.type_id):
 			by_semantic[src.type_id] = []
 		by_semantic[src.type_id].append({"pos": pos, "o": o})
 	_set_paste_ghost_groups(by_semantic)
 
-# The [min, max] inclusive world bounds the pasted region's box would occupy at `anchor`,
-# current rotation. A 90°-multiple rotation only swaps/negates the X/Z axes (no shearing), so
-# rotating just the two extreme corners of the local box and taking their component-wise
-# min/max is exactly the rotated AABB — no need to touch every clipboard cell.
+# The [min, max] inclusive world bounds the pasted box would occupy at `anchor`, current turn
+# and mirror. An axis-aligned map only swaps/negates axes, so mapping the box's two extreme
+# corners and taking their component-wise min/max is exactly the moved box.
 func _paste_bounds(anchor: Vector3i) -> Array:
-	var clip_size := VoxelWorld.clipboard_size()
-	var c0 := Orientation.rotate_offset_cw(Vector3i.ZERO, _paste_rotation)
-	var c1 := Orientation.rotate_offset_cw(clip_size - Vector3i.ONE, _paste_rotation)
+	var t := _paste_xform()
+	var handle := _paste_handle()
+	var c0 := t.apply_pos(Vector3i.ZERO - handle)
+	var c1 := t.apply_pos(_paste_box_size() - Vector3i.ONE - handle)
 	var lo := anchor + Vector3i(mini(c0.x, c1.x), mini(c0.y, c1.y), mini(c0.z, c1.z))
 	var hi := anchor + Vector3i(maxi(c0.x, c1.x), maxi(c0.y, c1.y), maxi(c0.z, c1.z))
 	return [lo, hi]
@@ -3409,21 +3524,35 @@ func _workspace_rect() -> Rect2:
 
 func _build_paste_overlay() -> ToolOverlayPanel:
 	var panel := ToolOverlayPanel.new("Paste")
+	_paste_panel = panel
 	var content := panel.content
 
 	for axis in ["x", "y", "z"]:
 		content.add_child(_build_axis_row(axis))
 
+	var turn_row := HBoxContainer.new()
+	turn_row.add_theme_constant_override("separation", 8)
+	content.add_child(turn_row)
 	var rotate_btn := Button.new()
-	rotate_btn.text = "Rotate 90°"
+	rotate_btn.text = "Rotate 90° (R)"
 	rotate_btn.focus_mode = Control.FOCUS_NONE
 	rotate_btn.custom_minimum_size = Vector2(0, 40)
 	rotate_btn.add_theme_font_size_override("font_size", 16)
+	rotate_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	rotate_btn.pressed.connect(func():
 		_paste_rotation = (_paste_rotation + 1) % 4
 		_refresh_ghost_preview()
 		_update_paste_offset_labels())
-	content.add_child(rotate_btn)
+	turn_row.add_child(rotate_btn)
+	var mirror_btn := Button.new()
+	mirror_btn.text = "Mirror (M)"
+	mirror_btn.tooltip_text = "Flip east-west (after the turn)"
+	mirror_btn.focus_mode = Control.FOCUS_NONE
+	mirror_btn.custom_minimum_size = Vector2(0, 40)
+	mirror_btn.add_theme_font_size_override("font_size", 16)
+	mirror_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	mirror_btn.pressed.connect(_toggle_paste_mirror)
+	turn_row.add_child(mirror_btn)
 
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 8)
@@ -3534,6 +3663,10 @@ func _refresh_selection_overlay() -> void:
 		VoxelWorld.set_cutaway(VoxelWorld.selection_min, VoxelWorld.selection_max)
 		open_cutaway_panel())
 	content.add_child(cut_btn)
+	var prefab_btn := _overlay_button("Save as prefab…  (Ctrl+P)")
+	prefab_btn.tooltip_text = "Keep this region as a named prefab you can place again in any project"
+	prefab_btn.pressed.connect(func(): SavePrefabDialog.open(self))
+	content.add_child(prefab_btn)
 
 # One "[swatch] name … count" row. `hollow` dims the text and outlines the swatch (used for
 # the air row) so the count of empty cells reads as distinct from the placed block types.
@@ -4114,12 +4247,14 @@ func _draw_paste_hud() -> void:
 		_overlay.draw_line(center + Vector2(-14, 0),  center + Vector2(14, 0),  col, 1.5)
 		_overlay.draw_line(center + Vector2(0,  -14), center + Vector2(0,  14), col, 1.5)
 		_overlay.draw_circle(center, 3.0, Color(0,0,0,0.4))
-	var title := "Paste%s  offset (%d, %d, %d)  ·  rotation %d°" % [
+	var title := "%s%s  offset (%d, %d, %d)  ·  rotation %d°%s" % [
+		"Place prefab \"%s\"" % _paste_prefab.name if _paste_prefab != null else "Paste",
 		"  (locked)" if _paste_locked else "",
-		_paste_offset.x, _paste_offset.y, _paste_offset.z, _paste_rotation * 90]
+		_paste_offset.x, _paste_offset.y, _paste_offset.z, _paste_rotation * 90,
+		"  ·  mirrored" if _paste_mirror else ""]
 	_overlay.draw_string(font, Vector2(14.0, 30.0), title,
 		HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color(0.85, 1.0, 0.9, 0.95))
-	var hint := ("RMB place  ·  LMB lock/unlock  ·  MMB offset controls  ·  R rotate  ·  Esc cancel" if _fly_mode
+	var hint := ("RMB place  ·  LMB lock/unlock  ·  MMB offset controls  ·  R rotate  ·  M mirror  ·  Esc cancel" if _fly_mode
 		else "MMB or click the view to resume aiming  ·  Esc or Cancel to abort")
 	_overlay.draw_string(font, Vector2(10.0, _overlay.size.y - 10.0), hint,
 		HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.7))

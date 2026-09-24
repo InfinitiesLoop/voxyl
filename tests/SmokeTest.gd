@@ -819,9 +819,9 @@ func _test_prefabs() -> void:
 	for e in mirrored["edits"]:
 		mx[e["pos"]] = true
 	_check("mirror x flips east-west about the anchor", mx.has(Vector3i(-2, 0, 0)) and mx.has(Vector3i(0, 1, 1)))
-	var renamed := RegionOps.place_edits(prefab.data.cells, Vector3i.ZERO, Vector3i.ZERO, Basis(), {"Arch Stone": "Accent"})
+	var remapped := RegionOps.place_edits(prefab.data.cells, Vector3i.ZERO, Vector3i.ZERO, Basis(), {"Arch Stone": "Accent"})
 	_check("remap renames semantics on the way in",
-		(renamed["edits"] as Array).any(func(e: Dictionary) -> bool: return (e["cell"] as BlockCell).type_id == "Accent"))
+		(remapped["edits"] as Array).any(func(e: Dictionary) -> bool: return (e["cell"] as BlockCell).type_id == "Accent"))
 
 	# Another project that only has Default: "Arch Stone" is missing, "Prefab Pal" defines it.
 	var other := VoxelWorld.workspace.add_project("Prefab Test 2")
