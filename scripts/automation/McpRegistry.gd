@@ -27,6 +27,7 @@ const _GROUPS := [
 	preload("res://scripts/automation/tools/PrefabTools.gd"),
 	preload("res://scripts/automation/tools/InspectTools.gd"),
 	preload("res://scripts/automation/tools/ViewTools.gd"),
+	preload("res://scripts/automation/tools/ImportTools.gd"),
 ]
 
 var _tools := {}

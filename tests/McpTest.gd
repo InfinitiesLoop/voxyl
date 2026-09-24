@@ -48,6 +48,7 @@ func _run() -> void:
 	await _test_http()
 	await _test_build()
 	await _test_prefabs()
+	await _test_nei_roster_import_tool()
 	McpServer.stop()
 
 func _cleanup() -> void:
@@ -475,6 +476,67 @@ func _test_prefabs() -> void:
 	_check("prefab_delete", not deleted["_is_error"] and VoxelWorld.workspace.get_prefab("Bench") == null
 		and not FileAccess.file_exists(PrefabStore.path_for("Bench")))
 	_check("placed copies stay", data.get_block(Vector3i(10, 1, 0)) == "Core")
+
+func _test_nei_roster_import_tool() -> void:
+	print("-- nei_roster_import over MCP")
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_mcpnei_lib__"
+	var src := "user://__voxyl_mcpnei_src__"
+	var dumps := "user://__voxyl_mcpnei_dumps__"
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	_rm_rf(dumps)
+	var blocks := src + "/assets/testmod/textures/blocks"
+	DirAccess.make_dir_recursive_absolute(blocks)
+	var img := Image.create_empty(16, 16, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0.3, 0.7, 0.4))
+	img.save_png(blocks + "/widget.png")
+	DirAccess.make_dir_recursive_absolute(dumps)
+	var item_f := FileAccess.open(dumps + "/item.csv", FileAccess.WRITE)
+	item_f.store_string("\n".join([
+		"Name,ID,Has Block,Mod,Class,Display Name",
+		"testmod:widget,400,true,TestMod,some.Class,Widget",
+		"testmod:machine,401,true,TestMod,some.Class,Machine",
+	]))
+	item_f.close()
+	var panel_f := FileAccess.open(dumps + "/itempanel.csv", FileAccess.WRITE)
+	panel_f.store_string("\n".join([
+		"Item Name,Item ID,Item meta,Has NBT,Display Name",
+		"testmod:widget,400,0,false,Widget",
+		"testmod:machine,401,0,false,Machine",
+	]))
+	panel_f.close()
+
+	var browse := await _tool("nei_roster_import",
+		{"dumps_path": dumps, "asset_paths": [src], "library": "mcpnei"})
+	_check("no mods/all → browse only, nothing imported",
+		not browse["_is_error"] and browse.get("dry_run", false) == true
+		and int(browse.get("total", 0)) == 2)
+
+	var bad_lib := await _tool("nei_roster_import",
+		{"dumps_path": dumps, "asset_paths": [src], "library": VoxelWorkspace.BASIC_LIBRARY, "all": true})
+	_check("refuses to target the built-in library", bad_lib["_is_error"])
+
+	var imported := await _tool("nei_roster_import",
+		{"dumps_path": dumps, "asset_paths": [src], "library": "mcpnei", "all": true})
+	_check("all:true imports the whole roster",
+		not imported["_is_error"] and int(imported.get("imported", 0)) == 2)
+	_check("libraries_touched names the target library",
+		Array(imported.get("libraries_touched", [])).has("mcpnei"))
+
+	var got := await _tool("block_get", {"name": "Widget", "library": "mcpnei"})
+	_check("block_get surfaces confirmed mc identity",
+		not got["_is_error"] and got.get("mc_registry", "") == "testmod:widget"
+		and got.get("mc_confirmed", false) == true)
+	var machine := await _tool("block_get", {"name": "Machine", "library": "mcpnei"})
+	_check("textureless entry still imported, correctly identified",
+		not machine["_is_error"] and machine.get("mc_registry", "") == "testmod:machine"
+		and str(machine.get("model", "")).is_empty())
+
+	_rm_rf("user://__voxyl_mcpnei_lib__")
+	_rm_rf(src)
+	_rm_rf(dumps)
+	AssetLibrary.ROOT = saved_root
 
 func _rm_rf(path: String) -> void:
 	var d := DirAccess.open(path)

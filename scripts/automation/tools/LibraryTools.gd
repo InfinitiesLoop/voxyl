@@ -112,6 +112,18 @@ static func _block_get(args: Dictionary) -> Dictionary:
 		return McpRegistry.fail("not_found", "no block named '%s'%s; try block_search" % [name, (" in " + lib_name) if not lib_name.is_empty() else ""])
 	var out := {"name": bt.name, "library": owner, "color": bt.color, "namespace": bt.source_namespace,
 		"shape": ["full", "slab", "stairs"][bt.shape], "model": bt.model_id, "tags": Array(bt.tags)}
+	if McId.has_registry(bt):
+		out["mc_registry"] = McId.get_registry(bt)
+		out["mc_meta"] = McId.get_mc_meta(bt)
+		out["mc_confirmed"] = McId.is_confirmed(bt)
+		if not McId.get_orient(bt).is_empty():
+			out["mc_orient"] = McId.get_orient(bt)
+	if McId.has_unlocalized(bt):
+		out["mc_unlocalized"] = McId.get_unlocalized(bt)
+	if not McId.get_mod(bt).is_empty():
+		out["mc_mod"] = McId.get_mod(bt)
+	if not McId.get_display(bt).is_empty():
+		out["mc_display"] = McId.get_display(bt)
 	var model := VoxelWorld.workspace.resolve_block_model(bt.model_id, [owner]) if not bt.model_id.is_empty() else null
 	if model != null:
 		out["textures"] = model.textures.duplicate()
