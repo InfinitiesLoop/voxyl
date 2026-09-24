@@ -61,6 +61,9 @@ func list_libraries() -> Array[String]:
 	var out: Array[String] = []
 	for lib in libraries:
 		out.append(lib.name)
+	# Case-insensitive so e.g. "gregtech" doesn't get sorted after "Ztones" — libraries load in
+	# on-disk directory order, which is case-sensitive (all uppercase names first).
+	out.sort_custom(func(a, b): return a.to_lower() < b.to_lower())
 	return out
 
 # The built-in `basic` library, seeding it (with its shape models) on first request so

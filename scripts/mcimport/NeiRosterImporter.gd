@@ -35,6 +35,7 @@ const _ITEMPANEL_HEADER := ["Item Name", "Item ID", "Item meta", "Has NBT", "Dis
 
 var _library: BlockLibrary
 var _sources_by_ns := {}     # lowercased real namespace -> MCAssetSource
+var _real_ns_by_lower := {}  # lowercased real namespace -> the real (on-disk) namespace string
 var _real_ns_by_norm := {}   # _norm(real namespace) -> the real namespace string (see _norm)
 var _by_identity := {}       # "registry@meta" -> existing BlockType (for idempotent reimport)
 var _warned_missing_ns := {} # namespace -> true (warn once per mod, not once per row)
@@ -52,6 +53,7 @@ func _init(sources: Array, library: BlockLibrary) -> void:
 	for s in sources:
 		for ns in s.list_namespaces():
 			_sources_by_ns[ns.to_lower()] = s
+			_real_ns_by_lower[ns.to_lower()] = ns
 			_real_ns_by_norm[_norm(ns)] = ns
 	for bt in library.block_types:
 		if McId.has_registry(bt):
@@ -134,14 +136,18 @@ func _read_item_panel(path: String):
 func source_for(ns: String) -> MCAssetSource:
 	return _resolve_source(ns).get("source")
 
-# {source, ns} for a namespace, or {} if none matches — tried exact first, then normalized
-# (letters+digits only, case-insensitive). Many older 1.7.10 mods register blocks under their
-# raw @Mod modid ("BuildCraft|Core", "AWWayofTime"), which isn't a legal resource-folder name;
-# the real assets/ folder is a sanitized version ("buildcraftcore"). Returning the REAL
-# namespace (not just the source) matters — callers build texture paths from it.
+# {source, ns} for a namespace, or {} if none matches — tried exact first (case-insensitive),
+# then normalized (letters+digits only). Many older 1.7.10 mods register blocks under their raw
+# @Mod modid ("Ztones", "BuildCraft|Core", "AWWayofTime"), whose casing (and, for the pipe/space
+# cases, whole shape) doesn't match the actual assets/ folder — Forge/MC resource locations are
+# always lowercase, so the real folder is "ztones", "buildcraftcore", etc. Returning the REAL,
+# on-disk-cased namespace (not the row's own casing) matters: callers build texture paths from
+# it, and a zip archive's entries are matched by exact byte-for-byte path — "Ztones/textures/…"
+# never matches an entry actually stored as "ztones/textures/…".
 func _resolve_source(ns: String) -> Dictionary:
-	if _sources_by_ns.has(ns.to_lower()):
-		return {"source": _sources_by_ns[ns.to_lower()], "ns": ns}
+	var lower := ns.to_lower()
+	if _sources_by_ns.has(lower):
+		return {"source": _sources_by_ns[lower], "ns": _real_ns_by_lower[lower]}
 	var real: String = _real_ns_by_norm.get(_norm(ns), "")
 	if real.is_empty():
 		return {}

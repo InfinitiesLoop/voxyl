@@ -2153,6 +2153,10 @@ func _test_nei_roster_import() -> void:
 	# out even though itempanel.csv lists it too, exactly like a tool/food item would).
 	# "gear" mimics an old-style modid registry name ("BuildCraft|Core") whose real assets/
 	# folder is a sanitized "buildcraftcore" — pipes/case aren't legal in a resource path.
+	# "korp" mimics a real confirmed case (see .plans/prefabs.md): "Ztones:tile.korpBlock",
+	# whose real assets/ folder is plain lowercase "ztones" — no pipes/spaces, just a case
+	# difference, so this exercises _resolve_source's EXACT (case-insensitive) tier rather
+	# than the normalized fallback the BuildCraft|Core row exercises below.
 	_write_file(dumps + "/item.csv", "\n".join([
 		"Name,ID,Has Block,Mod,Class,Display Name",
 		"testmod:widget,100,true,TestMod,some.Class,Widget",
@@ -2160,6 +2164,7 @@ func _test_nei_roster_import() -> void:
 		"testmod:wool,102,true,TestMod,some.Class,Wool",
 		"testmod:gadget,103,false,TestMod,some.Class,Gadget",
 		"BuildCraft|Core:gear,104,true,BuildCraft|Core,some.Class,Gear",
+		"Ztones:tile.korpBlock,105,true,Ztones,some.Class,Korp",
 	]))
 	# itempanel.csv: the confirmed per-subtype roster. "machine" gets two metas with no
 	# texture at all (the GT single-block-machine shape); "wool" is meta-packed with real
@@ -2174,6 +2179,7 @@ func _test_nei_roster_import() -> void:
 		"testmod:wool,102,1,false,Orange Wool",
 		"testmod:gadget,103,0,false,Gadget",
 		"BuildCraft|Core:gear,104,0,false,Gear",
+		"Ztones:tile.korpBlock,105,0,false,Korp",
 	]))
 
 	_write_solid(blocks + "/widget.png", Color(0.2, 0.6, 0.9))
@@ -2182,13 +2188,28 @@ func _test_nei_roster_import() -> void:
 	# No "machine" texture anywhere — the GT-machine shape: confirmed identity, no visual yet.
 	_write_solid(assets + "/buildcraftcore/textures/blocks/gear.png", Color(0.6, 0.6, 0.1))
 
+	# Packed as a real .zip (not the plain MCDirSource the other mods use): a zip's entries
+	# are matched byte-for-byte, so a namespace resolved with the WRONG case ("Ztones/…"
+	# against an entry actually stored as "ztones/…") fails to find it — exactly the bug this
+	# covers. A directory source would hide it on a case-insensitive filesystem (Windows/
+	# macOS), which is how it shipped unnoticed.
+	var ztones_zip := src + "/ztones.jar"
+	var korp_img := Image.create_empty(16, 16, false, Image.FORMAT_RGBA8)
+	korp_img.fill(Color(0.4, 0.2, 0.6))
+	var korp_packer := ZIPPacker.new()
+	korp_packer.open(ztones_zip)
+	_zip_add(korp_packer, "assets/ztones/textures/blocks/korp.png", korp_img.save_png_to_buffer())
+	korp_packer.close()
+
 	var ws := VoxelWorkspace.new()
 	var lib := ws.get_or_add_library("nei")
 	var src_asset := MCDirSource.new(assets)
-	var nri := NeiRosterImporter.new([src_asset], lib)
+	var ztones_asset := MCZipSource.new(ztones_zip)
+	var nri := NeiRosterImporter.new([src_asset, ztones_asset], lib)
 
 	_check("load_dumps succeeds against the real column format", nri.load_dumps(dumps) == "")
-	_check("mods lists both mods present", Array(nri.mods) == ["BuildCraft|Core", "TestMod"])
+	_check("mods lists every mod present",
+		Array(nri.mods) == ["BuildCraft|Core", "TestMod", "Ztones"])
 	var rows := nri.entries("TestMod")
 	_check("Has Block:false rows are dropped even though itempanel.csv lists them",
 		rows.size() == 5)   # widget + machine(x2 metas) + wool(x2 metas) — gadget excluded
@@ -2240,6 +2261,16 @@ func _test_nei_roster_import() -> void:
 	_check("normalized-namespace fallback finds textures under the real (sanitized) folder",
 		not gear_bt.model_id.is_empty()
 		and ws.get_block_model(gear_bt.model_id).elements[0]["faces"][BlockModel.Dir.UP]["texture_key"] == "buildcraftcore:blocks/gear")
+
+	var korp_rows := nri.entries("Ztones")
+	_check("mixed-case modid namespace is its own mod entry", korp_rows.size() == 1)
+	var korp_bt := nri.import_entry(korp_rows[0])
+	_check("exact-tier match resolves to the real ON-DISK case, not the registry's own casing "
+		+ "(a zip's entries are case-sensitive, so the wrong case finds nothing)",
+		not korp_bt.model_id.is_empty()
+		and ws.get_block_model(korp_bt.model_id).elements[0]["faces"][BlockModel.Dir.UP]["texture_key"] == "ztones:blocks/korp")
+
+	ztones_asset.close()
 
 	var bad := NeiRosterImporter.new([src_asset], ws.get_or_add_library("bad"))
 	_check("a missing dumps folder fails with a descriptive message, not a crash",
