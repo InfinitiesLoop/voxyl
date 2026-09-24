@@ -229,7 +229,11 @@ func _attach_texture(bt: BlockType, row: Dictionary) -> void:
 	if resolved.is_empty():
 		if not _warned_missing_ns.has(ns):
 			_warned_missing_ns[ns] = true
-			warnings.append("no assets found for mod namespace '%s' — its blocks import textureless" % ns)
+			# Colon-delimited so ImportProgressDialog's summary groups every mod under one
+			# "no assets found for mod namespace" bullet instead of one bullet each (the
+			# category is everything before the first ':') — the full per-mod list still
+			# shows in the dialog's scrollable warning box.
+			warnings.append("no assets found for mod namespace: %s (its blocks import textureless)" % ns)
 		return
 	var source: MCAssetSource = resolved["source"]
 	var real_ns: String = resolved["ns"]

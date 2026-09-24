@@ -161,7 +161,15 @@ func _add_row(item_name: String) -> void:
 		var del := Button.new()
 		del.text = "✕"
 		del.flat = true
-		del.pressed.connect(func(): delete_requested.emit(captured))
+		# Deleting from inside a multi-selection acts on the whole selection, not just the row
+		# clicked — the common "delete selected" pattern (file managers, mail clients). A row
+		# outside the current selection (or when there's no real multi-selection) still deletes
+		# just itself.
+		del.pressed.connect(func():
+			if allow_multi_select and _selected_set.size() > 1 and _selected_set.has(captured):
+				bulk_delete_requested.emit(get_selected_items())
+			else:
+				delete_requested.emit(captured))
 		hbox.add_child(del)
 
 	_item_list.add_child(row)

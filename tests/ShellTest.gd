@@ -69,6 +69,7 @@ func _run() -> void:
 	_check_render_options(v3d)
 	await _check_import_progress()
 	_check_library_rename()
+	_check_library_list_bulk_delete_via_x()
 
 	var tb := (_panes(shell)[0] as ViewPane).get_tab_bar()
 	_check("tab bar enables cross-pane drag",
@@ -722,6 +723,44 @@ func _check_library_rename() -> void:
 	ws.remove_library("ren_new")
 	_rm_rf(AssetLibrary.ROOT)
 	AssetLibrary.ROOT = saved_root
+
+# The X on a row inside a multi-selection deletes the whole selection (the common "delete
+# selected" pattern), not just that one row; a row outside the selection still deletes itself.
+func _check_library_list_bulk_delete_via_x() -> void:
+	var list := LibraryList.new()
+	list.allow_multi_select = true
+	list.allow_bulk_delete = true
+	add_child(list)
+	list.populate(["A", "B", "C"])
+
+	var bulk_events: Array = []
+	var single_events: Array = []
+	list.bulk_delete_requested.connect(func(items: Array): bulk_events.append(items))
+	list.delete_requested.connect(func(item_name: String): single_events.append(item_name))
+
+	# A multi-selection — bypasses the real shift-click path (Input.is_key_pressed can't be
+	# faked headlessly), but that's unrelated machinery; this only exercises what the X does
+	# given a selection state, via the same _selected_set the click handler itself maintains.
+	list._selected_set = {"A": true, "B": true}
+	list._update_selection()
+
+	_library_row_delete_button(list, "A").pressed.emit()
+	_check("X on a row inside a multi-selection deletes the whole selection",
+		bulk_events.size() == 1 and bulk_events[0] == ["A", "B"] and single_events.is_empty())
+
+	bulk_events.clear()
+	_library_row_delete_button(list, "C").pressed.emit()
+	_check("X on a row outside the selection still deletes just that row",
+		single_events == ["C"] and bulk_events.is_empty())
+
+	list.queue_free()
+
+func _library_row_delete_button(list: LibraryList, item_name: String) -> Button:
+	for row in list._item_list.get_children():
+		if str(row.get_meta("item_name", "")) == item_name:
+			var hbox: HBoxContainer = row.get_child(0)
+			return hbox.get_child(hbox.get_child_count() - 1)
+	return null
 
 func _color_near(a: Color, b: Color, tol: float) -> bool:
 	return absf(a.r - b.r) <= tol and absf(a.g - b.g) <= tol and absf(a.b - b.b) <= tol
