@@ -141,6 +141,45 @@ static func paste_edits(clip: Dictionary, size: Vector3i, at: Vector3i, xform_ba
 		out.append({"pos": at + (q - box_lo), "op": "cell", "cell": moved[q]})
 	return {"edits": out, "rejected": rejected}
 
+# Copies of the box's cells (position → BlockCell) with the `exclude` semantics left out:
+# whole blocks of them dropped, their parts removed from part cells (a cell left with no
+# parts is dropped too).
+static func cells_without(data: VoxelData, mn: Vector3i, mx: Vector3i, exclude: Array = []) -> Dictionary:
+	var skip := {}
+	for s in exclude:
+		skip[str(s)] = true
+	var out := {}
+	for p in cells_in(data, mn, mx):
+		var cell := data.get_cell(p)
+		if skip.is_empty():
+			out[p] = cell.duplicate_cell()
+		elif cell.is_shaped():
+			var keep: Array = []
+			for part in cell.parts:
+				if not skip.has(str(part["semantic"])):
+					keep.append(part)
+			if not keep.is_empty():
+				var c := cell.duplicate_cell()
+				c.parts = keep.duplicate(true)
+				c.sync_type_id()
+				out[p] = c
+		elif not skip.has(cell.type_id):
+			out[p] = cell.duplicate_cell()
+	return out
+
+# Semantic → count inside the box (cells for whole blocks, parts for part cells).
+static func semantic_counts(data: VoxelData, mn: Vector3i, mx: Vector3i) -> Dictionary:
+	var counts := {}
+	for p in cells_in(data, mn, mx):
+		var cell := data.get_cell(p)
+		if cell.is_shaped():
+			for part in cell.parts:
+				var s := str(part["semantic"])
+				counts[s] = int(counts.get(s, 0)) + 1
+		else:
+			counts[cell.type_id] = int(counts.get(cell.type_id, 0)) + 1
+	return counts
+
 # Place cells keyed relative to a box (a prefab) so its `anchor` cell lands on `at`, after
 # `xform_basis` turns / mirrors them about that anchor. `renames` renames semantics on the way
 # in ({from: to}). Parts without a mirror image come back in `rejected`.

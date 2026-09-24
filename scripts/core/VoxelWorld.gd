@@ -1308,6 +1308,19 @@ func select_region_click(cell: Variant) -> void:
 	region_selection_changed.emit()
 	mark_dirty()
 
+# Move one face of the selection box by `delta` cells (axis 0/1/2 = x/y/z; max_side = the
+# + face), never past the opposite face — the fine-tuning for a box whose corners sit in air
+# where no click can reach.
+func nudge_selection_face(axis: int, max_side: bool, delta: int) -> void:
+	if not has_selection:
+		return
+	if max_side:
+		selection_max[axis] = maxi(selection_min[axis], selection_max[axis] + delta)
+	else:
+		selection_min[axis] = mini(selection_max[axis], selection_min[axis] + delta)
+	region_selection_changed.emit()
+	mark_dirty()
+
 # Drop the current selection (and any pending anchor). No-op — and no signal — when
 # there's nothing to clear, so idle repaints stay cheap.
 func clear_selection() -> void:
@@ -1429,12 +1442,16 @@ func cut_selection() -> void:
 # ---------------------------------------------------------------------------
 
 # Save the cells of an inclusive box as a prefab. `palettes` is its preferred stack; empty
-# takes the open project's palettes that define any semantic the cells use (same order, so
-# they resolve exactly as they do here). `anchor` is relative to the box's min corner (null
-# = the min corner). `replace` overwrites a prefab of the same name. Returns the prefab, or
-# an error code: empty_name, name_taken, empty_region, no_project.
+# takes the open project's palettes that define any semantic the kept cells use (same order,
+# so they resolve exactly as they do here). `exclude` leaves semantics out: whole blocks of
+# them are dropped and their parts removed from part cells (e.g. the floor under a pillar).
+# `trim` shrinks the box to the cells that are left; otherwise it's the region as given,
+# empty margins included. `anchor` is the handle: a Vector3i relative to the saved box's min
+# corner, "bottom-center", or null / "min" for the min corner. `replace` overwrites a prefab
+# of the same name. Returns the prefab, or an error code: empty_name, name_taken,
+# empty_region, no_project.
 func save_prefab_from_region(prefab_name: String, mn: Vector3i, mx: Vector3i, palettes: Array = [],
-		anchor: Variant = null, replace := false) -> Variant:
+		anchor: Variant = null, replace := false, exclude: Array = [], trim := false) -> Variant:
 	var n := prefab_name.strip_edges()
 	if n.is_empty():
 		return "empty_name"
@@ -1443,17 +1460,28 @@ func save_prefab_from_region(prefab_name: String, mn: Vector3i, mx: Vector3i, pa
 	var existing := workspace.get_prefab(n)
 	if existing != null and not replace:
 		return "name_taken"
-	var cells := {}
-	for p in RegionOps.cells_in(active_project.data, mn, mx):
-		cells[p - mn] = active_project.data.get_cell(p).duplicate_cell()
+	var cells := RegionOps.cells_without(active_project.data, mn, mx, exclude)
 	if cells.is_empty():
 		return "empty_region"
+	var lo := mn
+	var hi := mx
+	if trim:
+		lo = Vector3i(1 << 30, 1 << 30, 1 << 30)
+		hi = -lo
+		for p: Vector3i in cells:
+			lo = Vector3i(mini(lo.x, p.x), mini(lo.y, p.y), mini(lo.z, p.z))
+			hi = Vector3i(maxi(hi.x, p.x), maxi(hi.y, p.y), maxi(hi.z, p.z))
 	var prefab := existing if existing != null else workspace.add_prefab(n)
 	prefab.data = VoxelData.new()
-	for rel: Vector3i in cells:
-		prefab.data.set_cell(rel, cells[rel])
-	prefab.size = mx - mn + Vector3i.ONE
-	prefab.anchor = anchor if anchor is Vector3i else Vector3i.ZERO
+	for p: Vector3i in cells:
+		prefab.data.set_cell(p - lo, cells[p])
+	prefab.size = hi - lo + Vector3i.ONE
+	if anchor is Vector3i:
+		prefab.anchor = anchor
+	elif str(anchor) == "bottom-center":
+		prefab.anchor = prefab.bottom_center()
+	else:
+		prefab.anchor = Vector3i.ZERO
 	var names: Array[String] = []
 	if palettes.is_empty():
 		var used := {}

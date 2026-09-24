@@ -2,14 +2,19 @@ class_name SavePrefabDialog
 extends ConfirmationDialog
 
 # "Save selection as prefab…" (Ctrl+P, or the Select tool's overlay): name the selected
-# region, pick its handle, tag it. The prefab's preferred palettes default to this project's
-# palettes that define what it uses, so it previews exactly as it looks here. Saving over an
-# existing name asks first (the button turns into Replace).
+# region, pick its handle, tag it, and untick any semantics to leave out (the floor under a
+# pillar, say). The prefab's preferred palettes default to this project's palettes that
+# define what it keeps, so it previews exactly as it looks here. Saving over an existing
+# name asks first (the button turns into Replace).
 
 var _name_edit: LineEdit
 var _anchor_pick: OptionButton
 var _tags_edit: LineEdit
+var _trim_check: CheckBox
+var _info: Label
 var _warn: Label
+var _checks := {}          # semantic -> CheckBox
+var _trim_touched := false # the user set trim themselves: stop auto-setting it
 var _mn: Vector3i
 var _mx: Vector3i
 
@@ -35,21 +40,18 @@ func _start() -> void:
 	ok_button_text = "Save"
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 8)
-	box.custom_minimum_size = Vector2(380, 0)
+	box.custom_minimum_size = Vector2(400, 0)
 	add_child(box)
 
-	var dims := _mx - _mn + Vector3i.ONE
-	var cells := RegionOps.cells_in(VoxelWorld.active_project.data, _mn, _mx).size()
-	var info := Label.new()
-	info.text = "%d × %d × %d  ·  %d cells" % [dims.x, dims.y, dims.z, cells]
-	info.modulate = Color(1, 1, 1, 0.7)
-	box.add_child(info)
+	_info = Label.new()
+	_info.modulate = Color(1, 1, 1, 0.7)
+	box.add_child(_info)
 
 	box.add_child(_caption("Name"))
 	_name_edit = LineEdit.new()
 	_name_edit.text = _unique_name("Prefab")
 	_name_edit.select_all_on_focus = true
-	_name_edit.text_changed.connect(func(_t: String): _check_name())
+	_name_edit.text_changed.connect(func(_t: String): _check())
 	_name_edit.text_submitted.connect(func(_t: String):
 		if not get_ok_button().disabled:
 			_save())
@@ -66,16 +68,66 @@ func _start() -> void:
 	_tags_edit.placeholder_text = "pillar, factory"
 	box.add_child(_tags_edit)
 
+	# What goes in: every semantic in the box with its count; untick to leave it out.
+	var head := HBoxContainer.new()
+	var inc := _caption("Include (untick to leave out)")
+	inc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(inc)
+	for pair in [["All", true], ["None", false]]:
+		var b := Button.new()
+		b.text = pair[0]
+		b.flat = true
+		b.focus_mode = Control.FOCUS_NONE
+		b.pressed.connect(func():
+			for c: CheckBox in _checks.values():
+				c.set_pressed_no_signal(pair[1])
+			_on_include_changed())
+		head.add_child(b)
+	box.add_child(head)
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	var list := VBoxContainer.new()
+	list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(list)
+	box.add_child(scroll)
+	var counts := RegionOps.semantic_counts(VoxelWorld.active_project.data, _mn, _mx)
+	var names := counts.keys()
+	names.sort_custom(func(a, b): return counts[a] > counts[b] if counts[a] != counts[b] else str(a) < str(b))
+	for sem in names:
+		var row := HBoxContainer.new()
+		var swatch := ColorRect.new()
+		swatch.color = VoxelWorld.get_color_for_semantic(str(sem))
+		swatch.custom_minimum_size = Vector2(14, 14)
+		swatch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(swatch)
+		var cb := CheckBox.new()
+		cb.text = str(sem)
+		cb.button_pressed = true
+		cb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		cb.toggled.connect(func(_on: bool): _on_include_changed())
+		row.add_child(cb)
+		var n := Label.new()
+		n.text = "×%d" % counts[sem]
+		n.modulate = Color(1, 1, 1, 0.7)
+		row.add_child(n)
+		list.add_child(row)
+		_checks[str(sem)] = cb
+	scroll.custom_minimum_size = Vector2(0, mini(names.size(), 8) * 30 + 4)
+
+	_trim_check = CheckBox.new()
+	_trim_check.text = "Shrink the box to what's kept"
+	_trim_check.tooltip_text = "Drop empty rows left around the kept cells (turned on when you leave something out, so a pillar without its floor doesn't float a block up)"
+	_trim_check.toggled.connect(func(_on: bool):
+		_trim_touched = true
+		_check())
+	box.add_child(_trim_check)
+
 	_warn = Label.new()
 	_warn.add_theme_color_override("font_color", Color(1.0, 0.75, 0.35))
 	_warn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	box.add_child(_warn)
 
-	if cells == 0:
-		_warn.text = "The selection is empty — there's nothing to save."
-		get_ok_button().disabled = true
-	else:
-		_check_name()
+	_check()
 	confirmed.connect(_save)
 	canceled.connect(_close)
 	_set_views_suspended(true)
@@ -96,12 +148,42 @@ func _unique_name(base: String) -> String:
 		n += 1
 	return "%s %d" % [base, n]
 
-func _check_name() -> void:
+func _excluded() -> Array:
+	var out: Array = []
+	for sem in _checks:
+		if not (_checks[sem] as CheckBox).button_pressed:
+			out.append(sem)
+	return out
+
+# Leaving something out turns trimming on (until the user sets it themselves).
+func _on_include_changed() -> void:
+	if not _trim_touched:
+		_trim_check.set_pressed_no_signal(not _excluded().is_empty())
+	_check()
+
+# Refresh the size / count read-out and the Save button for the current choices.
+func _check() -> void:
+	var cells := RegionOps.cells_without(VoxelWorld.active_project.data, _mn, _mx, _excluded())
+	var lo := _mn
+	var hi := _mx
+	if _trim_check.button_pressed and not cells.is_empty():
+		lo = Vector3i(1 << 30, 1 << 30, 1 << 30)
+		hi = -lo
+		for p: Vector3i in cells:
+			lo = Vector3i(mini(lo.x, p.x), mini(lo.y, p.y), mini(lo.z, p.z))
+			hi = Vector3i(maxi(hi.x, p.x), maxi(hi.y, p.y), maxi(hi.z, p.z))
+	var dims := hi - lo + Vector3i.ONE
+	_info.text = "%d × %d × %d  ·  %d cells" % [dims.x, dims.y, dims.z, cells.size()]
 	var n := _name_edit.text.strip_edges()
 	var taken := VoxelWorld.workspace.get_prefab(n) != null
-	get_ok_button().disabled = n.is_empty()
+	get_ok_button().disabled = n.is_empty() or cells.is_empty()
 	get_ok_button().text = "Replace" if taken else "Save"
-	_warn.text = "A prefab named \"%s\" exists — saving replaces it." % n if taken else ""
+	if cells.is_empty():
+		_warn.text = "Nothing is left to save."
+	elif taken:
+		_warn.text = "A prefab named \"%s\" exists — saving replaces it." % n
+	else:
+		_warn.text = ""
 
 func _save() -> void:
 	var n := _name_edit.text.strip_edges()
@@ -109,9 +191,9 @@ func _save() -> void:
 		return
 	var anchor: Variant = null
 	if _anchor_pick.get_selected_id() == 1:
-		var dims := _mx - _mn + Vector3i.ONE
-		anchor = Vector3i(floori((dims.x - 1) / 2.0), 0, floori((dims.z - 1) / 2.0))
-	var res: Variant = VoxelWorld.save_prefab_from_region(n, _mn, _mx, [], anchor, true)
+		anchor = "bottom-center"
+	var res: Variant = VoxelWorld.save_prefab_from_region(n, _mn, _mx, [], anchor, true,
+		_excluded(), _trim_check.button_pressed)
 	if res is Prefab:
 		var tags := _tags_edit.text.split(",", false)
 		if not tags.is_empty():

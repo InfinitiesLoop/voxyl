@@ -416,6 +416,11 @@ func _test_prefabs() -> void:
 	_check("…written to the sandbox", PrefabStore.dir().begins_with(_sandbox) and FileAccess.file_exists(PrefabStore.path_for("Bench")))
 	var dup := await _tool("prefab_save", {"name": "Bench", "region": {"min": [0, 0, 0], "max": [2, 1, 0]}})
 	_check("saving over a name needs replace", dup["_is_error"] and str(dup.get("code", "")) == "name_taken")
+	var top := await _tool("prefab_save", {"name": "Seat Only", "region": {"min": [0, 0, 0], "max": [2, 1, 0]},
+		"exclude": ["Mass"], "trim": true, "anchor": "bottom-center"})
+	_check("prefab_save exclude + trim", not top["_is_error"] and int(top["cells"]) == 1
+		and _ints(top["size"]) == [1, 1, 1] and _ints(top["anchor"]) == [0, 0, 0])
+	await _tool("prefab_delete", {"name": "Seat Only", "confirm": true})
 	var listed := await _tool("prefab_list", {"query": "furn"})
 	_check("prefab_list finds it by tag", (listed["prefabs"] as Array).size() == 1)
 

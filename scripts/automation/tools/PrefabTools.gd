@@ -8,7 +8,7 @@ const _ViewTools := preload("res://scripts/automation/tools/ViewTools.gd")
 
 static func register(reg: McpRegistry) -> void:
 	reg.add("prefab_save",
-		"Save a region of the open project as a named prefab (cells keyed to the region's min corner; empty cells stay empty). palettes = its preferred stack for previews and for filling gaps when placed elsewhere (default: the project's palettes that define its semantics). anchor = the handle cell that lands on `at` when placing and that turns pivot about: [x,y,z] relative to the region's min corner, \"min\" (default) or \"bottom-center\". replace:true overwrites a prefab of the same name.",
+		"Save a region of the open project as a named prefab (cells keyed to the region's min corner; empty cells stay empty). palettes = its preferred stack for previews and for filling gaps when placed elsewhere (default: the project's palettes that define its semantics). exclude = semantics to leave out (whole blocks dropped, their parts removed from part cells), e.g. the floor under a pillar. trim:true shrinks the box to the cells kept (otherwise the region is the box, empty margins included — use them to keep a module on a grid). anchor = the handle cell that lands on `at` when placing and that turns pivot about: [x,y,z] relative to the saved box's min corner (after trim), \"min\" (default) or \"bottom-center\". replace:true overwrites a prefab of the same name.",
 		{"properties": {
 			"name": {"type": "string"},
 			"region": McpArgs.s_region(),
@@ -17,6 +17,8 @@ static func register(reg: McpRegistry) -> void:
 			"tags": {"type": "array", "items": {"type": "string"}},
 			"notes": {"type": "string"},
 			"replace": {"type": "boolean"},
+			"exclude": {"type": "array", "items": {"type": "string"}, "description": "Semantics to leave out"},
+			"trim": {"type": "boolean", "description": "Shrink the box to the kept cells"},
 			"project": {"type": "string"},
 		}, "required": ["name", "region"]}, _prefab_save, {"mutates": true})
 	reg.add("prefab_list",
@@ -105,21 +107,25 @@ static func _prefab_save(args: Dictionary) -> Variant:
 	var r: Variant = McpArgs.region(args.get("region"))
 	if McpRegistry.is_error(r):
 		return r
-	var size: Vector3i = r["max"] - r["min"] + Vector3i.ONE
-	var anchor: Variant = _anchor(args.get("anchor"), size)
-	if McpRegistry.is_error(anchor):
-		return anchor
+	# bottom-center is worked out after the exclude / trim, on the box actually saved.
+	var anchor: Variant = "bottom-center"
+	if str(args.get("anchor", "")) != "bottom-center":
+		anchor = _anchor(args.get("anchor"), Vector3i.ONE)
+		if McpRegistry.is_error(anchor):
+			return anchor
 	var palettes: Array = []
 	for n in args.get("palettes", []):
 		if VoxelWorld.workspace.get_palette(str(n)) == null:
 			return McpRegistry.fail("not_found", "no palette named '%s'" % n)
 		palettes.append(str(n))
+	var exclude: Array = (args.get("exclude", []) as Array).map(func(x: Variant) -> String: return str(x)) \
+		if args.get("exclude") is Array else []
 	var res: Variant = VoxelWorld.save_prefab_from_region(str(args.get("name", "")), r["min"], r["max"], palettes,
-		anchor, bool(args.get("replace", false)))
+		anchor, bool(args.get("replace", false)), exclude, bool(args.get("trim", false)))
 	if res is String:
 		match res:
 			"name_taken": return McpRegistry.fail("name_taken", "a prefab named '%s' exists; pass replace:true to overwrite it" % args.get("name"))
-			"empty_region": return McpRegistry.fail("empty_region", "that region has no cells")
+			"empty_region": return McpRegistry.fail("empty_region", "no cells are left in that region" if not exclude.is_empty() else "that region has no cells")
 			"empty_name": return McpRegistry.fail("bad_argument", "name is required")
 		return McpRegistry.fail(str(res), "couldn't save the prefab")
 	var p: Prefab = res

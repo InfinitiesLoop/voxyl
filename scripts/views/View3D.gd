@@ -3667,6 +3667,48 @@ func _refresh_selection_overlay() -> void:
 	prefab_btn.tooltip_text = "Keep this region as a named prefab you can place again in any project"
 	prefab_btn.pressed.connect(func(): SavePrefabDialog.open(self))
 	content.add_child(prefab_btn)
+	# Bounds last: the panel grows upward from the bottom edge, so these rows stay under the
+	# pointer while the counts above change with every nudge.
+	content.add_child(HSeparator.new())
+	var hint := _overlay_note("Move each face of the box.  Shift+click: 5 cells")
+	hint.add_theme_font_size_override("font_size", 13)
+	hint.add_theme_color_override("font_color", Color(0.72, 0.76, 0.84))
+	content.add_child(hint)
+	for axis in 3:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 4)
+		var label := Label.new()
+		label.text = (["X", "Y", "Z"] as Array)[axis] + ":"
+		label.add_theme_font_size_override("font_size", 16)
+		label.custom_minimum_size = Vector2(22, 0)
+		row.add_child(label)
+		for max_side in [false, true]:
+			if max_side:
+				var dash := Label.new()
+				dash.text = "to"
+				dash.add_theme_color_override("font_color", Color(0.72, 0.76, 0.84))
+				row.add_child(dash)
+			row.add_child(_sel_nudge_button("-", axis, max_side, -1))
+			var value := Label.new()
+			value.text = str((VoxelWorld.selection_max if max_side else VoxelWorld.selection_min)[axis])
+			value.add_theme_font_size_override("font_size", 16)
+			value.custom_minimum_size = Vector2(48, 0)
+			value.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			row.add_child(value)
+			row.add_child(_sel_nudge_button("+", axis, max_side, 1))
+		content.add_child(row)
+
+func _sel_nudge_button(text: String, axis: int, max_side: bool, dir: int) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	b.custom_minimum_size = Vector2(34, 34)
+	b.add_theme_font_size_override("font_size", 18)
+	b.pressed.connect(func():
+		var step := 5 if Input.is_key_pressed(KEY_SHIFT) else 1
+		# Deferred: the nudge rebuilds this panel, which must not free the button mid-click.
+		VoxelWorld.nudge_selection_face.call_deferred(axis, max_side, dir * step))
+	return b
 
 # One "[swatch] name … count" row. `hollow` dims the text and outlines the swatch (used for
 # the air row) so the count of empty cells reads as distinct from the placed block types.

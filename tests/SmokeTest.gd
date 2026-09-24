@@ -796,6 +796,30 @@ func _test_prefabs() -> void:
 		str(VoxelWorld.save_prefab_from_region("Nothing", Vector3i(50, 0, 50), Vector3i(51, 0, 51))) == "empty_region")
 	_check("its file is written", FileAccess.file_exists(PrefabStore.path_for("Arch")))
 
+	# Leave the floor out: excluded cells drop, and trim shrinks the box to what's kept.
+	VoxelWorld.set_block(Vector3i(11, 0, 11), "Floor1")
+	var no_floor: Variant = VoxelWorld.save_prefab_from_region("No Floor", Vector3i(10, 0, 10), Vector3i(12, 1, 11),
+		[], "bottom-center", false, ["Floor1", "Wall", "Arch Stone"], true)
+	_check("exclude + trim keeps only the rest, in a tight box",
+		no_floor is Prefab and (no_floor as Prefab).cell_count() == 1 and (no_floor as Prefab).size == Vector3i.ONE
+		and (no_floor as Prefab).data.get_block(Vector3i.ZERO) == "Trim")
+	var kept_box: Variant = VoxelWorld.save_prefab_from_region("Kept Box", Vector3i(10, 0, 10), Vector3i(12, 1, 11),
+		[], null, false, ["Floor1"])
+	_check("without trim the box stays the region",
+		kept_box is Prefab and (kept_box as Prefab).size == Vector3i(3, 2, 2) and (kept_box as Prefab).cell_count() == 3)
+	VoxelWorld.delete_prefab(no_floor)
+	VoxelWorld.delete_prefab(kept_box)
+	VoxelWorld.clear_block(Vector3i(11, 0, 11))
+
+	# Nudging a selection face, never past the opposite one.
+	VoxelWorld.set_selection_box(Vector3i(0, 0, 0), Vector3i(2, 2, 2))
+	VoxelWorld.nudge_selection_face(0, true, 3)
+	VoxelWorld.nudge_selection_face(1, false, -1)
+	VoxelWorld.nudge_selection_face(2, false, 9)
+	_check("selection faces move one at a time",
+		VoxelWorld.selection_max.x == 5 and VoxelWorld.selection_min.y == -1 and VoxelWorld.selection_min.z == 2)
+	VoxelWorld.clear_selection()
+
 	var ws2 := VoxelWorkspace.new()
 	PrefabStore.load_persisted(ws2)
 	var back := ws2.get_prefab("Arch")
