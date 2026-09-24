@@ -45,6 +45,7 @@ func _ready() -> void:
 	_test_import_split_by_namespace()
 	_test_flat_import()
 	_test_import_service_flat()
+	_test_nei_roster_import()
 	_test_install_locations()
 	_test_shape_catalog()
 	_test_shape_rules()
@@ -2209,6 +2210,112 @@ func _test_import_service_flat() -> void:
 	svc.close()
 	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(src_root)
+	AssetLibrary.ROOT = saved_root
+
+# NeiRosterImporter: item.csv (Has Block filter + mod label) + itempanel.csv (the confirmed,
+# per-subtype roster — real registry+meta+display, straight from NEI's own browsable list)
+# become tagged, best-effort-textured block types. No block-boundary guessing: a registry+meta
+# with no matching texture file (the GT-machine case) still imports, correctly identified, just
+# textureless — see .plans/prefabs.md for how the real CSV format was confirmed.
+func _test_nei_roster_import() -> void:
+	print("-- NEI roster importer (confirmed identity, narrow texture attachment)")
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_neilib__"
+	var src := "user://__voxyl_neisrc__"
+	var dumps := "user://__voxyl_neidumps__"
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	_rm_rf(dumps)
+	var assets := src + "/assets"
+	var blocks := assets + "/testmod/textures/blocks"
+
+	# item.csv: widget/machine/wool are blocks; gadget is an item-only row (must be filtered
+	# out even though itempanel.csv lists it too, exactly like a tool/food item would).
+	_write_file(dumps + "/item.csv", "\n".join([
+		"Name,ID,Has Block,Mod,Class,Display Name",
+		"testmod:widget,100,true,TestMod,some.Class,Widget",
+		"testmod:machine,101,true,TestMod,some.Class,Machine",
+		"testmod:wool,102,true,TestMod,some.Class,Wool",
+		"testmod:gadget,103,false,TestMod,some.Class,Gadget",
+	]))
+	# itempanel.csv: the confirmed per-subtype roster. "machine" gets two metas with no
+	# texture at all (the GT single-block-machine shape); "wool" is meta-packed with real
+	# per-meta textures; "gadget" is here too (itempanel.csv lists every item) but must be
+	# dropped since item.csv says it Has Block:false.
+	_write_file(dumps + "/itempanel.csv", "\n".join([
+		"Item Name,Item ID,Item meta,Has NBT,Display Name",
+		"testmod:widget,100,0,false,Widget",
+		"testmod:machine,101,0,false,Basic Machine",
+		"testmod:machine,101,5,false,Advanced Machine",
+		"testmod:wool,102,0,false,White Wool",
+		"testmod:wool,102,1,false,Orange Wool",
+		"testmod:gadget,103,0,false,Gadget",
+	]))
+
+	_write_solid(blocks + "/widget.png", Color(0.2, 0.6, 0.9))
+	_write_solid(blocks + "/wool_0.png", Color(0.95, 0.95, 0.95))
+	_write_solid(blocks + "/wool_1.png", Color(0.9, 0.5, 0.1))
+	# No "machine" texture anywhere — the GT-machine shape: confirmed identity, no visual yet.
+
+	var ws := VoxelWorkspace.new()
+	var lib := ws.get_or_add_library("nei")
+	var src_asset := MCDirSource.new(assets)
+	var nri := NeiRosterImporter.new([src_asset], lib)
+
+	_check("load_dumps succeeds against the real column format", nri.load_dumps(dumps) == "")
+	_check("mods lists the one mod present", Array(nri.mods) == ["TestMod"])
+	var rows := nri.entries("TestMod")
+	_check("Has Block:false rows are dropped even though itempanel.csv lists them",
+		rows.size() == 5)   # widget + machine(x2 metas) + wool(x2 metas) — gadget excluded
+
+	var widget_row: Dictionary
+	var machine0_row: Dictionary
+	var machine5_row: Dictionary
+	var wool0_row: Dictionary
+	var wool1_row: Dictionary
+	for row: Dictionary in rows:
+		match [row["registry"], row["meta"]]:
+			["testmod:widget", 0]: widget_row = row
+			["testmod:machine", 0]: machine0_row = row
+			["testmod:machine", 5]: machine5_row = row
+			["testmod:wool", 0]: wool0_row = row
+			["testmod:wool", 1]: wool1_row = row
+
+	var widget_bt := nri.import_entry(widget_row)
+	_check("confirmed identity: registry + meta + mod + display, marked confirmed",
+		McId.get_registry(widget_bt) == "testmod:widget" and McId.get_mc_meta(widget_bt) == 0
+		and McId.get_mod(widget_bt) == "TestMod" and McId.get_display(widget_bt) == "Widget"
+		and McId.is_confirmed(widget_bt))
+	_check("named from the confirmed display name", widget_bt.name == "Widget")
+	_check("single matching texture → a bound, textured model",
+		not widget_bt.model_id.is_empty()
+		and ws.get_block_model(widget_bt.model_id).has_textures())
+
+	var machine0_bt := nri.import_entry(machine0_row)
+	var machine5_bt := nri.import_entry(machine5_row)
+	_check("no matching texture at all → still imports, correctly identified",
+		McId.get_registry(machine0_bt) == "testmod:machine" and McId.get_mc_meta(machine0_bt) == 0
+		and McId.is_confirmed(machine0_bt) and machine0_bt.model_id.is_empty())
+	_check("two metas of one registry name become two distinct block types",
+		machine0_bt != machine5_bt and machine5_bt.name == "Advanced Machine"
+		and McId.get_mc_meta(machine5_bt) == 5)
+
+	var wool0_bt := nri.import_entry(wool0_row)
+	var wool1_bt := nri.import_entry(wool1_row)
+	_check("meta-packed: each variant's numeral-suffixed texture matches its own meta",
+		ws.get_block_model(wool0_bt.model_id).elements[0]["faces"][BlockModel.Dir.UP]["texture_key"] == "testmod:blocks/wool_0"
+		and ws.get_block_model(wool1_bt.model_id).elements[0]["faces"][BlockModel.Dir.UP]["texture_key"] == "testmod:blocks/wool_1")
+
+	_check("reimporting the same (registry, meta) reuses the existing block type",
+		nri.import_entry(widget_row) == widget_bt)
+
+	var bad := NeiRosterImporter.new([src_asset], ws.get_or_add_library("bad"))
+	_check("a missing dumps folder fails with a descriptive message, not a crash",
+		not bad.load_dumps("user://__voxyl_no_such_dumps__").is_empty())
+
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	_rm_rf(dumps)
 	AssetLibrary.ROOT = saved_root
 
 # The import UI's "common locations" helper: well-formed, platform-appropriate
