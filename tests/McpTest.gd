@@ -457,6 +457,16 @@ func _test_prefabs() -> void:
 	_check("prefab_get lists semantics", (got["semantics"] as Dictionary).has("Seat") and (got["semantics"] as Dictionary).has("Mass"))
 	var upd := await _tool("prefab_update", {"name": "Seat Bench", "rename": "Seat Bench 2", "anchor": [1, 0, 0], "notes": "two cells"})
 	_check("prefab_update renames and re-anchors", not upd["_is_error"] and upd["name"] == "Seat Bench 2" and _ints(upd["anchor"]) == [1, 0, 0])
+	var home := VoxelWorld.active_project
+	var opened := await _tool("prefab_open", {"name": "Seat Bench 2"})
+	_check("prefab_open opens it as the project", not opened["_is_error"] and VoxelWorld.active_project.editing_prefab != null)
+	var st_pf := await _tool("status")
+	_check("…and status says so", bool(st_pf["project"].get("editing_prefab", false)))
+	await _tool("cells_set", {"cells": [{"pos": [0, 1, 0], "semantic": "Core"}]})
+	var saved_back := await _tool("project_save", {})
+	_check("project_save writes the edit back into the prefab", not saved_back["_is_error"]
+		and VoxelWorld.workspace.get_prefab("Seat Bench 2").cell_count() == 3)
+	VoxelWorld.open(home)
 	var render := await _tool("prefab_render", {"name": "Bench"})
 	_check("prefab_render without a display says so", render["_is_error"] and str(render.get("code", "")) == "no_renderer")
 	var no_confirm := await _tool("prefab_delete", {"name": "Bench", "confirm": false})

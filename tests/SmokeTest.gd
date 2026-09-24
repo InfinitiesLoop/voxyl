@@ -863,6 +863,28 @@ func _test_prefabs() -> void:
 	_check("rename via update_prefab", VoxelWorld.update_prefab(prefab, {"name": "Arch 2"}).is_empty()
 		and VoxelWorld.workspace.get_prefab("Arch 2") == prefab)
 	_check("…moves its file", FileAccess.file_exists(PrefabStore.path_for("Arch 2")) and not FileAccess.file_exists(PrefabStore.path_for("Arch")))
+	# Editing a prefab like a project: its stand-in saves back, growing the box when built past.
+	var home_project := VoxelWorld.active_project
+	var ed := VoxelWorld.open_prefab_for_editing(prefab)
+	VoxelWorld.open(ed)
+	_check("a prefab opens as a scratch stand-in with its cells and box selected",
+		ed.scratch and ed.data.cells.size() == 3 and VoxelWorld.selection_max == prefab.size - Vector3i.ONE)
+	var before_mod := prefab.modified_at
+	VoxelWorld.save_active_project()
+	_check("saving with no change leaves the prefab alone", prefab.modified_at == before_mod and prefab.cell_count() == 3)
+	VoxelWorld.set_block(Vector3i(-1, 0, 0), "Accent")
+	VoxelWorld.save_active_project()
+	_check("an edit writes back, growing the box toward -x", prefab.cell_count() == 4
+		and prefab.size == Vector3i(4, 2, 2) and prefab.data.get_block(Vector3i.ZERO) == "Accent")
+	_check("…and the handle keeps its place in the build", prefab.anchor == Vector3i(2, 0, 0))
+	VoxelWorld.set_block(Vector3i(-1, 1, 0), "Accent")
+	VoxelWorld.save_active_project()
+	_check("a second save uses the moved origin (no double shift)",
+		prefab.size == Vector3i(4, 2, 2) and prefab.anchor == Vector3i(2, 0, 0) and prefab.cell_count() == 5)
+	_check("it's never listed or written as a project",
+		VoxelWorld.workspace.get_project(ed.name) == null and not FileAccess.file_exists(ProjectStore.ROOT.path_join(ed.name + ".tres")))
+	VoxelWorld.open(home_project)
+
 	VoxelWorld.delete_prefab(prefab)
 	_check("delete removes it from memory and disk",
 		VoxelWorld.workspace.get_prefab("Arch 2") == null and not FileAccess.file_exists(PrefabStore.path_for("Arch 2")))

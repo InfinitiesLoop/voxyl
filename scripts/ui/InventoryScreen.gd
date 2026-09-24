@@ -115,6 +115,7 @@ func _build_ui() -> void:
 	_prefab_grid = BlockGrid.new()
 	_prefab_grid.show_captions = true
 	_prefab_grid.cell_size = Vector2(112, 112)
+	_prefab_grid.search_placeholder = "Search prefabs (name, tags, notes)…"
 	_prefab_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_prefab_grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_prefab_grid.visible = false

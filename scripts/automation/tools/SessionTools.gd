@@ -46,6 +46,8 @@ static func _status(_args: Dictionary) -> Dictionary:
 			"cells": p.data.cells.size(),
 			"bounds": _bounds(aabb),
 		}
+		if p.editing_prefab != null:
+			out["project"]["editing_prefab"] = true   # saves write back into the prefab of this name
 		out["hotbar"] = {"slots": Array(VoxelWorld.hotbar), "active": VoxelWorld.active_slot}
 		out["selection"] = null
 		if VoxelWorld.has_selection:

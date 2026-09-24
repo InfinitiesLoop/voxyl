@@ -17,6 +17,8 @@ var _checks := {}          # semantic -> CheckBox
 var _trim_touched := false # the user set trim themselves: stop auto-setting it
 var _mn: Vector3i
 var _mx: Vector3i
+var _preview: PrefabPreview
+var _preview_key := ""
 
 # Open for the current selection. Without a project or a selection it says what's needed.
 static func open(host: Node) -> void:
@@ -38,10 +40,26 @@ func _start() -> void:
 	_mx = VoxelWorld.selection_max
 	title = "Save selection as prefab"
 	ok_button_text = "Save"
+	var layout := HBoxContainer.new()
+	layout.add_theme_constant_override("separation", 16)
+	add_child(layout)
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 8)
 	box.custom_minimum_size = Vector2(400, 0)
-	add_child(box)
+	layout.add_child(box)
+	# What will be saved, live: unticked semantics and the trim are applied, and it resolves
+	# through the palettes the prefab will prefer. Drag to turn, wheel to zoom.
+	var right := VBoxContainer.new()
+	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	layout.add_child(right)
+	_preview = PrefabPreview.new()
+	_preview.custom_minimum_size = Vector2(420, 420)
+	_preview.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	right.add_child(_preview)
+	var note := _caption("Preview of what will be saved · drag to turn, wheel to zoom")
+	note.custom_minimum_size = Vector2.ZERO
+	note.autowrap_mode = TextServer.AUTOWRAP_OFF
+	right.add_child(note)
 
 	_info = Label.new()
 	_info.modulate = Color(1, 1, 1, 0.7)
@@ -71,6 +89,8 @@ func _start() -> void:
 	# What goes in: every semantic in the box with its count; untick to leave it out.
 	var head := HBoxContainer.new()
 	var inc := _caption("Include (untick to leave out)")
+	inc.custom_minimum_size = Vector2.ZERO
+	inc.autowrap_mode = TextServer.AUTOWRAP_OFF
 	inc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(inc)
 	for pair in [["All", true], ["None", false]]:
@@ -125,6 +145,7 @@ func _start() -> void:
 	_warn = Label.new()
 	_warn.add_theme_color_override("font_color", Color(1.0, 0.75, 0.35))
 	_warn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_warn.custom_minimum_size = Vector2(390, 0)
 	box.add_child(_warn)
 
 	_check()
@@ -140,6 +161,9 @@ func _caption(text: String) -> Label:
 	l.add_theme_font_size_override("font_size", 12)
 	l.modulate = Color(1, 1, 1, 0.65)
 	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	# A wrapping label measures its height at its current width; with none yet it stands one
+	# word per line and props the dialog up tall. Give it the column's width.
+	l.custom_minimum_size = Vector2(390, 0)
 	return l
 
 func _unique_name(base: String) -> String:
@@ -173,6 +197,7 @@ func _check() -> void:
 			lo = Vector3i(mini(lo.x, p.x), mini(lo.y, p.y), mini(lo.z, p.z))
 			hi = Vector3i(maxi(hi.x, p.x), maxi(hi.y, p.y), maxi(hi.z, p.z))
 	var dims := hi - lo + Vector3i.ONE
+	_update_preview(cells, lo, dims)
 	_info.text = "%d × %d × %d  ·  %d cells" % [dims.x, dims.y, dims.z, cells.size()]
 	var n := _name_edit.text.strip_edges()
 	var taken := VoxelWorld.workspace.get_prefab(n) != null
@@ -210,3 +235,18 @@ func _set_views_suspended(on: bool) -> void:
 	var shell := get_tree().get_first_node_in_group("view_shell") if is_inside_tree() else null
 	if shell != null and shell.has_method("set_views_suspended"):
 		shell.call("set_views_suspended", on)
+
+# Show the kept cells as a throwaway prefab (only rebuilt when what's kept changes, not on
+# every keystroke in the name).
+func _update_preview(cells: Dictionary, lo: Vector3i, dims: Vector3i) -> void:
+	var key := "%s|%s|%d" % [",".join(_excluded()), str(lo), cells.size()]
+	if key == _preview_key or cells.is_empty():
+		return
+	_preview_key = key
+	var p := Prefab.new()
+	p.name = "preview"
+	for pos: Vector3i in cells:
+		p.data.set_cell(pos - lo, cells[pos])
+	p.size = dims
+	p.palette_names = VoxelWorld.prefab_default_palettes(p.used_semantics())
+	_preview.show_prefab(p)

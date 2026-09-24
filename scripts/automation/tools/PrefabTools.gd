@@ -48,7 +48,7 @@ static func register(reg: McpRegistry) -> void:
 		"Place a prefab into the open project with its anchor at `at`, optionally turned / mirrored, and with symmetry / repeat like any edit tool (stamp a row of pillars in one call). One undo step. The result lists missing_semantics (used by the prefab, unknown to the project's palettes — they render undecided) and palettes_available (its preferred palettes that define them); retry with add_palettes:true to add those to the bottom of the stack, or remap them.",
 		{"properties": place_props, "required": ["name", "at"]}, _prefab_place, {"mutates": true})
 	reg.add("prefab_update",
-		"Change a prefab's name (rename), preferred palettes, anchor, tags or notes. Its cells change only by saving over it (prefab_save replace:true).",
+		"Change a prefab's name (rename), preferred palettes, anchor, tags or notes. Its cells change by editing it (prefab_open) or saving over it (prefab_save replace:true).",
 		{"properties": {
 			"name": {"type": "string"},
 			"rename": {"type": "string"},
@@ -57,6 +57,9 @@ static func register(reg: McpRegistry) -> void:
 			"tags": {"type": "array", "items": {"type": "string"}},
 			"notes": {"type": "string"},
 		}, "required": ["name"]}, _prefab_update, {"mutates": true})
+	reg.add("prefab_open",
+		"Open a prefab in the user's editor as if it were a project, so every edit tool, capture and undo works on it (status shows the project as editing_prefab). Its box starts selected. Saves (project_save, or leaving the editor) write the cells and palette stack back into the prefab; building past its box grows the box.",
+		{"properties": {"name": {"type": "string"}}, "required": ["name"]}, _prefab_open, {"mutates": true})
 	reg.add("prefab_delete",
 		"Delete a prefab (placed copies stay: they're plain cells). Requires confirm: true.",
 		{"properties": {"name": {"type": "string"}, "confirm": {"type": "boolean"}}, "required": ["name", "confirm"]},
@@ -296,3 +299,15 @@ static func _prefab_delete(args: Dictionary) -> Dictionary:
 		return McpRegistry.fail("needs_confirm", "deleting a prefab needs confirm: true")
 	VoxelWorld.delete_prefab(pv)
 	return {"deleted": (pv as Prefab).name}
+
+static func _prefab_open(args: Dictionary) -> Dictionary:
+	var pv: Variant = _prefab(str(args.get("name", "")))
+	if McpRegistry.is_error(pv):
+		return pv
+	var p: Prefab = pv
+	if VoxelWorld.active_project != null and VoxelWorld.active_project.editing_prefab == p:
+		return {"project": p.name, "editing_prefab": true, "already_open": true}
+	VoxelWorld.save_active_project()
+	VoxelWorld.request_open_project(VoxelWorld.open_prefab_for_editing(p))
+	return {"project": p.name, "editing_prefab": true, "box": {"min": Vector3i.ZERO, "max": p.size - Vector3i.ONE},
+		"anchor": p.anchor, "palettes": Array(p.palette_names)}

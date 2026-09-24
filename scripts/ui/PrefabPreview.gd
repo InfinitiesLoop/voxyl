@@ -11,6 +11,7 @@ var _yaw := 135.0      # compass bearing the camera looks from (se)
 var _elev := 28.0
 var _zoom := 1.0
 var _dragging := false
+var _catcher: Control
 
 func _ready() -> void:
 	clip_contents = true
@@ -25,6 +26,7 @@ func _ready() -> void:
 	_view.set_render_options(opts)
 	# Input goes to this catcher, not the view (an offscreen view ignores it anyway).
 	var catcher := Control.new()
+	_catcher = catcher
 	catcher.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	catcher.mouse_filter = Control.MOUSE_FILTER_STOP
 	catcher.gui_input.connect(_on_input)
@@ -33,11 +35,17 @@ func _ready() -> void:
 	if _prefab != null:
 		show_prefab(_prefab)
 
+var _shown_key := ""
+
 func show_prefab(prefab: Prefab) -> void:
 	_prefab = prefab
 	if _view == null or prefab == null:
 		return
-	_view.set_source_project(CaptureService.prefab_stage(prefab))
+	# Rebuild only when it changed (the browser refreshes often: thumbnails landing, edits).
+	var key := "%d|%d|%s" % [prefab.get_instance_id(), prefab.modified_at, ",".join(prefab.palette_names)]
+	if key != _shown_key:
+		_shown_key = key
+		_view.set_source_project(CaptureService.prefab_stage(prefab))
 	_update_camera()
 
 func _process(_delta: float) -> void:
@@ -45,6 +53,10 @@ func _process(_delta: float) -> void:
 		_view.flush_pending()   # offscreen views hold their rebuilds until asked
 
 func _on_input(ev: InputEvent) -> void:
+	# Everything over the preview is the preview's: a wheel zoom must not also scroll the
+	# panel it sits in.
+	if ev is InputEventMouse:
+		_catcher.accept_event()
 	if ev is InputEventMouseButton:
 		var mb := ev as InputEventMouseButton
 		match mb.button_index:

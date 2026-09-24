@@ -16,6 +16,8 @@ static func texture_for(prefab: Prefab, px := 128) -> Texture2D:
 		request_bake(prefab)
 		return null
 	var mtime := FileAccess.get_modified_time(path)
+	if mtime < prefab.modified_at:
+		request_bake(prefab)   # edited since: show the old one until the new one lands
 	var key := "%s|%d" % [path, px]
 	var hit: Dictionary = _cache.get(key, {})
 	if hit.get("mtime", -1) == mtime:

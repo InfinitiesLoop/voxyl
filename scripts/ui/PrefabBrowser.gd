@@ -14,6 +14,7 @@ var _grid: BlockGrid
 var _empty_label: Label
 var _detail: VBoxContainer
 var _preview: PrefabPreview
+var _preview_hint: Label
 var _selected := ""
 
 func _ready() -> void:
@@ -24,25 +25,42 @@ func _ready() -> void:
 	row.add_theme_constant_override("separation", 16)
 	add_child(row)
 
-	var left := VBoxContainer.new()
+	# Left: the big live preview on top, the prefab grid under it (drag the divider to trade).
+	var left := VSplitContainer.new()
 	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	left.add_theme_constant_override("separation", 8)
 	row.add_child(left)
-	var title := Label.new()
-	title.text = "Prefabs"
-	left.add_child(title)
+	var top := PanelContainer.new()
+	top.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	top.size_flags_stretch_ratio = 1.4
+	left.add_child(top)
+	_preview = PrefabPreview.new()
+	_preview.custom_minimum_size = Vector2(0, 240)
+	_preview.visible = false
+	top.add_child(_preview)
+	_preview_hint = Label.new()
+	_preview_hint.text = "Select a prefab to see it in 3D.\nDrag to turn · wheel to zoom · shown through its preferred palettes."
+	_preview_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_preview_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_preview_hint.modulate = Color(1, 1, 1, 0.55)
+	top.add_child(_preview_hint)
+
+	var bottom := VBoxContainer.new()
+	bottom.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	bottom.add_theme_constant_override("separation", 6)
+	left.add_child(bottom)
 	_empty_label = Label.new()
 	_empty_label.text = "No prefabs yet. In the editor, select a region with the Select tool, then press Ctrl+P (or \"Save as prefab…\" in the selection panel)."
 	_empty_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_empty_label.modulate = Color(1, 1, 1, 0.6)
-	left.add_child(_empty_label)
+	bottom.add_child(_empty_label)
 	_grid = BlockGrid.new()
 	_grid.show_captions = true
-	_grid.cell_size = Vector2(120, 120)
+	_grid.cell_size = Vector2(90, 90)
+	_grid.search_placeholder = "Search prefabs (name, tags, notes)…"
 	_grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_grid.item_selected.connect(_select)
 	_grid.item_right_clicked.connect(_on_right_click)
-	left.add_child(_grid)
+	bottom.add_child(_grid)
 
 	var scroll := ScrollContainer.new()
 	scroll.custom_minimum_size = Vector2(_DETAIL_W, 0)
@@ -52,8 +70,6 @@ func _ready() -> void:
 	_detail.custom_minimum_size = Vector2(_DETAIL_W - 16, 0)
 	_detail.add_theme_constant_override("separation", 8)
 	scroll.add_child(_detail)
-	_preview = PrefabPreview.new()
-	_preview.custom_minimum_size = Vector2(_DETAIL_W - 16, 280)
 
 	VoxelWorld.prefabs_changed.connect(_refresh)
 	VoxelWorld.workspace_changed.connect(_refresh)
@@ -98,11 +114,11 @@ func _on_right_click(key: String, global_pos: Vector2) -> void:
 	menu.popup(Rect2i(Vector2i(global_pos), Vector2i.ZERO))
 
 func _rebuild_detail() -> void:
-	if _preview.get_parent() != null:
-		_preview.get_parent().remove_child(_preview)
 	for c in _detail.get_children():
 		c.queue_free()
 	var p := VoxelWorld.workspace.get_prefab(_selected)
+	_preview.visible = p != null
+	_preview_hint.visible = p == null
 	if p == null:
 		var hint := Label.new()
 		hint.text = "Select a prefab to see it in 3D and edit its details.\n\nTo place one, open a project and press E: the inventory has a Prefabs page."
@@ -110,10 +126,13 @@ func _rebuild_detail() -> void:
 		hint.modulate = Color(1, 1, 1, 0.6)
 		_detail.add_child(hint)
 		return
-
-	_detail.add_child(_preview)
 	_preview.show_prefab(p)
-	_detail.add_child(_note("Drag to turn · wheel to zoom · shown through its preferred palettes"))
+
+	var edit := Button.new()
+	edit.text = "Edit in the editor"
+	edit.tooltip_text = "Open its cells like a project: build, undo, cut away… Leaving the editor saves them back into the prefab."
+	edit.pressed.connect(func(): VoxelWorld.request_open_project(VoxelWorld.open_prefab_for_editing(p)))
+	_detail.add_child(edit)
 
 	_detail.add_child(_caption("Name"))
 	var name_edit := LineEdit.new()
@@ -275,7 +294,3 @@ func _kv(key: String, value: String) -> Control:
 	row.add_child(v)
 	return row
 
-# The preview is parked out of the tree while no prefab is selected; free it with the browser.
-func _exit_tree() -> void:
-	if _preview != null and not _preview.is_inside_tree():
-		_preview.queue_free()

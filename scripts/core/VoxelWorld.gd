@@ -177,7 +177,9 @@ func _flush_save() -> void:
 	active_project.cutaway_max = cutaway_max
 	active_project.cutaway_enabled = cutaway_enabled
 	about_to_save.emit(active_project)
-	ProjectStore.save_project(active_project)   # a no-op for a scratch project
+	if active_project.editing_prefab != null:
+		_write_back_prefab(active_project)
+	ProjectStore.save_project(active_project)   # a no-op for a scratch project (incl. a prefab edit)
 
 # ---------------------------------------------------------------------------
 # Project lifecycle (used by the Home screen's dialogs and by agents alike)
@@ -201,6 +203,11 @@ func create_project(project_name: String, palettes: Array = [], scratch := false
 # Save a project, optionally under a new name (which also promotes a scratch project to a
 # real one). Returns "" or an error code: name_taken, empty_name, write_failed.
 func save_project_as(project: VoxelProject, new_name := "") -> String:
+	# A prefab open for editing saves back into the prefab; it never becomes a project.
+	if project.editing_prefab != null:
+		if project == active_project:
+			_flush_save()
+		return ""
 	var n := new_name.strip_edges()
 	if not n.is_empty() and n != project.name:
 		if workspace.get_project(n) != null:
@@ -1484,13 +1491,7 @@ func save_prefab_from_region(prefab_name: String, mn: Vector3i, mx: Vector3i, pa
 		prefab.anchor = Vector3i.ZERO
 	var names: Array[String] = []
 	if palettes.is_empty():
-		var used := {}
-		for s in prefab.used_semantics():
-			used[s] = true
-		for pn in active_project.palette_names:
-			var pal := workspace.get_palette(pn)
-			if pal != null and pal.entries.any(func(e: PaletteEntry) -> bool: return used.has(e.semantic_name)):
-				names.append(pn)
+		names = prefab_default_palettes(prefab.used_semantics())
 	else:
 		for pn in palettes:
 			names.append(str(pn))
@@ -1499,6 +1500,21 @@ func save_prefab_from_region(prefab_name: String, mn: Vector3i, mx: Vector3i, pa
 	PrefabStore.save_prefab(prefab)
 	prefabs_changed.emit()
 	return prefab
+
+# The palettes a prefab using `semantics` prefers by default: the open project's stack,
+# keeping only palettes that define one of them (same order, so they resolve as here).
+func prefab_default_palettes(semantics: Array) -> Array[String]:
+	var used := {}
+	for s in semantics:
+		used[str(s)] = true
+	var names: Array[String] = []
+	if active_project == null:
+		return names
+	for pn in active_project.palette_names:
+		var pal := workspace.get_palette(pn)
+		if pal != null and pal.entries.any(func(e: PaletteEntry) -> bool: return used.has(e.semantic_name)):
+			names.append(pn)
+	return names
 
 # Change a prefab's name / preferred palettes / anchor / tags / notes. `changes` holds only
 # the keys to change: name (String), palettes (Array), anchor (Vector3i), tags (Array),
@@ -1568,6 +1584,60 @@ func add_prefab_palettes(project: VoxelProject, palette_names: Array) -> void:
 		return
 	stack.append_array(project.palette_names)
 	set_palette_stack(project, stack)
+
+# A prefab opened for editing is just a project: a stand-in holding a copy of its cells (box
+# min corner at the origin) under its preferred palettes, so every view, tool, undo and agent
+# tool works on it unchanged. It's scratch — never listed, never written as a project — and
+# each save writes its cells back into the prefab (_write_back_prefab). The prefab's box
+# starts selected so its bounds are visible. Open it with request_open_project.
+func open_prefab_for_editing(prefab: Prefab) -> VoxelProject:
+	var p := VoxelProject.new()
+	p.name = prefab.name
+	p.scratch = true
+	p.editing_prefab = prefab
+	for rel: Vector3i in prefab.data.cells:
+		p.data.set_cell(rel, prefab.data.cells[rel].duplicate_cell())
+	p.palette_names.assign(prefab.palette_names)
+	p.has_selection = true
+	p.selection_min = Vector3i.ZERO
+	p.selection_max = prefab.size - Vector3i.ONE
+	p.prefab_saved_sig = _prefab_edit_sig(p)
+	return p
+
+# What a save would change: the cells (via the undo history) and the palette stack.
+func _prefab_edit_sig(p: VoxelProject) -> String:
+	return "%d|%s" % [p.history.to_data().hash() if p.history else 0, ",".join(p.palette_names)]
+
+# Write a prefab edit's cells and palette stack back into the prefab, when they changed. The
+# box grows to hold cells built past it (never shrinks: re-save from a selection for that);
+# the handle keeps its place in the build.
+func _write_back_prefab(project: VoxelProject) -> void:
+	var prefab := project.editing_prefab
+	if not workspace.prefabs.has(prefab):
+		return   # deleted while open
+	var sig := _prefab_edit_sig(project)
+	if sig == project.prefab_saved_sig:
+		return
+	project.prefab_saved_sig = sig
+	var lo := project.prefab_origin
+	var hi := project.prefab_origin + prefab.size - Vector3i.ONE
+	var aabb := project.data.get_used_aabb()
+	if not aabb.is_empty():
+		var a: Vector3i = aabb[0]
+		var b: Vector3i = aabb[1]
+		lo = Vector3i(mini(lo.x, a.x), mini(lo.y, a.y), mini(lo.z, a.z))
+		hi = Vector3i(maxi(hi.x, b.x), maxi(hi.y, b.y), maxi(hi.z, b.z))
+	var anchor_at := project.prefab_origin + prefab.anchor
+	prefab.data = VoxelData.new()
+	for pos: Vector3i in project.data.cells:
+		prefab.data.set_cell(pos - lo, project.data.cells[pos].duplicate_cell())
+	prefab.size = hi - lo + Vector3i.ONE
+	prefab.anchor = anchor_at - lo
+	project.prefab_origin = lo
+	prefab.palette_names.assign(project.palette_names)
+	prefab.modified_at = int(Time.get_unix_time_from_system())
+	PrefabStore.save_prefab(prefab)
+	prefabs_changed.emit()
 
 # Ask the focused 3D view to start placing `prefab` (its paste mode, with the prefab as the
 # source instead of the clipboard).

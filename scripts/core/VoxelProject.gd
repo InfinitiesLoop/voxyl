@@ -93,3 +93,11 @@ func semantic_counts() -> Dictionary:
 		else:
 			counts[cell.type_id] = counts.get(cell.type_id, 0) + 1
 	return counts
+
+# Set when this project is a prefab opened for editing (VoxelWorld.open_prefab_for_editing):
+# an in-memory stand-in (scratch, never listed or written as a project) whose saves write its
+# cells back into the prefab. `prefab_origin` is where the prefab's box min corner sits in
+# this project's coordinates (it moves if edits grow the box toward -x/-y/-z).
+var editing_prefab: Prefab = null
+var prefab_origin := Vector3i.ZERO
+var prefab_saved_sig := ""

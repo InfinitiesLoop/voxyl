@@ -82,6 +82,7 @@ static func block_item(bt: BlockType, library_name: String = "", section: String
 # (captioned cells get a taller box with a text strip beneath the icon).
 var cell_size := Vector2(50, 50)
 var show_captions := false
+var search_placeholder := "Search blocks…"
 
 var _canvas: Control                 # fixed-height virtual content; cells positioned inside it
 var _scroll: ScrollContainer
@@ -140,7 +141,7 @@ func _ready() -> void:
 	_scroll.resized.connect(_update_visible)
 
 	_search = LineEdit.new()
-	_search.placeholder_text = "Search blocks…"
+	_search.placeholder_text = search_placeholder
 	_search.clear_button_enabled = true
 	_search.text_changed.connect(_apply_filter)
 	# Right-click selects everything so a fresh search just types over the old one

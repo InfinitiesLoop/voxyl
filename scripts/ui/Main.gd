@@ -94,7 +94,8 @@ func _notification(what: int) -> void:
 
 func _open_editor(project: VoxelProject) -> void:
 	VoxelWorld.open(project)
-	_project_label.text = project.name
+	# A prefab opened for editing says so: leaving saves it back into the prefab.
+	_project_label.text = ("Prefab: %s" % project.name) if project.editing_prefab != null else project.name
 	_home.visible = false
 	_editor.visible = true
 	_inventory.set_armed(true)
