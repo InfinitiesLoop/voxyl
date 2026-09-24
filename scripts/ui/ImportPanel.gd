@@ -12,7 +12,14 @@ extends Window
 # the importer reads assets the user already owns and bundles no Minecraft content.
 
 const _NOTE := "Reads blocks from your own installed game, resource packs, or mods. Voxyl bundles no Minecraft content."
-const _FLAT_NOTE := "Pre-1.8 packs carry no model data — shapes are guessed from texture names (top/side/front…) and everything imports as a cube."
+const _NEI_NOTE := "Needs NEI's own Data Dumps (in-game: Options → Tools → Data Dumps → Items, then Item Panel in CSV mode) — that's what gives every block its confirmed identity. A block with no matching texture (a GregTech-style machine) still imports, correctly identified, just textureless."
+
+# Which import mode to offer, and its label — the OptionButton is built from this list so
+# adding/removing a mode is a data change here, not a UI rewrite.
+const _FORMATS := [
+	{"id": ImportService.Mode.JSON, "label": "Minecraft 1.8+ (block models)"},
+	{"id": ImportService.Mode.NEI, "label": "NEI roster (1.7-1.12, confirmed identity)"},
+]
 
 # Set by the opener (HomeScreen) to the Block Types tab's selected library, so imports
 # default to the library the user is managing. "" → first existing non-basic library, or
@@ -43,8 +50,14 @@ var _prefix_edit: LineEdit          # shown in place of the picker when splittin
 var _split_check: CheckBox
 var _locations: MenuButton
 var _loc_entries: Array = []        # MCInstallLocations.candidates() for this platform
-var _flat_note: Label
+var _nei_note: Label
 var _path_label: Label
+# NEI mode only: the Data Dumps folder (item.csv + itempanel.csv), separate from the asset
+# source above (which still supplies textures). Browsing waits for both to be chosen.
+var _dumps_row: HBoxContainer
+var _dumps_path := ""
+var _dumps_label: Label
+var _dumps_dialog: FileDialog
 var _search: LineEdit
 var _list: ItemList
 var _select_all_check: CheckBox
@@ -80,8 +93,8 @@ func _build() -> void:
 	fmt_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	fmt_row.add_child(fmt_lbl)
 	_format = OptionButton.new()
-	_format.add_item("Minecraft 1.8+ (block models)", ImportService.Mode.JSON)
-	_format.add_item("Older / pre-1.8 (textures only)", ImportService.Mode.FLAT)
+	for f in _FORMATS:
+		_format.add_item(f["label"], f["id"])
 	_format.item_selected.connect(_on_format_changed)
 	fmt_row.add_child(_format)
 
@@ -140,6 +153,22 @@ func _build() -> void:
 	_path_label.tooltip_text = ""
 	vbox.add_child(_path_label)
 
+	# NEI mode only: a second, separate picker for the Data Dumps folder. The source above
+	# still supplies textures; this supplies the confirmed identity roster.
+	_dumps_row = HBoxContainer.new()
+	_dumps_row.add_theme_constant_override("separation", 6)
+	_dumps_row.visible = false
+	vbox.add_child(_dumps_row)
+	var dumps_btn := Button.new()
+	dumps_btn.text = "Choose Data Dumps folder…"
+	dumps_btn.pressed.connect(func(): _dumps_dialog.popup_centered())
+	_dumps_row.add_child(dumps_btn)
+	_dumps_label = Label.new()
+	_dumps_label.text = "No dumps folder chosen."
+	_dumps_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_dumps_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_dumps_row.add_child(_dumps_label)
+
 	var note := Label.new()
 	note.text = _NOTE
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -147,14 +176,14 @@ func _build() -> void:
 	note.add_theme_font_size_override("font_size", 11)
 	vbox.add_child(note)
 
-	# Shown only in pre-1.8 mode: the shapes-are-guessed caveat.
-	_flat_note = Label.new()
-	_flat_note.text = _FLAT_NOTE
-	_flat_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_flat_note.modulate = Color(1, 0.85, 0.5, 0.85)
-	_flat_note.add_theme_font_size_override("font_size", 11)
-	_flat_note.visible = false
-	vbox.add_child(_flat_note)
+	# Shown only in NEI mode: where its confirmed identity comes from.
+	_nei_note = Label.new()
+	_nei_note.text = _NEI_NOTE
+	_nei_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_nei_note.modulate = Color(1, 0.85, 0.5, 0.85)
+	_nei_note.add_theme_font_size_override("font_size", 11)
+	_nei_note.visible = false
+	vbox.add_child(_nei_note)
 
 	vbox.add_child(HSeparator.new())
 
@@ -204,6 +233,10 @@ func _build() -> void:
 	_dir_dialog = _make_dialog(FileDialog.FILE_MODE_OPEN_DIR)
 	_dir_dialog.dir_selected.connect(_set_source)
 	add_child(_dir_dialog)
+
+	_dumps_dialog = _make_dialog(FileDialog.FILE_MODE_OPEN_DIR)
+	_dumps_dialog.dir_selected.connect(_set_dumps)
+	add_child(_dumps_dialog)
 
 func _make_dialog(dialog_mode: FileDialog.FileMode) -> FileDialog:
 	var d := FileDialog.new()
@@ -358,27 +391,64 @@ func _resolve_target_library() -> BlockLibrary:
 		_created_library_names.append(_target_library_name)
 	return VoxelWorld.workspace.get_or_add_library(_target_library_name)
 
-# Switching format: show/hide the caveat and re-browse the current source under it.
+# Switching format: show/hide the NEI-only controls and re-browse the current source under it.
 func _on_format_changed(_idx: int) -> void:
-	_flat_note.visible = _mode() == ImportService.Mode.FLAT
+	var nei := _mode() == ImportService.Mode.NEI
+	_nei_note.visible = nei
+	_dumps_row.visible = nei
 	if not _current_path.is_empty():
 		_set_source(_current_path)
 
-# Chosen a path → detect source(s), browse, and populate the list.
+# Chosen the asset source (still the texture supply in NEI mode) → detect source(s),
+# construct the service, and browse once every mode-required input is in hand.
 func _set_source(path: String) -> void:
 	if _service != null:
 		_service.close()
 	_current_path = path
 	var sources := ImportService.detect_sources(path)
 	_service = ImportService.new(sources, _resolve_target_library(), _mode())
-	_available = _service.available_blocks()
 	_path_label.text = path
 	_path_label.tooltip_text = path
+	if sources.is_empty():
+		_available = []
+		_refilter()
+		_status.text = "Couldn't read a Minecraft assets tree there."
+		return
+	if _mode() == ImportService.Mode.NEI:
+		if _dumps_path.is_empty():
+			_available = []
+			_refilter()
+			_status.text = "Now choose the Data Dumps folder above."
+			return
+		var err := _service.load_nei_dumps(_dumps_path)
+		if not err.is_empty():
+			_available = []
+			_refilter()
+			_status.text = err
+			return
+	_browse()
+
+# Chosen the Data Dumps folder (NEI mode only). If the asset source hasn't been picked yet,
+# _set_source picks this up once it is; otherwise load it into the existing service and browse.
+func _set_dumps(path: String) -> void:
+	_dumps_path = path
+	_dumps_label.text = path
+	_dumps_label.tooltip_text = path
+	if _service == null:
+		return
+	var err := _service.load_nei_dumps(path)
+	if not err.is_empty():
+		_available = []
+		_refilter()
+		_status.text = err
+		return
+	_browse()
+
+func _browse() -> void:
+	_available = _service.available_blocks()
 	_search.text = ""
 	_refilter()
-	if sources.is_empty():
-		_status.text = "Couldn't read a Minecraft assets tree there."
-	elif _available.is_empty():
+	if _available.is_empty():
 		_status.text = "No blocks found — try the other format, or a different source."
 	else:
 		_status.text = "%d block(s) available." % _available.size()

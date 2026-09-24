@@ -6,7 +6,7 @@ extends RefCounted
 # result — copy/composite textures, emit cube blocks, remove the presumptive ones, and reach
 # mod files that sit NEXT to the source (a mod's lang). Centralizing the toolkit keeps every
 # extension from re-implementing texture ingest / compositing / block emission, and keeps the
-# generic importers (MCImporter, MCFlatImporter) free of any of this.
+# generic importers (MCImporter, NeiRosterImporter) free of any of this.
 #
 # Still a reader of the user's own assets (decision 4): compositing writes NEW pixels, but only
 # ones synthesized from textures the user already owns — nothing is bundled.

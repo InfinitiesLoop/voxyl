@@ -12,14 +12,22 @@ extends RefCounted
 # already owns (their game install, resource packs, or mods). The import UI says so.
 
 # Which translator to run over the sources. JSON = the 1.8+ blockstate/model format
-# (MCImporter); FLAT = the pre-1.8 textures-only synthesis (MCFlatImporter). Same
-# sources either way — only the importer differs, chosen in the UI.
-enum Mode { JSON, FLAT }
+# (MCImporter). NEI = the confirmed-roster import (NeiRosterImporter) — item.csv +
+# itempanel.csv from NEI's own Data Dumps, for any 1.7.10-1.12 modpack that ships NEI.
+# NEI mode additionally needs a dumps folder (see load_nei_dumps); `_sources` still
+# supplies the mod assets its texture-attachment pass searches.
+enum Mode { JSON, NEI }
 
 var _sources: Array[MCAssetSource] = []
-var _importers := {}     # source -> { library_name -> MCImporter | MCFlatImporter } (lazy)
+var _importers := {}     # source -> { library_name -> MCImporter } (lazy, JSON mode)
 var _library: BlockLibrary
 var _mode: Mode
+
+# NEI mode: one NeiRosterImporter per target library (each re-parses the same dumps folder —
+# cheap; the real cost, texture matching/copying, only happens per actually-imported entry).
+# Keyed by library name, mirroring _importers' per-library caching for JSON mode.
+var _nei_by_library := {}      # library.name -> NeiRosterImporter
+var _nei_dumps_dir := ""       # set by load_nei_dumps(); "" until then
 
 # Namespace-split routing (opt-in via set_namespace_split). When on, import_step picks
 # the target library per block from its namespace instead of using the single `_library`,
@@ -161,10 +169,26 @@ static func _scan_for_sources(root: String) -> Array[MCAssetSource]:
 # Browse
 # ---------------------------------------------------------------------------
 
-# Every importable block across the sources, each as
-# { ns, id, ref (= "ns:id"), source }, sorted by ref for a stable list. The UI
-# searches/filters this and feeds a subset back to import_selected().
+# NEI mode only: parse item.csv + itempanel.csv from `dumps_dir` (see NeiRosterImporter for
+# the expected format). Call before available_blocks(); "" on success, else a message to
+# show the user (missing file, unexpected header) — available_blocks() returns nothing until
+# this succeeds.
+func load_nei_dumps(dumps_dir: String) -> String:
+	_nei_dumps_dir = dumps_dir
+	return _nei_for(_library).load_dumps(dumps_dir)
+
+# Every importable block across the sources, each as { ns, id, ref, source } (JSON mode, ref =
+# "ns:id") or { ns, id, ref, source: null, row } (NEI mode, ref = "mod: display name", id =
+# "registry@meta"), sorted by ref for a stable list. The UI searches/filters this and feeds a
+# subset back to import_selected().
 func available_blocks() -> Array:
+	if _mode == Mode.NEI:
+		var out: Array = []
+		for row in _nei_for(_library).all_entries():
+			out.append({"ns": row["ns"], "id": "%s@%d" % [row["registry"], row["meta"]],
+				"ref": "%s: %s" % [row["mod"], row["display"]], "source": null, "row": row})
+		out.sort_custom(func(a, b): return a["ref"] < b["ref"])
+		return out
 	var out: Array = []
 	for s in _sources:
 		var imp = _importer_for(s, _library)
@@ -203,7 +227,9 @@ var _pending_names: PackedStringArray = PackedStringArray()
 # Prepare to import `selection`; returns the total number of blocks to step through.
 func begin_import(selection: Array) -> int:
 	_pending = selection
-	_pending_names = _resolve_names(selection)
+	# Naming is intrinsic to each NEI roster row (its own confirmed display name); JSON mode
+	# needs names precomputed for dedup across namespaces.
+	_pending_names = _resolve_names(selection) if _mode != Mode.NEI else PackedStringArray()
 	imported_count = 0
 	warnings.clear()
 	_touched.clear()
@@ -218,6 +244,18 @@ func begin_import(selection: Array) -> int:
 func import_step(i: int) -> bool:
 	var entry = _pending[i]
 	var lib := _target_library_for(entry["ns"])
+	if _mode == Mode.NEI:
+		var nri := _nei_for(lib)
+		# Same reason as the JSON path below: the post-import extension pass needs a source
+		# for this namespace even if this particular row fails to bind a texture.
+		var src := nri.source_for(entry["ns"])
+		if src != null:
+			_ns_source[entry["ns"]] = src
+		var ok := nri.import_entry(entry["row"]) != null
+		if ok:
+			imported_count += 1
+			_touched[lib.name] = lib
+		return ok
 	var imp = _importer_for(entry["source"], lib)
 	# Remember which source fed each namespace so the post-import extension pass (which reads
 	# more of the same source) can find it — even for a block that failed to import.
@@ -243,6 +281,8 @@ func end_import() -> void:
 	_run_extensions()
 	for imp in _all_importers():
 		warnings.append_array(imp.warnings)
+	for nri in _nei_by_library.values():
+		warnings.append_array(nri.warnings)
 	for lib in _touched.values():
 		LibraryStore.save_library(lib)
 
@@ -267,7 +307,9 @@ func _run_extensions() -> void:
 func imported_block_types() -> Array:
 	var out: Array = []
 	var seen := {}
-	for imp in _all_importers():
+	var owners: Array = _all_importers()
+	owners.append_array(_nei_by_library.values())
+	for imp in owners:
 		for bt_name in imp.imported_blocks:
 			# Dedup per (library, name): a bare name like "stone" can legitimately exist
 			# in more than one library once splitting spreads blocks across namespaces.
@@ -318,22 +360,17 @@ func _target_library_for(ns: String) -> BlockLibrary:
 		_lib_by_ns[ns] = _library_resolver.call(ns)
 	return _lib_by_ns[ns]
 
-# The translator for a (source, library) pair, matching the chosen mode. Keyed by both
-# because splitting feeds one source's blocks into several libraries (and one library can
-# be fed by several sources), and an importer is bound to a single library. MCImporter and
-# MCFlatImporter share the methods this service uses (list_namespaces / list_blocks /
-# import_block / warnings + imported_blocks), so callers treat them alike (duck-typed).
-func _importer_for(source: MCAssetSource, library: BlockLibrary):
+# The JSON-mode translator for a (source, library) pair. Keyed by both because splitting
+# feeds one source's blocks into several libraries (and one library can be fed by several
+# sources), and an importer is bound to a single library.
+func _importer_for(source: MCAssetSource, library: BlockLibrary) -> MCImporter:
 	var by_lib = _importers.get(source)
 	if by_lib == null:
 		by_lib = {}
 		_importers[source] = by_lib
 	var imp = by_lib.get(library.name)
 	if imp == null:
-		if _mode == Mode.FLAT:
-			imp = MCFlatImporter.new(source, library)
-		else:
-			imp = MCImporter.new(source, library)
+		imp = MCImporter.new(source, library)
 		by_lib[library.name] = imp
 	return imp
 
@@ -343,3 +380,16 @@ func _all_importers() -> Array:
 	for by_lib in _importers.values():
 		out.append_array(by_lib.values())
 	return out
+
+# NEI mode's translator for one target library. Re-parses the shared dumps folder into its
+# own roster (cheap — see the field comment above); each entry's actual texture-copy cost is
+# only paid once, when that entry is imported.
+func _nei_for(library: BlockLibrary) -> NeiRosterImporter:
+	var existing: NeiRosterImporter = _nei_by_library.get(library.name)
+	if existing != null:
+		return existing
+	var nri := NeiRosterImporter.new(_sources, library)
+	if not _nei_dumps_dir.is_empty():
+		nri.load_dumps(_nei_dumps_dir)
+	_nei_by_library[library.name] = nri
+	return nri

@@ -127,6 +127,11 @@ func _read_item_panel(path: String):
 # Browse
 # ---------------------------------------------------------------------------
 
+# The asset source backing a namespace, or null — lets a caller (ImportService, wiring the
+# post-import extension pass) find the same source this importer's texture-attachment used.
+func source_for(ns: String) -> MCAssetSource:
+	return _sources_by_ns.get(ns.to_lower())
+
 func entries(mod: String) -> Array:
 	return _rows_by_mod.get(mod, [])
 

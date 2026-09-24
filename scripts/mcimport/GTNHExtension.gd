@@ -80,8 +80,8 @@ func _leaf_is_junk(leaf: String) -> bool:
 # and removes the superseded presumptive cubes.
 # ===========================================================================
 
-# Texture-ref prefixes as the flat importer wrote them ("<ns>:<subdir>/<path>"). The `blocks`
-# segment is the pre-1.8 `textures/blocks/` folder MCFlatImporter reads from.
+# Texture-ref prefixes in MCTexImport's "<ns>:<subdir>/<path>" convention. The `blocks`
+# segment is the pre-1.8 `textures/blocks/` folder GTNH's assets keep their PNGs under.
 const _ICONSETS := "gregtech:blocks/iconsets"
 const _BASICMACHINES := "gregtech:blocks/basicmachines"
 const _MACHINES_TEX_DIR := "gregtech/textures/blocks/basicmachines"

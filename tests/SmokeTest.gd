@@ -43,8 +43,7 @@ func _ready() -> void:
 	_test_forgiving_source_scan()
 	_test_incremental_import()
 	_test_import_split_by_namespace()
-	_test_flat_import()
-	_test_import_service_flat()
+	_test_import_service_nei()
 	_test_nei_roster_import()
 	_test_install_locations()
 	_test_shape_catalog()
@@ -2053,163 +2052,54 @@ func _test_import_split_by_namespace() -> void:
 	_rm_rf(src_root)
 	AssetLibrary.ROOT = saved_root
 
-# Pre-1.8 import: a 1.7.10-style tree has NO blockstates/models, only loose
-# textures under textures/blocks/. MCFlatImporter groups them by base name (across
-# underscore / dot / camelCase / glued separators), strips state suffixes, and
-# synthesizes a unit-cube BlockModel per block — multi-face when corroborated,
-# uniform otherwise. The 1.8+ importer finds nothing in the same tree.
-func _test_flat_import() -> void:
-	print("-- flat importer (pre-1.8 textures-only)")
+# Import service through NEI mode: load_nei_dumps + available_blocks browses the confirmed
+# roster, import_selected imports + persists, and set_namespace_split routes by registry
+# namespace exactly like JSON mode (a NEI row's own `ns` is its registry prefix).
+func _test_import_service_nei() -> void:
+	print("-- import service (NEI roster mode)")
 	var saved_root := AssetLibrary.ROOT
-	AssetLibrary.ROOT = "user://__voxyl_flatlib__"
-	var src := "user://__voxyl_flatsrc__"
-	_rm_rf(AssetLibrary.ROOT)
-	_rm_rf(src)
-	var assets := src + "/assets"
-	var blocks := assets + "/testmod/textures/blocks"
-
-	var c_stone := Color(0.5, 0.5, 0.5)
-	var c_top := Color(0.8, 0.2, 0.2);  var c_side := Color(0.2, 0.8, 0.2)
-	var c_front := Color(0.2, 0.2, 0.8); var c_front_on := Color(0.9, 0.9, 0.1)
-	_write_solid(blocks + "/stone.png", c_stone)
-	# Underscore-separated multi-face + an on/off state pair on the front.
-	_write_solid(blocks + "/furnace_top.png", c_top)
-	_write_solid(blocks + "/furnace_side.png", c_side)
-	_write_solid(blocks + "/furnace_front_off.png", c_front)
-	_write_solid(blocks + "/furnace_front_on.png", c_front_on)
-	# Dot-separated (Railcraft style) and camelCase (EnderIO style) and glued.
-	_write_solid(blocks + "/signal.lamp.top.png", c_top)
-	_write_solid(blocks + "/signal.lamp.bottom.png", c_side)
-	_write_solid(blocks + "/solarPanelSide.png", c_side)
-	_write_solid(blocks + "/solarPanelTop.png", c_top)
-	_write_solid(blocks + "/arcaneside.png", c_side)
-	_write_solid(blocks + "/arcanetop.png", c_top)
-	# A lone face texture with no siblings → stays standalone, not a fake block.
-	_write_solid(blocks + "/treetop.png", Color(0.3, 0.5, 0.2))
-	# Textures sorted into a subfolder (the Ztones pattern): must be found recursively,
-	# each carrying its subpath so it imports as its own cube.
-	_write_solid(blocks + "/agon/0.png", Color(0.4, 0.3, 0.6))
-	_write_solid(blocks + "/agon/1.png", Color(0.5, 0.3, 0.6))
-	# An animated texture (2-frame vertical strip + .mcmeta), as in 1.7.10.
-	var anim := Image.create_empty(16, 32, false, Image.FORMAT_RGBA8)
-	anim.fill(Color(0.7, 0.3, 0.1))
-	_write_png(blocks + "/magma.png", anim)
-	_write_file(blocks + "/magma.png.mcmeta", '{"animation":{"frametime":2}}')
-
-	var ws := VoxelWorkspace.new()
-	var lib := ws.get_or_add_library("flat")
-	var imp := MCFlatImporter.new(assets, lib)
-
-	# Browse: 9 blocks — the four faced groups collapse to one each; stone, magma,
-	# treetop stand alone; the two nested agon variants each stand alone. (14 PNGs → 9.)
-	var listed := imp.list_blocks("testmod")
-	_check("flat browse groups faces into blocks",
-		listed.size() == 9
-		and Array(listed).has("furnace") and Array(listed).has("signal_lamp")
-		and Array(listed).has("solar_panel") and Array(listed).has("arcane")
-		and Array(listed).has("stone") and Array(listed).has("treetop"))
-	_check("lone suffix texture stays standalone (no fake 'tree' block)",
-		Array(listed).has("treetop") and not Array(listed).has("tree"))
-	_check("subfolder textures found recursively (Ztones-style sets)",
-		Array(listed).has("agon/0") and Array(listed).has("agon/1"))
-	# A nested block imports end-to-end: its texture ref keeps the subpath.
-	var agon_bt := imp.import_block("testmod", "agon/0")
-	_check("nested block imports as its own cube with the right texture",
-		agon_bt != null and ws.get_block_model("testmod:flat/agon/0") != null
-		and ws.get_texture_asset("testmod:blocks/agon/0") != null)
-
-	# Uniform block: a single texture on all six faces.
-	var stone_bt := imp.import_block("testmod", "stone")
-	var stone_m := ws.get_block_model("testmod:flat/stone")
-	_check("uniform block → full cube, one texture on every face",
-		stone_bt != null and stone_m != null and stone_m.textures.size() == 1
-		and stone_m.elements[0]["faces"][BlockModel.Dir.UP]["texture_key"] == "testmod:blocks/stone"
-		and stone_m.elements[0]["faces"][BlockModel.Dir.NORTH]["texture_key"] == "testmod:blocks/stone")
-	_check("uniform planning color is the texture average",
-		stone_bt != null and _color_near(stone_bt.color, c_stone, 0.02))
-
-	# Multi-face block: top/side/front mapped; front uses the resting (off) state;
-	# the unspecified bottom falls back to side.
-	imp.import_block("testmod", "furnace")
-	var fm := ws.get_block_model("testmod:flat/furnace")
-	var ff: Dictionary = fm.elements[0]["faces"]
-	_check("multi-face: top maps to the _top texture",
-		ff[BlockModel.Dir.UP]["texture_key"] == "testmod:blocks/furnace_top")
-	_check("multi-face: front maps to NORTH, resting (off) state chosen",
-		ff[BlockModel.Dir.NORTH]["texture_key"] == "testmod:blocks/furnace_front_off")
-	_check("multi-face: a side fills the other horizontals",
-		ff[BlockModel.Dir.EAST]["texture_key"] == "testmod:blocks/furnace_side"
-		and ff[BlockModel.Dir.WEST]["texture_key"] == "testmod:blocks/furnace_side")
-	_check("multi-face: unspecified bottom falls back (to side here)",
-		ff[BlockModel.Dir.DOWN]["texture_key"] == "testmod:blocks/furnace_side")
-	_check("multi-face block binds its three distinct textures", fm.textures.size() == 3)
-
-	# Separator coverage: dot + camelCase resolve the same way as underscore.
-	imp.import_block("testmod", "signal_lamp")
-	imp.import_block("testmod", "solar_panel")
-	var sl: Dictionary = ws.get_block_model("testmod:flat/signal_lamp").elements[0]["faces"]
-	var sp: Dictionary = ws.get_block_model("testmod:flat/solar_panel").elements[0]["faces"]
-	_check("dot-separated faces resolve (signal.lamp.top → UP)",
-		sl[BlockModel.Dir.UP]["texture_key"] == "testmod:blocks/signal.lamp.top"
-		and sl[BlockModel.Dir.DOWN]["texture_key"] == "testmod:blocks/signal.lamp.bottom")
-	_check("camelCase faces resolve (solarPanelTop → UP, Side → horizontals)",
-		sp[BlockModel.Dir.UP]["texture_key"] == "testmod:blocks/solarPanelTop"
-		and sp[BlockModel.Dir.NORTH]["texture_key"] == "testmod:blocks/solarPanelSide")
-
-	# Animation survives the flat path (shared ingestion with the JSON importer).
-	imp.import_block("testmod", "magma")
-	var mt := ws.get_texture_asset("testmod:blocks/magma")
-	_check("flat animated texture keeps its frames",
-		mt != null and mt.frame_count == 2 and is_equal_approx(mt.frame_time, 0.1))
-
-	# The 1.8+ importer finds nothing in a pre-1.8 tree (no blockstates).
-	var ws2 := VoxelWorkspace.new()
-	var jimp := MCImporter.new(assets, ws2.get_or_add_library("json"))
-	jimp.import_namespace("testmod")
-	_check("the 1.8+ importer imports nothing from a pre-1.8 tree",
-		jimp.imported_blocks.is_empty() and _warns_contain(jimp, "no blockstates"))
-
-	_rm_rf(AssetLibrary.ROOT)
-	_rm_rf(src)
-	AssetLibrary.ROOT = saved_root
-
-# Pre-1.8 import through the service: FLAT mode browses + imports the synthesized
-# blocks and persists them, exactly like the JSON path but via MCFlatImporter.
-func _test_import_service_flat() -> void:
-	print("-- import service (pre-1.8 FLAT mode)")
-	var saved_root := AssetLibrary.ROOT
-	AssetLibrary.ROOT = "user://__voxyl_flatsvc_lib__"
-	var src_root := "user://__voxyl_flatsvc_src__"
+	AssetLibrary.ROOT = "user://__voxyl_neisvc_lib__"
+	var src_root := "user://__voxyl_neisvc_src__"
+	var dumps := "user://__voxyl_neisvc_dumps__"
 	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(src_root)
+	_rm_rf(dumps)
 	var blocks := src_root + "/assets/testmod/textures/blocks"
 	_write_solid(blocks + "/cobble.png", Color(0.4, 0.4, 0.4))
-	_write_solid(blocks + "/machine_top.png", Color(0.7, 0.7, 0.2))
-	_write_solid(blocks + "/machine_side.png", Color(0.2, 0.7, 0.7))
+
+	_write_file(dumps + "/item.csv", "\n".join([
+		"Name,ID,Has Block,Mod,Class,Display Name",
+		"testmod:cobble,200,true,TestMod,some.Class,Cobble",
+		"testmod:machine,201,true,TestMod,some.Class,Machine",
+	]))
+	_write_file(dumps + "/itempanel.csv", "\n".join([
+		"Item Name,Item ID,Item meta,Has NBT,Display Name",
+		"testmod:cobble,200,0,false,Cobble",
+		"testmod:machine,201,0,false,Machine",
+	]))
 
 	var sources := ImportService.detect_sources(src_root)
 	var ws := VoxelWorkspace.new()
-	var svc := ImportService.new(sources, ws.get_or_add_library("flatsvc"), ImportService.Mode.FLAT)
+	var svc := ImportService.new(sources, ws.get_or_add_library("neisvc"), ImportService.Mode.NEI)
+	_check("load_nei_dumps succeeds", svc.load_nei_dumps(dumps) == "")
 	var avail := svc.available_blocks()
-	_check("FLAT browse synthesizes blocks (cobble + grouped machine)",
-		avail.size() == 2)
+	_check("NEI browse lists the confirmed roster", avail.size() == 2)
 	var n := svc.import_selected(avail)
-	# testmod is not the minecraft namespace, so names keep the prefix.
-	_check("FLAT import creates the namespaced block types",
-		n == 2 and ws.get_block_type("testmod:cobble") != null
-		and ws.get_block_type("testmod:machine") != null)
-	_check("FLAT import builds a cube model with textures",
-		ws.get_block_model("testmod:flat/machine") != null
-		and ws.get_block_model("testmod:flat/machine").has_textures())
+	_check("NEI import creates both block types",
+		n == 2 and ws.get_block_type("Cobble") != null and ws.get_block_type("Machine") != null)
+	_check("NEI import binds the textured one, leaves the textureless one identified",
+		ws.get_block_type("Cobble").model_id != "" and ws.get_block_type("Machine").model_id == ""
+		and McId.is_confirmed(ws.get_block_type("Machine")))
 
 	var ws2 := VoxelWorkspace.new()
 	LibraryStore.load_persisted(ws2)
-	_check("FLAT-imported library persisted to disk",
-		ws2.get_block_type("testmod:machine") != null and ws2.get_block_type("testmod:cobble") != null)
+	_check("NEI-imported library persisted to disk",
+		ws2.get_block_type("Cobble") != null and ws2.get_block_type("Machine") != null)
 
 	svc.close()
 	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(src_root)
+	_rm_rf(dumps)
 	AssetLibrary.ROOT = saved_root
 
 # NeiRosterImporter: item.csv (Has Block filter + mod label) + itempanel.csv (the confirmed,

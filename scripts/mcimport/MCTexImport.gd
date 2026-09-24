@@ -5,9 +5,9 @@ extends RefCounted
 # TextureAsset" — copy the pixels into the asset library, scan them for the planning
 # average-color + a transparency class, and parse any sibling `.mcmeta` animation —
 # lives here in exactly one place, used by both MCImporter (1.8+ JSON models) and
-# MCFlatImporter (pre-1.8 flat textures). It only knows the `<ns>/textures/<path>.png`
-# (+ `.mcmeta`) convention, the one thing both formats share; all the format-specific
-# layout knowledge stays in the two importers.
+# NeiRosterImporter (confirmed-roster import). It only knows the `<ns>/textures/<path>.png`
+# (+ `.mcmeta`) convention, the one thing both share; all the format-specific layout
+# knowledge stays in the importers themselves.
 
 # EXPERIMENTAL: when on, the verbatim pixel copy is written on a WorkerThreadPool thread
 # instead of inline. Off by default so direct-importer callers (the tests) stay fully

@@ -1,7 +1,7 @@
 class_name MCImportExtension
 extends RefCounted
 
-# A mod-specific post-import "healer". The generic MC importers (MCImporter, MCFlatImporter)
+# A mod-specific post-import "healer". The generic MC importers (MCImporter, NeiRosterImporter)
 # translate every namespace the same neutral way; some mods, though, model their blocks in
 # ways neutral synthesis can't recover — GregTech composites a machine from a tier hull + a
 # transparent overlay in Java, and names it from a metadata table, so a texture-only import

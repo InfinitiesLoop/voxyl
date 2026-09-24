@@ -562,30 +562,40 @@ func _check_tinted_render(v3d: Node) -> void:
 	_rm_rf(src)
 	AssetLibrary.ROOT = saved_root
 
-# Phase 5 / pre-1.8: a block synthesized by MCFlatImporter from loose textures must
-# render through the same per-face textured path. A multi-face block (distinct top vs
-# side) yields more than one surface, proving the per-face bindings flow to the view —
-# closing importer → view for the textures-only format with no model JSON in sight.
+# Phase 5 / NEI roster import: a block whose texture attachment binds distinct per-face
+# files must render through the same per-face textured path. A multi-face block (distinct
+# top vs side) yields more than one surface, proving the per-face bindings flow to the view.
 func _check_flat_render(v3d: Node) -> void:
 	var saved_root := AssetLibrary.ROOT
 	AssetLibrary.ROOT = "user://__voxyl_shelltest_flatlib__"
 	var src := "user://__voxyl_shelltest_flatsrc__"
+	var dumps := "user://__voxyl_shelltest_flatdumps__"
 	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(src)
+	_rm_rf(dumps)
 	var blocks := src + "/assets/testmod/textures/blocks"
 	for face in [["pillar_top", Color(0.8, 0.2, 0.2)], ["pillar_side", Color(0.2, 0.6, 0.2)]]:
 		var img := Image.create_empty(16, 16, false, Image.FORMAT_RGBA8)
 		img.fill(face[1])
 		DirAccess.make_dir_recursive_absolute((blocks + "/" + face[0] + ".png").get_base_dir())
 		img.save_png(blocks + "/" + face[0] + ".png")
+	_write_text(dumps + "/item.csv", "\n".join([
+		"Name,ID,Has Block,Mod,Class,Display Name",
+		"testmod:pillar,300,true,TestMod,some.Class,Pillar",
+	]))
+	_write_text(dumps + "/itempanel.csv", "\n".join([
+		"Item Name,Item ID,Item meta,Has NBT,Display Name",
+		"testmod:pillar,300,0,false,Pillar",
+	]))
 
 	var ws := VoxelWorld.workspace
 	var lib := ws.basic_library()
-	var imp := MCFlatImporter.new(src + "/assets", lib)
-	imp.import_block("testmod", "pillar")          # top + side → multi-face cube
+	var nri := NeiRosterImporter.new([MCDirSource.new(src + "/assets")], lib)
+	nri.load_dumps(dumps)
+	nri.import_entry(nri.entries("TestMod")[0])     # top + side → multi-face cube
 	var pal := ws.add_palette("__flat_test__")
 	var e := PaletteEntry.new()
-	e.semantic_name = "FlatTest"; e.block_type_name = "pillar"
+	e.semantic_name = "FlatTest"; e.block_type_name = "Pillar"
 	pal.entries.append(e)
 	var project := VoxelWorld.active_project
 	project.palette_names.append("__flat_test__")
@@ -605,13 +615,14 @@ func _check_flat_render(v3d: Node) -> void:
 	VoxelWorld.clear_block(Vector3i(0, 10, 0))
 	project.palette_names.erase("__flat_test__")
 	ws.remove_palette("__flat_test__")
-	lib.remove_block_type("pillar")
-	lib.remove_block_model("testmod:flat/pillar")
+	lib.remove_block_type("Pillar")
+	lib.remove_block_model("testmod:nei/Pillar")
 	lib.remove_texture_asset("testmod:blocks/pillar_top")
 	lib.remove_texture_asset("testmod:blocks/pillar_side")
 	v3d._rebuild()
 	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(src)
+	_rm_rf(dumps)
 	AssetLibrary.ROOT = saved_root
 
 # The import progress window must drive the incremental import to completion across

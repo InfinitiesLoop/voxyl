@@ -27,9 +27,16 @@ stairs, fences, walls, panes, bars).
 - **Biome tinting** as a per-`BlockType.tint` (WHITE = identity); importer bakes the
   plains default, classifies category from the texture path; `View3D` multiplies tint
   into `tint_index` faces.
-- **Pre-1.8 (1.7.10-era) flat import** (`MCFlatImporter` + shared `MCTexImport`): synthesizes
-  cubes from bare `textures/blocks/*.png`, grouping multi-face cubes by a corroborated
-  naming heuristic. `ImportService.Mode { JSON, FLAT }` routes to the right importer.
+- **Pre-1.8 (1.7.10-era) import superseded (2026-09-24):** `MCFlatImporter`'s texture-
+  filename-clustering (guessing block *boundaries* from PNG names) produced messy,
+  sometimes-wrong blocks and is gone. Replaced by `NeiRosterImporter` + shared
+  `MCTexImport`: NEI's own Data Dumps (`item.csv` + `itempanel.csv` — see
+  `.plans/prefabs.md`) give the *confirmed* roster of every real (registry, meta, display
+  name) a modpack offers, straight from the live registry; texture attachment is then a
+  narrow per-confirmed-entry match (never a blind guess) — no match (e.g. a GregTech
+  single-block machine, which has no texture file at all) still imports, correctly
+  identified, just textureless. General to any 1.7.10-1.12 modpack shipping NEI, not
+  GTNH-specific. `ImportService.Mode { JSON, NEI }` routes to the right importer.
 - **Import UX + library management** (`ImportPanel`, `ImportService`, `MCAssetSource`
   with dir/zip sources, `ImportProgressDialog`): pick a source, browse/search/multiselect,
   non-freezing import with progress + shown warnings, namespace-aware naming/overwrite,
@@ -116,10 +123,14 @@ block); surfaces are keyed by texture identity (`ns:path`) for max sharing.
   rather than terrain-driven; plus a tint-override editor so users can fix the imported default.
 - **Persisting projects/palettes** (today only the shared block-type/model/texture libraries
   persist; projects/palettes are code-seeded each launch).
-- **FLAT-mode limits** (documented in the panel): only geometry *recorded in assets* is
-  recoverable — pre-1.8 records none, so slabs/stairs/fences/cross-plants come in as cubes;
-  runtime-composited mods (GregTech overlays) won't reassemble; nested `blocks/<subdir>/`
-  textures aren't browsed.
+- **NEI-mode limits** (documented in the panel): only geometry *recorded in assets* is
+  recoverable — pre-1.8 records none, so a textured block always imports as a plain cube
+  (slabs/stairs/fences/cross-plants included); runtime-composited mods (GregTech overlays)
+  need their own `MCImportExtension` healer (see `GTNHExtension`) to look right — it still
+  runs after a NEI import, but its "remove superseded junk" step is now largely moot
+  (`NeiRosterImporter` doesn't create that junk in the first place); its "composite a real
+  casing/machine" step still adds value but targets its own invented names rather than
+  `NeiRosterImporter`'s confirmed block types — reconciling those is unbuilt follow-up.
 - **2D side-texture rendering** (decision 1's open door) — needs per-face lookup by
   slice-plane normal; defer until there's demand.
 - **Storage root** may move off `res://` (decision 3) — kept abstracted so it's cheap.
