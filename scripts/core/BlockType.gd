@@ -71,6 +71,12 @@ enum OrientMode { AUTO, FULL, HORIZONTAL }
 # never looked up as an id.
 @export var tags: PackedStringArray = []
 
+# Open-ended, per-block-type data nothing in core needs to understand — the BlockType analog
+# of BlockCell.tags. Only extensions read/write specific keys (see scripts/mcexport/McId.gd for
+# the Schematica extension's "mc.*" keys); core and the palette/material layer never interpret
+# it. Most block types carry none.
+@export var metadata: Dictionary = {}
+
 # The text a search matches a block against: its library, source namespace, leaf name, and
 # tags, space-joined. One place so BlockGrid (the icon browser) and HomeScreen (the library
 # rail's has-a-match test) score identically. `library_name` is passed in because a block
