@@ -46,6 +46,7 @@ func _ready() -> void:
 	_test_find_dumps_folder()
 	_test_import_service_nei()
 	_test_nei_roster_import()
+	_test_nei_roster_multi_source_namespace()
 	_test_install_locations()
 	_test_shape_catalog()
 	_test_shape_rules()
@@ -2276,6 +2277,76 @@ func _test_nei_roster_import() -> void:
 	_check("a missing dumps folder fails with a descriptive message, not a crash",
 		not bad.load_dumps("user://__voxyl_no_such_dumps__").is_empty())
 
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	_rm_rf(dumps)
+	AssetLibrary.ROOT = saved_root
+
+# Real bug, found against the user's actual GTNH install: THREE small satellite mod jars
+# (hydroenergy, Computronics, GTNewHorizonsCoreMod) each patch a handful of extra textures
+# into gregtech's OWN namespace alongside gregtech-*.jar's ~12k real files. NeiRosterImporter
+# used to keep only the LAST source seen per namespace in a flat dict -- whichever small patch
+# jar Godot's directory scan happened to return last silently won, and every texture lookup for
+# "gregtech" (all ~13.6k confirmed block variants) missed the real jar entirely: no warning (A
+# source WAS found), just gray boxes for the whole namespace. This reproduces it directly: two
+# zip sources declare the same namespace, the SECOND (registered after, so it used to win the
+# overwrite) has only an unrelated file; a texture that only the FIRST source has must still
+# resolve.
+func _test_nei_roster_multi_source_namespace() -> void:
+	print("-- NEI roster importer (namespace split across multiple sources)")
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_neimultilib__"
+	var src := "user://__voxyl_neimultisrc__"
+	var dumps := "user://__voxyl_neimultidumps__"
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	_rm_rf(dumps)
+	DirAccess.make_dir_recursive_absolute(src)   # ZIPPacker.open needs the parent dir to exist
+
+	_write_file(dumps + "/item.csv", "\n".join([
+		"Name,ID,Has Block,Mod,Class,Display Name",
+		"bigmod:widget,200,true,BigMod,some.Class,Widget",
+	]))
+	_write_file(dumps + "/itempanel.csv", "\n".join([
+		"Item Name,Item ID,Item meta,Has NBT,Display Name",
+		"bigmod:widget,200,0,false,Widget",
+	]))
+
+	# The "real mod" jar: registered FIRST, carries the texture that actually matters.
+	var big_zip := src + "/big.jar"
+	var widget_img := Image.create_empty(16, 16, false, Image.FORMAT_RGBA8)
+	widget_img.fill(Color(0.3, 0.7, 0.4))
+	var big_packer := ZIPPacker.new()
+	big_packer.open(big_zip)
+	_zip_add(big_packer, "assets/bigmod/textures/blocks/widget.png", widget_img.save_png_to_buffer())
+	big_packer.close()
+
+	# A small "patch" jar that ALSO declares the bigmod namespace, registered SECOND (so it's
+	# the one a naive last-wins map would keep) but has nothing widget-related in it.
+	var patch_zip := src + "/patch.jar"
+	var unrelated_img := Image.create_empty(16, 16, false, Image.FORMAT_RGBA8)
+	unrelated_img.fill(Color(0.1, 0.1, 0.9))
+	var patch_packer := ZIPPacker.new()
+	patch_packer.open(patch_zip)
+	_zip_add(patch_packer, "assets/bigmod/textures/blocks/gadget.png", unrelated_img.save_png_to_buffer())
+	patch_packer.close()
+
+	var ws := VoxelWorkspace.new()
+	var lib := ws.get_or_add_library("nei-multi")
+	var big_source := MCZipSource.new(big_zip)
+	var patch_source := MCZipSource.new(patch_zip)
+	var nri := NeiRosterImporter.new([big_source, patch_source], lib)
+	_check("load_dumps succeeds", nri.load_dumps(dumps) == "")
+
+	var widget_row: Dictionary = nri.entries("BigMod")[0]
+	var widget_bt := nri.import_entry(widget_row)
+	_check("a namespace shared by two sources still finds a texture that only the FIRST-"
+		+ "registered one has (not silently dropped by the second's overwrite)",
+		not widget_bt.model_id.is_empty()
+		and ws.get_block_model(widget_bt.model_id).elements[0]["faces"][BlockModel.Dir.UP]["texture_key"] == "bigmod:blocks/widget")
+
+	big_source.close()
+	patch_source.close()
 	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(src)
 	_rm_rf(dumps)

@@ -34,7 +34,7 @@ const _ITEM_HEADER := ["Name", "ID", "Has Block", "Mod", "Class", "Display Name"
 const _ITEMPANEL_HEADER := ["Item Name", "Item ID", "Item meta", "Has NBT", "Display Name"]
 
 var _library: BlockLibrary
-var _sources_by_ns := {}     # lowercased real namespace -> MCAssetSource
+var _sources_by_ns := {}     # lowercased real namespace -> MCMultiSource (every jar/dir providing it)
 var _real_ns_by_lower := {}  # lowercased real namespace -> the real (on-disk) namespace string
 var _real_ns_by_norm := {}   # _norm(real namespace) -> the real namespace string (see _norm)
 var _by_identity := {}       # "registry@meta" -> existing BlockType (for idempotent reimport)
@@ -50,11 +50,21 @@ var warnings: Array[String] = []
 
 func _init(sources: Array, library: BlockLibrary) -> void:
 	_library = library
+	# A namespace is often provided by more than one jar/dir — a big pack's main mod plus small
+	# satellite mods that patch a few extra textures into its own namespace (see MCMultiSource).
+	# Collect every source per namespace first, THEN wrap: a namespace declared by only one
+	# source still gets its own MCMultiSource, so callers never special-case single vs. many.
+	var by_ns := {}   # lowercased ns -> Array[MCAssetSource]
 	for s in sources:
 		for ns in s.list_namespaces():
-			_sources_by_ns[ns.to_lower()] = s
-			_real_ns_by_lower[ns.to_lower()] = ns
-			_real_ns_by_norm[_norm(ns)] = ns
+			var lower: String = ns.to_lower()
+			if not by_ns.has(lower):
+				by_ns[lower] = [] as Array[MCAssetSource]
+				_real_ns_by_lower[lower] = ns
+				_real_ns_by_norm[_norm(ns)] = ns
+			(by_ns[lower] as Array[MCAssetSource]).append(s)
+	for lower in by_ns:
+		_sources_by_ns[lower] = MCMultiSource.new(by_ns[lower])
 	for bt in library.block_types:
 		if McId.has_registry(bt):
 			_by_identity["%s@%d" % [McId.get_registry(bt), McId.get_mc_meta(bt)]] = bt
