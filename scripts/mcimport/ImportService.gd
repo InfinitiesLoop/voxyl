@@ -165,6 +165,22 @@ static func _scan_for_sources(root: String) -> Array[MCAssetSource]:
 			queue.append({"path": p.path_join(sub), "depth": depth + 1})
 	return out
 
+# NEI writes its Data Dumps to <.minecraft>/dumps/. Given whatever folder the user (or an
+# MCP caller) points at as the asset source — an instance root, `.minecraft` itself, or a
+# folder inside it like `mods/` — locate that dumps folder automatically, so NEI mode only
+# ever needs the one path. "" if none is found nearby.
+static func find_dumps_folder(path: String) -> String:
+	var dir := path
+	for _i in 5:
+		for cand in [dir.path_join("dumps"), dir.path_join(".minecraft/dumps")]:
+			if DirAccess.dir_exists_absolute(cand):
+				return cand
+		var up := dir.get_base_dir()
+		if up == dir:
+			break
+		dir = up
+	return ""
+
 # ---------------------------------------------------------------------------
 # Browse
 # ---------------------------------------------------------------------------

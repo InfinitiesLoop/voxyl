@@ -43,6 +43,7 @@ func _ready() -> void:
 	_test_forgiving_source_scan()
 	_test_incremental_import()
 	_test_import_split_by_namespace()
+	_test_find_dumps_folder()
 	_test_import_service_nei()
 	_test_nei_roster_import()
 	_test_install_locations()
@@ -2101,6 +2102,30 @@ func _test_import_service_nei() -> void:
 	_rm_rf(src_root)
 	_rm_rf(dumps)
 	AssetLibrary.ROOT = saved_root
+
+# ImportService.find_dumps_folder: the user (or an MCP caller) picks one asset path; NEI's
+# Data Dumps folder is located near it automatically — no second picker.
+func _test_find_dumps_folder() -> void:
+	print("-- find_dumps_folder (one folder pick covers both)")
+	var root := "user://__voxyl_dumpsfind__"
+	_rm_rf(root)
+
+	_write_file(root.path_join("direct/dumps/item.csv"), "x")
+	_check("dumps/ directly under the chosen path",
+		ImportService.find_dumps_folder(root.path_join("direct")) == root.path_join("direct/dumps"))
+
+	_write_file(root.path_join("instance/.minecraft/dumps/item.csv"), "x")
+	_check("an instance root above .minecraft/dumps",
+		ImportService.find_dumps_folder(root.path_join("instance")) == root.path_join("instance/.minecraft/dumps"))
+
+	_write_file(root.path_join("walkup/.minecraft/dumps/item.csv"), "x")
+	_check("walks up from a folder chosen deeper inside (e.g. mods/)",
+		ImportService.find_dumps_folder(root.path_join("walkup/.minecraft/mods")) == root.path_join("walkup/.minecraft/dumps"))
+
+	_check("no dumps folder anywhere nearby → \"\", not a crash",
+		ImportService.find_dumps_folder(root.path_join("nothing/here")) == "")
+
+	_rm_rf(root)
 
 # NeiRosterImporter: item.csv (Has Block filter + mod label) + itempanel.csv (the confirmed,
 # per-subtype roster — real registry+meta+display, straight from NEI's own browsable list)
