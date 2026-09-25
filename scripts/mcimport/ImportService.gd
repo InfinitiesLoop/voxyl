@@ -298,6 +298,7 @@ func end_import() -> void:
 	for imp in _all_importers():
 		warnings.append_array(imp.warnings)
 	for nri in _nei_by_library.values():
+		nri.finalize()
 		warnings.append_array(nri.warnings)
 	for lib in _touched.values():
 		LibraryStore.save_library(lib)

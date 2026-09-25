@@ -21,14 +21,19 @@ extends RefCounted
 #
 # Texture attachment is a second, NARROW pass per confirmed entry (never a blind
 # filename-clustering guess): given a real (registry, meta), search that mod's own
-# textures/blocks/ for a file whose name correlates with the registry's local part, and for a
+# textures/blocks/, then vanilla's shared "minecraft" domain (some mods, like backports that
+# restore a vanilla feature, register under their own modid but ship the actual PNGs under
+# assets/minecraft/), for a file whose name correlates with the registry's local part, and for a
 # meta-packed entry, whose own numeral correlates with the confirmed meta. No candidate, or an
-# ambiguous one → the block type still exists, correctly identified, just textureless
-# (principle 5 — undecided is always valid). This is deliberately narrower than
-# MCFlatImporter's old block-BOUNDARY guessing (which produced "weird blocks that use textures
-# in ways blocks never do") — the roster already gives the boundary; only the face-suffix
-# detection (top/side/bottom/…) below is inherited from it, now applied only within an
-# already-confirmed block's own candidate files, never to discover blocks in the first place.
+# ambiguous one → the identity is DROPPED, not imported: an MC block the user can never tell
+# apart from any other undecided block, and can never look like the real thing it's named after,
+# isn't a useful placeholder (real-world modpacks are full of mods whose textures are
+# procedurally composited or use per-mod-idiosyncratic naming this narrow match can't and
+# shouldn't try to guess at). This is deliberately narrower than MCFlatImporter's old block-
+# BOUNDARY guessing (which produced "weird blocks that use textures in ways blocks never do") —
+# the roster already gives the boundary; only the face-suffix detection (top/side/bottom/…)
+# below is inherited from it, now applied only within an already-confirmed block's own
+# candidate files, never to discover blocks in the first place.
 
 const _ITEM_HEADER := ["Name", "ID", "Has Block", "Mod", "Class", "Display Name"]
 const _ITEMPANEL_HEADER := ["Item Name", "Item ID", "Item meta", "Has NBT", "Display Name"]
@@ -39,6 +44,7 @@ var _real_ns_by_lower := {}  # lowercased real namespace -> the real (on-disk) n
 var _real_ns_by_norm := {}   # _norm(real namespace) -> the real namespace string (see _norm)
 var _by_identity := {}       # "registry@meta" -> existing BlockType (for idempotent reimport)
 var _warned_missing_ns := {} # namespace -> true (warn once per mod, not once per row)
+var _dropped_by_mod := {}    # mod label -> count of new identities dropped for no texture match
 
 # The parsed roster: mod label -> Array of { registry, meta, mod, display, ns }.
 var _rows_by_mod := {}
@@ -187,21 +193,45 @@ func all_entries() -> Array:
 # ---------------------------------------------------------------------------
 
 # Create/update the BlockType for one roster row (confirmed identity, best-effort texture).
-# Idempotent: reimporting the same (registry, meta) reuses the existing BlockType.
+# Idempotent: reimporting the same (registry, meta) reuses the existing BlockType. Returns null,
+# adding nothing, when a BRAND-NEW identity can't be matched to any texture: an MC block the
+# user can never tell apart from any other undecided block, and can never look like the real
+# thing it's named after, isn't a useful placeholder here the way a hand-authored BlockType
+# left undecided on purpose is (that's a deliberate voxel-data choice; this is a failed lookup).
+# A block that already existed from an earlier, successful import is left alone even if this
+# pass can't (re-)match its texture — reimporting never deletes previously-working state.
 func import_entry(row: Dictionary) -> BlockType:
 	var registry := str(row["registry"])
 	var meta := int(row["meta"])
 	var key := "%s@%d" % [registry, meta]
+	var mod := str(row["mod"])
 	var bt: BlockType = _by_identity.get(key)
-	if bt == null:
+	var is_new := bt == null
+	if is_new:
 		bt = _library.add_block_type(_unique_name(row))
-		_by_identity[key] = bt
-	McId.set_registry_id(bt, registry, meta, McId.get_orient(bt), true, str(row["mod"]), str(row["display"]))
+	McId.set_registry_id(bt, registry, meta, McId.get_orient(bt), true, mod, str(row["display"]))
 	bt.source_namespace = str(row["ns"])
 	_attach_texture(bt, row)
+	if is_new and bt.model_id.is_empty():
+		_library.remove_block_type(bt.name)
+		_dropped_by_mod[mod] = int(_dropped_by_mod.get(mod, 0)) + 1
+		return null
+	if is_new:
+		_by_identity[key] = bt
 	if not imported_blocks.has(bt.name):
 		imported_blocks.append(bt.name)
 	return bt
+
+# Call once after every import_entry() for this run, before reading `warnings`: appends one
+# summary line per mod that had blocks dropped for lacking a texture match — never one line per
+# block, which could be thousands for a big pack. Distinct from "no assets found for mod
+# namespace" (no SOURCE at all, checked once up front): this covers a source that WAS found,
+# where individual blocks within it just couldn't be confidently matched to a texture.
+func finalize() -> void:
+	var mods_list := _dropped_by_mod.keys()
+	mods_list.sort()
+	for mod in mods_list:
+		warnings.append("no texture match, dropped: %d block(s) in %s" % [_dropped_by_mod[mod], mod])
 
 func _unique_name(row: Dictionary) -> String:
 	var display := str(row["display"])
@@ -249,7 +279,7 @@ func _attach_texture(bt: BlockType, row: Dictionary) -> void:
 			# "no assets found for mod namespace" bullet instead of one bullet each (the
 			# category is everything before the first ':') — the full per-mod list still
 			# shows in the dialog's scrollable warning box.
-			warnings.append("no assets found for mod namespace: %s (its blocks import textureless)" % ns)
+			warnings.append("no assets found for mod namespace: %s (its blocks are dropped, not imported)" % ns)
 		return
 	var base_tokens := _base_tokens(str(row["registry"]))
 	if base_tokens.is_empty():

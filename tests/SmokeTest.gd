@@ -2093,16 +2093,18 @@ func _test_import_service_nei() -> void:
 	var avail := svc.available_blocks()
 	_check("NEI browse lists the confirmed roster", avail.size() == 2)
 	var n := svc.import_selected(avail)
-	_check("NEI import creates both block types",
-		n == 2 and ws.get_block_type("Cobble") != null and ws.get_block_type("Machine") != null)
-	_check("NEI import binds the textured one, leaves the textureless one identified",
-		ws.get_block_type("Cobble").model_id != "" and ws.get_block_type("Machine").model_id == ""
-		and McId.is_confirmed(ws.get_block_type("Machine")))
+	_check("NEI import creates the textured block type only -- the textureless one is dropped, "
+		+ "not left behind as an unusable gray placeholder",
+		n == 1 and ws.get_block_type("Cobble") != null and ws.get_block_type("Machine") == null)
+	_check("NEI import binds the textured one",
+		ws.get_block_type("Cobble").model_id != "")
+	_check("the drop is reported as a summary warning, not silently",
+		svc.warnings.any(func(w): return str(w).begins_with("no texture match, dropped: 1 block(s) in TestMod")))
 
 	var ws2 := VoxelWorkspace.new()
 	LibraryStore.load_persisted(ws2)
 	_check("NEI-imported library persisted to disk",
-		ws2.get_block_type("Cobble") != null and ws2.get_block_type("Machine") != null)
+		ws2.get_block_type("Cobble") != null and ws2.get_block_type("Machine") == null)
 
 	svc.close()
 	_rm_rf(AssetLibrary.ROOT)
@@ -2249,12 +2251,11 @@ func _test_nei_roster_import() -> void:
 
 	var machine0_bt := nri.import_entry(machine0_row)
 	var machine5_bt := nri.import_entry(machine5_row)
-	_check("no matching texture at all → still imports, correctly identified",
-		McId.get_registry(machine0_bt) == "testmod:machine" and McId.get_mc_meta(machine0_bt) == 0
-		and McId.is_confirmed(machine0_bt) and machine0_bt.model_id.is_empty())
-	_check("two metas of one registry name become two distinct block types",
-		machine0_bt != machine5_bt and machine5_bt.name == "Advanced Machine"
-		and McId.get_mc_meta(machine5_bt) == 5)
+	_check("no matching texture at all → dropped, not imported (an MC block the user can never "
+		+ "tell apart from any other undecided block isn't a useful placeholder)",
+		machine0_bt == null and machine5_bt == null
+		and lib.get_block_type("Basic Machine") == null
+		and lib.get_block_type("Advanced Machine") == null)
 
 	var wool0_bt := nri.import_entry(wool0_row)
 	var wool1_bt := nri.import_entry(wool1_row)
@@ -2287,6 +2288,10 @@ func _test_nei_roster_import() -> void:
 		and ws.get_block_model(korp_bt.model_id).elements[0]["faces"][BlockModel.Dir.UP]["texture_key"] == "ztones:blocks/korp")
 
 	ztones_asset.close()
+
+	nri.finalize()
+	_check("dropped blocks are summarized per mod, not one warning per block",
+		nri.warnings.any(func(w): return str(w) == "no texture match, dropped: 2 block(s) in TestMod"))
 
 	var bad := NeiRosterImporter.new([src_asset], ws.get_or_add_library("bad"))
 	_check("a missing dumps folder fails with a descriptive message, not a crash",

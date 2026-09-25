@@ -33,10 +33,15 @@ stairs, fences, walls, panes, bars).
   `MCTexImport`: NEI's own Data Dumps (`item.csv` + `itempanel.csv` — see
   `.plans/prefabs.md`) give the *confirmed* roster of every real (registry, meta, display
   name) a modpack offers, straight from the live registry; texture attachment is then a
-  narrow per-confirmed-entry match (never a blind guess) — no match (e.g. a GregTech
-  single-block machine, which has no texture file at all) still imports, correctly
-  identified, just textureless. General to any 1.7.10-1.12 modpack shipping NEI, not
-  GTNH-specific. `ImportService.Mode { JSON, NEI }` routes to the right importer.
+  narrow per-confirmed-entry match (never a blind guess) across the block's own namespace
+  and vanilla's shared `minecraft` domain (some mods, e.g. backports, reuse it) — no match
+  (e.g. a GregTech single-block machine, or anything whose look is procedurally composited
+  rather than static files) is **dropped, not imported** (2026-09-25): an MC block the user
+  could never tell apart from any other undecided block, or make look like the real thing
+  it's named after, isn't a useful placeholder the way a hand-authored undecided BlockType
+  is. A mod that resolves to nothing leaves no library behind either. Dropped counts are
+  reported per mod in the import warnings. General to any 1.7.10-1.12 modpack shipping NEI,
+  not GTNH-specific. `ImportService.Mode { JSON, NEI }` routes to the right importer.
 - **Import UX + library management** (`ImportPanel`, `ImportService`, `MCAssetSource`
   with dir/zip sources, `ImportProgressDialog`): pick a source, browse/search/multiselect,
   non-freezing import with progress + shown warnings, namespace-aware naming/overwrite,

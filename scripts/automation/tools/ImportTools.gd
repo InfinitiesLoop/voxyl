@@ -6,7 +6,7 @@ extends RefCounted
 
 static func register(reg: McpRegistry) -> void:
 	reg.add("nei_roster_import",
-		"Import block types from NEI's own Data Dumps (in-game: Options -> Tools -> Data Dumps -> Items, then Item Panel in CSV mode) -- the confirmed, complete roster of everything placeable in a modpack (real registry name + meta + display name), general to any 1.7.10-1.12 modpack that ships NEI. `asset_paths` are one or more paths to the mod assets (an instance root, `.minecraft`, a mods folder, a resource pack) -- these supply textures, and the Data Dumps folder (item.csv + itempanel.csv) is located automatically nearby; pass `dumps_path` only if it isn't under any of asset_paths. A registry+meta with no matching texture (e.g. a GregTech single-block machine) still imports, correctly identified, just textureless. Without `mods` or `all:true` this only browses (returns per-mod counts, imports nothing) -- a modpack roster can be thousands of blocks, so an actual import is opt-in.",
+		"Import block types from NEI's own Data Dumps (in-game: Options -> Tools -> Data Dumps -> Items, then Item Panel in CSV mode) -- the confirmed, complete roster of everything placeable in a modpack (real registry name + meta + display name), general to any 1.7.10-1.12 modpack that ships NEI. `asset_paths` are one or more paths to the mod assets (an instance root, `.minecraft`, a mods folder, a resource pack) -- these supply textures, and the Data Dumps folder (item.csv + itempanel.csv) is located automatically nearby; pass `dumps_path` only if it isn't under any of asset_paths. A registry+meta with no matching texture (e.g. a GregTech single-block machine, or a block whose textures are procedurally composited rather than static files) is dropped, not imported -- an MC block the user could never tell apart from any other undecided block isn't a useful placeholder; see the `warnings` in the result for a per-mod count of what got dropped and why. A mod that resolves to nothing at all leaves no library behind. Without `mods` or `all:true` this only browses (returns per-mod counts, imports nothing) -- a modpack roster can be thousands of blocks, so an actual import is opt-in.",
 		{"properties": {
 			"dumps_path": {"type": "string", "description": "Only needed if it can't be found automatically near asset_paths"},
 			"asset_paths": {"type": "array", "items": {"type": "string"}},
@@ -39,6 +39,7 @@ static func _nei_roster_import(args: Dictionary) -> Variant:
 	if dumps_path.is_empty():
 		return McpRegistry.fail("no_dumps", "couldn't find a dumps/ folder near any of asset_paths -- run NEI's Data Dumps first (Options -> Tools -> Data Dumps -> Items, then Item Panel in CSV mode), or pass dumps_path directly")
 
+	var lib_preexisted := VoxelWorld.workspace.get_library(lib_name) != null
 	var lib := VoxelWorld.workspace.get_or_add_library(lib_name)
 	var svc := ImportService.new(sources, lib, ImportService.Mode.NEI)
 	var err := svc.load_nei_dumps(dumps_path)
@@ -73,9 +74,13 @@ static func _nei_roster_import(args: Dictionary) -> Variant:
 			svc.close()
 			return McpRegistry.fail("not_found", "none of the requested mods matched the roster; see the 'mods' list from a browse call")
 
+	var split_created: Array[String] = []
 	if bool(args.get("split", false)):
 		svc.set_namespace_split(func(ns: String) -> BlockLibrary:
-			return VoxelWorld.workspace.get_or_add_library("%s.%s" % [lib_name, ns]))
+			var split_name := "%s.%s" % [lib_name, ns]
+			if VoxelWorld.workspace.get_library(split_name) == null and split_name not in split_created:
+				split_created.append(split_name)
+			return VoxelWorld.workspace.get_or_add_library(split_name))
 
 	var n := svc.import_selected(selection)
 	var out := {"imported": n, "mods": mod_counts, "libraries_touched": svc.touched_library_names(),
@@ -83,4 +88,16 @@ static func _nei_roster_import(args: Dictionary) -> Variant:
 	svc.close()
 	if not unreadable.is_empty():
 		out["asset_paths_unreadable"] = unreadable
+	# A namespace/library every one of whose blocks failed to match a texture ends up empty
+	# (import_entry drops rather than keeps an unmatched new block) — drop the library itself
+	# too rather than leaving a pointless, empty entry behind. Mirrors ImportPanel._close()'s
+	# same cleanup for the UI path.
+	var to_check := split_created.duplicate()
+	if not lib_preexisted:
+		to_check.append(lib_name)
+	for name in to_check:
+		var check_lib := VoxelWorld.workspace.get_library(name)
+		if check_lib != null and check_lib.block_types.is_empty() and check_lib.block_models.is_empty() \
+				and check_lib.texture_assets.is_empty():
+			VoxelWorld.workspace.remove_library(name)
 	return out
