@@ -1315,7 +1315,14 @@ func _confirm_delete_libraries(library_names: Array) -> void:
 		body.add_theme_constant_override("separation", 8)
 		var label := Label.new()
 		label.text = "Delete %d libraries? This can't be undone." % library_names.size()
-		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		# NOT autowrapped, deliberately: a wrapping Label's minimum size depends on a width it
+		# doesn't know yet on its first layout pass, and against the dialog's not-yet-settled
+		# width that pass measured a near-zero width — wrapping the short message onto a huge
+		# number of lines and reporting a ~1000px minimum height. The dialog's window latched
+		# onto that inflated minimum and never shrank back down once the label recovered its
+		# real (short, single-line) size, leaving a tall dialog with blank space where the
+		# label would have been. This message is always one short sentence, so it never
+		# actually needs to wrap — removing autowrap removes the whole failure mode.
 		body.add_child(label)
 		var list := TextEdit.new()
 		list.editable = false
