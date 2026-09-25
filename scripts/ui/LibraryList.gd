@@ -192,11 +192,18 @@ func _update_selection() -> void:
 	if _delete_btn:
 		_delete_btn.disabled = _selected_set.is_empty()
 
-# A row was clicked. Shift-click (multi-select only) toggles it in/out of the selection;
-# a plain click always replaces the selection with just this item. The anchor (`selected`)
-# moves to the clicked item either way, even a shift-click that deselects it.
+# A row was clicked. Multi-select only: ctrl/cmd-click toggles just this row in/out of the
+# selection (everything else untouched); shift-click selects the contiguous rail-order range
+# between the anchor and this row (replacing the current selection, the usual file-manager/
+# mail-client convention — the way to multi-select "everything but one" out of a long list is
+# click the first, shift-click the last, then ctrl-click the one exception off). A plain click
+# always replaces the selection with just this item. The anchor (`selected`) moves to the
+# clicked item every time, even a click that deselects it, so a later shift-click ranges from
+# wherever the user last touched.
 func _handle_click(item_name: String) -> void:
 	if allow_multi_select and Input.is_key_pressed(KEY_SHIFT):
+		_select_range(selected, item_name)
+	elif allow_multi_select and (Input.is_key_pressed(KEY_CTRL) or Input.is_key_pressed(KEY_META)):
 		if _selected_set.has(item_name):
 			_selected_set.erase(item_name)
 		else:
@@ -207,6 +214,29 @@ func _handle_click(item_name: String) -> void:
 	_update_selection()
 	selection_changed.emit(get_selected_items())
 	item_selected.emit(item_name)
+
+# Every real row's item_name (excludes the "All blocks" pseudo-row), in rail order.
+func _all_item_names() -> Array:
+	var out: Array = []
+	for row in _item_list.get_children():
+		if row.get_meta("is_all", false):
+			continue
+		out.append(row.get_meta("item_name"))
+	return out
+
+# Select every row between `from_name` and `to_name` (inclusive), in rail order — replacing the
+# current selection. Falls back to selecting just `to_name` alone when `from_name` isn't a
+# current row (no prior anchor yet, or a search filter has since hidden it).
+func _select_range(from_name: String, to_name: String) -> void:
+	var names := _all_item_names()
+	var from_i := names.find(from_name)
+	var to_i := names.find(to_name)
+	if from_i < 0 or to_i < 0:
+		_selected_set = {to_name: true}
+		return
+	_selected_set = {}
+	for i in range(mini(from_i, to_i), maxi(from_i, to_i) + 1):
+		_selected_set[names[i]] = true
 
 # The current multi-selection, in rail order (not click order). The "All blocks" row is a
 # filter affordance, never a selected item, so it's skipped.

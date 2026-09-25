@@ -70,6 +70,7 @@ func _run() -> void:
 	await _check_import_progress()
 	_check_library_rename()
 	_check_library_list_bulk_delete_via_x()
+	_check_library_list_range_select()
 
 	var tb := (_panes(shell)[0] as ViewPane).get_tab_bar()
 	_check("tab bar enables cross-pane drag",
@@ -752,6 +753,36 @@ func _check_library_list_bulk_delete_via_x() -> void:
 	_library_row_delete_button(list, "C").pressed.emit()
 	_check("X on a row outside the selection still deletes just that row",
 		single_events == ["C"] and bulk_events.is_empty())
+
+	list.queue_free()
+
+# Shift-click range-select and ctrl-click toggle, the core new logic behind the "select ~120,
+# then unselect the 1 you don't want" workflow. Input.is_key_pressed can't be faked headlessly
+# (see the test above), so this drives the underlying _select_range helper and _selected_set
+# directly rather than through a simulated click with a held modifier key.
+func _check_library_list_range_select() -> void:
+	var list := LibraryList.new()
+	list.allow_multi_select = true
+	add_child(list)
+	list.populate(["A", "B", "C", "D", "E"])
+
+	list.selected = "B"
+	list._select_range("B", "D")
+	_check("shift-click range selects everything between anchor and click, inclusive",
+		list.get_selected_items() == ["B", "C", "D"])
+
+	list._select_range("D", "B")
+	_check("range selection works reversed (clicked before the anchor)",
+		list.get_selected_items() == ["B", "C", "D"])
+
+	# ctrl-click toggles one row without touching the rest of an existing multi-selection.
+	list._selected_set.erase("C")
+	_check("ctrl-click-style removal leaves the rest of the range intact",
+		list.get_selected_items() == ["B", "D"])
+
+	list._select_range("nonexistent", "E")
+	_check("a stale/missing anchor (e.g. hidden by a search filter) falls back to just the click",
+		list.get_selected_items() == ["E"])
 
 	list.queue_free()
 
