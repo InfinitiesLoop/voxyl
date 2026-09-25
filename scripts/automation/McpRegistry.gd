@@ -28,6 +28,7 @@ const _GROUPS := [
 	preload("res://scripts/automation/tools/InspectTools.gd"),
 	preload("res://scripts/automation/tools/ViewTools.gd"),
 	preload("res://scripts/automation/tools/ImportTools.gd"),
+	preload("res://scripts/automation/tools/SchematicaTools.gd"),
 ]
 
 var _tools := {}

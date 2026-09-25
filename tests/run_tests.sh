@@ -27,8 +27,10 @@ run_scene "res://tests/ShellTest.tscn"
 shell_rc=$?
 run_scene "res://tests/McpTest.tscn"
 mcp_rc=$?
+run_scene "res://tests/SchematicaTest.tscn"
+schematica_rc=$?
 
-if [[ $smoke_rc -ne 0 || $shell_rc -ne 0 || $mcp_rc -ne 0 ]]; then
+if [[ $smoke_rc -ne 0 || $shell_rc -ne 0 || $mcp_rc -ne 0 || $schematica_rc -ne 0 ]]; then
   exit 1
 fi
 exit 0
