@@ -68,6 +68,7 @@ func _run() -> void:
 	_check_flat_render(v3d)
 	_check_render_options(v3d)
 	await _check_import_progress()
+	_check_import_progress_warning_totals()
 	_check_library_rename()
 	_check_library_list_bulk_delete_via_x()
 	_check_library_list_range_select()
@@ -676,6 +677,26 @@ func _check_import_progress() -> void:
 	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(src)
 	AssetLibrary.ROOT = saved_root
+
+# Real bug: the warning summary counted warning LINES per category, but NeiRosterImporter's
+# "no texture match, dropped: N block(s) in X" lines each carry their own per-mod N — with
+# many mods dropping blocks, the summary showed something like "133" (one line per mod)
+# directly above detail lines reading "5354 block(s) in gregtech", which never reconciled to
+# anything. The summary must total the real block count for that category, not the line count.
+func _check_import_progress_warning_totals() -> void:
+	var dlg := ImportProgressDialog.new()
+	add_child(dlg)
+	dlg._show_warnings([
+		"no texture match, dropped: 5354 block(s) in gregtech",
+		"no texture match, dropped: 362 block(s) in bartworks",
+		"no assets found for mod namespace: AWWayofTime (its blocks are dropped, not imported)",
+	])
+	var summary: String = (dlg.get("_warn_summary") as Label).text
+	_check("the summary totals dropped BLOCKS across mods, not the number of warning lines",
+		summary.contains("no texture match, dropped: 5716 block(s) across 2 mod(s)"))
+	_check("a category with no per-line count still just counts lines",
+		summary.contains("no assets found for mod namespace: 1"))
+	dlg.queue_free()
 
 # Renaming a library moves its folder on disk, repoints its textures' embedded library
 # segment, and updates any palette that subscribed to it — while keeping the basic floor

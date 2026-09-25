@@ -118,23 +118,49 @@ func run(service: ImportService, selection: Array) -> void:
 	_show_warnings(service.warnings)
 	_close_btn.disabled = false
 
-# Show the warnings: a category summary (count per message-prefix, the part before the
-# first ':') up top, and the full list below so nothing is hidden.
+# Prefix NeiRosterImporter.finalize() writes ("no texture match, dropped: N block(s) in X") —
+# recognized here so the summary can total the real block count instead of the line count.
+const _DROPPED_PREFIX := "no texture match, dropped: "
+
+# The N from a "no texture match, dropped: N block(s) in X" line, or -1 if `line` isn't one.
+static func _dropped_block_count(line: String) -> int:
+	if not line.begins_with(_DROPPED_PREFIX):
+		return -1
+	var rest := line.substr(_DROPPED_PREFIX.length())
+	var space := rest.find(" ")
+	if space <= 0 or not rest.substr(0, space).is_valid_int():
+		return -1
+	return int(rest.substr(0, space))
+
+# Show the warnings: a category summary (per message-prefix, the part before the first ':')
+# up top, and the full list below so nothing is hidden. A category whose lines each carry
+# their own "N block(s)" count (see _dropped_block_count) sums those Ns instead of just
+# counting lines — otherwise the summary showed "133" (one line per mod) right above detail
+# lines reading "5354 block(s) in gregtech", which never added up to anything a reader could
+# reconcile.
 func _show_warnings(warnings: Array) -> void:
 	if warnings.is_empty():
 		return
-	var counts := {}
+	var line_counts := {}    # category -> number of warning lines
+	var block_totals := {}   # category -> summed block count, only for lines that carry one
 	for w in warnings:
-		var cat := str(w)
+		var line := str(w)
+		var cat := line
 		var colon := cat.find(":")
 		if colon > 0:
 			cat = cat.substr(0, colon)
-		counts[cat] = int(counts.get(cat, 0)) + 1
-	var cats := counts.keys()
-	cats.sort_custom(func(a, b): return counts[a] > counts[b])
+		line_counts[cat] = int(line_counts.get(cat, 0)) + 1
+		var n := _dropped_block_count(line)
+		if n >= 0:
+			block_totals[cat] = int(block_totals.get(cat, 0)) + n
+	var cats := line_counts.keys()
+	cats.sort_custom(func(a, b): return line_counts[a] > line_counts[b])
 	var summary := PackedStringArray()
 	for c in cats:
-		summary.append("• %s: %d" % [c, counts[c]])
+		if block_totals.has(c):
+			summary.append("• %s: %d block(s) across %d mod(s)" % [c, block_totals[c], line_counts[c]])
+		else:
+			summary.append("• %s: %d" % [c, line_counts[c]])
 	_warn_summary.text = "Some blocks couldn't be fully translated (this is normal for a full game import):\n" + "\n".join(summary)
 	_warn_summary.visible = true
 	_warn_box.text = "\n".join(warnings)

@@ -1301,17 +1301,29 @@ func _confirm_delete_libraries(library_names: Array) -> void:
 	if library_names.size() == 1:
 		dialog.dialog_text = "Delete \"%s\"? This can't be undone." % library_names[0]
 	else:
-		dialog.dialog_text = "Delete %d libraries? This can't be undone." % library_names.size()
-		# The list used to be joined straight into dialog_text: with enough libraries selected
-		# (bulk-deleting a whole failed import pass, say) the dialog grew taller than the screen
-		# and pushed the OK/Cancel buttons out of reach. A fixed-height scrollable list keeps the
-		# dialog (and its buttons) a constant size no matter how many names are in it.
+		# AcceptDialog only reserves layout space for ONE content child below its own
+		# dialog_text label, sized from that label's estimated (single-line) height — so
+		# pairing dialog_text with a second, separately-added child (the list) overlapped
+		# whenever the label actually wrapped to two lines. Building the whole body — message
+		# label included — as one VBoxContainer sidesteps that: it's the dialog's only content
+		# child, and normal container layout stacks the label and list inside it correctly no
+		# matter how many lines the message wraps to. The list itself stays a fixed-height
+		# scrollable TextEdit so the dialog (and its OK/Cancel buttons) don't grow past the
+		# screen with a lot of libraries selected.
+		dialog.dialog_text = ""
+		var body := VBoxContainer.new()
+		body.add_theme_constant_override("separation", 8)
+		var label := Label.new()
+		label.text = "Delete %d libraries? This can't be undone." % library_names.size()
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		body.add_child(label)
 		var list := TextEdit.new()
 		list.editable = false
 		list.text = "\n".join(library_names)
 		list.custom_minimum_size = Vector2(360, 160)
 		list.scroll_fit_content_height = false
-		dialog.add_child(list)
+		body.add_child(list)
+		dialog.add_child(body)
 	dialog.confirmed.connect(func():
 		for library_name in library_names:
 			_on_delete_library(library_name)
