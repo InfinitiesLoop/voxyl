@@ -251,36 +251,55 @@ func _attach_texture(bt: BlockType, row: Dictionary) -> void:
 			# shows in the dialog's scrollable warning box.
 			warnings.append("no assets found for mod namespace: %s (its blocks import textureless)" % ns)
 		return
-	var source: MCAssetSource = resolved["source"]
-	var real_ns: String = resolved["ns"]
-	var base_token := _base_token(str(row["registry"]))
-	if base_token.is_empty():
+	var base_tokens := _base_tokens(str(row["registry"]))
+	if base_tokens.is_empty():
 		return
-	var candidates := _matching_files(source, real_ns, base_token)
-	if candidates.is_empty():
+	# Try the block's own (resolved) namespace first, then vanilla's shared "minecraft" domain:
+	# a "restore a vanilla feature" mod (EtFuturum backporting newer MC blocks into 1.7.10, e.g.)
+	# registers blocks under its own modid but ships the actual PNGs under
+	# assets/minecraft/textures/blocks/, reusing the vanilla domain instead of duplicating it
+	# under its own namespace — confirmed against the user's real GTNH install, where EtFuturum's
+	# own jar puts 559 of its 664 block textures under assets/minecraft/ and only 105 under its
+	# own assets/etfuturum/. This only widens WHERE the search looks; the match itself stays
+	# exactly as narrow (still one confident token-prefix hit) either way.
+	var tiers: Array[Dictionary] = [resolved]
+	var vanilla := _resolve_source("minecraft")
+	if not vanilla.is_empty() and vanilla["ns"] != resolved["ns"]:
+		tiers.append(vanilla)
+	for tier in tiers:
+		var source: MCAssetSource = tier["source"]
+		var real_ns: String = tier["ns"]
+		var candidates := _matching_files(source, real_ns, base_tokens)
+		if candidates.is_empty():
+			continue
+		var faces := _resolve_faces(candidates, int(row["meta"]))
+		if faces.is_empty():
+			continue
+		_bind_model(bt, real_ns, source, faces)
 		return
-	var faces := _resolve_faces(candidates, int(row["meta"]))
-	if faces.is_empty():
-		return
-	_bind_model(bt, real_ns, source, faces)
 
-# "tile.korpBlock" -> "korp"; "gt.blockmachines" -> "blockmachines". Strips a leading "tile."
-# and a trailing "block"/"blocks", case-insensitively — the common ztones/vanilla-ish pattern;
-# anything else is left as the lowercased local name (still a reasonable substring anchor).
-func _base_token(registry: String) -> String:
+# "tile.korpBlock" -> ["korp"]; "gt.blockmachines" -> ["blockmachines"]; "ancient_debris" ->
+# ["ancient", "debris"]. Strips a leading "tile." (case-insensitively), then tokenizes what's
+# left the SAME way a candidate filename is (see _tokenize) — a multi-word registry name like
+# "ancient_debris" must match a same-shaped multi-word filename token-for-token, never a single
+# glued "ancient_debris" string no real filename would produce (that was the bug: the old
+# single-string base_token could never match a multi-word name against a tokenized filename
+# list at all). Finally drops a trailing "block"/"blocks" TOKEN, the common ztones/vanilla-ish
+# Java-naming artifact ("korpBlock") that never appears in the actual texture filename.
+func _base_tokens(registry: String) -> PackedStringArray:
 	var local: String = MCTexImport.split_ref(registry)["path"]
-	local = local.to_lower()
-	if local.begins_with("tile."):
+	if local.to_lower().begins_with("tile."):
 		local = local.substr(5)
-	for suffix in ["blocks", "block"]:
-		if local.ends_with(suffix) and local.length() > suffix.length():
-			local = local.substr(0, local.length() - suffix.length())
-			break
-	return local
+	var toks := _tokenize(local)
+	if toks.size() > 1 and (toks[-1] == "block" or toks[-1] == "blocks"):
+		toks = toks.slice(0, toks.size() - 1)
+	return toks
 
 # Every texture file under the namespace's textures/blocks (recursively; ztones-style sorts
-# into subfolders) whose basename contains `base_token` as a token.
-func _matching_files(source: MCAssetSource, ns: String, base_token: String) -> Array:
+# into subfolders) whose basename's tokens START WITH `base_tokens`, in order — e.g. ["ancient",
+# "debris"] matches "ancient_debris.png" (exact) and "ancient_debris_top.png" (extra face
+# suffix), but not "debris.png" (missing the first word) or "ancient.png" (too short).
+func _matching_files(source: MCAssetSource, ns: String, base_tokens: PackedStringArray) -> Array:
 	var files := source.list_files_recursive("%s/textures/blocks" % ns)
 	var subdir := "blocks"
 	if files.is_empty():
@@ -292,9 +311,18 @@ func _matching_files(source: MCAssetSource, ns: String, base_token: String) -> A
 			continue
 		var name := f.get_basename()
 		var toks := _tokenize(name.get_file())   # match against the leaf name, not the subpath
-		if toks.find(base_token) >= 0 or String(",".join(toks)).contains(base_token):
+		if _starts_with_tokens(toks, base_tokens):
 			out.append({"name": name, "subdir": subdir, "toks": toks})
 	return out
+
+# Whether `toks` begins with every element of `prefix`, in the same order.
+func _starts_with_tokens(toks: PackedStringArray, prefix: PackedStringArray) -> bool:
+	if prefix.is_empty() or toks.size() < prefix.size():
+		return false
+	for i in prefix.size():
+		if toks[i] != prefix[i]:
+			return false
+	return true
 
 # Split candidates into a numeral-suffixed group (meta variants) and a face-suffixed / plain
 # group (one block's own faces), then resolve to a dir->filename map for `meta`, or {} if

@@ -47,6 +47,7 @@ func _ready() -> void:
 	_test_import_service_nei()
 	_test_nei_roster_import()
 	_test_nei_roster_multi_source_namespace()
+	_test_nei_roster_vanilla_namespace_fallback()
 	_test_install_locations()
 	_test_shape_catalog()
 	_test_shape_rules()
@@ -2158,6 +2159,9 @@ func _test_nei_roster_import() -> void:
 	# whose real assets/ folder is plain lowercase "ztones" — no pipes/spaces, just a case
 	# difference, so this exercises _resolve_source's EXACT (case-insensitive) tier rather
 	# than the normalized fallback the BuildCraft|Core row exercises below.
+	# "debris" mimics a real confirmed case (a GTNH EtFuturum block): a multi-word, already-
+	# underscored registry local name ("ancient_debris") that must match an equally multi-word
+	# tokenized filename ("ancient_debris.png" -> ["ancient","debris"]) token-for-token.
 	_write_file(dumps + "/item.csv", "\n".join([
 		"Name,ID,Has Block,Mod,Class,Display Name",
 		"testmod:widget,100,true,TestMod,some.Class,Widget",
@@ -2166,6 +2170,7 @@ func _test_nei_roster_import() -> void:
 		"testmod:gadget,103,false,TestMod,some.Class,Gadget",
 		"BuildCraft|Core:gear,104,true,BuildCraft|Core,some.Class,Gear",
 		"Ztones:tile.korpBlock,105,true,Ztones,some.Class,Korp",
+		"testmod:ancient_debris,106,true,TestMod,some.Class,Ancient Debris",
 	]))
 	# itempanel.csv: the confirmed per-subtype roster. "machine" gets two metas with no
 	# texture at all (the GT single-block-machine shape); "wool" is meta-packed with real
@@ -2181,10 +2186,12 @@ func _test_nei_roster_import() -> void:
 		"testmod:gadget,103,0,false,Gadget",
 		"BuildCraft|Core:gear,104,0,false,Gear",
 		"Ztones:tile.korpBlock,105,0,false,Korp",
+		"testmod:ancient_debris,106,0,false,Ancient Debris",
 	]))
 
 	_write_solid(blocks + "/widget.png", Color(0.2, 0.6, 0.9))
 	_write_solid(blocks + "/wool_0.png", Color(0.95, 0.95, 0.95))
+	_write_solid(blocks + "/ancient_debris.png", Color(0.5, 0.3, 0.3))
 	_write_solid(blocks + "/wool_1.png", Color(0.9, 0.5, 0.1))
 	# No "machine" texture anywhere — the GT-machine shape: confirmed identity, no visual yet.
 	_write_solid(assets + "/buildcraftcore/textures/blocks/gear.png", Color(0.6, 0.6, 0.1))
@@ -2213,13 +2220,14 @@ func _test_nei_roster_import() -> void:
 		Array(nri.mods) == ["BuildCraft|Core", "TestMod", "Ztones"])
 	var rows := nri.entries("TestMod")
 	_check("Has Block:false rows are dropped even though itempanel.csv lists them",
-		rows.size() == 5)   # widget + machine(x2 metas) + wool(x2 metas) — gadget excluded
+		rows.size() == 6)   # widget + machine(x2 metas) + wool(x2 metas) + ancient_debris — gadget excluded
 
 	var widget_row: Dictionary
 	var machine0_row: Dictionary
 	var machine5_row: Dictionary
 	var wool0_row: Dictionary
 	var wool1_row: Dictionary
+	var debris_row: Dictionary
 	for row: Dictionary in rows:
 		match [row["registry"], row["meta"]]:
 			["testmod:widget", 0]: widget_row = row
@@ -2227,6 +2235,7 @@ func _test_nei_roster_import() -> void:
 			["testmod:machine", 5]: machine5_row = row
 			["testmod:wool", 0]: wool0_row = row
 			["testmod:wool", 1]: wool1_row = row
+			["testmod:ancient_debris", 0]: debris_row = row
 
 	var widget_bt := nri.import_entry(widget_row)
 	_check("confirmed identity: registry + meta + mod + display, marked confirmed",
@@ -2252,6 +2261,12 @@ func _test_nei_roster_import() -> void:
 	_check("meta-packed: each variant's numeral-suffixed texture matches its own meta",
 		ws.get_block_model(wool0_bt.model_id).elements[0]["faces"][BlockModel.Dir.UP]["texture_key"] == "testmod:blocks/wool_0"
 		and ws.get_block_model(wool1_bt.model_id).elements[0]["faces"][BlockModel.Dir.UP]["texture_key"] == "testmod:blocks/wool_1")
+
+	var debris_bt := nri.import_entry(debris_row)
+	_check("a multi-word underscored registry name matches an equally multi-word filename "
+		+ "token-for-token (not glued into one string no filename would ever produce)",
+		not debris_bt.model_id.is_empty()
+		and ws.get_block_model(debris_bt.model_id).elements[0]["faces"][BlockModel.Dir.UP]["texture_key"] == "testmod:blocks/ancient_debris")
 
 	_check("reimporting the same (registry, meta) reuses the existing block type",
 		nri.import_entry(widget_row) == widget_bt)
@@ -2347,6 +2362,63 @@ func _test_nei_roster_multi_source_namespace() -> void:
 
 	big_source.close()
 	patch_source.close()
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	_rm_rf(dumps)
+	AssetLibrary.ROOT = saved_root
+
+# Real case, found against the user's actual GTNH install: EtFuturum (backports newer MC blocks
+# into 1.7.10) registers its blocks under its own "etfuturum" modid, but ships most of their
+# actual textures under assets/minecraft/ instead of its own namespace -- 559 of its 664 block
+# textures, in the real jar -- reusing vanilla's shared texture domain rather than duplicating
+# it. Before the vanilla-namespace fallback, every one of those came up empty: a source WAS
+# found for "etfuturum" (its own jar), so no warning fired, but the narrow search only ever
+# looked in "etfuturum/textures/blocks", which doesn't have the file.
+func _test_nei_roster_vanilla_namespace_fallback() -> void:
+	print("-- NEI roster importer (texture reused from the vanilla \"minecraft\" namespace)")
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_neivanlib__"
+	var src := "user://__voxyl_neivansrc__"
+	var dumps := "user://__voxyl_neivandumps__"
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	_rm_rf(dumps)
+
+	_write_file(dumps + "/item.csv", "\n".join([
+		"Name,ID,Has Block,Mod,Class,Display Name",
+		"etfuturum:target,200,true,EtFuturum,some.Class,Target",
+	]))
+	_write_file(dumps + "/itempanel.csv", "\n".join([
+		"Item Name,Item ID,Item meta,Has NBT,Display Name",
+		"etfuturum:target,200,0,false,Target",
+	]))
+
+	# The mod's OWN namespace exists (so no "no assets found" warning) but carries nothing
+	# target-related -- only the vanilla domain has the real files, as two face textures (also
+	# exercises face-mapping through the fallback tier, not just a single whole texture).
+	var side_img := Image.create_empty(16, 16, false, Image.FORMAT_RGBA8)
+	side_img.fill(Color(0.8, 0.1, 0.1))
+	var top_img := Image.create_empty(16, 16, false, Image.FORMAT_RGBA8)
+	top_img.fill(Color(0.9, 0.9, 0.9))
+	_write_png(src + "/assets/etfuturum/textures/blocks/unrelated.png", side_img)
+	_write_png(src + "/assets/minecraft/textures/blocks/target_side.png", side_img)
+	_write_png(src + "/assets/minecraft/textures/blocks/target_top.png", top_img)
+
+	var ws := VoxelWorkspace.new()
+	var lib := ws.get_or_add_library("nei-vanilla")
+	var source := MCDirSource.new(src + "/assets")
+	var nri := NeiRosterImporter.new([source], lib)
+	_check("load_dumps succeeds", nri.load_dumps(dumps) == "")
+
+	var target_row: Dictionary = nri.entries("EtFuturum")[0]
+	var target_bt := nri.import_entry(target_row)
+	var model := ws.get_block_model(target_bt.model_id) if not target_bt.model_id.is_empty() else null
+	_check("a namespace with no matching texture of its own falls back to vanilla's shared "
+		+ "\"minecraft\" domain, still resolving per-face",
+		model != null
+		and model.elements[0]["faces"][BlockModel.Dir.UP]["texture_key"] == "minecraft:blocks/target_top"
+		and model.elements[0]["faces"][BlockModel.Dir.NORTH]["texture_key"] == "minecraft:blocks/target_side")
+
 	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(src)
 	_rm_rf(dumps)
