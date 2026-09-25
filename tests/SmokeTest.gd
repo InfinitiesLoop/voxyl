@@ -48,6 +48,7 @@ func _ready() -> void:
 	_test_nei_roster_import()
 	_test_nei_roster_multi_source_namespace()
 	_test_nei_roster_vanilla_namespace_fallback()
+	_test_nei_roster_texture_suffix_precision()
 	_test_install_locations()
 	_test_shape_catalog()
 	_test_shape_rules()
@@ -2423,6 +2424,117 @@ func _test_nei_roster_vanilla_namespace_fallback() -> void:
 		model != null
 		and model.elements[0]["faces"][BlockModel.Dir.UP]["texture_key"] == "minecraft:blocks/target_top"
 		and model.elements[0]["faces"][BlockModel.Dir.NORTH]["texture_key"] == "minecraft:blocks/target_side")
+
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	_rm_rf(dumps)
+	AssetLibrary.ROOT = saved_root
+
+# Real bugs, found spot-checking the user's actual GTNH install after the multi-source/token-
+# prefix/vanilla-fallback fixes above still left real blocks gray:
+#   1. EtFuturum's "Block of Copper" (registry etfuturum:copper_block, base tokens ["copper"])
+#      matched its OWN namespace's "copper_barrel_bottom.png" (tokens ["copper","barrel",
+#      "bottom"]) — a token-PREFIX match with no constraint on the trailing tokens accepts any
+#      longer name that merely starts with the same word, so it never even tried vanilla's real
+#      copper_block.png.
+#   2. AE2's "ME Controller" (registry tile.BlockController, base tokens ["block","controller"])
+#      has a dozen render-state textures in the SAME namespace with the same prefix (…Column,
+#      …Powered, …Conflict, …InsideA, …InsideB, …Lights) — none of those extra words were
+#      recognized as face/state suffixes, so they all piled into the "ambiguous whole" bucket
+#      and the controller was dropped even though its own plain BlockController.png exists.
+#   3. AE2's "4k/16k/64k Crafting Storage" (metas 1-3 of tile.BlockCraftingStorage) share their
+#      base tokens with meta 0's plain BlockCraftingStorage.png (their own per-tier files exist
+#      but carry a suffix — "4k","16k","64k" — this importer can't correlate to a meta index) —
+#      confidently binding them to meta 0's texture would be a wrong-looking "match", worse than
+#      dropping them.
+func _test_nei_roster_texture_suffix_precision() -> void:
+	print("-- NEI roster importer (suffix-precision texture matching)")
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_neisuffixlib__"
+	var src := "user://__voxyl_neisuffixsrc__"
+	var dumps := "user://__voxyl_neisuffixdumps__"
+	_rm_rf(AssetLibrary.ROOT)
+	_rm_rf(src)
+	_rm_rf(dumps)
+	var blocks := src + "/assets/testmod/textures/blocks"
+
+	_write_file(dumps + "/item.csv", "\n".join([
+		"Name,ID,Has Block,Mod,Class,Display Name",
+		"testmod:copper_block,200,true,TestMod,some.Class,Block of Copper",
+		"testmod:copper_barrel,201,true,TestMod,some.Class,Copper Barrel",
+		"testmod:tile.BlockController,202,true,TestMod,some.Class,Controller",
+		"testmod:tile.BlockCraftingStorage,203,true,TestMod,some.Class,Crafting Storage",
+	]))
+	_write_file(dumps + "/itempanel.csv", "\n".join([
+		"Item Name,Item ID,Item meta,Has NBT,Display Name",
+		"testmod:copper_block,200,0,false,Block of Copper",
+		"testmod:copper_barrel,201,0,false,Copper Barrel",
+		"testmod:tile.BlockController,202,0,false,Controller",
+		"testmod:tile.BlockCraftingStorage,203,0,false,1k Crafting Storage",
+		"testmod:tile.BlockCraftingStorage,203,1,false,4k Crafting Storage",
+	]))
+
+	# (1) A registry whose base token is a strict PREFIX of an unrelated block's filename.
+	_write_solid(blocks + "/copper_block.png", Color(0.8, 0.4, 0.1))
+	_write_solid(blocks + "/copper_barrel_bottom.png", Color(0.2, 0.2, 0.2))
+	_write_solid(blocks + "/copper_barrel_side.png", Color(0.2, 0.2, 0.2))
+	_write_solid(blocks + "/copper_barrel_top.png", Color(0.2, 0.2, 0.2))
+	# (2) One real plain texture plus a pile of same-prefixed render-state textures.
+	_write_solid(blocks + "/BlockController.png", Color(0.1, 0.5, 0.9))
+	_write_solid(blocks + "/BlockControllerColumn.png", Color(0.9, 0.1, 0.1))
+	_write_solid(blocks + "/BlockControllerPowered.png", Color(0.9, 0.1, 0.1))
+	_write_solid(blocks + "/BlockControllerInsideA.png", Color(0.9, 0.1, 0.1))
+	# (3) A multi-meta registry where only the base tier has an unsuffixed file; the other
+	# tier's own file exists but its suffix can't be correlated to meta 1.
+	_write_solid(blocks + "/BlockCraftingStorage.png", Color(0.5, 0.5, 0.1))
+	_write_solid(blocks + "/BlockCraftingStorage4k.png", Color(0.1, 0.9, 0.1))
+
+	var ws := VoxelWorkspace.new()
+	var lib := ws.get_or_add_library("nei-suffix")
+	var source := MCDirSource.new(src + "/assets")
+	var nri := NeiRosterImporter.new([source], lib)
+	_check("load_dumps succeeds", nri.load_dumps(dumps) == "")
+
+	var rows := nri.entries("TestMod")
+	var copper_block_row: Dictionary
+	var copper_barrel_row: Dictionary
+	var controller_row: Dictionary
+	var storage0_row: Dictionary
+	var storage1_row: Dictionary
+	for row: Dictionary in rows:
+		match [row["registry"], row["meta"]]:
+			["testmod:copper_block", 0]: copper_block_row = row
+			["testmod:copper_barrel", 0]: copper_barrel_row = row
+			["testmod:tile.BlockController", 0]: controller_row = row
+			["testmod:tile.BlockCraftingStorage", 0]: storage0_row = row
+			["testmod:tile.BlockCraftingStorage", 1]: storage1_row = row
+
+	var copper_block_bt := nri.import_entry(copper_block_row)
+	_check("a short base token doesn't match an unrelated longer name that merely starts "
+		+ "with the same word (copper_block vs. copper_barrel_*)",
+		not copper_block_bt.model_id.is_empty()
+		and ws.get_block_model(copper_block_bt.model_id).elements[0]["faces"][BlockModel.Dir.UP]["texture_key"] == "testmod:blocks/copper_block")
+
+	var copper_barrel_bt := nri.import_entry(copper_barrel_row)
+	_check("the unrelated block itself still imports fine from its own faces",
+		not copper_barrel_bt.model_id.is_empty()
+		and ws.get_block_model(copper_barrel_bt.model_id).elements[0]["faces"][BlockModel.Dir.UP]["texture_key"] == "testmod:blocks/copper_barrel_top")
+
+	var controller_bt := nri.import_entry(controller_row)
+	_check("a pile of same-prefixed render-state textures doesn't make the real plain "
+		+ "texture look ambiguous and get dropped",
+		not controller_bt.model_id.is_empty()
+		and ws.get_block_model(controller_bt.model_id).elements[0]["faces"][BlockModel.Dir.UP]["texture_key"] == "testmod:blocks/BlockController")
+
+	var storage0_bt := nri.import_entry(storage0_row)
+	_check("meta 0 of a multi-meta registry binds the plain texture",
+		not storage0_bt.model_id.is_empty()
+		and ws.get_block_model(storage0_bt.model_id).elements[0]["faces"][BlockModel.Dir.UP]["texture_key"] == "testmod:blocks/BlockCraftingStorage")
+
+	var storage1_bt := nri.import_entry(storage1_row)
+	_check("a non-zero meta sharing the same candidate pool is dropped rather than silently "
+		+ "reusing meta 0's texture",
+		storage1_bt == null and lib.get_block_type("4k Crafting Storage") == null)
 
 	_rm_rf(AssetLibrary.ROOT)
 	_rm_rf(src)

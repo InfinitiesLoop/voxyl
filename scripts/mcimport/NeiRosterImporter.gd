@@ -326,9 +326,10 @@ func _base_tokens(registry: String) -> PackedStringArray:
 	return toks
 
 # Every texture file under the namespace's textures/blocks (recursively; ztones-style sorts
-# into subfolders) whose basename's tokens START WITH `base_tokens`, in order — e.g. ["ancient",
-# "debris"] matches "ancient_debris.png" (exact) and "ancient_debris_top.png" (extra face
-# suffix), but not "debris.png" (missing the first word) or "ancient.png" (too short).
+# into subfolders) whose basename's tokens are `base_tokens` followed only by tokens that
+# could plausibly be THIS block's own face/variant suffix — e.g. ["ancient", "debris"] matches
+# "ancient_debris.png" (exact) and "ancient_debris_top.png" (extra face suffix), but not
+# "debris.png" (missing the first word) or "ancient.png" (too short).
 func _matching_files(source: MCAssetSource, ns: String, base_tokens: PackedStringArray) -> Array:
 	var files := source.list_files_recursive("%s/textures/blocks" % ns)
 	var subdir := "blocks"
@@ -341,16 +342,26 @@ func _matching_files(source: MCAssetSource, ns: String, base_tokens: PackedStrin
 			continue
 		var name := f.get_basename()
 		var toks := _tokenize(name.get_file())   # match against the leaf name, not the subpath
-		if _starts_with_tokens(toks, base_tokens):
+		if _matches_base(toks, base_tokens):
 			out.append({"name": name, "subdir": subdir, "toks": toks})
 	return out
 
-# Whether `toks` begins with every element of `prefix`, in the same order.
-func _starts_with_tokens(toks: PackedStringArray, prefix: PackedStringArray) -> bool:
-	if prefix.is_empty() or toks.size() < prefix.size():
+# Whether `toks` is `base_tokens` exactly, or `base_tokens` followed ONLY by tokens that read as
+# this same block's own suffix (a numeral, a known face/state word, or the "block"/"blocks" word
+# _base_tokens itself strips off the registry side) — never an unrelated longer name that merely
+# happens to start with the same word(s). Without this, base_tokens ["copper"] (from registry
+# "copper_block") wrongly matched "copper_barrel_bottom.png" — a real GTNH case (EtFuturum ships
+# both "Block of Copper" and "Copper Barrel" under the same namespace) that made the block of
+# copper render with barrel textures instead of falling through to vanilla's real copper_block.png.
+func _matches_base(toks: PackedStringArray, base_tokens: PackedStringArray) -> bool:
+	if base_tokens.is_empty() or toks.size() < base_tokens.size():
 		return false
-	for i in prefix.size():
-		if toks[i] != prefix[i]:
+	for i in base_tokens.size():
+		if toks[i] != base_tokens[i]:
+			return false
+	for i in range(base_tokens.size(), toks.size()):
+		var t: String = toks[i]
+		if not (t.is_valid_int() or _FACE.has(t) or _STATES.has(t) or t == "block" or t == "blocks"):
 			return false
 	return true
 
@@ -377,6 +388,18 @@ func _resolve_faces(candidates: Array, meta: int) -> Dictionary:
 			return {}   # meta-packed, but nothing confidently maps to THIS meta
 		var c: Dictionary = numbered[meta]
 		return {_U: c, _D: c, _N: c, _S: c, _E: c, _W: c}
+	# Not meta-packed at all: only meta 0 may bind the group's plain/face-bound texture. A
+	# real block's only variant is always meta 0, so this is a no-op for the common case — but
+	# a registry with SEVERAL confirmed metas (this same candidate set is recomputed per meta,
+	# since it depends only on the registry, not the row) must never let meta 1+ silently reuse
+	# meta 0's texture as if it had been confirmed for them too. Real GTNH case: AE2's "4k/16k/
+	# 64k Crafting Storage" (metas 1-3 of tile.BlockCraftingStorage) share the exact same
+	# candidate pool as meta 0 ("1k Crafting Storage") because their OWN per-tier files
+	# (BlockCraftingStorage4k.png, …) carry a suffix ("4k") this importer can't correlate to a
+	# meta index — defaulting them to meta 0's plain BlockCraftingStorage.png would be a
+	# confident-looking wrong texture, worse than the drop this now falls through to.
+	if meta != 0:
+		return {}
 	# Not meta-packed (no numeral-suffixed files at all): face-bind the plain candidates.
 	var face_map := {}
 	var wholes: Array = []

@@ -1298,9 +1298,20 @@ func _confirm_delete_libraries(library_names: Array) -> void:
 		return
 	var dialog := ConfirmationDialog.new()
 	dialog.title = "Delete Libraries"
-	dialog.dialog_text = ("Delete \"%s\"? This can't be undone." % library_names[0]) \
-		if library_names.size() == 1 \
-		else "Delete %d libraries? This can't be undone.\n\n%s" % [library_names.size(), "\n".join(library_names)]
+	if library_names.size() == 1:
+		dialog.dialog_text = "Delete \"%s\"? This can't be undone." % library_names[0]
+	else:
+		dialog.dialog_text = "Delete %d libraries? This can't be undone." % library_names.size()
+		# The list used to be joined straight into dialog_text: with enough libraries selected
+		# (bulk-deleting a whole failed import pass, say) the dialog grew taller than the screen
+		# and pushed the OK/Cancel buttons out of reach. A fixed-height scrollable list keeps the
+		# dialog (and its buttons) a constant size no matter how many names are in it.
+		var list := TextEdit.new()
+		list.editable = false
+		list.text = "\n".join(library_names)
+		list.custom_minimum_size = Vector2(360, 160)
+		list.scroll_fit_content_height = false
+		dialog.add_child(list)
 	dialog.confirmed.connect(func():
 		for library_name in library_names:
 			_on_delete_library(library_name)
@@ -1351,13 +1362,19 @@ func _populate_block_grid() -> void:
 
 # Libraries whose blocks the grid shows: the rail selection when there is one, else *every*
 # non-basic library (the "All blocks" default). basic is the resolution floor, not a
-# user-managed library, so it isn't listed on its own — same as the rail.
+# user-managed library, so it isn't listed on its own — same as the rail. Ordered the same
+# case-insensitive way as the rail (list_libraries()) — VoxelWorld.workspace.libraries is raw
+# on-disk load order (case-sensitive, uppercase names first), which used to leave the section
+# dividers in the merged grid sorted differently than the rail right next to it.
 func _grid_libraries() -> Array:
 	if not _selected_libraries.is_empty():
 		return _selected_libraries
 	var out: Array = []
-	for lib in VoxelWorld.workspace.libraries:
-		if lib.name != VoxelWorkspace.BASIC_LIBRARY:
+	for n in VoxelWorld.workspace.list_libraries():
+		if n == VoxelWorkspace.BASIC_LIBRARY:
+			continue
+		var lib := VoxelWorld.workspace.get_library(n)
+		if lib != null:
 			out.append(lib)
 	return out
 

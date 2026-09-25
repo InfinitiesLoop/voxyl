@@ -83,13 +83,15 @@ func remove_block_type(block_name: String) -> void:
 			return
 
 # Block types sorted by (order, name) — the stable grid order. order is per-library;
-# name breaks ties so equal-order blocks (e.g. a bulk import) stay alphabetical.
+# name breaks ties so equal-order blocks (e.g. a bulk import) stay alphabetical. Case-
+# insensitive so a mixed-case bulk import (many MC display names start uppercase) doesn't
+# sort every "A"-"Z" name before every lowercase one.
 func sorted_block_types() -> Array[BlockType]:
 	var out: Array[BlockType] = block_types.duplicate()
 	out.sort_custom(func(a, b):
 		if a.order != b.order:
 			return a.order < b.order
-		return a.name < b.name)
+		return a.name.to_lower() < b.name.to_lower())
 	return out
 
 # The next order value (max existing + 1), so newly added/imported blocks append.
