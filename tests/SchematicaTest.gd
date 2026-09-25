@@ -1,9 +1,9 @@
 extends Node
 
 # Schematica export: NBT container round-trip, SchematicaMeta's orientation-family bit rules,
-# and the whole-block SchematicaWriter/SchematicaExporter/SchematicaProbe pipeline end to end.
-# FMP/AC/GT part export isn't built yet (see .plans' build order) — this covers whole blocks
-# only, same scope as SchematicaExporter itself today.
+# the whole-block SchematicaWriter/SchematicaExporter/SchematicaProbe pipeline, and shaped-part
+# export (ForgeMultipart microblocks via FmpParts, ArchitectureCraft shapes via AcParts) end to
+# end. GT machine export isn't built yet.
 
 var _pass := 0
 var _fail := 0
@@ -16,6 +16,8 @@ func _ready() -> void:
 	_test_schematica_writer_add_blocks()
 	_test_schematica_exporter_region()
 	_test_schematica_exporter_prefab()
+	_test_fmp_microblock_export()
+	_test_ac_shape_export()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
@@ -218,3 +220,186 @@ func _test_schematica_exporter_prefab() -> void:
 	ws.remove_prefab(prefab.name)
 	ws.remove_palette("__schem_export__")
 	ws.remove_library("__schem_export_prefab_lib__")
+
+# --- SchematicaExporter (ForgeMultipart microblock parts) --------------------
+
+func _tile_entities_of(bytes: PackedByteArray) -> Array:
+	var parsed: Variant = NbtReader.read_file(bytes)
+	if parsed == null:
+		return []
+	var fields: Dictionary = parsed["value"]
+	return fields["TileEntities"]["value"] if fields.has("TileEntities") else []
+
+func _tile_at(bytes: PackedByteArray, pos: Vector3i) -> Dictionary:
+	for t: Dictionary in _tile_entities_of(bytes):
+		if int(t["x"]["value"]) == pos.x and int(t["y"]["value"]) == pos.y and int(t["z"]["value"]) == pos.z:
+			return t
+	return {}
+
+func _data_byte_at(bytes: PackedByteArray, pos: Vector3i, size: Vector3i) -> int:
+	var parsed: Variant = NbtReader.read_file(bytes)
+	var data: PackedByteArray = (parsed["value"] as Dictionary)["Data"]["value"]
+	return data[(pos.y * size.z + pos.z) * size.x + pos.x]
+
+func _test_fmp_microblock_export() -> void:
+	print("-- SchematicaExporter (ForgeMultipart microblock parts)")
+	var ws := VoxelWorld.workspace
+	var lib := ws.get_or_add_library("__schem_fmp_lib__")
+	var stone := lib.add_block_type("Stone")
+	McId.set_registry_id(stone, "minecraft:stone", 0, "", true)
+	var planks := lib.add_block_type("Planks")
+	McId.set_registry_id(planks, "minecraft:planks", 2, "", true)
+
+	var palette := ws.add_palette("__schem_fmp_pal__")
+	palette.library_names = ["__schem_fmp_lib__"]
+	for pair in [["Cover", "Stone"], ["Strip", "Planks"], ["Post", "Stone"],
+			["Corner", "Planks"], ["Hollow", "Stone"], ["Ghost", ""]]:
+		var e := PaletteEntry.new()
+		e.semantic_name = pair[0]
+		e.block_type_name = pair[1]
+		palette.entries.append(e)
+
+	var project: VoxelProject = ws.add_project("__schem_fmp_project__")
+	project.palette_names.append("__schem_fmp_pal__")
+	VoxelWorld.open(project)
+	var data := project.data
+
+	var shared := Vector3i(0, 0, 0)
+	data.add_part(shared, BlockCell.make_part("Strip", "edge1", 0))
+	data.add_part(shared, BlockCell.make_part("Cover", "face1", 1))
+	var post_pos := Vector3i(1, 0, 0)
+	data.add_part(post_pos, BlockCell.make_part("Post", "edge2", ShapeCatalog.CENTER_SLOT))
+	var corner_pos := Vector3i(0, 0, 1)
+	data.add_part(corner_pos, BlockCell.make_part("Corner", "corner2", 5))
+	var hollow_pos := Vector3i(1, 0, 1)
+	data.add_part(hollow_pos, BlockCell.make_part("Hollow", "hollow1", 3))
+	var ghost_pos := Vector3i(0, 1, 0)
+	data.add_part(ghost_pos, BlockCell.make_part("Ghost", "face1", 0))
+
+	var result := SchematicaExporter.export_region(data, Vector3i(0, 0, 0), Vector3i(1, 1, 1))
+	var report: Dictionary = result["report"]
+	_check("4 part cells resolved", int(report["cells_written"]) == 4)
+	_check("1 empty part cell (Ghost, no confirmed identity)", int(report["empty_part_cells"]) == 1)
+	_check("Ghost is bucketed as unmapped", int(report["unmapped"].get("Ghost", 0)) == 1)
+	_check("4 tile entities written", int(report["tile_entities"]) == 4)
+	_check("the placeholder block is mapped 4 times", int(report["mapped"].get(FmpParts.WORLD_REGISTRY, 0)) == 4)
+
+	var bytes: PackedByteArray = result["bytes"]
+	var probed: Variant = SchematicaProbe.probe(bytes)
+	_check("the written file parses back", probed != null)
+	if probed != null:
+		_check("the placeholder block shows up 4 times in the histogram",
+			int(probed["histogram"].get(FmpParts.WORLD_REGISTRY, 0)) == 4)
+
+	var size := Vector3i(2, 2, 2)
+	_check("a multipart position's Data byte is 0 (real state lives in the tile entity)",
+		_data_byte_at(bytes, shared, size) == 0)
+
+	var shared_tile := _tile_at(bytes, shared)
+	_check("the shared cell got a savedMultipart tile entity", str(shared_tile.get("id", {}).get("value", "")) == "savedMultipart")
+	var shared_parts: Array = shared_tile["parts"]["value"] if shared_tile.has("parts") else []
+	_check("it holds both parts", shared_parts.size() == 2)
+	var strip_tag: Dictionary = {}
+	var cover_tag: Dictionary = {}
+	for p: Dictionary in shared_parts:
+		if str(p["id"]["value"]) == "mcr_edge":
+			strip_tag = p
+		elif str(p["id"]["value"]) == "mcr_face":
+			cover_tag = p
+	_check("the strip saved as mcr_edge with slot 0, size 1 (shape byte 0x10)",
+		not strip_tag.is_empty() and int(strip_tag["shape"]["value"]) == 0x10)
+	_check("the strip's material is Planks' registry + non-zero meta suffix",
+		str(strip_tag.get("material", {}).get("value", "")) == "minecraft:planks_2")
+	_check("the cover saved as mcr_face with slot 1, size 1 (shape byte 0x11)",
+		not cover_tag.is_empty() and int(cover_tag["shape"]["value"]) == 0x11)
+	_check("the cover's material is Stone's registry, no meta suffix (meta 0)",
+		str(cover_tag.get("material", {}).get("value", "")) == "minecraft:stone")
+
+	var post_tile := _tile_at(bytes, post_pos)
+	var post_parts: Array = post_tile["parts"]["value"] if post_tile.has("parts") else []
+	_check("a centered post saves as its own mcr_post type",
+		post_parts.size() == 1 and str(post_parts[0]["id"]["value"]) == "mcr_post")
+	_check("its shape byte is size 2, axis 0 (Y) -> 0x20",
+		post_parts.size() == 1 and int(post_parts[0]["shape"]["value"]) == 0x20)
+
+	var corner_tile := _tile_at(bytes, corner_pos)
+	var corner_parts: Array = corner_tile["parts"]["value"] if corner_tile.has("parts") else []
+	_check("a corner saves as mcr_cnr with its slot verbatim (size 2, slot 5 -> 0x25)",
+		corner_parts.size() == 1 and str(corner_parts[0]["id"]["value"]) == "mcr_cnr"
+		and int(corner_parts[0]["shape"]["value"]) == 0x25)
+
+	var hollow_tile := _tile_at(bytes, hollow_pos)
+	var hollow_parts: Array = hollow_tile["parts"]["value"] if hollow_tile.has("parts") else []
+	_check("a hollow face saves as mcr_hllw (size 1, slot 3 -> 0x13)",
+		hollow_parts.size() == 1 and str(hollow_parts[0]["id"]["value"]) == "mcr_hllw"
+		and int(hollow_parts[0]["shape"]["value"]) == 0x13)
+
+	_check("the ghost cell got no tile entity", _tile_at(bytes, ghost_pos).is_empty())
+
+	ws.remove_project(project.name)
+	ws.remove_palette("__schem_fmp_pal__")
+	ws.remove_library("__schem_fmp_lib__")
+
+# --- SchematicaExporter (ArchitectureCraft shapes) ---------------------------
+
+func _test_ac_shape_export() -> void:
+	print("-- SchematicaExporter (ArchitectureCraft shapes)")
+	var ws := VoxelWorld.workspace
+	var lib := ws.get_or_add_library("__schem_ac_lib__")
+	var planks := lib.add_block_type("Planks")
+	McId.set_registry_id(planks, "minecraft:planks", 1, "", true)
+
+	var palette := ws.add_palette("__schem_ac_pal__")
+	palette.library_names = ["__schem_ac_lib__"]
+	for pair in [["RoofMat", "Planks"], ["Undecided", ""]]:
+		var e := PaletteEntry.new()
+		e.semantic_name = pair[0]
+		e.block_type_name = pair[1]
+		palette.entries.append(e)
+
+	var project: VoxelProject = ws.add_project("__schem_ac_project__")
+	project.palette_names.append("__schem_ac_pal__")
+	VoxelWorld.open(project)
+	var data := project.data
+
+	var stairs_pos := Vector3i(0, 0, 0)
+	var stairs_slot := ArchShapes.make_slot(2, 1)
+	data.add_part(stairs_pos, BlockCell.make_part("RoofMat", "stairs", stairs_slot))
+	var ban_pos_neg := Vector3i(1, 0, 0)
+	data.add_part(ban_pos_neg, BlockCell.make_part("RoofMat", "banister_plain", ArchShapes.make_slot(1, 2, true)))
+	var ban_pos_pos := Vector3i(0, 0, 1)
+	data.add_part(ban_pos_pos, BlockCell.make_part("RoofMat", "banister_plain", ArchShapes.make_slot(1, 2, false)))
+	var undecided_pos := Vector3i(1, 0, 1)
+	data.add_part(undecided_pos, BlockCell.make_part("Undecided", "roof_tile", ArchShapes.make_slot(0, 0)))
+
+	var result := SchematicaExporter.export_region(data, Vector3i(0, 0, 0), Vector3i(1, 0, 1))
+	var report: Dictionary = result["report"]
+	_check("3 arch-shape cells resolved", int(report["cells_written"]) == 3)
+	_check("1 empty part cell (Undecided material)", int(report["empty_part_cells"]) == 1)
+	_check("the placeholder AC block is mapped 3 times", int(report["mapped"].get(AcParts.WORLD_REGISTRY, 0)) == 3)
+
+	var bytes: PackedByteArray = result["bytes"]
+	var size := Vector3i(2, 1, 2)
+	_check("an AC shape position's Data byte is 0", _data_byte_at(bytes, stairs_pos, size) == 0)
+
+	var stairs_tile := _tile_at(bytes, stairs_pos)
+	_check("stairs saved as a gcewing.shape tile entity", str(stairs_tile.get("id", {}).get("value", "")) == "gcewing.shape")
+	_check("Shape is stairs' real AC id (91), not ArchShapes' own table index",
+		int(stairs_tile.get("Shape", {}).get("value", -1)) == AcParts.SHAPE_ID["stairs"])
+	_check("side/turn match the placed slot", int(stairs_tile["side"]["value"]) == 2 and int(stairs_tile["turn"]["value"]) == 1)
+	_check("BaseName/BaseData carry the resolved material",
+		str(stairs_tile["BaseName"]["value"]) == "minecraft:planks" and int(stairs_tile["BaseData"]["value"]) == 1)
+	_check("a non-offset shape writes no offsetX", not stairs_tile.has("offsetX"))
+
+	var ban_neg := _tile_at(bytes, ban_pos_neg)
+	_check("a banister shifted toward -X writes offsetX -6",
+		ban_neg.has("offsetX") and int(ban_neg["offsetX"]["value"]) == -6)
+	var ban_pos := _tile_at(bytes, ban_pos_pos)
+	_check("a banister shifted toward +X writes offsetX +6",
+		ban_pos.has("offsetX") and int(ban_pos["offsetX"]["value"]) == 6)
+
+	_check("the undecided-material cell got no tile entity", _tile_at(bytes, undecided_pos).is_empty())
+
+	ws.remove_project(project.name)
+	ws.remove_palette("__schem_ac_pal__")
+	ws.remove_library("__schem_ac_lib__")

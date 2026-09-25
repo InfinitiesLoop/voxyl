@@ -118,8 +118,6 @@ static func _block_get(args: Dictionary) -> Dictionary:
 		out["mc_confirmed"] = McId.is_confirmed(bt)
 		if not McId.get_orient(bt).is_empty():
 			out["mc_orient"] = McId.get_orient(bt)
-	if McId.has_unlocalized(bt):
-		out["mc_unlocalized"] = McId.get_unlocalized(bt)
 	if not McId.get_mod(bt).is_empty():
 		out["mc_mod"] = McId.get_mod(bt)
 	if not McId.get_display(bt).is_empty():

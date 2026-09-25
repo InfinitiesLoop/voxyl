@@ -5,7 +5,7 @@ extends RefCounted
 
 static func register(reg: McpRegistry) -> void:
 	reg.add("schematic_export",
-		"Export whole blocks to a real Schematica .schematic file (FMP microblocks / ArchitectureCraft shapes / GT machines aren't wired up yet — see the plan). Give EITHER `region` (within the open project; omit for the whole build) OR `prefab` (a saved prefab name, resolved through its own preferred palette stack, independent of whatever project is open). A cell whose resolved block has no confirmed Minecraft identity (see block_set_mc_id, or reimport via nei_roster_import) is left out and counted in the report's `unmapped`, not guessed at; a shaped/part cell is counted in `skipped_part_cells` (not supported yet).",
+		"Export a region to a real Schematica .schematic file: whole blocks, ForgeMultipart microblock parts (covers/panels/slabs, hollow covers, strips/posts/pillars, nooks/corners/notches), and ArchitectureCraft shapes (roofs, stairs, cylinders, capitals, arches, balustrades/banisters — GT machines aren't wired up yet). Give EITHER `region` (within the open project; omit for the whole build) OR `prefab` (a saved prefab name, resolved through its own preferred palette stack, independent of whatever project is open). A cell or part whose resolved block has no confirmed Minecraft identity (see block_set_mc_id, or reimport via nei_roster_import) is left out and counted in the report's `unmapped`, not guessed at; a part cell where nothing resolved is counted in `empty_part_cells`.",
 		{"properties": {
 			"region": McpArgs.s_region(),
 			"prefab": {"type": "string", "description": "Export this saved prefab instead of a project region"},
@@ -16,14 +16,13 @@ static func register(reg: McpRegistry) -> void:
 		"Read-only inspection of an existing .schematic file (this exporter's own output, or a reference file someone else made): dimensions, the SchematicaMapping table, and a per-block histogram. Does not import it as a prefab.",
 		{"properties": {"path": {"type": "string"}}, "required": ["path"]}, _schematic_probe)
 	reg.add("block_set_mc_id",
-		"Manually set or correct a block type's confirmed Minecraft identity for export: registry name (\"modid:name\") + meta, and — only for a slab/stairs/log-shaped semantic — which orientation family (orient) governs its placed metadata (NEI's dumps don't expose this; it's never guessed). `unlocalized` is ForgeMultipart's separate microblock-material identity, only needed for a block actually used as cover/frame material. Pass registry:\"\" to clear an identity.",
+		"Manually set or correct a block type's confirmed Minecraft identity for export: registry name (\"modid:name\") + meta, and — only for a slab/stairs/log-shaped semantic — which orientation family (orient) governs its placed metadata (NEI's dumps don't expose this; it's never guessed). This same registry+meta identity also serves as a ForgeMultipart microblock material and an ArchitectureCraft base material — no separate identity needed. Pass registry:\"\" to clear an identity.",
 		{"properties": {
 			"library": {"type": "string"},
 			"block": {"type": "string"},
 			"registry": {"type": "string", "description": "\"modid:name\", e.g. \"minecraft:stone_slab\"; \"\" clears it"},
 			"meta": {"type": "integer", "description": "Defaults to the block's current meta if omitted"},
 			"orient": {"type": "string", "enum": ["", "half", "stairs", "log_axis"]},
-			"unlocalized": {"type": "string", "description": "ForgeMultipart material key, e.g. \"tile.wool\""},
 		}, "required": ["library", "block"]}, _block_set_mc_id, {"mutates": true})
 
 static func _schematic_export(args: Dictionary) -> Dictionary:
@@ -87,9 +86,6 @@ static func _block_set_mc_id(args: Dictionary) -> Dictionary:
 	elif args.has("orient") and McId.has_registry(bt):
 		McId.set_registry_id(bt, McId.get_registry(bt), meta, str(args["orient"]),
 			McId.is_confirmed(bt), McId.get_mod(bt), McId.get_display(bt))
-	if args.has("unlocalized"):
-		McId.set_unlocalized_id(bt, str(args["unlocalized"]), meta)
-
 	LibraryStore.save_library(lib)
 	return {"library": lib_name, "block": block_name, "registry": McId.get_registry(bt),
-		"meta": McId.get_mc_meta(bt), "orient": McId.get_orient(bt), "unlocalized": McId.get_unlocalized(bt)}
+		"meta": McId.get_mc_meta(bt), "orient": McId.get_orient(bt)}
