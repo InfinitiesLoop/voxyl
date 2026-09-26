@@ -28,6 +28,13 @@ const KEY_ORIENT := "mc.orient"
 const KEY_MOD := "mc.mod"
 const KEY_DISPLAY := "mc.display"
 const KEY_CONFIRMED := "mc.confirmed"
+# "mc.legacy_id" is this install's own live numeric block id for mc.registry (straight from NEI's
+# item.csv "ID" column) — WorldEdit's legacy .schematic reader (unlike Schematica's own) doesn't
+# understand the SchematicaMapping name table and just reads Blocks/AddBlocks as raw numeric ids,
+# so SchematicaWriter uses this as the local id when it's known and fits the format's 12-bit cap
+# (0-4095), instead of an arbitrary made-up number, making one file work for both readers. -1
+# when unknown (a manually-set or healed identity with no roster row behind it).
+const KEY_LEGACY_ID := "mc.legacy_id"
 
 # mc.orient values.
 const ORIENT_NONE := ""
@@ -58,13 +65,18 @@ static func is_confirmed(bt: BlockType) -> bool:
 static func has_registry(bt: BlockType) -> bool:
 	return not get_registry(bt).is_empty()
 
+static func get_legacy_id(bt: BlockType) -> int:
+	return int(bt.metadata.get(KEY_LEGACY_ID, -1)) if bt != null else -1
+
 # Set the whole-block / ArchitectureCraft identity (registry name + meta + orientation
-# family). An empty registry clears it. `mod`/`display` are optional search aids.
+# family). An empty registry clears it. `mod`/`display` are optional search aids. `legacy_id`
+# < 0 means "unknown" and leaves any previously-set one alone (most callers don't have one).
 static func set_registry_id(bt: BlockType, registry: String, meta: int = 0, orient: String = ORIENT_NONE,
-		confirmed: bool = false, mod: String = "", display: String = "") -> void:
+		confirmed: bool = false, mod: String = "", display: String = "", legacy_id: int = -1) -> void:
 	if registry.is_empty():
 		bt.metadata.erase(KEY_REGISTRY)
 		bt.metadata.erase(KEY_ORIENT)
+		bt.metadata.erase(KEY_LEGACY_ID)
 	else:
 		bt.metadata[KEY_REGISTRY] = registry
 		bt.metadata[KEY_META] = meta
@@ -72,6 +84,8 @@ static func set_registry_id(bt: BlockType, registry: String, meta: int = 0, orie
 			bt.metadata.erase(KEY_ORIENT)
 		else:
 			bt.metadata[KEY_ORIENT] = orient
+		if legacy_id >= 0:
+			bt.metadata[KEY_LEGACY_ID] = legacy_id
 	if not mod.is_empty():
 		bt.metadata[KEY_MOD] = mod
 	if not display.is_empty():

@@ -3665,8 +3665,12 @@ func _refresh_selection_overlay() -> void:
 	content.add_child(cut_btn)
 	var prefab_btn := _overlay_button("Save as prefab…  (Ctrl+P)")
 	prefab_btn.tooltip_text = "Keep this region as a named prefab you can place again in any project"
-	prefab_btn.pressed.connect(func(): SavePrefabDialog.open(self))
+	prefab_btn.pressed.connect(func(): SaveRegionDialog.open(self))
 	content.add_child(prefab_btn)
+	var export_btn := _overlay_button("Export to Schematica…")
+	export_btn.tooltip_text = "Write this region out as a real .schematic file (blocks/parts with a confirmed Minecraft identity only)"
+	export_btn.pressed.connect(func(): SaveRegionDialog.open_export_region(self))
+	content.add_child(export_btn)
 	# Bounds last: the panel grows upward from the bottom edge, so these rows stay under the
 	# pointer while the counts above change with every nudge.
 	content.add_child(HSeparator.new())

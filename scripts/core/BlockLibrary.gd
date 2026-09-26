@@ -21,6 +21,14 @@ extends Resource
 @export var block_types: Array[BlockType] = []
 @export var block_models: Array[BlockModel] = []
 @export var texture_assets: Array[TextureAsset] = []
+# registry -> this modpack's real numeric block id, for the handful of world-registry blocks
+# Schematica export places that have no item form at all, so there's no BlockType to hang
+# McId.get_legacy_id off of (ForgeMultipart's and ArchitectureCraft's own shape-carrier
+# blocks — see SchematicaExporter._mark_placeholder). Parked on whichever library an import
+# happened to target (see ImportService._capture_placeholder_ids) since a BlockLibrary is the
+# smallest thing that's actually persisted on its own; the exporter checks every library in
+# the workspace for these, so it doesn't matter which one holds them.
+@export var mc_legacy_ids: Dictionary = {}
 
 # Lazy name/id → resource indexes so a big import (vanilla MC is thousands of block
 # types / models / textures) stays linear instead of O(n²): every get/add during the

@@ -134,6 +134,12 @@ func _rebuild_detail() -> void:
 	edit.pressed.connect(func(): VoxelWorld.request_open_project(VoxelWorld.open_prefab_for_editing(p)))
 	_detail.add_child(edit)
 
+	var export_btn := Button.new()
+	export_btn.text = "Export to Schematica…"
+	export_btn.tooltip_text = "Write this prefab out as a real .schematic file (blocks/parts with a confirmed Minecraft identity only)"
+	export_btn.pressed.connect(func(): SaveRegionDialog.open_export_prefab(self, p))
+	_detail.add_child(export_btn)
+
 	_detail.add_child(_caption("Name"))
 	var name_edit := LineEdit.new()
 	name_edit.text = p.name

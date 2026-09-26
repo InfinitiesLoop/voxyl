@@ -43,6 +43,10 @@ var _ns_source := {}     # ns -> MCAssetSource that fed it (for the post-import 
 # Diagnostics from the last import_selected().
 var imported_count := 0
 var warnings: Array[String] = []
+# The block import_step() most recently touched (null on a failed step) — purely cosmetic,
+# for ImportProgressDialog's texture filmstrip; nothing functional reads these.
+var last_imported: BlockType = null
+var last_imported_library: BlockLibrary = null
 
 # `library` is the default import target (decision: import targets a library). Block types,
 # models and textures land in it, `order` is assigned via its next_order(), and it's
@@ -191,7 +195,30 @@ static func find_dumps_folder(path: String) -> String:
 # this succeeds.
 func load_nei_dumps(dumps_dir: String) -> String:
 	_nei_dumps_dir = dumps_dir
-	return _nei_for(_library).load_dumps(dumps_dir)
+	var nri := _nei_for(_library)
+	var err := nri.load_dumps(dumps_dir)
+	if not err.is_empty():
+		return err
+	err = nri.load_block_csv(dumps_dir)
+	if not err.is_empty():
+		return err
+	_capture_placeholder_ids(nri)
+	return ""
+
+# The couple of world-registry blocks Schematica export places that never show up as a
+# placeable item (see SchematicaExporter._mark_placeholder) can't live on a BlockType like
+# everything else's numeric id does — there's no BlockType for them at all — so they're
+# persisted on the library instead, straight from block.csv (required by this point; see
+# load_block_csv).
+func _capture_placeholder_ids(nri: NeiRosterImporter) -> void:
+	var changed := false
+	for registry in ["ForgeMultipart:block", "ArchitectureCraft:shape"]:
+		var id := nri.legacy_id_for(registry)
+		if id >= 0 and int(_library.mc_legacy_ids.get(registry, -1)) != id:
+			_library.mc_legacy_ids[registry] = id
+			changed = true
+	if changed:
+		LibraryStore.save_library(_library)
 
 # Every importable block across the sources, each as { ns, id, ref, source } (JSON mode, ref =
 # "ns:id") or { ns, id, ref, source: null, row } (NEI mode, ref = "mod: display name", id =
@@ -267,7 +294,9 @@ func import_step(i: int) -> bool:
 		var src := nri.source_for(entry["ns"])
 		if src != null:
 			_ns_source[entry["ns"]] = src
-		var ok := nri.import_entry(entry["row"]) != null
+		last_imported = nri.import_entry(entry["row"])
+		last_imported_library = lib
+		var ok := last_imported != null
 		if ok:
 			imported_count += 1
 			_touched[lib.name] = lib
@@ -276,7 +305,9 @@ func import_step(i: int) -> bool:
 	# Remember which source fed each namespace so the post-import extension pass (which reads
 	# more of the same source) can find it — even for a block that failed to import.
 	_ns_source[entry["ns"]] = entry["source"]
-	var ok := imp.import_block(entry["ns"], entry["id"], _pending_names[i]) != null
+	last_imported = imp.import_block(entry["ns"], entry["id"], _pending_names[i])
+	last_imported_library = lib
+	var ok := last_imported != null
 	if ok:
 		imported_count += 1
 		_touched[lib.name] = lib   # remember to persist it once, in end_import
@@ -312,7 +343,9 @@ func _run_extensions() -> void:
 		if ext == null:
 			continue
 		var lib := _target_library_for(ns)
-		var ctx := MCHealContext.new(lib, _ns_source[ns], ns)
+		var nri: NeiRosterImporter = _nei_by_library.get(lib.name)
+		var legacy_lookup := Callable(nri, "legacy_id_for") if nri != null else Callable()
+		var ctx := MCHealContext.new(lib, _ns_source[ns], ns, legacy_lookup)
 		ext.heal(ctx)
 		ctx.flush_composites()   # block until the threaded composite writes are all on disk
 		warnings.append_array(ctx.warnings)

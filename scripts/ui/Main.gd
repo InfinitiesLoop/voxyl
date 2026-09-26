@@ -60,7 +60,7 @@ func _shortcut_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		KEY_P:   # save the selection as a prefab (P sits on the right, for either hand)
 			if not _inventory.visible:
-				SavePrefabDialog.open(self)
+				SaveRegionDialog.open(self)
 			get_viewport().set_input_as_handled()
 
 func _refresh_history_buttons() -> void:

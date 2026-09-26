@@ -21,6 +21,15 @@ var _warn_summary: Label
 var _warn_box: TextEdit
 var _close_btn: Button
 
+# A little fun instead of a bare progress bar: a filmstrip of the textures scrolling past as
+# they import, with a center marker to sell "looking through a long list" — purely cosmetic,
+# updated on the same cadence as the bar so it costs about what the bar already did.
+const _THUMB_PX := 32
+const _THUMB_GAP := 4
+const _STRIP_LEN := 15   # odd, so one thumbnail sits exactly under the center marker
+var _strip_row: HBoxContainer
+var _recent_textures: Array[Texture2D] = []
+
 func _ready() -> void:
 	title = "Importing Blocks"
 	size = Vector2i(520, 460)
@@ -48,6 +57,8 @@ func _build() -> void:
 	_bar.min_value = 0
 	_bar.value = 0
 	vbox.add_child(_bar)
+
+	vbox.add_child(_build_filmstrip())
 
 	_warn_summary = Label.new()
 	_warn_summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -80,6 +91,12 @@ func run(service: ImportService, selection: Array) -> void:
 		if (i % _BATCH) == 0 or i == total - 1:
 			_bar.value = i + 1
 			_status.text = "Importing %d / %d…" % [i + 1, total]
+			# The just-copied texture's PNG write may still be outstanding on a worker thread
+			# (see MCTexImport.use_threads) — only ever flushed for real at end_import(), well
+			# after this loop. Flush here too, just for the filmstrip's read, so it's not
+			# racing an unwritten file; at most _BATCH writes outstanding, so this is cheap.
+			MCTexImport.flush_writes()
+			_push_texture(service.last_imported, service.last_imported_library)
 			await get_tree().process_frame
 	_status.text = "Saving library…"
 	await get_tree().process_frame
@@ -169,3 +186,64 @@ func _show_warnings(warnings: Array) -> void:
 func _on_close() -> void:
 	dismissed.emit()
 	queue_free()
+
+# A fixed-height strip of recent textures with a center marker line drawn over them — the
+# marker never moves; thumbnails shift in from the right and drop off the left as they import,
+# so whichever one is passing under the marker reads as "the one being looked at right now".
+func _build_filmstrip() -> Control:
+	var clip := Control.new()
+	clip.clip_contents = true
+	clip.custom_minimum_size = Vector2(0, _THUMB_PX)
+	_strip_row = HBoxContainer.new()
+	_strip_row.add_theme_constant_override("separation", _THUMB_GAP)
+	# Right-aligned within a FULL-rect anchor, not a manually-offset one sized to fit the row
+	# itself — at build time the row has no children yet, so anchoring straight to its own
+	# (then-zero) size would freeze it at zero width forever; a Control's size only follows
+	# its children automatically through a Container's own layout, not through one-off anchors.
+	# Full-rect + END alignment hugs new thumbnails to the right, with older ones pushed past
+	# the left edge and clipped by `clip` above as the strip fills — the scrolling look, for free.
+	_strip_row.alignment = BoxContainer.ALIGNMENT_END
+	_strip_row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	clip.add_child(_strip_row)
+	var marker := ColorRect.new()
+	marker.color = Color(1, 1, 1, 0.55)
+	marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	marker.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	marker.offset_left = -1
+	marker.offset_right = 1
+	marker.offset_top = 0
+	marker.offset_bottom = _THUMB_PX
+	clip.add_child(marker)
+	return clip
+
+# Slide a newly-imported block's texture into the strip (front of the array = rightmost/
+# newest), dropping the oldest once it's full. Silently does nothing without a texture — a
+# failed step, or a block whose model has none — so the reel just holds its last frame.
+func _push_texture(bt: BlockType, lib: BlockLibrary) -> void:
+	if bt == null or lib == null:
+		return
+	var tex := _texture_for(bt, lib)
+	if tex == null:
+		return
+	_recent_textures.append(tex)
+	while _recent_textures.size() > _STRIP_LEN:
+		_recent_textures.pop_front()
+	for c in _strip_row.get_children():
+		_strip_row.remove_child(c)
+		c.queue_free()
+	for t in _recent_textures:
+		var r := TextureRect.new()
+		r.texture = t
+		r.custom_minimum_size = Vector2(_THUMB_PX, _THUMB_PX)
+		r.stretch_mode = TextureRect.STRETCH_SCALE
+		r.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		_strip_row.add_child(r)
+
+# Any one texture off the block's model, just for the filmstrip's sake — which face doesn't
+# matter, this is decorative, not a real preview.
+func _texture_for(bt: BlockType, lib: BlockLibrary) -> Texture2D:
+	var model := lib.get_block_model(bt.model_id)
+	if model == null or model.textures.is_empty():
+		return null
+	var asset := lib.get_texture_asset(str(model.textures.values()[0]))
+	return BlockTextureCache.face_texture(asset) if asset != null else null

@@ -26,11 +26,15 @@ var _img_cache := {}
 # them. The encode is the bulk of a big heal's cost, and each composite is an independent file, so
 # it parallelizes cleanly across cores.
 var _write_tasks: Array[int] = []
+# registry (String) -> this install's live numeric block id (int), or unset if this import ran
+# without NEI dumps behind it. See NeiRosterImporter.legacy_id_for.
+var _legacy_id_lookup := Callable()
 
-func _init(lib: BlockLibrary, src: MCAssetSource, namespace_id: String) -> void:
+func _init(lib: BlockLibrary, src: MCAssetSource, namespace_id: String, legacy_id_lookup := Callable()) -> void:
 	library = lib
 	source = src
 	ns = namespace_id
+	_legacy_id_lookup = legacy_id_lookup
 
 # ---------------------------------------------------------------------------
 # Textures
@@ -173,7 +177,8 @@ func add_cube(name: String, dir_to_texture: Dictionary, color: Color,
 # it, never a guess). `orient` only matters for a slab/stairs/log-shaped semantic.
 func confirm_registry(bt: BlockType, registry: String, meta: int, mod: String, display: String,
 		orient := "") -> void:
-	McId.set_registry_id(bt, registry, meta, orient, true, mod, display)
+	var legacy_id := int(_legacy_id_lookup.call(registry)) if _legacy_id_lookup.is_valid() else -1
+	McId.set_registry_id(bt, registry, meta, orient, true, mod, display, legacy_id)
 
 # A block-type name not yet taken in this library, suffixing " 2", " 3", … on collision. Lets
 # an extension use human display names (which can repeat across machines) as block names safely.

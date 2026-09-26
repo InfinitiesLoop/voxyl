@@ -37,6 +37,7 @@ extends RefCounted
 
 const _ITEM_HEADER := ["Name", "ID", "Has Block", "Mod", "Class", "Display Name"]
 const _ITEMPANEL_HEADER := ["Item Name", "Item ID", "Item meta", "Has NBT", "Display Name"]
+const _BLOCK_HEADER := ["Name", "ID", "Has Item", "Mod", "Class", "Display Name"]
 
 var _library: BlockLibrary
 var _sources_by_ns := {}     # lowercased real namespace -> MCMultiSource (every jar/dir providing it)
@@ -45,6 +46,13 @@ var _real_ns_by_norm := {}   # _norm(real namespace) -> the real namespace strin
 var _by_identity := {}       # "registry@meta" -> existing BlockType (for idempotent reimport)
 var _warned_missing_ns := {} # namespace -> true (warn once per mod, not once per row)
 var _dropped_by_mod := {}    # mod label -> count of new identities dropped for no texture match
+var _placeable := {}         # registry -> {mod, ns, legacy_id}, every item.csv Has-Block row —
+                              # not just the confirmed roster — so a heal extension confirming a
+                              # registry it never saw a roster row for (see GTNHExtension) can
+                              # still look up this install's real numeric id for it.
+var _block_ids := {}         # registry -> numeric id, from block.csv — EVERY registered block,
+                              # item-backed or not (see load_block_csv). Checked before
+                              # _placeable in legacy_id_for since it's the more complete source.
 
 # The parsed roster: mod label -> Array of { registry, meta, mod, display, ns }.
 var _rows_by_mod := {}
@@ -96,6 +104,7 @@ func load_dumps(dumps_dir: String) -> String:
 			continue   # itempanel.csv lists every item, not just placeable ones
 		row["mod"] = owner["mod"]
 		row["ns"] = owner["ns"]
+		row["legacy_id"] = owner["legacy_id"]
 		var mod: String = row["mod"]
 		if not _rows_by_mod.has(mod):
 			_rows_by_mod[mod] = []
@@ -121,7 +130,9 @@ func _read_placeable(path: String):
 		if str(row[2]) != "true":
 			continue
 		var registry := str(row[0])
-		out[registry] = {"mod": str(row[3]), "ns": MCTexImport.split_ref(registry)["ns"]}
+		var legacy_id := int(row[1]) if str(row[1]).is_valid_int() else -1
+		out[registry] = {"mod": str(row[3]), "ns": MCTexImport.split_ref(registry)["ns"], "legacy_id": legacy_id}
+	_placeable = out
 	return out
 
 # Array of { registry, meta, display }, one per itempanel.csv row (mod/ns filled in by
@@ -151,6 +162,36 @@ func _read_item_panel(path: String):
 # post-import extension pass) find the same source this importer's texture-attachment used.
 func source_for(ns: String) -> MCAssetSource:
 	return _resolve_source(ns).get("source")
+
+# This install's live numeric block id for `registry`, or -1 if it's in neither dump. Checks
+# block.csv first (every registered block, item-backed or not — see load_block_csv), then
+# falls back to item.csv's own Has-Block rows (load_block_csv is optional; older dumps
+# folders won't have block.csv at all).
+func legacy_id_for(registry: String) -> int:
+	if _block_ids.has(registry):
+		return int(_block_ids[registry])
+	return int(_placeable.get(registry, {}).get("legacy_id", -1))
+
+# Required second pass over block.csv (NEI's "Blocks" dump — Options -> Tools -> Data Dumps ->
+# Blocks), which lists EVERY registered block regardless of whether it has an item form.
+# item.csv/itempanel.csv only ever cover item-backed ones, so this is the only way to get a
+# numeric id for something like ForgeMultipart's own placeholder world block, which nothing
+# crafts or gives out directly — and SchematicaExporter has nothing to fall back to for one of
+# those without it (see BlockLibrary.mc_legacy_ids), so ImportService treats a missing/bad
+# block.csv as a hard failure rather than silently proceeding without it.
+func load_block_csv(dumps_dir: String) -> String:
+	var f := FileAccess.open(dumps_dir.path_join("block.csv"), FileAccess.READ)
+	if f == null:
+		return "couldn't find block.csv — run NEI's Data Dumps (Blocks) too, next to the others"
+	var header := f.get_csv_line()
+	if Array(header) != _BLOCK_HEADER:
+		return "block.csv doesn't look like an NEI block dump (unexpected header)"
+	while not f.eof_reached():
+		var row := f.get_csv_line()
+		if row.size() < 2 or str(row[0]).is_empty() or not str(row[1]).is_valid_int():
+			continue
+		_block_ids[str(row[0])] = int(row[1])
+	return ""
 
 # {source, ns} for a namespace, or {} if none matches — tried exact first (case-insensitive),
 # then normalized (letters+digits only). Many older 1.7.10 mods register blocks under their raw
@@ -209,7 +250,8 @@ func import_entry(row: Dictionary) -> BlockType:
 	var is_new := bt == null
 	if is_new:
 		bt = _library.add_block_type(_unique_name(row))
-	McId.set_registry_id(bt, registry, meta, McId.get_orient(bt), true, mod, str(row["display"]))
+	McId.set_registry_id(bt, registry, meta, McId.get_orient(bt), true, mod, str(row["display"]),
+		int(row.get("legacy_id", -1)))
 	bt.source_namespace = str(row["ns"])
 	_attach_texture(bt, row)
 	if is_new and bt.model_id.is_empty():
