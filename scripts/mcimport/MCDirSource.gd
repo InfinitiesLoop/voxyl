@@ -6,6 +6,12 @@ extends MCAssetSource
 
 var _root: String
 
+# list_files_recursive(rel_dir) result, cached by rel_dir — see MCZipSource's cache for why:
+# NeiRosterImporter calls this once per roster row with the same rel_dir for every row in a
+# mod, so an uncached walk re-hits disk for an identical result thousands of times over on a
+# big mod. The directory isn't expected to change mid-import.
+var _recursive_cache := {}
+
 func _init(assets_root: String) -> void:
 	_root = assets_root
 
@@ -21,8 +27,12 @@ func list_files(rel_dir: String) -> PackedStringArray:
 	return dir.get_files() if dir != null else PackedStringArray()
 
 func list_files_recursive(rel_dir: String) -> PackedStringArray:
+	var cached = _recursive_cache.get(rel_dir)
+	if cached != null:
+		return cached
 	var out := PackedStringArray()
 	_walk_files(rel_dir, "", out)
+	_recursive_cache[rel_dir] = out
 	return out
 
 # Depth-first walk under rel_dir, prefixing each file with its subpath (relative to the

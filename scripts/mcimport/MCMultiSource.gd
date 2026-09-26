@@ -15,6 +15,12 @@ extends MCAssetSource
 
 var _sources: Array[MCAssetSource] = []
 
+# list_files_recursive(rel_dir) result, cached by rel_dir — avoids re-fanning-out to every
+# wrapped source (each already cheap after its own cache, but several sources times many
+# repeat calls still adds up) and re-merging their union every time NeiRosterImporter asks
+# for the same rel_dir across a mod's many rows.
+var _recursive_cache := {}
+
 func _init(sources: Array[MCAssetSource]) -> void:
 	_sources = sources
 
@@ -33,11 +39,16 @@ func list_files(rel_dir: String) -> PackedStringArray:
 	return PackedStringArray(seen.keys())
 
 func list_files_recursive(rel_dir: String) -> PackedStringArray:
+	var cached = _recursive_cache.get(rel_dir)
+	if cached != null:
+		return cached
 	var seen := {}
 	for s in _sources:
 		for f in s.list_files_recursive(rel_dir):
 			seen[f] = true
-	return PackedStringArray(seen.keys())
+	var out := PackedStringArray(seen.keys())
+	_recursive_cache[rel_dir] = out
+	return out
 
 func has_file(rel: String) -> bool:
 	for s in _sources:

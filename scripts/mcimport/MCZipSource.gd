@@ -36,6 +36,9 @@ var _entries := {}
 # Fallback path, only opened lazily if the fast parse fails on this archive.
 var _fallback_reader: ZIPReader
 
+# list_files_recursive(rel_dir) result, cached by rel_dir. See list_files_recursive below.
+var _recursive_cache := {}
+
 func _init(zip_path: String) -> void:
 	_zip_path = zip_path
 	if _parse_index(zip_path):
@@ -190,7 +193,15 @@ func list_files(rel_dir: String) -> PackedStringArray:
 
 # Every file at or below rel_dir, each relative to it ("agon/0.png"). Zip entries are a
 # flat path list, so this is just a prefix scan; directory entries (trailing "/") skipped.
+# Cached by rel_dir: NeiRosterImporter calls this once per roster ROW (every meta of every
+# registry) with the SAME rel_dir for every row in a mod ("<ns>/textures/blocks"), since the
+# match only depends on the namespace, not the row — a big mod (gregtech: ~5000 rows) was
+# re-scanning this archive's full entry list that many times over for an identical result.
+# _files is fixed once _init() returns, so caching is safe for the source's whole lifetime.
 func list_files_recursive(rel_dir: String) -> PackedStringArray:
+	var cached = _recursive_cache.get(rel_dir)
+	if cached != null:
+		return cached
 	var prefix := _full(rel_dir) + "/"
 	var out := PackedStringArray()
 	for full in _files.keys():
@@ -199,6 +210,7 @@ func list_files_recursive(rel_dir: String) -> PackedStringArray:
 		var rest: String = full.substr(prefix.length())
 		if not rest.is_empty() and not rest.ends_with("/"):
 			out.append(rest)
+	_recursive_cache[rel_dir] = out
 	return out
 
 # Immediate children (dirs or files) under a full in-zip prefix. Zip entries are a

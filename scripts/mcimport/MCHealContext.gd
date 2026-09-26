@@ -168,6 +168,13 @@ func add_cube(name: String, dir_to_texture: Dictionary, color: Color,
 	bt.tags = tags
 	return bt
 
+# Confirm a healed block's real Minecraft identity for export (McId.set_registry_id, always
+# `confirmed: true` — a heal binds a registry+meta straight from the NEI roster row that drove
+# it, never a guess). `orient` only matters for a slab/stairs/log-shaped semantic.
+func confirm_registry(bt: BlockType, registry: String, meta: int, mod: String, display: String,
+		orient := "") -> void:
+	McId.set_registry_id(bt, registry, meta, orient, true, mod, display)
+
 # A block-type name not yet taken in this library, suffixing " 2", " 3", … on collision. Lets
 # an extension use human display names (which can repeat across machines) as block names safely.
 func unique_name(base: String) -> String:

@@ -21,6 +21,8 @@ extends MCImportExtension
 const _MODS := {
 	"gregtech": true,
 	"ggfab": true,
+	"etfuturum": true,
+	"catwalks": true,
 }
 
 func handles(ns: String) -> bool:
@@ -29,6 +31,10 @@ func handles(ns: String) -> bool:
 func heal(ctx: MCHealContext) -> void:
 	if ctx.ns == "gregtech":
 		_heal_gregtech(ctx)
+	elif ctx.ns == "etfuturum":
+		_heal_etfuturum(ctx)
+	elif ctx.ns == "catwalks":
+		_heal_catwalks(ctx)
 	_strip_overlay_junk(ctx)
 
 # ---------------------------------------------------------------------------
@@ -302,6 +308,134 @@ func _remove_superseded(ctx: MCHealContext) -> void:
 				break
 		if superseded:
 			ctx.remove_block(bt.name)
+
+# ===========================================================================
+# EtFuturum — vanilla-backport block families the flat import's meta matching can't reach.
+#
+# EtFuturum restores several post-1.7.10 vanilla block families into GTNH, each as ONE
+# registry name with 16 packed metas (mirroring vanilla's own metadata scheme) — but ships
+# every meta's texture as its own color-PREFIXED file (gray_concrete.png, white_concrete.png)
+# rather than the base-name-then-suffix shape the generic importer's meta matching looks for
+# (concrete_7.png, korp_ (4).png: NeiRosterImporter._matches_base requires the registry's own
+# token(s) to come FIRST). So every meta of etfuturum:concrete / concrete_powder fails to
+# match anything and the whole 32-block family (confirmed against the pack's real GTNH 2.9
+# NEI dump) is silently dropped. This binds each meta straight to its own file by color name.
+# The color order is vanilla's own dye/wool metadata order, also confirmed against the dump.
+# ===========================================================================
+
+const _DYE_COLORS := [
+	"white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray",
+	"light_gray", "cyan", "purple", "blue", "brown", "green", "red", "black",
+]
+
+func _heal_etfuturum(ctx: MCHealContext) -> void:
+	_heal_color_packed(ctx, "etfuturum:concrete", "%s_concrete", "%s Concrete")
+	_heal_color_packed(ctx, "etfuturum:concrete_powder", "%s_concrete_powder", "%s Concrete Powder")
+
+# A meta-packed registry whose 16 vanilla-dye-ordered variants each have their own
+# color-prefixed texture file under vanilla's shared "minecraft" domain (see class doc) —
+# one confirmed, uniformly-textured cube per meta. `file_fmt`/`display_fmt` take the color
+# name ("light_blue"); reusable for any other EtFuturum family shaped the same way.
+func _heal_color_packed(ctx: MCHealContext, registry: String, file_fmt: String, display_fmt: String) -> void:
+	for meta in _DYE_COLORS.size():
+		var color_name: String = _DYE_COLORS[meta]
+		var ref := "minecraft:blocks/%s" % (file_fmt % color_name)
+		if not ctx.source_has_texture(ref):
+			continue
+		var tex := ctx.ensure_texture(ref)
+		if tex == null:
+			continue
+		var display := display_fmt % color_name.capitalize()
+		var faces := {
+			BlockModel.Dir.UP: tex.id, BlockModel.Dir.DOWN: tex.id,
+			BlockModel.Dir.NORTH: tex.id, BlockModel.Dir.SOUTH: tex.id,
+			BlockModel.Dir.EAST: tex.id, BlockModel.Dir.WEST: tex.id,
+		}
+		var bt := ctx.add_cube(ctx.unique_name(display), faces, tex.average_color,
+			PackedStringArray(["etfuturum"]))
+		ctx.confirm_registry(bt, registry, meta, "etfuturum", display)
+
+# ===========================================================================
+# Catwalks — thin platform/rail/ladder blocks, critical to a GTNH build, whose per-item
+# textures sit several state-folders deep (lit/tape/nobottom for the catwalk + caged-ladder
+# families) that the flat importer's suffix matching can't peel through; of the pack's own
+# nine placeable roster rows for this mod (item.csv cross-referenced against itempanel.csv —
+# most of the mod's 40+ registry names are unplaceable pure block-states, e.g. the "_lit"/
+# "_tape" catwalk variants), only "Scaffold" survives unaided (its two files sit flat under
+# textures/blocks/, matching the generic face-suffix path). This binds the other eight by
+# hand to their plain (unlit/untaped) textures.
+#
+# NOT a faithful reproduction of the mod's real non-cube geometry — rails, ladders and
+# catwalks aren't cubes in-game, and voxyl has no shape for them yet. This gives each a
+# recognizable, correctly-colored, correctly-export-identified cube stand-in, same spirit as
+# the GregTech machine cubes above; a real thin-platform/rail SHAPE is future work, not this.
+# ===========================================================================
+
+const _CATWALKS_TEX := "catwalks:blocks"
+
+func _heal_catwalks(ctx: MCHealContext) -> void:
+	_heal_catwalks_uniform(ctx, "catwalks:sturdy_rail", 0, "Sturdy Rail", "sturdy_rail/normal")
+	_heal_catwalks_uniform(ctx, "catwalks:sturdy_rail_powered", 0, "Sturdy Powered Rail", "sturdy_rail/booster_off")
+	_heal_catwalks_uniform(ctx, "catwalks:sturdy_rail_detector", 0, "Sturdy Detector Rail", "sturdy_rail/detector_off")
+	_heal_catwalks_uniform(ctx, "catwalks:sturdy_rail_activator", 0, "Sturdy Activator Rail", "sturdy_rail/activator_off")
+	_heal_catwalks_uniform(ctx, "catwalks:support_column", 0, "Support Column", "support")
+	_heal_catwalks_faces(ctx, "catwalks:scaffold", 1, "Builder's Scaffold", {
+		BlockModel.Dir.UP: "scaffold_builders_top", BlockModel.Dir.DOWN: "scaffold_builders_top",
+		BlockModel.Dir.NORTH: "scaffold_builders_side", BlockModel.Dir.SOUTH: "scaffold_builders_side",
+		BlockModel.Dir.EAST: "scaffold_builders_side", BlockModel.Dir.WEST: "scaffold_builders_side",
+	})
+	_heal_catwalks_faces(ctx, "catwalks:catwalk_unlit", 0, "Catwalk", {
+		BlockModel.Dir.UP: "transparent",
+		BlockModel.Dir.DOWN: "catwalk/bottom/plain/no_lights",
+		BlockModel.Dir.NORTH: "catwalk/side/plain/no_lights", BlockModel.Dir.SOUTH: "catwalk/side/plain/no_lights",
+		BlockModel.Dir.EAST: "catwalk/side/plain/no_lights", BlockModel.Dir.WEST: "catwalk/side/plain/no_lights",
+	})
+	# "Tape" isn't a texture swap on the same block — the pack's own NEI dump (block.csv)
+	# registers it as its own block, "catwalks:catwalk_unlit_tape", a real block ID (3101)
+	# distinct from plain catwalk_unlit (3102). No item backs it (nothing crafts an
+	# already-taped catwalk — the tape is applied in-world), so it never surfaces in the
+	# roster's placeable/item-backed listing, but it's a genuine confirmable registry+meta for
+	# export all the same. Public source (thecodewarrior/Catwalk-Mod, GTNH's likely base)
+	# stores render state on the TileEntity rather than exposing a model here, so meta 0 (the
+	# block's only placeable state) is the safe default, same as every other catwalks entry.
+	_heal_catwalks_faces(ctx, "catwalks:catwalk_unlit_tape", 0, "Catwalk (Tape)", {
+		BlockModel.Dir.UP: "transparent",
+		BlockModel.Dir.DOWN: "catwalk/bottom/tape/no_lights",
+		BlockModel.Dir.NORTH: "catwalk/side/tape/no_lights", BlockModel.Dir.SOUTH: "catwalk/side/tape/no_lights",
+		BlockModel.Dir.EAST: "catwalk/side/tape/no_lights", BlockModel.Dir.WEST: "catwalk/side/tape/no_lights",
+	})
+	_heal_catwalks_faces(ctx, "catwalks:cagedLadder_north_unlit", 0, "Caged Ladder", {
+		BlockModel.Dir.UP: "ladder/side/plain/no_lights", BlockModel.Dir.DOWN: "ladder/bottom/plain/no_lights",
+		BlockModel.Dir.NORTH: "ladder/front/plain/no_lights", BlockModel.Dir.SOUTH: "ladder/ladder/plain/no_lights",
+		BlockModel.Dir.EAST: "ladder/side/plain/no_lights", BlockModel.Dir.WEST: "ladder/side/plain/no_lights",
+	})
+
+# The same single texture on all six faces — a plain material stand-in for an item with no
+# meaningful per-face variation available (a rail overlay, a support post).
+func _heal_catwalks_uniform(ctx: MCHealContext, registry: String, meta: int, display: String,
+		tex_path: String) -> void:
+	_heal_catwalks_faces(ctx, registry, meta, display, {
+		BlockModel.Dir.UP: tex_path, BlockModel.Dir.DOWN: tex_path,
+		BlockModel.Dir.NORTH: tex_path, BlockModel.Dir.SOUTH: tex_path,
+		BlockModel.Dir.EAST: tex_path, BlockModel.Dir.WEST: tex_path,
+	})
+
+# One confirmed, per-face-textured cube. `dir_to_path` values are relative to
+# textures/blocks/ (no namespace/subdir prefix, no extension). Skips (with a warning) if any
+# named face's file is missing, rather than binding a partially-textured block.
+func _heal_catwalks_faces(ctx: MCHealContext, registry: String, meta: int, display: String,
+		dir_to_path: Dictionary) -> void:
+	var faces := {}
+	for d in dir_to_path:
+		var ref := "%s/%s" % [_CATWALKS_TEX, dir_to_path[d]]
+		var tex := ctx.ensure_texture(ref)
+		if tex == null:
+			ctx.warnings.append("catwalks: missing texture %s for %s, skipped" % [ref, display])
+			return
+		faces[d] = tex.id
+	var bt := ctx.add_cube(ctx.unique_name(display), faces, _avg(ctx, faces[BlockModel.Dir.NORTH]),
+		PackedStringArray(["catwalks"]))
+	ctx.confirm_registry(bt, registry, meta, "catwalks", display)
 
 # ---------------------------------------------------------------------------
 # Small helpers

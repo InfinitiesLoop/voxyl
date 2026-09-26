@@ -218,14 +218,41 @@ static func _load_palettes() -> Array:
 			out.append(res)
 	return out
 
-# Recursively delete an absolute directory and everything under it.
+# Recursively delete an absolute directory and everything under it. Tries the OS's own
+# recursive-delete command first (one process launch) before falling back to the portable
+# per-file walk, which matters for a library folder holding many thousands of small texture
+# PNGs (a big mod import can leave that many behind) — walking + removing each one through
+# DirAccess is one syscall per file, and on Windows antivirus real-time scanning can inspect
+# every single one, turning what should be instant into minutes. Already only ever runs off
+# the main thread (see purge_trash), so blocking here doesn't freeze the UI either way; this
+# is purely about the wall-clock time before the trash folder is actually reclaimed.
 static func _rm_rf(abs_path: String) -> Error:
+	if _rm_rf_native(abs_path):
+		return OK
+	return _rm_rf_manual(abs_path)
+
+# True on success (including "already gone"); false only signals "fall back to the manual
+# walk" — never a hard failure on its own, since the platform might just not be one of these.
+static func _rm_rf_native(abs_path: String) -> bool:
+	if not DirAccess.dir_exists_absolute(abs_path):
+		return true
+	var exit_code := -1
+	match OS.get_name():
+		"Windows":
+			exit_code = OS.execute("cmd.exe", ["/c", "rd", "/s", "/q", abs_path.replace("/", "\\")], [], true)
+		"macOS", "Linux":
+			exit_code = OS.execute("rm", ["-rf", abs_path], [], true)
+		_:
+			return false
+	return exit_code == 0 and not DirAccess.dir_exists_absolute(abs_path)
+
+static func _rm_rf_manual(abs_path: String) -> Error:
 	var d := DirAccess.open(abs_path)
 	if d == null:
 		return ERR_CANT_OPEN
 	d.include_hidden = true
 	for sub in d.get_directories():
-		var err := _rm_rf(abs_path.path_join(sub))
+		var err := _rm_rf_manual(abs_path.path_join(sub))
 		if err != OK:
 			return err
 	for f in d.get_files():

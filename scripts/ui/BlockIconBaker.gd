@@ -84,6 +84,10 @@ var _slot_mesh: Array[MeshInstance3D] = []
 var use_threads := true
 var _save_tasks: Array[int] = []   # outstanding WorkerThreadPool task ids (disk writes)
 
+# Cap on outstanding disk-write tasks before _bake_next starts waiting on the oldest ones —
+# see _throttle_save_tasks.
+const _MAX_INFLIGHT_SAVES := 256
+
 # Bulk mode (set for the duration of a prebake): warm the DISK cache only. The lazy
 # icon_for() path retains each baked icon as an in-memory ImageTexture and emits
 # icon_ready so a visible cell repaints immediately — right for a handful of on-screen
@@ -294,6 +298,7 @@ func _bake_next() -> void:
 		if use_threads:
 			_save_tasks.append(WorkerThreadPool.add_task(
 				_save_image_worker.bind(img, _disk_path(bt), _safe(bt.name) + "__", prune)))
+			_throttle_save_tasks()
 		else:
 			_save_to_disk(bt, img, prune)
 		if not _bulk:
@@ -364,9 +369,23 @@ func _reconcile_stale(blocks: Array) -> void:
 			if prefixes.has(f.substr(0, f.length() - 20)):
 				dir.remove(f)
 
+# Wait on the OLDEST outstanding disk-write task(s) once the queue passes _MAX_INFLIGHT_SAVES,
+# so a big prebake's writes roughly keep pace with its renders instead of piling up unbounded.
+# Without this, a big import (thousands of newly-confirmed blocks) queued every PNG write and
+# only ever waited on them in _drain_save_tasks() below — one long, silent freeze AFTER the
+# progress bar already read 100%, since rendering (GPU-bound) outran encode+write (I/O-bound,
+# and slower still under e.g. antivirus real-time scanning). Waiting here instead spreads that
+# same total I/O wait across the bake loop's own per-batch frame yields, where the "Baking
+# previews… N/M" label is still visibly advancing. FIFO wait order matches submission order
+# closely enough in practice (WorkerThreadPool mostly processes queued tasks in order); waiting
+# on a not-yet-started task is still correct, just blocks a little longer for that one slot.
+func _throttle_save_tasks() -> void:
+	while _save_tasks.size() > _MAX_INFLIGHT_SAVES:
+		WorkerThreadPool.wait_for_task_completion(_save_tasks.pop_front())
+
 # Block until every dispatched disk-write task has completed, so a caller (prebake) can
 # rely on the PNGs being on disk before it returns. Cheap when use_threads is off (no
-# tasks are ever queued).
+# tasks are ever queued) or when _throttle_save_tasks already kept the queue small.
 func _drain_save_tasks() -> void:
 	for tid in _save_tasks:
 		WorkerThreadPool.wait_for_task_completion(tid)
