@@ -23,6 +23,7 @@ const _MODS := {
 	"ggfab": true,
 	"etfuturum": true,
 	"catwalks": true,
+	"chisel": true,
 }
 
 func handles(ns: String) -> bool:
@@ -35,6 +36,8 @@ func heal(ctx: MCHealContext) -> void:
 		_heal_etfuturum(ctx)
 	elif ctx.ns == "catwalks":
 		_heal_catwalks(ctx)
+	elif ctx.ns == "chisel":
+		_heal_chisel(ctx)
 	_strip_overlay_junk(ctx)
 
 # ---------------------------------------------------------------------------
@@ -436,6 +439,124 @@ func _heal_catwalks_faces(ctx: MCHealContext, registry: String, meta: int, displ
 	var bt := ctx.add_cube(ctx.unique_name(display), faces, _avg(ctx, faces[BlockModel.Dir.NORTH]),
 		PackedStringArray(["catwalks"]))
 	ctx.confirm_registry(bt, registry, meta, "catwalks", display)
+
+# ===========================================================================
+# Chisel — ~75 decorative block families whose per-meta texture the flat import's token-prefix
+# matching can never reach.
+#
+# Chisel (1.7.10, predates blockstate JSON) hardcodes its meta -> texture mapping in Java: each
+# block group is registered via CarvableHelper.addVariation(descKey, meta, texturePath), and the
+# texture path is an artist-chosen name with NO correlation to the registry name or a numeral
+# suffix (chisel:glass meta 1 ships as "glass/terrain-glassbubble.png", meta 3 as
+# "glass/japanese.png") — exactly the shape NeiRosterImporter._matches_base's token-prefix rule
+# can't and shouldn't try to guess at (see that file's class doc). ChiselVariations.VARIATIONS is
+# the ground truth for this — group -> {meta -> texture base name} — extracted once by decompiling
+# every team.chisel.Features$N.class (one per block group) with javap and parsing its
+# addVariation calls; see that file's header for how, and which groups it deliberately excludes as
+# ambiguous (metalOre, voidstone, tallow).
+#
+# Resolving a base name to an actual file still needs a fallback chain, because Chisel's own
+# texture folders aren't internally consistent either: most groups nest their files under
+# "<group>/<name>.png" with the group already baked into the base name (checked as bare, then
+# with an explicit "<group_lowercase>/" prefix for the groups that don't), and several sub-
+# families (columns, pillars, some wall panels) ship a SIDE + TOP pair (foo-side.png/foo-top.png,
+# or a "-ctmv"/"-ctmh" connected-texture variant of the side face) instead of one flat texture —
+# confirmed against the pack's real GTNH 2.5.1 Chisel jar, which resolves ~97% of the extracted
+# table this way; whatever's left (a few dozen truly one-off names) is dropped with a warning,
+# same as any other unmatched roster row.
+# ===========================================================================
+
+const _CHISEL_TEX := "chisel:blocks"
+const _CHISEL_SIDE_SUFFIXES := ["-side", "-ctmv", "-ctmh"]
+
+func _heal_chisel(ctx: MCHealContext) -> void:
+	var lang := _parse_chisel_lang(ctx)
+	for group in ChiselVariations.VARIATIONS:
+		var metas: Dictionary = ChiselVariations.VARIATIONS[group]
+		var registry := "chisel:%s" % group
+		var group_name: String = lang.get("chisel.%s" % group, _prettify(group))
+		for meta in metas:
+			var base: String = metas[meta]
+			var faces := _chisel_faces(ctx, group, base)
+			if faces.is_empty():
+				ctx.warnings.append(
+					"chisel: no texture match for %s meta %d (%s), skipped" % [registry, meta, base])
+				continue
+			var display: String
+			if int(meta) == 0:
+				display = group_name   # meta 0's .desc is often a tooltip, not a name (e.g.
+				                        # "tile.andesite.0.desc=Generates in your world")
+			else:
+				display = lang.get("%s.%d" % [group, meta], "%s %d" % [group_name, meta])
+			var color := _avg(ctx, faces[BlockModel.Dir.NORTH])
+			var bt := ctx.add_cube(ctx.unique_name(display), faces, color,
+				PackedStringArray(["chisel", group.to_lower()]))
+			ctx.confirm_registry(bt, registry, int(meta), "Chisel", display)
+
+# All six faces bound to one texture, or UP/DOWN to a "top" face and the four horizontals to a
+# "side" face for a column/pillar-shaped group — {} if neither resolves (see class doc for the
+# fallback chain).
+func _chisel_faces(ctx: MCHealContext, group: String, base: String) -> Dictionary:
+	var single := _chisel_single(ctx, group, base)
+	if not single.is_empty():
+		return {
+			BlockModel.Dir.UP: single, BlockModel.Dir.DOWN: single,
+			BlockModel.Dir.NORTH: single, BlockModel.Dir.SOUTH: single,
+			BlockModel.Dir.EAST: single, BlockModel.Dir.WEST: single,
+		}
+	return _chisel_pair(ctx, group, base)
+
+func _chisel_candidates(group: String, base: String) -> Array[String]:
+	return [base, "%s/%s" % [group.to_lower(), base]]
+
+func _chisel_single(ctx: MCHealContext, group: String, base: String) -> String:
+	for candidate in _chisel_candidates(group, base):
+		var ref := "%s/%s" % [_CHISEL_TEX, candidate]
+		if ctx.source_has_texture(ref):
+			var tex := ctx.ensure_texture(ref)
+			if tex != null:
+				return tex.id
+	return ""
+
+func _chisel_pair(ctx: MCHealContext, group: String, base: String) -> Dictionary:
+	for candidate in _chisel_candidates(group, base):
+		var top_ref := "%s/%s-top" % [_CHISEL_TEX, candidate]
+		if not ctx.source_has_texture(top_ref):
+			continue
+		for suffix in _CHISEL_SIDE_SUFFIXES:
+			var side_ref := "%s/%s%s" % [_CHISEL_TEX, candidate, suffix]
+			if not ctx.source_has_texture(side_ref):
+				continue
+			var top := ctx.ensure_texture(top_ref)
+			var side := ctx.ensure_texture(side_ref)
+			if top != null and side != null:
+				return {
+					BlockModel.Dir.UP: top.id, BlockModel.Dir.DOWN: top.id,
+					BlockModel.Dir.NORTH: side.id, BlockModel.Dir.SOUTH: side.id,
+					BlockModel.Dir.EAST: side.id, BlockModel.Dir.WEST: side.id,
+				}
+	return {}
+
+# { "chisel.<group>" -> "<group display>", "<group>.<meta>" -> "<variant display>" } parsed
+# straight from Chisel's own shipped en_US.lang (inside its own source, not a sibling file —
+# read_sibling_text is for mod data that lives NEXT to the jar, this lives inside it), keyed to
+# match how _heal_chisel looks them up. "" (missing file) yields an empty map; every lookup above
+# already has a prettified-group-name fallback.
+func _parse_chisel_lang(ctx: MCHealContext) -> Dictionary:
+	var out := {}
+	var text := ctx.source.read_text("chisel/lang/en_US.lang")
+	for raw in text.split("\n"):
+		var line := raw.strip_edges()
+		var eq := line.find("=")
+		if eq < 0:
+			continue
+		var key := line.substr(0, eq).strip_edges()
+		var val := line.substr(eq + 1).strip_edges()
+		if key.begins_with("tile.chisel.") and key.ends_with(".name"):
+			out["chisel.%s" % key.trim_prefix("tile.chisel.").trim_suffix(".name")] = val
+		elif key.begins_with("tile.") and key.ends_with(".desc"):
+			out[key.trim_prefix("tile.").trim_suffix(".desc")] = val
+	return out
 
 # ---------------------------------------------------------------------------
 # Small helpers
