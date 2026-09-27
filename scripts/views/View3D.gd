@@ -110,6 +110,18 @@ var _sky_label_timer: float = 0.0
 var _dirty := false                # true once a flush (incremental or full) is scheduled
 var _dirty_positions := {}         # Vector3i -> true; cells needing a node rebuild
 var _full_rebuild_pending := false
+var _flushing := false             # a _flush_dirty coroutine is currently running (maybe across frames)
+
+# A rebuild/incremental flush touching at least this many cells splits into batches across
+# frames (see _rebuild, _flush_dirty_inner) instead of one unbroken loop, so opening a big
+# project (or a palette edit that reaches thousands of cells) doesn't freeze the window for
+# the whole span. Below this it's cheap enough to just do in one frame as before — no bar
+# flicker for routine edits.
+const _PROGRESS_THRESHOLD := 1500
+const _REBUILD_BATCH := 400        # cells touched per frame once batching kicks in
+var _progress_panel: Control
+var _progress_bar: ProgressBar
+var _progress_label: Label
 
 # --- Placement animation (bulk builds) -------------------------------------
 # A bulk tool writes its blocks to the data immediately, then asks for a quick reveal:
@@ -286,6 +298,8 @@ func _ready() -> void:
 	_setup_viewport()
 	_setup_overlay()
 	_setup_tool_overlays()
+	if not offscreen:
+		_setup_progress_overlay()
 	VoxelWorld.project_opened.connect(_on_project_opened)
 	# Batches placed by agents (VoxelWorld.apply_edits) get the same reveal as the user's own.
 	VoxelWorld.placement_fx_requested.connect(func(steps: Array): if not offscreen: _animate_placement(steps))
@@ -599,6 +613,44 @@ func _setup_overlay() -> void:
 	_overlay.visible = false
 	_overlay.draw.connect(_draw_overlay)
 	add_child(_overlay)
+
+# A small "building view…" indicator shown only while a batched rebuild is in flight (see
+# _rebuild/_flush_dirty_inner) — never intercepts input, so flying/orbiting during a big
+# rebuild still works.
+func _setup_progress_overlay() -> void:
+	_progress_panel = PanelContainer.new()
+	_progress_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_progress_panel.visible = false
+	_progress_panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_progress_panel.position = Vector2(-140, 10)
+	_progress_panel.custom_minimum_size = Vector2(280, 0)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 4)
+	_progress_panel.add_child(vbox)
+	_progress_label = Label.new()
+	_progress_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(_progress_label)
+	_progress_bar = ProgressBar.new()
+	_progress_bar.min_value = 0
+	_progress_bar.show_percentage = false
+	vbox.add_child(_progress_bar)
+	add_child(_progress_panel)
+
+var _progress_base_label := ""
+
+func _show_progress(total: int, label_text: String) -> void:
+	_progress_base_label = label_text
+	_progress_bar.max_value = maxi(total, 1)
+	_progress_bar.value = 0
+	_progress_label.text = "%s (0 / %d)" % [label_text, total]
+	_progress_panel.visible = true
+
+func _update_progress(done: int, total: int) -> void:
+	_progress_bar.value = done
+	_progress_label.text = "%s (%d / %d)" % [_progress_base_label, done, total]
+
+func _hide_progress() -> void:
+	_progress_panel.visible = false
 
 # ---------------------------------------------------------------------------
 # Skybox presets
@@ -1485,9 +1537,11 @@ func _schedule_flush() -> void:
 		return
 	if not _dirty:
 		_dirty = true
-		call_deferred("_flush_dirty")
+		if not _flushing:   # a running flush will notice this new dirty state itself (see below)
+			call_deferred("_flush_dirty")
 
-# Bring the view up to date now (the capture path calls this before it renders).
+# Bring the view up to date now (the capture path calls this before it renders). Offscreen
+# views never batch (see _rebuild/_flush_dirty_inner), so this always completes in one call.
 func flush_pending() -> void:
 	if _dirty:
 		_flush_dirty()
@@ -1496,17 +1550,37 @@ func flush_pending() -> void:
 # bulk tool or a multi-block undo/redo step, each emitting block_changed per cell) into
 # one deferred flush. A pending full rebuild wins outright since it already covers every
 # dirty position.
+#
+# A big flush (see _PROGRESS_THRESHOLD) spans multiple frames via awaits inside
+# _flush_dirty_inner, so an edit that arrives mid-flush (_schedule_flush firing again while
+# _flushing is already true) can't just call_deferred another overlapping run — instead it
+# sets _dirty again and this loop picks it up once the current pass finishes.
 func _flush_dirty() -> void:
+	if _flushing:
+		return
+	# A view can be call_deferred'd here (from _ready(), an edit, a palette change) and then
+	# detached before the deferred call actually runs — closing a pane, switching layouts on
+	# project open, and apply_preset's re-tiling all remove_child a view synchronously while
+	# its queue_free (if any) and this deferred flush are still pending. get_tree() isn't safe
+	# to call on a detached node (that's the crash this guards against); a detached view has
+	# nothing visible to rebuild for anyway, so just skip it.
+	if not is_inside_tree():
+		return
+	_flushing = true
 	# Every cell asks the palette what its semantic resolves to (several times over) and looks
-	# its model up by id; nothing can change mid-flush, so each is resolved once per pass.
+	# its model up by id; nothing else touches the data while a pass is running (see above),
+	# so each is resolved once per pass.
 	_begin_source()
 	VoxelWorld.begin_resolve_memo()
 	_flush_memo_live = true
-	_flush_dirty_inner()
+	while _dirty:
+		_dirty = false
+		await _flush_dirty_inner()
 	_flush_memo_live = false
 	_flush_memo.clear()
 	VoxelWorld.end_resolve_memo()
 	_end_source()
+	_flushing = false
 
 # Per-flush lookups (see _flush_dirty). Outside a flush they go straight through.
 var _flush_memo := {}
@@ -1531,11 +1605,10 @@ func _semantic_model(semantic: String) -> BlockModel:
 	return _flush_memo[key]
 
 func _flush_dirty_inner() -> void:
-	_dirty = false
 	if _full_rebuild_pending:
 		_full_rebuild_pending = false
 		_dirty_positions.clear()
-		_rebuild()
+		await _rebuild()
 		return
 	if _dirty_positions.is_empty():
 		return
@@ -1543,9 +1616,24 @@ func _flush_dirty_inner() -> void:
 	_dirty_positions.clear()
 	if not _project():
 		return
-	var data := _project().data
-	for pos: Vector3i in positions:
-		_update_cell_node(pos, data)
+	var target := _project()
+	var data := target.data
+	if offscreen or positions.size() < _PROGRESS_THRESHOLD:
+		for pos: Vector3i in positions:
+			_update_cell_node(pos, data)
+	else:
+		_show_progress(positions.size(), "Updating view…")
+		for i in positions.size():
+			_update_cell_node(positions[i], data)
+			if (i % _REBUILD_BATCH) == 0 or i == positions.size() - 1:
+				_update_progress(i + 1, positions.size())
+				await get_tree().process_frame
+				if not is_instance_valid(self):
+					return
+				if not is_inside_tree() or _project() != target:
+					_hide_progress()
+					return
+		_hide_progress()
 	# Re-apply emphasis/guide the same way a full rebuild would (both are cheap: emphasis
 	# only touches the nodes that exist, guide only resizes a 4-vertex plane).
 	if _slice_active:
@@ -1580,6 +1668,14 @@ func _on_workspace_changed() -> void:
 	_textured_model_meshes.clear()
 	_schedule_appearance_check()
 
+# Rebuilds every render node from scratch (project open, a block-type/library edit, or any
+# other structural change wide enough that _apply_appearance_diff gave up and fell back
+# here). At project-open scale (tens of thousands of cells) this used to be one unbroken
+# loop that froze the window for the whole rebuild; above _PROGRESS_THRESHOLD it now yields
+# to the engine every _REBUILD_BATCH cells instead, with a progress bar, so the rest of the
+# UI (including that bar) actually repaints while it runs. Offscreen views (CaptureService,
+# prefab thumbnails) never batch — flush_pending() needs them fully caught up before the
+# frame it's called in reads back, and their builds are small stand-ins anyway.
 func _rebuild() -> void:
 	_dirty = false
 	_ghost_mesh_key = ""  # block appearance may have changed; rebuild the ghost mesh lazily
@@ -1599,19 +1695,37 @@ func _rebuild() -> void:
 	_surface_mats.clear()
 	if not _project():
 		return
-	var data := _project().data
+	var target := _project()
+	var data := target.data
 	_cut_box = _wanted_cut_box()
 	var cut_on := not _cut_box.is_empty()
-	for pos: Vector3i in data.cells.keys():
+	var positions := data.cells.keys()
+	var batching := not offscreen and positions.size() >= _PROGRESS_THRESHOLD
+	if batching:
+		_show_progress(positions.size(), "Building view…")
+	for i in positions.size():
+		var pos: Vector3i = positions[i]
 		var cell: BlockCell = data.cells[pos]
 		var semantic: String = cell.type_id
-		if semantic.is_empty():
-			continue
-		var node := _build_cell_node(pos, cell, semantic)
-		if cut_on and _in_cut(pos):
-			node.visible = false
-		_voxel_root.add_child(node)
-		_cell_nodes[pos] = node
+		if not semantic.is_empty():
+			var node := _build_cell_node(pos, cell, semantic)
+			if cut_on and _in_cut(pos):
+				node.visible = false
+			_voxel_root.add_child(node)
+			_cell_nodes[pos] = node
+		if batching and ((i % _REBUILD_BATCH) == 0 or i == positions.size() - 1):
+			_update_progress(i + 1, positions.size())
+			await get_tree().process_frame
+			# The view (or its project) may have moved on while this was suspended — a pane
+			# closed mid-rebuild, or the user switched projects again before this one
+			# finished. Either way the in-flight result is stale; a fresh rebuild for
+			# whatever's current has already been (or will be) scheduled separately.
+			if not is_instance_valid(self) or not is_inside_tree() or _project() != target:
+				if is_instance_valid(self):
+					_hide_progress()
+				return
+	if batching:
+		_hide_progress()
 	# Re-apply emphasis if a rebuild happened while choosing a slice (e.g. an edit
 	# in another view, or a palette change).
 	if _slice_active:
