@@ -48,6 +48,7 @@ func _run() -> void:
 	await _test_http()
 	await _test_build()
 	await _test_prefabs()
+	await _test_semantic_rename()
 	await _test_nei_roster_import_tool()
 	McpServer.stop()
 
@@ -516,6 +517,68 @@ func _test_prefabs() -> void:
 	_check("prefab_delete", not deleted["_is_error"] and VoxelWorld.workspace.get_prefab("Bench") == null
 		and not FileAccess.file_exists(PrefabStore.path_for("Bench")))
 	_check("placed copies stay", data.get_block(Vector3i(10, 1, 0)) == "Core")
+
+# --- Semantic rename --------------------------------------------------------------------
+
+func _test_semantic_rename() -> void:
+	print("-- semantic_rename")
+	await _tool("palette_create", {"name": "Rename Pal", "entries": [{"semantic": "Birch Trunk", "block": "stone"}]})
+	# A second palette that already has BOTH names — the collision this tool must refuse.
+	await _tool("palette_create", {"name": "Collision Pal", "entries": [
+		{"semantic": "Birch Trunk", "block": "stone"}, {"semantic": "Tree Trunk", "block": "stone"}]})
+
+	await _tool("project_create", {"name": "Rename A", "scratch": true, "palettes": ["Rename Pal"]})
+	await _tool("cells_set", {"cells": [{"pos": [0, 0, 0], "semantic": "Birch Trunk"}, {"pos": [1, 0, 0], "semantic": "Birch Trunk"}]})
+	await _tool("hotbar_set", {"slots": ["Birch Trunk"]})
+
+	await _tool("project_create", {"name": "Rename B", "palettes": ["Rename Pal"]})
+	await _tool("cells_set", {"cells": [{"pos": [5, 0, 0], "semantic": "Birch Trunk"}]})
+	await _tool("hotbar_set", {"slots": ["Birch Trunk"]})
+	await _tool("prefab_save", {"name": "Rename Prefab", "region": {"min": [5, 0, 0], "max": [5, 0, 0]}})
+
+	await _tool("project_open", {"name": "Rename A"})
+	_check("back on Rename A", VoxelWorld.active_project.name == "Rename A")
+
+	var preview := await _tool("semantic_rename", {"from": "Birch Trunk", "to": "Tree Trunk", "dry_run": true})
+	_check("dry_run touches nothing", VoxelWorld.active_project.data.get_block(Vector3i(0, 0, 0)) == "Birch Trunk")
+	_check("dry_run finds both projects", Array(preview["projects"]).has("Rename A") and Array(preview["projects"]).has("Rename B"))
+	_check("dry_run finds the prefab", Array(preview["prefabs"]) == ["Rename Prefab"])
+	_check("dry_run would rename the clean palette but not the colliding one",
+		Array(preview["palettes"]) == ["Rename Pal"]
+		and (preview["problems"] as Array).any(func(p: String) -> bool: return p.contains("Collision Pal")))
+
+	var out := await _tool("semantic_rename", {"from": "Birch Trunk", "to": "Tree Trunk"})
+	_check("renamed in both projects and the prefab", not out["_is_error"]
+		and Array(out["projects"]).has("Rename A") and Array(out["projects"]).has("Rename B")
+		and Array(out["prefabs"]) == ["Rename Prefab"])
+	_check("renamed the one clean palette only", Array(out["palettes"]) == ["Rename Pal"])
+	_check("reports the colliding palette as a problem, not a silent merge",
+		(out["problems"] as Array).any(func(p: String) -> bool: return p.contains("Collision Pal")))
+	_check("warns that 'Tree Trunk' already existed elsewhere (Collision Pal's own entry)",
+		(out.get("warnings", []) as Array).any(func(w: String) -> bool: return w.contains("Tree Trunk")))
+
+	_check("Rename A's cells followed the rename",
+		VoxelWorld.active_project.data.get_block(Vector3i(0, 0, 0)) == "Tree Trunk"
+		and VoxelWorld.active_project.data.get_block(Vector3i(1, 0, 0)) == "Tree Trunk")
+	_check("Rename A's live hotbar followed the rename", VoxelWorld.hotbar[0] == "Tree Trunk")
+
+	var opened_b := await _tool("project_open", {"name": "Rename B"})
+	_check("Rename B's cells followed the rename (written straight to disk while inactive)",
+		not opened_b["_is_error"] and VoxelWorld.active_project.data.get_block(Vector3i(5, 0, 0)) == "Tree Trunk")
+	_check("Rename B's hotbar followed the rename too", VoxelWorld.hotbar[0] == "Tree Trunk")
+
+	var pf := await _tool("prefab_get", {"name": "Rename Prefab"})
+	_check("the prefab's cells followed the rename", (pf["semantics"] as Dictionary).has("Tree Trunk")
+		and not (pf["semantics"] as Dictionary).has("Birch Trunk"))
+
+	var clean_pal := await _tool("palette_get", {"name": "Rename Pal"})
+	var clean_names := (clean_pal["entries"] as Array).map(func(e: Dictionary) -> String: return str(e["semantic"]))
+	_check("the clean palette's entry was renamed", clean_names.has("Tree Trunk") and not clean_names.has("Birch Trunk"))
+
+	var collided_pal := await _tool("palette_get", {"name": "Collision Pal"})
+	var collided_names := (collided_pal["entries"] as Array).map(func(e: Dictionary) -> String: return str(e["semantic"]))
+	_check("the colliding palette was left alone (no silent merge)",
+		collided_names.has("Birch Trunk") and collided_names.has("Tree Trunk"))
 
 func _test_nei_roster_import_tool() -> void:
 	print("-- nei_roster_import over MCP")

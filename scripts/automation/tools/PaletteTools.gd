@@ -34,6 +34,17 @@ static func register(reg: McpRegistry) -> void:
 		"Delete a palette (not the built-in Default). Requires confirm: true.",
 		{"properties": {"name": {"type": "string"}, "confirm": {"type": "boolean"}}, "required": ["name", "confirm"]},
 		_palette_delete, {"mutates": true})
+	reg.add("semantic_rename",
+		"Safely rename a semantic across the whole workspace: every project's placed cells (plain blocks and shaped parts) and hotbar, and every prefab's cells — then, unless `palettes` says otherwise, the semantic_name of every palette entry that maps it. Unlike palette_update's `rename` (which only relabels one palette entry and leaves every already-placed use pointing at the old name, rendering undecided), this repoints everything so nothing breaks. Refuses to merge two distinct entries: if a palette in scope already has a different entry named `to`, that palette is left alone and noted in `problems`. `warnings` flags when `to` is already used somewhere (a project, prefab or out-of-scope palette) this call won't touch, since after the rename both names' uses become indistinguishable. dry_run:true reports what would be touched without changing anything.",
+		{"properties": {
+			"from": {"type": "string"},
+			"to": {"type": "string"},
+			"palettes": {
+				"description": "Which palettes to also rename the entry in (only ones that actually have a `from` entry are touched). Omit or \"all\" = every one of them; \"none\" = leave palette entries alone; a name or array of names = just those.",
+				"anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+			},
+			"dry_run": {"type": "boolean"},
+		}, "required": ["from", "to"]}, _semantic_rename, {"mutates": true})
 	reg.add("project_palettes_set",
 		"Set the open project's palette stack, bottom to top (the last palette that maps a semantic wins). Empty hotbar slots fill from the new semantics.",
 		{"properties": {
@@ -215,6 +226,41 @@ static func _palette_delete(args: Dictionary) -> Dictionary:
 		return McpRegistry.fail("read_only", "the built-in palette can't be deleted")
 	VoxelWorld.remove_palette(p)
 	return {"deleted": p.name}
+
+static func _semantic_rename(args: Dictionary) -> Dictionary:
+	var from_n := str(args.get("from", "")).strip_edges()
+	var to_n := str(args.get("to", "")).strip_edges()
+	if from_n.is_empty() or to_n.is_empty():
+		return McpRegistry.fail("bad_argument", "from and to are both required")
+	if from_n == to_n:
+		return McpRegistry.fail("bad_argument", "from and to are the same")
+	var scope: Variant = args.get("palettes", "all")
+	var dry_run := bool(args.get("dry_run", false))
+	var warnings: Array = []
+	if _semantic_used_anywhere(to_n):
+		warnings.append("'%s' is already used somewhere; after this, its uses and '%s''s become indistinguishable" % [to_n, from_n])
+	var out := VoxelWorld.rename_semantic(from_n, to_n, scope, dry_run)
+	if out.has("error"):
+		return McpRegistry.fail("bad_argument", str(out["error"]))
+	if not warnings.is_empty():
+		out["warnings"] = warnings
+	return out
+
+# Whether `semantic_name` is placed in any project/prefab, or is a palette entry anywhere —
+# used to warn (not block) a rename whose `to` would collide with something the call itself
+# might not touch (e.g. a palette outside its `palettes` scope).
+static func _semantic_used_anywhere(semantic_name: String) -> bool:
+	for project in VoxelWorld.workspace.projects:
+		project.data.ensure_loaded()
+		if project.semantic_counts().has(semantic_name):
+			return true
+	for prefab in VoxelWorld.workspace.prefabs:
+		if prefab.semantic_counts().has(semantic_name):
+			return true
+	for palette in VoxelWorld.workspace.palettes:
+		if palette.get_entry(semantic_name) != null:
+			return true
+	return false
 
 static func _project_palettes_set(args: Dictionary) -> Dictionary:
 	var proj: Variant = McpArgs.project(args)

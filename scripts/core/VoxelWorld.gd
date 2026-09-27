@@ -1280,6 +1280,162 @@ func rename_palette_entry(palette: Palette, entry: PaletteEntry, new_name: Strin
 	_palettes_changed(palette)
 	return true
 
+# ---------------------------------------------------------------------------
+# Semantic rename (see PaletteTools.semantic_rename) — repoints EVERY usage of a semantic
+# name workspace-wide: every project's placed cells (plain blocks and shaped parts) and
+# hotbar, every prefab's cells, and — unless `palette_scope` says otherwise — the
+# semantic_name of every palette entry that currently maps it. rename_palette_entry above
+# only ever relabels the one entry, silently orphaning every place that semantic is already
+# placed; this is the safe path once a semantic is actually in use. Like every mutator here,
+# it only ever touches the semantic id string, never a block/material (Principle 1).
+#
+# palette_scope: "all" (default, every palette with a matching entry), "none" (skip palette
+# entries entirely), a single palette name, or an Array of names.
+# dry_run: report what would be touched without changing anything.
+# ---------------------------------------------------------------------------
+
+func rename_semantic(from_name: String, to_name: String, palette_scope: Variant = "all", dry_run := false) -> Dictionary:
+	var from_n := from_name.strip_edges()
+	var to_n := to_name.strip_edges()
+	if from_n.is_empty() or to_n.is_empty():
+		return {"error": "from and to can't be empty"}
+	if from_n == to_n:
+		return {"projects": [], "prefabs": [], "palettes": [], "problems": []}
+
+	if dry_run:
+		return _rename_semantic_preview(from_n, to_n, palette_scope)
+
+	var touched_projects: Array[String] = []
+	var touched_prefabs: Array[String] = []
+
+	# The active project goes through the normal edit path (apply_edits), so the open
+	# editor's views repaint and the change is undoable, same as region_replace.
+	if active_project != null:
+		active_project.data.ensure_loaded()
+		var aabb := active_project.data.get_used_aabb()
+		if not aabb.is_empty():
+			var edits := RegionOps.replace_edits(active_project.data, aabb[0], aabb[1], from_n, to_n)
+			if not edits.is_empty():
+				apply_edits(edits, "Claude: semantic_rename", {"animate": false})
+				touched_projects.append(active_project.name)
+		# The live hotbar (project.hotbar only mirrors it at save time — see _flush_save).
+		if _rename_in_array(hotbar, from_n, to_n):
+			hotbar_changed.emit()
+			mark_dirty()
+			if not touched_projects.has(active_project.name):
+				touched_projects.append(active_project.name)
+		if selected_semantic == from_n:
+			selected_semantic = to_n
+			selection_changed.emit(to_n)
+
+	# Every other project, written straight to disk — not open, so there's no live view or
+	# undo history to keep in sync.
+	for project in workspace.projects:
+		if project == active_project:
+			continue
+		project.data.ensure_loaded()
+		var hit := _rename_semantic_in_data(project.data, from_n, to_n)
+		if _rename_in_array(project.hotbar, from_n, to_n):
+			hit = true
+		if hit:
+			ProjectStore.save_project(project)
+			touched_projects.append(project.name)
+
+	# Every prefab (fully loaded already — PrefabStore.load_persisted unpacks eagerly).
+	for prefab in workspace.prefabs:
+		if _rename_semantic_in_data(prefab.data, from_n, to_n):
+			PrefabStore.save_prefab(prefab)
+			touched_prefabs.append(prefab.name)
+	if not touched_prefabs.is_empty():
+		prefabs_changed.emit()
+
+	# Palette entries — optional and scoped; never merges two distinct entries by surprise.
+	var renamed_palettes: Array[String] = []
+	var problems: Array[String] = []
+	begin_palette_batch()
+	for palette in workspace.palettes:
+		var e := palette.get_entry(from_n)
+		if e == null or not _semantic_rename_in_scope(palette.name, palette_scope):
+			continue
+		if palette.builtin:
+			problems.append("'%s' is built in; couldn't rename its entry there" % palette.name)
+		elif rename_palette_entry(palette, e, to_n):
+			renamed_palettes.append(palette.name)
+		else:
+			problems.append("'%s' already has an entry named '%s'; left '%s' alone there" % [palette.name, to_n, from_n])
+	end_palette_batch()
+
+	return {"projects": touched_projects, "prefabs": touched_prefabs, "palettes": renamed_palettes, "problems": problems}
+
+# Read-only preview of rename_semantic: which projects/prefabs use `from_n`, which palettes
+# would have their entry renamed (or, in `problems`, why one couldn't be).
+func _rename_semantic_preview(from_n: String, to_n: String, palette_scope: Variant) -> Dictionary:
+	var projects_hit: Array[String] = []
+	for project in workspace.projects:
+		project.data.ensure_loaded()
+		var live_hotbar: Array = hotbar if project == active_project else project.hotbar
+		if project.data.cells.values().any(func(c: BlockCell) -> bool: return _cell_uses(c, from_n)) \
+				or live_hotbar.has(from_n):
+			projects_hit.append(project.name)
+	if active_project != null and not workspace.projects.has(active_project) and not projects_hit.has(active_project.name):
+		active_project.data.ensure_loaded()
+		if active_project.data.cells.values().any(func(c: BlockCell) -> bool: return _cell_uses(c, from_n)) \
+				or hotbar.has(from_n):
+			projects_hit.append(active_project.name)
+	var prefabs_hit: Array[String] = []
+	for prefab in workspace.prefabs:
+		if prefab.data.cells.values().any(func(c: BlockCell) -> bool: return _cell_uses(c, from_n)):
+			prefabs_hit.append(prefab.name)
+	var palettes_hit: Array[String] = []
+	var problems: Array[String] = []
+	for palette in workspace.palettes:
+		var e := palette.get_entry(from_n)
+		if e == null or not _semantic_rename_in_scope(palette.name, palette_scope):
+			continue
+		if palette.builtin:
+			problems.append("'%s' is built in; its entry would stay '%s'" % [palette.name, from_n])
+		elif palette.get_entry(to_n) != null:
+			problems.append("'%s' already has an entry named '%s'; '%s' would stay there" % [palette.name, to_n, from_n])
+		else:
+			palettes_hit.append(palette.name)
+	return {"dry_run": true, "projects": projects_hit, "prefabs": prefabs_hit, "palettes": palettes_hit, "problems": problems}
+
+static func _cell_uses(cell: BlockCell, semantic_name: String) -> bool:
+	if cell.is_shaped():
+		return cell.parts.any(func(p: Dictionary) -> bool: return str(p.get("semantic", "")) == semantic_name)
+	return cell.type_id == semantic_name
+
+static func _rename_in_array(arr: Array, from_n: String, to_n: String) -> bool:
+	var changed := false
+	for i in arr.size():
+		if arr[i] == from_n:
+			arr[i] = to_n
+			changed = true
+	return changed
+
+# Swap `from_n` for `to_n` throughout `data` (plain cells and shaped parts alike), applied
+# directly rather than through apply_edits — for a project/prefab that isn't the live,
+# undo-tracked active project. Reuses RegionOps.replace_edits so both paths share one
+# definition of "what changes".
+static func _rename_semantic_in_data(data: VoxelData, from_n: String, to_n: String) -> bool:
+	var aabb := data.get_used_aabb()
+	if aabb.is_empty():
+		return false
+	var edits := RegionOps.replace_edits(data, aabb[0], aabb[1], from_n, to_n)
+	for e: Dictionary in edits:
+		data.set_cell(e["pos"], e["cell"])
+	return not edits.is_empty()
+
+static func _semantic_rename_in_scope(palette_name: String, scope: Variant) -> bool:
+	if scope is Array:
+		return (scope as Array).any(func(n: Variant) -> bool: return str(n) == palette_name)
+	var s := str(scope)
+	if s.is_empty() or s == "all":
+		return true
+	if s == "none":
+		return false
+	return s == palette_name
+
 # Map an entry to `block_type_name` ("" = undecided). A shaped entry keeps its shape — every
 # placed part of it re-skins, since parts resolve their material through the entry.
 func assign_palette_entry_block(palette: Palette, entry: PaletteEntry, block_type_name: String) -> void:
