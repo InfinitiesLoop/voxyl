@@ -371,6 +371,46 @@ func _test_build() -> void:
 	_check("an explicit pivot that lands between cells is refused",
 		bad_pivot["_is_error"] and str(bad_pivot.get("code", "")) == "bad_argument")
 
+	# Two disjoint "pillars" (same semantic, not touching each other), joined at the
+	# bottom by a wall of a different semantic — the fixture for filter/grow/shrink.
+	await _tool("region_fill", {"region": {"min": [200, 0, 200], "max": [200, 2, 200]}, "semantic": "Mass"})
+	await _tool("region_fill", {"region": {"min": [204, 0, 200], "max": [204, 2, 200]}, "semantic": "Mass"})
+	await _tool("region_fill", {"region": {"min": [201, 0, 200], "max": [203, 0, 200]}, "semantic": "Core"})
+
+	var ad_hoc_stats := await _tool("region_stats", {"region": {"min": [200, 0, 200], "max": [204, 2, 200], "filter": {"whitelist": ["Mass"]}}})
+	_check("an ad hoc region filter isolates the pillars from the connecting wall",
+		int(ad_hoc_stats["cells"]) == 6 and not (ad_hoc_stats["blocks"] as Dictionary).has("Core"))
+
+	var filt_replace := await _tool("region_replace", {"region": {"min": [200, 0, 200], "max": [204, 2, 200], "filter": {"whitelist": ["Mass"]}}, "from": "Mass", "to": "Nope"})
+	_check("region_replace with a filter only touches the whitelisted pillars", int(filt_replace["placed"]) == 6)
+	_check("…the wall is untouched", data.get_cell(Vector3i(202, 0, 200)).type_id == "Core")
+	await _tool("region_replace", {"region": {"min": [200, 0, 200], "max": [204, 2, 200]}, "from": "Nope", "to": "Mass"})
+
+	await _tool("selection_set", {"region": {"min": [200, 0, 200], "max": [204, 2, 200]}})
+	await _tool("selection_filter", {"whitelist": ["Mass"]})
+	var sel_get := await _tool("selection_get", {})
+	_check("selection_filter narrows a persisted selection the same way",
+		int(sel_get["cells"]) == 6 and not (sel_get["blocks"] as Dictionary).has("Core"))
+	var sel_cleared_filter := await _tool("selection_filter", {"clear": true})
+	_check("selection_filter clear removes it", (sel_cleared_filter["filter"] as Dictionary).is_empty())
+
+	await _tool("selection_set", {"region": {"min": [200, 0, 200], "max": [200, 0, 200]}})
+	var grown := await _tool("selection_grow", {"range": 3})
+	_check("grow from one pillar's base doesn't cross the gap into the other pillar",
+		not grown["_is_error"] and int(grown["cells"]) == 3)
+	_check("…and folds what it grew into into the selection's filter",
+		(grown["filter"] as Dictionary).get("whitelist", []) == ["Mass"])
+	var grown_replace := await _tool("region_replace", {"region": {"selection": true}, "from": "Mass", "to": "Nope"})
+	_check("region_replace on the grown selection only touches that pillar", int(grown_replace["placed"]) == 3)
+	_check("…the other pillar is untouched", data.get_cell(Vector3i(204, 0, 200)).type_id == "Mass")
+	await _tool("region_replace", {"region": {"min": [200, 0, 200], "max": [200, 2, 200]}, "from": "Nope", "to": "Mass"})
+
+	await _tool("selection_set", {"region": {"min": [200, 0, 200], "max": [200, 2, 200]}})
+	var shrunk := await _tool("selection_shrink", {"range": 1})
+	_check("shrink erodes a 1-wide column down to nothing (every cell has an outside neighbor)",
+		not shrunk["_is_error"] and int(shrunk["cells"]) == 0)
+	await _tool("selection_clear", {})
+
 	var cut := await _tool("cutaway", {"region": {"min": [0, 3, 0], "max": [9, 1, 9]}})
 	_check("cutaway sets the user's cut box", not cut["_is_error"] and cut["cutaway"] is Dictionary
 		and int(cut["cutaway"]["min"][1]) == 1 and bool(cut["cutaway"]["enabled"]))
