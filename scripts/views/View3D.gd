@@ -295,8 +295,8 @@ func _ready() -> void:
 		add_child(_toolbar)
 	VoxelWorld.about_to_save.connect(_on_about_to_save)
 	VoxelWorld.block_changed.connect(func(p, _s): if source_project == null: _mark_cell_dirty(p))
-	VoxelWorld.palette_stack_changed.connect(func(): _mark_dirty(); if _fly_mode: _overlay.queue_redraw())
-	VoxelWorld.block_type_changed.connect(func(): _mark_dirty(); if _fly_mode: _overlay.queue_redraw())
+	VoxelWorld.palette_stack_changed.connect(func(): _schedule_appearance_check(); if _fly_mode: _overlay.queue_redraw())
+	VoxelWorld.block_type_changed.connect(func(): _schedule_appearance_check(); if _fly_mode: _overlay.queue_redraw())
 	VoxelWorld.selection_changed.connect(func(_s): if _fly_mode: _overlay.queue_redraw())
 	# Keep the build-to-me ghost in sync with anything that changes what it would build.
 	VoxelWorld.tool_changed.connect(func(_t): _refresh_ghost_preview())
@@ -1417,6 +1417,52 @@ func _mark_dirty(_arg = null) -> void:
 	_full_rebuild_pending = true
 	_schedule_flush()
 
+# A palette/block-type signal (palette_stack_changed, block_type_changed, workspace_changed)
+# fired — possibly several times for one edit (e.g. assign_palette_entry_block emits both
+# block_type_changed and workspace_changed) or several times for one batched edit. Rather than
+# react per-signal, coalesce into a single deferred appearance check per frame: by the time it
+# runs, VoxelWorld.get_changed_semantics_since_snapshot() reflects everything that happened.
+var _appearance_check_scheduled := false
+
+func _schedule_appearance_check() -> void:
+	if not _appearance_check_scheduled:
+		_appearance_check_scheduled = true
+		call_deferred("_flush_appearance_check")
+
+func _flush_appearance_check() -> void:
+	_appearance_check_scheduled = false
+	_apply_appearance_diff(VoxelWorld.get_changed_semantics_since_snapshot())
+
+# `changed` is whatever VoxelWorld.get_changed_semantics_since_snapshot() returned: null means
+# it couldn't tell (this view renders a different project than the one that's tracked, or
+# nothing was snapshotted yet) — fall back to the previous, safe behavior of rebuilding every
+# node. A PackedStringArray means exactly those semantics' resolved appearance changed since
+# the last check; an empty one means it checked and nothing actually did (no work left at
+# all — the common case for editing a library/entry nothing currently placed uses).
+func _apply_appearance_diff(changed: Variant) -> void:
+	var proj := _project()
+	if changed == null or proj == null or proj != VoxelWorld.active_project:
+		_mark_dirty()
+		return
+	if _full_rebuild_pending:
+		return  # already covers every cell
+	var arr: PackedStringArray = changed
+	if arr.is_empty():
+		return
+	var lookup := {}
+	for s in arr:
+		lookup[s] = true
+	for pos: Vector3i in proj.data.cells.keys():
+		var cell: BlockCell = proj.data.cells[pos]
+		if cell.parts.is_empty():
+			if lookup.has(cell.type_id):
+				_mark_cell_dirty(pos)
+		else:
+			for part in cell.parts:
+				if lookup.has(str(part.get("semantic", ""))):
+					_mark_cell_dirty(pos)
+					break
+
 # A single cell changed (block_changed). Its own render node needs rebuilding, and so
 # do its 6 neighbors: connecting/multipart blocks derive their connection flags from
 # neighbor occupancy at render time (see _cell_connections), so a neighbor's node can
@@ -1532,7 +1578,7 @@ func _update_cell_node(pos: Vector3i, data: VoxelData) -> void:
 func _on_workspace_changed() -> void:
 	_model_meshes.clear()
 	_textured_model_meshes.clear()
-	_mark_dirty()
+	_schedule_appearance_check()
 
 func _rebuild() -> void:
 	_dirty = false

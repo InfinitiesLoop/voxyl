@@ -55,14 +55,33 @@ enum OrientMode { AUTO, FULL, HORIZONTAL }
 # BlockLibrary on add/import (next_order); the grid shows one library at a time sorted
 # by (order, name). Purely a presentation hint — never touches voxel data.
 @export var order: int = 0
-@export var color: Color = Color(0.5, 0.5, 0.5)
-@export var shape: Shape = Shape.FULL
-@export var model_id: String = ""
-@export var state_map: BlockStateMap = null
+@export var color: Color = Color(0.5, 0.5, 0.5):
+	set(value):
+		color = value
+		revision += 1
+@export var shape: Shape = Shape.FULL:
+	set(value):
+		shape = value
+		revision += 1
+@export var model_id: String = "":
+	set(value):
+		model_id = value
+		revision += 1
+@export var state_map: BlockStateMap = null:
+	set(value):
+		state_map = value
+		revision += 1
 # Explicit orientation constraint (see OrientMode). Defaults to AUTO so pre-existing saved
 # blocks and everything else keep deriving their scheme from state_map/shape.
-@export var orient_mode: OrientMode = OrientMode.AUTO
-@export var tint: Color = Color.WHITE
+@export var orient_mode: OrientMode = OrientMode.AUTO:
+	set(value):
+		orient_mode = value
+		revision += 1
+@export var tint: Color = Color.WHITE:
+	set(value):
+		tint = value
+		revision += 1
+
 # Free-form searchable labels, decoupled from identity exactly like source_namespace: a
 # term hits a tag without the tag being part of the block's name. Import extensions
 # (see MCImportExtension) use these to make a block findable by its real-world name and
@@ -76,6 +95,16 @@ enum OrientMode { AUTO, FULL, HORIZONTAL }
 # the Schematica extension's "mc.*" keys); core and the palette/material layer never interpret
 # it. Most block types carry none.
 @export var metadata: Dictionary = {}
+
+# Bumped whenever any rendered-appearance property above is reassigned (via the setters), or
+# by an explicit bump_revision() call for an in-place edit that doesn't reassign the property
+# (e.g. mutating state_map's own contents). NOT persisted (@export-free): it only needs to
+# differ from a moment ago within THIS running session. Mirrors BlockModel.revision — see
+# there for why callers key caches/snapshots on identity+revision instead of diffing fields.
+var revision: int = 0
+
+func bump_revision() -> void:
+	revision += 1
 
 # The text a search matches a block against: its library, source namespace, leaf name, and
 # tags, space-joined. One place so BlockGrid (the icon browser) and HomeScreen (the library

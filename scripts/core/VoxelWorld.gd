@@ -250,6 +250,7 @@ func request_open_project(project: VoxelProject) -> void:
 func reset_for_tests() -> void:
 	workspace = VoxelWorkspace.new()
 	active_project = null
+	_semantic_appearance_baseline_project = null
 	hotbar.fill("")
 	active_slot = 0
 	has_selection = false
@@ -261,6 +262,7 @@ func reset_for_tests() -> void:
 
 func open(project: VoxelProject) -> void:
 	active_project = project
+	_semantic_appearance_baseline_project = null  # force a fresh baseline under the new stack
 	_load_hotbar_from_project()
 	# Restore the saved region selection (transient anchor always starts clear).
 	has_selection = project.has_selection
@@ -806,6 +808,87 @@ func end_resolve_as() -> void:
 
 func _resolve_project() -> VoxelProject:
 	return _resolve_as.back() if not _resolve_as.is_empty() else active_project
+
+# ---------------------------------------------------------------------------
+# Incremental appearance-change detection
+# ---------------------------------------------------------------------------
+# A palette edit (add/remove a library, remap an entry, tweak a block type it points to)
+# can, worst case, change how every placed cell looks — historically every 3D view treated
+# it that way unconditionally and rebuilt every render node, which is fine at a few hundred
+# blocks and ruinous at ~140k (a big factory build). In practice a single edit usually
+# changes zero or a handful of semantics' resolved appearance. This keeps a rolling snapshot
+# of every in-use semantic's resolved identity and hands out the diff against it on request,
+# so a view can mark dirty only the cells that use one of the changed semantics.
+#
+# Scoped to active_project only: it's the only project expensive enough (an open build with
+# tens of thousands of cells) to be worth this, and it's the only stack this tracks, so a
+# view resolving something else (a prefab preview through its own preferred palettes) gets
+# null back — its cue to fall back to a full rebuild, exactly like before this existed.
+var _semantic_appearance_baseline: Dictionary = {}
+var _semantic_appearance_baseline_project: VoxelProject = null
+var _appearance_baseline_advance_scheduled := false
+
+# The resolved identity a semantic currently renders as — the exact inputs _build_cell_node
+# ultimately reads (geometry, texture, color, tint, orientation scheme all derive from the
+# winning palette entry's block type and model). Object identity plus each side's `revision`
+# catches both "resolves through a different palette entry/block type entirely" and "same
+# block type or model, edited in place" (see BlockType.revision / BlockModel.revision).
+func _semantic_appearance_key(semantic_name: String) -> Array:
+	var r := _resolve_semantic(semantic_name)
+	var bt: BlockType = r.get("bt")
+	var model := get_model_for_semantic(semantic_name)
+	return [
+		r.get("palette"), r.get("name", ""),
+		bt, bt.revision if bt else -1,
+		model, model.revision if model else -1,
+		r.get("shape", ""), r.get("glow", false),
+	]
+
+func _snapshot_semantic_appearance() -> Dictionary:
+	if active_project == null:
+		return {}
+	var snap := {}
+	begin_resolve_memo()
+	for semantic_name in merged_semantic_names():
+		snap[semantic_name] = _semantic_appearance_key(semantic_name)
+	end_resolve_memo()
+	return snap
+
+# Diffs active_project's current resolved appearance against the last-known snapshot and
+# returns exactly the semantic names whose appearance changed (a PackedStringArray, possibly
+# empty — checked and confirmed nothing did). Returns null when the diff can't be trusted yet:
+# no snapshot exists for this project (just opened, or the first call this session) — the
+# caller's cue to fall back to a full rebuild just this once.
+#
+# Pure and repeatable: call it as many times as you like without callers disturbing each
+# other (several 3D views of the same project asking after the same edit all get the same
+# answer) — the baseline itself only advances via a deferred call (see
+# _advance_semantic_appearance_baseline), scheduled at most once per frame, so it stays put
+# until every synchronous caller this frame has read it.
+func get_changed_semantics_since_snapshot() -> Variant:
+	var project := active_project
+	var fresh := _snapshot_semantic_appearance()
+	var result: Variant = null
+	if project != null and project == _semantic_appearance_baseline_project:
+		var names := {}
+		for n in _semantic_appearance_baseline:
+			names[n] = true
+		for n in fresh:
+			names[n] = true
+		var changed := PackedStringArray()
+		for semantic_name in names:
+			if _semantic_appearance_baseline.get(semantic_name) != fresh.get(semantic_name):
+				changed.append(semantic_name)
+		result = changed
+	if not _appearance_baseline_advance_scheduled:
+		_appearance_baseline_advance_scheduled = true
+		call_deferred("_advance_semantic_appearance_baseline")
+	return result
+
+func _advance_semantic_appearance_baseline() -> void:
+	_appearance_baseline_advance_scheduled = false
+	_semantic_appearance_baseline = _snapshot_semantic_appearance()
+	_semantic_appearance_baseline_project = active_project
 
 func _resolve_semantic_uncached(semantic_name: String) -> Dictionary:
 	var result := {}
