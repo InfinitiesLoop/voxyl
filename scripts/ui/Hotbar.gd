@@ -8,7 +8,9 @@ extends Control
 #
 # Interactions:
 #   • Left-click a slot          → make it the active (selected) slot
-#   • Right-click a slot         → clear it
+#   • Right-click a slot         → Edit its palette entry, or clear the slot (same menu
+#                                   shape as right-clicking an entry in the Inventory grid)
+#   • Hover a slot                → tooltip with what it currently resolves to
 #   • 1–9, 0                     → select that slot (slots 11+ via wheel / click)
 #   • E / Del                    → open the inventory to load slots (see InventoryScreen)
 # Blocks are loaded into slots from the inventory screen (Minecraft-style), not from a
@@ -19,7 +21,7 @@ extends Control
 
 const SLOT := 58.0
 const GAP := 6.0
-const CAPTION_H := 16.0  # name strip drawn beneath each slot
+const CAPTION_H := 28.0  # name strip drawn beneath each slot — up to 2 wrapped lines
 
 var _hover_drop := -1  # slot currently under a palette-block drag, or -1
 var _baker: BlockIconBaker  # bakes the real 3D icon for each slot's block
@@ -103,7 +105,7 @@ func _on_gui_input(event: InputEvent) -> void:
 			VoxelWorld.select_slot(slot)
 			accept_event()
 		elif mb.button_index == MOUSE_BUTTON_RIGHT:
-			VoxelWorld.set_hotbar_slot(slot, "")
+			_show_slot_menu(slot, mb.global_position)
 			accept_event()
 
 # Number keys select slots no matter where focus is — but only when an edit view
@@ -120,6 +122,52 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif kc == KEY_0:
 		VoxelWorld.select_slot(9)  # the tenth slot
 		get_viewport().set_input_as_handled()
+
+# ---------------------------------------------------------------------------
+# Right-click menu: edit the slot's palette entry (same action as right-clicking it in
+# the Inventory grid), or clear the slot — the clear-on-right-click shortcut moved into
+# this menu instead of firing immediately, so it doesn't get lost among the added option.
+# ---------------------------------------------------------------------------
+
+func _show_slot_menu(slot: int, global_pos: Vector2) -> void:
+	var semantic := VoxelWorld.hotbar[slot] if VoxelWorld.active_project and slot < VoxelWorld.hotbar.size() else ""
+	if semantic.is_empty():
+		return
+	var found := VoxelWorld.find_palette_and_entry_for_semantic(semantic)
+	var editable: bool = not found.is_empty() and not (found["palette"] as Palette).builtin
+	var menu := PopupMenu.new()
+	if editable:
+		menu.add_item("Edit", 0)
+	menu.add_item("Clear slot", 1)
+	menu.id_pressed.connect(func(id: int):
+		if id == 0:
+			_open_edit_for_slot(found["palette"], found["entry"])
+		else:
+			VoxelWorld.set_hotbar_slot(slot, ""))
+	get_tree().root.add_child(menu)
+	menu.popup_hide.connect(menu.queue_free)
+	menu.popup(Rect2i(Vector2i(global_pos), Vector2i.ZERO))
+
+func _open_edit_for_slot(palette: Palette, entry: PaletteEntry) -> void:
+	var dlg := NewPaletteEntryDialog.new()
+	get_tree().root.add_child(dlg)
+	dlg.setup_edit(palette, entry)
+	dlg.edited.connect(func(e: PaletteEntry, semantic_name: String, block_type_name: String, shape_id: String, glow: bool):
+		VoxelWorld.apply_palette_entry_edit(palette, e, semantic_name, block_type_name, shape_id, glow))
+	dlg.popup_centered(Vector2i(1200, 820))
+
+# ---------------------------------------------------------------------------
+# Tooltip: since slots are hand-drawn (not per-slot Controls), the default tooltip_text
+# can't vary by slot — override the lookup instead, same info as the Inventory grid's
+# cell tooltips.
+# ---------------------------------------------------------------------------
+
+func _get_tooltip(at_position: Vector2) -> String:
+	var slot := _slot_at(at_position)
+	if slot < 0 or not VoxelWorld.active_project:
+		return ""
+	var semantic := VoxelWorld.hotbar[slot] if slot < VoxelWorld.hotbar.size() else ""
+	return VoxelWorld.describe_semantic(semantic) if not semantic.is_empty() else ""
 
 # ---------------------------------------------------------------------------
 # Drag & drop from the palette
@@ -192,11 +240,13 @@ func _draw() -> void:
 			draw_string(font, rect.position + Vector2(4.0, 13.0), key_hint,
 				HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1, 1, 1, 0.65))
 
-# The semantic name assigned to a slot, drawn (and clipped) in the strip below it.
+# The semantic name assigned to a slot, drawn below it — up to 2 lines, wrapped on word
+# boundaries, so a longer name doesn't just get clipped (the tooltip has the full text
+# too, for anything that still doesn't fit).
 func _draw_caption(font: Font, rect: Rect2, semantic: String, is_active: bool) -> void:
 	var col := Color(1, 1, 1, 0.95 if is_active else 0.6)
-	draw_string(font, Vector2(rect.position.x - GAP * 0.5, rect.end.y + 12.0), semantic,
-		HORIZONTAL_ALIGNMENT_CENTER, SLOT + GAP, 10, col)
+	draw_multiline_string(font, Vector2(rect.position.x - GAP * 0.5, rect.end.y + 12.0), semantic,
+		HORIZONTAL_ALIGNMENT_CENTER, SLOT + GAP, 10, 2, col)
 
 # The number-key label for a slot: 1–9 for the first nine, 0 for the tenth, and
 # nothing for any extra slots (reachable only by scroll wheel or click).

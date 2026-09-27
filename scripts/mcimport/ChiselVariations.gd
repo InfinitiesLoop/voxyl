@@ -29,6 +29,35 @@ const VARIATIONS := {
 		5: "andesite/andesitePrism",
 		6: "andesite/andesiteTiles",
 	},
+	# Registered through team.chisel.client.render.SubmapManagerAntiblock, keyed by dye NAME (not
+	# index) at both the desc and texture ends: Features$6.addBlocks() builds "tile.antiBlock." +
+	# ItemDye.field_150921_b[i] + ".desc" and constructs the submap with field_150921_b[i] itself,
+	# which SubmapManagerAntiblock.registerIcons() turns into "chisel:antiblock/<name>-antiBlock"
+	# (getBaseIcon() returns that whole registered icon verbatim -- no cropping -- so the plain
+	# 32x32 file IS the flat appearance; the same-named "-antiBlock-ctm" file is only the extra
+	# connected-texture sheet). field_150921_b is 1.7.10's well-documented ItemDye.dyeColorNames
+	# order (Ink Sac=0 .. Bone Meal=15) -- NOT the wool/carpet meta order the rest of this file's
+	# color tables use -- confirmed against the jar's own 16 antiblock/*-antiBlock.png files and
+	# their name-keyed en_US.lang descs (tile.antiBlock.<name>.desc, not <group>.<meta>.desc, so
+	# _heal_chisel's generic "<group> <meta>" fallback names these instead of the real desc text).
+	"antiBlock": {
+		0: "antiblock/black-antiBlock",
+		1: "antiblock/red-antiBlock",
+		2: "antiblock/green-antiBlock",
+		3: "antiblock/brown-antiBlock",
+		4: "antiblock/blue-antiBlock",
+		5: "antiblock/purple-antiBlock",
+		6: "antiblock/cyan-antiBlock",
+		7: "antiblock/silver-antiBlock",
+		8: "antiblock/gray-antiBlock",
+		9: "antiblock/pink-antiBlock",
+		10: "antiblock/lime-antiBlock",
+		11: "antiblock/yellow-antiBlock",
+		12: "antiblock/light_blue-antiBlock",
+		13: "antiblock/magenta-antiBlock",
+		14: "antiblock/orange-antiBlock",
+		15: "antiblock/white-antiBlock",
+	},
 	"arcane": {
 		0: "arcane/moonEngrave",
 		1: "arcane/moonGlowAnim",
@@ -140,6 +169,29 @@ const VARIATIONS := {
 		8: "concrete/weathered-half",
 		9: "concrete/weathered-block-half",
 		10: "concrete/asphalt",
+	},
+	# Unlike every other group, Features$25.addBlocks() builds this one's 16 texture paths in a
+	# loop ("cubit/" + i) instead of individual addVariation() calls with a literal string per
+	# meta -- there's no per-meta string constant for javap to find, which is why the original
+	# decompile pass missed it. Confirmed straight from the loop bytecode (bipush 16 bound) and
+	# the jar's own assets/chisel/textures/blocks/cubit/0.png..15.png (2.12.3-GTNH).
+	"cubit": {
+		0: "0",
+		1: "1",
+		2: "2",
+		3: "3",
+		4: "4",
+		5: "5",
+		6: "6",
+		7: "7",
+		8: "8",
+		9: "9",
+		10: "10",
+		11: "11",
+		12: "12",
+		13: "13",
+		14: "14",
+		15: "15",
 	},
 	"diamond": {
 		1: "diamond/terrain-diamond-embossed",
@@ -276,8 +328,8 @@ const VARIATIONS := {
 		1: "futura/WIP/screenCyanWIP",
 		2: "futura/WIP/controller",
 		3: "futura/WIP/wavyWIP",
-		4: "futura/WIP/controller",
-		5: "futura/WIP/controller",
+		4: "futura/WIP/controllerPurple",
+		5: "futura/WIP/uberWavy",
 	},
 	"glass": {
 		1: "glass/terrain-glassbubble",
@@ -308,6 +360,31 @@ const VARIATIONS := {
 		13: "glasspane/chinese2",
 		14: "glasspane/japanese",
 		15: "glasspane/japanese2",
+	},
+	# Registered through SubmapManagerSpecialMaterial(String.valueOf(i), MaterialType.GLOTEK):
+	# registerIcons() builds "chisel:glotek/<i>-ctm" (the connected-texture sheet) and, separately,
+	# "chisel:glotek/<i>" for the base icon -- both real files in the jar, and getBaseIcon() on the
+	# latter's TextureSubmap returns it whole (no cropping), and it's a plain flat 16x16 PNG, so
+	# it's exactly the base texture we need. Same story as "neonite" below (same render class,
+	# different MaterialType) and the same shape as "cubit"/"sveltstone" above, just reached
+	# through the connected-texture render path instead of a bare addVariation() call.
+	"glotek": {
+		0: "glotek/0",
+		1: "glotek/1",
+		2: "glotek/2",
+		3: "glotek/3",
+		4: "glotek/4",
+		5: "glotek/5",
+		6: "glotek/6",
+		7: "glotek/7",
+		8: "glotek/8",
+		9: "glotek/9",
+		10: "glotek/10",
+		11: "glotek/11",
+		12: "glotek/12",
+		13: "glotek/13",
+		14: "glotek/14",
+		15: "glotek/15",
 	},
 	"gold": {
 		1: "gold/terrain-gold-largeingot",
@@ -366,6 +443,81 @@ const VARIATIONS := {
 		12: "netherrack/a1-netherrack-meatrock",
 		13: "netherrack/a1-netherrack-red",
 		14: "netherrack/a1-netherrack-wells",
+	},
+	# Plain team.chisel.block.BlockCarvable (no glow/color/submap involved) -- Features$45's loop
+	# builds "hempCrete/concrete/" + General.sGNames[i].replaceAll(" ", "").toLowerCase(), i.e.
+	# the SAME vanilla dye-name array and transform as "woolenClay" below, just a different
+	# texture subfolder. Real per-color 16x16 files confirmed in the jar for every meta.
+	"hempcrete": {
+		0: "hempCrete/concrete/white",
+		1: "hempCrete/concrete/orange",
+		2: "hempCrete/concrete/magenta",
+		3: "hempCrete/concrete/lightblue",
+		4: "hempCrete/concrete/yellow",
+		5: "hempCrete/concrete/lime",
+		6: "hempCrete/concrete/pink",
+		7: "hempCrete/concrete/gray",
+		8: "hempCrete/concrete/lightgray",
+		9: "hempCrete/concrete/cyan",
+		10: "hempCrete/concrete/purple",
+		11: "hempCrete/concrete/blue",
+		12: "hempCrete/concrete/brown",
+		13: "hempCrete/concrete/green",
+		14: "hempCrete/concrete/red",
+		15: "hempCrete/concrete/black",
+	},
+	# Same class, same loop shape as "hempcrete" above (Features$46), just the "sand" subfolder.
+	"hempcretesand": {
+		0: "hempCrete/sand/white",
+		1: "hempCrete/sand/orange",
+		2: "hempCrete/sand/magenta",
+		3: "hempCrete/sand/lightblue",
+		4: "hempCrete/sand/yellow",
+		5: "hempCrete/sand/lime",
+		6: "hempCrete/sand/pink",
+		7: "hempCrete/sand/gray",
+		8: "hempCrete/sand/lightgray",
+		9: "hempCrete/sand/cyan",
+		10: "hempCrete/sand/purple",
+		11: "hempCrete/sand/blue",
+		12: "hempCrete/sand/brown",
+		13: "hempCrete/sand/green",
+		14: "hempCrete/sand/red",
+		15: "hempCrete/sand/black",
+	},
+	# team.chisel.block.BlockCarvableGlow, not BlockCarvableColor -- unlike "antiBlock" above, all
+	# 16 metas of Features$43's FIRST loop bind the exact same literal string ("hexPlating/hexBase")
+	# as their addVariation() texture; only the .desc differs (reusing ItemDye.field_150921_b dye
+	# names purely as flavor text for the tooltip, not as a real color). The visual difference
+	# between metas is a glow-animation overlay (animations/archetype2) this importer doesn't
+	# model, same as every other *_GLOW-family block -- so one shared flat texture across all 16
+	# is the actual correct static appearance, not an approximation. hexBase.png is a real,
+	# standalone 32x32 file (getBaseIcon() returns a submap's registered icon whole, uncropped, so
+	# a larger-than-16x16 base tile is fine, same reasoning as "antiBlock" above).
+	#
+	# The class's SECOND block, "hexLargePlating", is deliberately left out: its addVariation call
+	# uses the 4-arg (String, int, String, int) overload with a "hexPlating/hexNew" base name that
+	# doesn't match any file in the jar (the real file is hexNew-v9.png) plus an extra i+20 index
+	# argument -- almost certainly selecting a sub-icon some other way this table's simple
+	# single-texture-per-meta shape can't express. Binding it wrong would be worse than dropping
+	# it, same standard the rest of this file holds to.
+	"hexPlating": {
+		0: "hexPlating/hexBase",
+		1: "hexPlating/hexBase",
+		2: "hexPlating/hexBase",
+		3: "hexPlating/hexBase",
+		4: "hexPlating/hexBase",
+		5: "hexPlating/hexBase",
+		6: "hexPlating/hexBase",
+		7: "hexPlating/hexBase",
+		8: "hexPlating/hexBase",
+		9: "hexPlating/hexBase",
+		10: "hexPlating/hexBase",
+		11: "hexPlating/hexBase",
+		12: "hexPlating/hexBase",
+		13: "hexPlating/hexBase",
+		14: "hexPlating/hexBase",
+		15: "hexPlating/hexBase",
 	},
 	"holystone": {
 		0: "holystone/holystone",
@@ -722,6 +874,27 @@ const VARIATIONS := {
 		14: "templemossy/tiles-light",
 		15: "templemossy/smalltiles-light",
 	},
+	# Same SubmapManagerSpecialMaterial shape as "glotek" above (Features$62, MaterialType.NEONITE)
+	# -- "chisel:neonite/<i>" is a plain flat 16x16 base icon, "<i>-ctm" the connected-texture
+	# sheet we don't need.
+	"neonite": {
+		0: "neonite/0",
+		1: "neonite/1",
+		2: "neonite/2",
+		3: "neonite/3",
+		4: "neonite/4",
+		5: "neonite/5",
+		6: "neonite/6",
+		7: "neonite/7",
+		8: "neonite/8",
+		9: "neonite/9",
+		10: "neonite/10",
+		11: "neonite/11",
+		12: "neonite/12",
+		13: "neonite/13",
+		14: "neonite/14",
+		15: "neonite/15",
+	},
 	"netherBrick": {
 		1: "netherbrick/a1-netherbrick-brinstar",
 		2: "netherbrick/a1-netherbrick-classicspatter",
@@ -927,6 +1100,28 @@ const VARIATIONS := {
 		14: "stonebrick/ornatepanel",
 		15: "stonebrick/poison",
 	},
+	# Same loop-generated shape as "cubit" above (Features$92.addBlocks(), "sveltstone/" + i) --
+	# missed by the original decompile for the same reason. Confirmed against the loop bytecode
+	# and assets/chisel/textures/blocks/sveltstone/0.png..15.png; display names come straight
+	# from the jar's own en_US.lang (tile.sveltstone.<n>.desc), same as any other group.
+	"sveltstone": {
+		0: "0",
+		1: "1",
+		2: "2",
+		3: "3",
+		4: "4",
+		5: "5",
+		6: "6",
+		7: "7",
+		8: "8",
+		9: "9",
+		10: "10",
+		11: "11",
+		12: "12",
+		13: "13",
+		14: "14",
+		15: "15",
+	},
 	"technical": {
 		0: "technical/scaffoldTransparent",
 		1: "technical/cautiontape",
@@ -1046,5 +1241,28 @@ const VARIATIONS := {
 		4: "waterstone/creeper",
 		5: "waterstone/panel",
 		6: "waterstone/panel-ornate",
+	},
+	# Plain BlockCarvable (Features$111) -- General.sGNames[i].replaceAll(" ", "").toLowerCase()
+	# under "woolenClay/", the same dye-name array and transform "hempcrete"/"hempcretesand" above
+	# use. Registry is "woolen_clay" (confirmed from the class's own registerAll/registerOre
+	# calls) even though the texture folder is camelCase "woolenClay" -- Chisel isn't internally
+	# consistent about this, so the table key has to match the registry, not the folder.
+	"woolen_clay": {
+		0: "woolenClay/white",
+		1: "woolenClay/orange",
+		2: "woolenClay/magenta",
+		3: "woolenClay/lightblue",
+		4: "woolenClay/yellow",
+		5: "woolenClay/lime",
+		6: "woolenClay/pink",
+		7: "woolenClay/gray",
+		8: "woolenClay/lightgray",
+		9: "woolenClay/cyan",
+		10: "woolenClay/purple",
+		11: "woolenClay/blue",
+		12: "woolenClay/brown",
+		13: "woolenClay/green",
+		14: "woolenClay/red",
+		15: "woolenClay/black",
 	},
 }

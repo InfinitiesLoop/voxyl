@@ -276,6 +276,10 @@ func reset_for_tests() -> void:
 
 func open(project: VoxelProject) -> void:
 	active_project = project
+	# Lazily-loaded projects (see ProjectStore.load_persisted) unpack here, so every
+	# subsequent view/edit read of active_project.data is accurate.
+	if project.data != null:
+		project.data.ensure_loaded()
 	_semantic_appearance_baseline_project = null  # force a fresh baseline under the new stack
 	_load_hotbar_from_project()
 	# Restore the saved region selection (transient anchor/filter/mask always start clear).
@@ -939,6 +943,50 @@ func get_shape_glow_for_semantic(semantic_name: String) -> bool:
 
 func is_shaped_semantic(semantic_name: String) -> bool:
 	return not get_shape_id_for_semantic(semantic_name).is_empty()
+
+# A short human-readable description of what a semantic currently resolves to, for
+# tooltips (hotbar slots, …): "Semantic — Shape of Block", "Semantic — Block", or
+# "Semantic — (undecided)" when no palette in the stack maps it to anything yet.
+func describe_semantic(semantic_name: String) -> String:
+	var r := _resolve_semantic(semantic_name)
+	var block_name: String = r.get("name", "")
+	if r.has("shape"):
+		return "%s — %s of %s" % [semantic_name, ShapeCatalog.name_of(str(r["shape"])),
+			block_name if not block_name.is_empty() else "(undecided)"]
+	if not block_name.is_empty():
+		return "%s — %s" % [semantic_name, block_name]
+	return "%s — (undecided)" % semantic_name
+
+# The palette (and its entry) that currently owns `semantic_name` in the active project's
+# stack — same last-wins precedence as _resolve_semantic, but returned even when the entry
+# is still fully undecided (block type unset, no shape), unlike _resolve_semantic which
+# only tracks entries that actually resolve to something visible. Editors that want to open
+# an entry for editing regardless of whether it renders yet (e.g. hotbar right-click) go
+# through this instead of duplicating the palette-stack walk. {} when nothing in the stack
+# defines this semantic.
+func find_palette_and_entry_for_semantic(semantic_name: String) -> Dictionary:
+	var project := _resolve_project()
+	if not project:
+		return {}
+	var result := {}
+	for palette_name in project.palette_names:
+		var palette := workspace.get_palette(palette_name)
+		if not palette:
+			continue
+		var e := palette.get_entry(semantic_name)
+		if e != null:
+			result = {"palette": palette, "entry": e}
+	return result
+
+# Commit an entry-dialog edit (rename + block/shape picks + glow) in one call — shared by
+# every editor that lets an existing entry be edited (Inventory screen's grid, hotbar
+# right-click, …) so "editing an entry" can't drift out of sync between them.
+func apply_palette_entry_edit(palette: Palette, entry: PaletteEntry, semantic_name: String,
+		block_type_name: String, shape_id: String, glow: bool) -> void:
+	if semantic_name != entry.semantic_name:
+		rename_palette_entry(palette, entry, semantic_name)
+	set_palette_entry_picks(palette, entry, block_type_name, shape_id)
+	set_palette_entry_glow(palette, entry, glow)
 
 # The winning palette's library stack for a semantic (for scoped model/texture
 # resolution), or [] when nothing maps it.

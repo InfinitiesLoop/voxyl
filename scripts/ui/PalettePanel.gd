@@ -41,7 +41,6 @@ func set_search_terms(terms: PackedStringArray) -> void:
 func _rebuild(_arg = null) -> void:
 	for child in get_children():
 		child.queue_free()
-	await get_tree().process_frame
 
 	if not VoxelWorld.active_project:
 		return

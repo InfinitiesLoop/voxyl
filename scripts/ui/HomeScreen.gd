@@ -227,6 +227,11 @@ func _make_project_header(project: VoxelProject, expanded: bool) -> Control:
 # The expanded detail body: metadata/stats, rename field, Open + Delete. The preview
 # lives in the header thumbnail — no second copy here.
 func _make_project_detail(project: VoxelProject) -> Control:
+	# Only called for the expanded card, so unpacking a lazily-loaded project's voxel data
+	# here (see ProjectStore.load_persisted) costs nothing until the user actually looks.
+	if project.data != null:
+		project.data.ensure_loaded()
+
 	var info := VBoxContainer.new()
 	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	info.add_theme_constant_override("separation", 6)

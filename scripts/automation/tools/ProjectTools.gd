@@ -35,6 +35,9 @@ static func register(reg: McpRegistry) -> void:
 static func _project_list(_args: Dictionary) -> Dictionary:
 	var out: Array = []
 	for p in VoxelWorld.workspace.projects:
+		# Projects load lazily (see ProjectStore.load_persisted); this tool reports real
+		# counts, so unpack here rather than report stale zeros.
+		p.data.ensure_loaded()
 		var aabb := p.data.get_used_aabb()
 		var d := {"name": p.name, "palettes": Array(p.palette_names), "cells": p.data.cells.size(),
 			"modified": Time.get_datetime_string_from_unix_time(p.modified_at) if p.modified_at > 0 else "",
@@ -81,6 +84,7 @@ static func _project_info(args: Dictionary) -> Dictionary:
 	return _info(p)
 
 static func _info(p: VoxelProject) -> Dictionary:
+	p.data.ensure_loaded()
 	var aabb := p.data.get_used_aabb()
 	var defined := {}
 	for pn in p.palette_names:

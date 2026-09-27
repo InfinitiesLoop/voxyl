@@ -1044,6 +1044,12 @@ func _test_project_persistence() -> void:
 	var q := ws2.get_project("Round Trip")
 	_check("project reloaded from disk", q != null)
 	if q != null:
+		# Loading is lazy (see ProjectStore.load_persisted / VoxelData.mark_lazy): cells
+		# aren't rebuilt from the packed mirror until something actually needs them.
+		_check("reload leaves the data lazy", not q.data.is_loaded())
+		q.data.ensure_loaded()
+		_check("ensure_loaded unpacks it", q.data.is_loaded())
+
 		var expected_stack: Array[String] = ["Default", "Extra"]
 		_check("palette stack round-trips", q.palette_names == expected_stack)
 		_check("cell count round-trips", q.data.cells.size() == 3)
@@ -1106,6 +1112,27 @@ func _test_project_rename_and_timestamps() -> void:
 
 	_check("delete drops the thumbnail too",
 		ProjectStore.delete_project("Gamma") == OK and not ProjectStore.has_thumbnail("Gamma"))
+
+	# Renaming (or otherwise re-saving) a project that was reloaded lazily and never opened
+	# must not wipe its cells: pack() is a no-op while the data is still lazy, so the on-disk
+	# packed mirror — already correct — passes through untouched. Without this, save_project
+	# would flatten the still-empty `cells` over the real data (see VoxelData.pack()).
+	var lazy_ws := VoxelWorkspace.new()
+	var lazy_p := lazy_ws.add_project("Untouched")
+	lazy_p.data.set_block(Vector3i(3, 3, 3), "Base")
+	_check("save lazy-rename fixture ok", ProjectStore.save_project(lazy_p) == OK)
+	var lazy_ws2 := VoxelWorkspace.new()
+	ProjectStore.load_persisted(lazy_ws2)
+	var lazy_q := lazy_ws2.get_project("Untouched")
+	_check("fixture reloads lazily", lazy_q != null and not lazy_q.data.is_loaded())
+	if lazy_q != null:
+		_check("rename without opening ok",
+			ProjectStore.rename_project(lazy_ws2, "Untouched", "Still Untouched"))
+		var lazy_ws3 := VoxelWorkspace.new()
+		ProjectStore.load_persisted(lazy_ws3)
+		var lazy_r := lazy_ws3.get_project("Still Untouched")
+		_check("renamed-without-opening project keeps its cell",
+			lazy_r != null and lazy_r.data.get_block(Vector3i(3, 3, 3)) == "Base")
 
 	_rm_rf(ProjectStore.ROOT)
 	ProjectStore.ROOT = saved_root

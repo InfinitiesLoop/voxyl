@@ -124,9 +124,15 @@ static func has_saved_projects() -> bool:
 			return true
 	return false
 
-# Load every saved project into `workspace`, replacing any same-named project. Each
-# loaded project's voxel data is rehydrated from its packed mirror. Order-insensitive;
-# projects are independent.
+# Load every saved project into `workspace`, replacing any same-named project.
+# Order-insensitive; projects are independent.
+#
+# Each project's voxel data is left packed (lazy): rebuilding `cells` from the packed
+# mirror is an O(cell-count) Dictionary rebuild, and app launch would otherwise pay that
+# cost for every saved project regardless of which one (if any) gets opened this session.
+# VoxelData.ensure_loaded() unpacks it on first real access — see VoxelWorld.open() and
+# VoxelData's accessors. History is small (capped at EditHistory.LIMIT steps) and unpacked
+# eagerly since nothing depends on deferring it.
 static func load_persisted(workspace: VoxelWorkspace) -> void:
 	var dir := DirAccess.open(ROOT)
 	if dir == null:
@@ -141,7 +147,7 @@ static func load_persisted(workspace: VoxelWorkspace) -> void:
 		if project == null:
 			continue
 		if project.data != null:
-			project.data.unpack()
+			project.data.mark_lazy()
 		project.unpack_history()
 		_replace_project(workspace, project)
 

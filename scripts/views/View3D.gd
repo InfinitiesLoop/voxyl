@@ -14,6 +14,9 @@ signal focus_requested
 # TODO: drive this from a user sensitivity setting.
 const DOLLY_STEP := 1.25
 
+# Base fly speed, in cells/second while WASD-flying (before any sprint multiplier).
+const _FLY_SPEED := 15.0
+
 # Uniform scale applied to every voxel mesh. This is a view rendering style, not
 # model geometry: BlockModel elements are authored at true size (a full block fills
 # [0,1]). At 1.0 a full block occupies its whole cell, so adjacent full blocks meet
@@ -25,7 +28,7 @@ const VOXEL_SCALE := 1.0
 const _MOVEMENT_KEYS := [
 	KEY_W, KEY_A, KEY_S, KEY_D,
 	KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT,
-	KEY_SPACE, KEY_SHIFT, KEY_SLASH,
+	KEY_SPACE, KEY_SHIFT, KEY_SLASH, KEY_BACKSLASH,
 ]
 
 # Camera transform
@@ -64,6 +67,15 @@ var _rshift_held := false
 #   mouse thumb button — back or forward, either hand
 var _lctrl_held := false
 var _alt_mouse_held := false
+
+# Sprint: tapping the sprint key while flying doubles fly speed; tapping it again
+# (while still moving) doubles it again, for two levels (2x, 4x). It resets to
+# normal the instant every movement key is released — see _process. Two ways to
+# tap it, so it works for either hand:
+#   left Ctrl — right-handed keyboard (shares the key with alt-placement above;
+#               a quick tap sprints, a hold-while-clicking still alt-places)
+#   \         — left-handed keyboard, neutral of the above
+var _sprint_level := 0
 
 # --- Raycast state ---
 var _target_hit := false
@@ -865,9 +877,29 @@ func _process(delta: float) -> void:
 	if Input.is_key_pressed(KEY_SPACE) or _rctrl_held or _ralt_held: move.y += 1.0
 	if Input.is_key_pressed(KEY_SHIFT) or Input.is_key_pressed(KEY_SLASH): move.y -= 1.0
 	if move.length_squared() > 0.0:
-		_camera_pos += move.normalized() * 10.0 * delta
+		var speed := _FLY_SPEED * pow(2.0, _sprint_level)
+		_camera_pos += move.normalized() * speed * delta
 		_update_camera()
 		_update_crosshair_target()
+	else:
+		_sprint_level = 0
+
+# True while any key that contributes to the fly-move vector above is held, so a
+# sprint tap can tell "tapped while moving" from "tapped at a standstill".
+func _any_fly_movement_key_held() -> bool:
+	return Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP) \
+		or Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN) \
+		or Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT) \
+		or Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT) \
+		or Input.is_key_pressed(KEY_SPACE) or _rctrl_held or _ralt_held \
+		or Input.is_key_pressed(KEY_SHIFT) or Input.is_key_pressed(KEY_SLASH)
+
+# One sprint-key tap while flying and moving adds a level (max 2 = 4x speed);
+# _process resets the level to 0 the instant movement stops.
+func _tap_sprint() -> void:
+	if not _fly_mode or not _any_fly_movement_key_held():
+		return
+	_sprint_level = mini(_sprint_level + 1, 2)
 
 # ---------------------------------------------------------------------------
 # Input
@@ -896,6 +928,10 @@ func _input(event: InputEvent) -> void:
 		elif key.physical_keycode == KEY_CTRL and not key.echo and _lctrl_held != key.pressed:
 			_lctrl_held = key.pressed
 			_refresh_shaped_preview()   # the ghost jumps to the opposite slot while held
+			if key.pressed:
+				_tap_sprint()
+		elif key.keycode == KEY_BACKSLASH and key.pressed and not key.echo:
+			_tap_sprint()
 
 		if key.pressed:
 			if key.keycode == KEY_TAB or key.keycode == KEY_ENTER or key.keycode == KEY_KP_ENTER:
@@ -4549,6 +4585,6 @@ func _draw_overlay() -> void:
 	if not _cut_box.is_empty():
 		_overlay.draw_string(font, Vector2(_overlay.size.x - 14.0, 30.0), "Cutaway on  ·  H/End to show all",
 			HORIZONTAL_ALIGNMENT_RIGHT, -1, 14, Color(1.0, 0.6, 0.5, 0.9))
-	var hint := "WASD move  ·  Space/RCtrl up · Shift// down  ·  LMB erase · RMB place · MMB pick  ·  R rotate (look at face)  ·  Tab slice · 1–0 slot · E inventory · Esc"
+	var hint := "WASD move  ·  Space/RCtrl up · Shift// down  ·  LCtrl/\\ sprint  ·  LMB erase · RMB place · MMB pick  ·  R rotate (look at face)  ·  Tab slice · 1–0 slot · E inventory · Esc"
 	_overlay.draw_string(font, Vector2(10.0, _overlay.size.y - 10.0),
 		hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1,1,1,0.45))

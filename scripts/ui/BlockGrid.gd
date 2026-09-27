@@ -107,7 +107,7 @@ var _header_pool: Array = []         # released header controls kept for reuse
 var _last_row_start: int = -1        # row-index window realized last update; skip if unchanged
 var _last_row_end: int = -1
 
-const _CAPTION_H := 20.0
+const _CAPTION_H := 34.0  # room for up to 2 wrapped lines (see _draw_cell)
 const _H_SEP := 3.0                  # gap between cells in a row
 const _V_SEP := 3.0                  # gap between rows
 const _HEADER_H := 24.0              # height of a section-divider row
@@ -518,9 +518,11 @@ func _draw_cell(cell: Control, item: Item) -> void:
 
 	if show_captions and not item.caption.is_empty():
 		var font := get_theme_default_font()
-		var baseline := cell.size.y - caption_h * 0.5 + 5.0
-		cell.draw_string(font, Vector2(2, baseline), item.caption,
-			HORIZONTAL_ALIGNMENT_CENTER, cell.size.x - 4, 11)
+		# Up to 2 lines, wrapped on word boundaries (draw_multiline_string's default break
+		# flags) rather than truncated — most captions don't fit a cell's width otherwise.
+		var first_baseline := cell.size.y - caption_h + 12.0
+		cell.draw_multiline_string(font, Vector2(2, first_baseline), item.caption,
+			HORIZONTAL_ALIGNMENT_CENTER, cell.size.x - 4, 11, 2)
 
 # The trailing "add new" tile: a dashed-ish outlined square with a centered "+".
 func _draw_add_glyph(cell: Control, area: Rect2) -> void:

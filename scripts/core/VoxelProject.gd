@@ -69,6 +69,7 @@ func unpack_history() -> void:
 
 # Returns all semantic names currently placed in this project's voxel data.
 func used_semantic_names() -> Array[String]:
+	data.ensure_loaded()
 	var seen := {}
 	for cell: BlockCell in data.cells.values():
 		if cell.is_shaped():
@@ -81,9 +82,9 @@ func used_semantic_names() -> Array[String]:
 	return result
 
 # Semantic name → placed count (cells for plain blocks, parts for shaped ones), for the
-# project details breakdown. Reads the live cells dictionary (already unpacked in memory),
-# so it's cheap to call at listing time.
+# project details breakdown.
 func semantic_counts() -> Dictionary:
+	data.ensure_loaded()
 	var counts := {}
 	for cell: BlockCell in data.cells.values():
 		if cell.is_shaped():

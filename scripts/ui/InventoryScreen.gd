@@ -30,6 +30,8 @@ var _grid: BlockGrid
 var _hotbar: Hotbar
 var _tool_strip: ToolsPanel
 var _stack: PalettePanel
+var _palette_title: Label      # which palette the center grid is showing (main-section ask)
+var _palette_details: Label    # right-panel blurb: entry count / builtin note
 var _lib_section: VBoxContainer
 var _armed := false  # only react to the open keys while the editor is on screen
 
@@ -134,15 +136,19 @@ func _build_ui() -> void:
 
 	body.add_child(VSeparator.new())
 
-	var right := VBoxContainer.new()
-	right.add_theme_constant_override("separation", 8)
-	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	right.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	body.add_child(right)
+	# Center column: reserved for the title + the selected palette's blocks (ask: the
+	# library list used to crowd this column, and it wasn't obvious which palette the
+	# grid even belonged to — both fixed by moving library management to its own column
+	# and always naming the palette above the grid).
+	var center := VBoxContainer.new()
+	center.add_theme_constant_override("separation", 6)
+	center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	center.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body.add_child(center)
 
-	_lib_section = VBoxContainer.new()
-	_lib_section.add_theme_constant_override("separation", 4)
-	right.add_child(_lib_section)
+	_palette_title = Label.new()
+	_palette_title.add_theme_font_size_override("font_size", 14)
+	center.add_child(_palette_title)
 
 	_grid = BlockGrid.new()
 	_grid.show_captions = true
@@ -154,7 +160,34 @@ func _build_ui() -> void:
 	# The grid's own search box doubles as the palette-list filter — typing a term also
 	# narrows which palettes show on the left (only ones with a matching entry).
 	_grid.search_changed.connect(func(text: String): _stack.set_search_terms(BlockGrid.split_terms(text)))
-	right.add_child(_grid)
+	center.add_child(_grid)
+
+	body.add_child(VSeparator.new())
+
+	# Right column: details about the selected palette + its library subscriptions —
+	# out of the way of the block grid, but still one glance away.
+	var right := VBoxContainer.new()
+	right.custom_minimum_size.x = 200
+	right.add_theme_constant_override("separation", 6)
+	right.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body.add_child(right)
+
+	var details_title := Label.new()
+	details_title.text = "Palette Details"
+	details_title.add_theme_font_size_override("font_size", 11)
+	details_title.modulate = Color(1, 1, 1, 0.6)
+	right.add_child(details_title)
+
+	_palette_details = Label.new()
+	_palette_details.add_theme_font_size_override("font_size", 12)
+	_palette_details.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	right.add_child(_palette_details)
+
+	right.add_child(HSeparator.new())
+
+	_lib_section = VBoxContainer.new()
+	_lib_section.add_theme_constant_override("separation", 4)
+	right.add_child(_lib_section)
 
 	vbox.add_child(HSeparator.new())
 
@@ -208,6 +241,7 @@ func _on_palette_selected(palette_name: String) -> void:
 	_selected_palette_name = palette_name
 	_refresh_items()
 	_refresh_library_section()
+	_refresh_palette_header()
 
 # Stack changed (palettes added/removed/reordered, or a project just opened): keep the
 # selection if it still resolves, otherwise fall back to the first palette in the stack.
@@ -218,6 +252,28 @@ func _on_stack_changed() -> void:
 		_stack.set_selected(_selected_palette_name)
 	_refresh_items()
 	_refresh_library_section()
+	_refresh_palette_header()
+
+# Names the palette the center grid is showing (main section) and gives the right panel's
+# details blurb its entry count / builtin note — the two things that make it obvious at a
+# glance which palette is on screen and what state it's in.
+func _refresh_palette_header() -> void:
+	if not _palette_title or not _palette_details:
+		return
+	if _selected_palette_name.is_empty():
+		_palette_title.text = "No palette selected"
+		_palette_details.text = ""
+		return
+	_palette_title.text = _selected_palette_name
+	var palette := VoxelWorld.workspace.get_palette(_selected_palette_name) if VoxelWorld.workspace else null
+	if not palette:
+		_palette_details.text = ""
+		return
+	if palette.builtin:
+		_palette_details.text = "Built-in — libraries fixed"
+	else:
+		var count := palette.entries.size()
+		_palette_details.text = "%d %s" % [count, "entry" if count == 1 else "entries"]
 
 # ---------------------------------------------------------------------------
 # Library subscriptions for the selected palette (add / remove / reorder), same recipe
@@ -356,6 +412,7 @@ func _on_entry_right_clicked(key: String, global_pos: Vector2) -> void:
 		elif id == 1:
 			VoxelWorld.remove_palette_entry(palette, entry)
 			_refresh_items()
+			_refresh_palette_header()
 		else:
 			_on_add_entry(entry.block_type_name, true))
 	get_tree().root.add_child(menu)
@@ -390,6 +447,7 @@ func _create_entry(palette: Palette, semantic_name: String, block_type_name: Str
 		if not shape_id.is_empty():
 			VoxelWorld.set_hotbar_slot(VoxelWorld.active_slot, semantic_name)
 	_refresh_items()
+	_refresh_palette_header()
 
 # Right-click "Edit": the same dialog, prefilled — lets the block type / shape (or the
 # semantic name) be changed without leaving the project.
@@ -403,10 +461,7 @@ func _open_edit_entry_dialog(palette: Palette, entry: PaletteEntry) -> void:
 
 func _apply_entry_edit(palette: Palette, entry: PaletteEntry, semantic_name: String,
 		block_type_name: String, shape_id: String, glow: bool) -> void:
-	if semantic_name != entry.semantic_name:
-		VoxelWorld.rename_palette_entry(palette, entry, semantic_name)
-	VoxelWorld.set_palette_entry_picks(palette, entry, block_type_name, shape_id)
-	VoxelWorld.set_palette_entry_glow(palette, entry, glow)
+	VoxelWorld.apply_palette_entry_edit(palette, entry, semantic_name, block_type_name, shape_id, glow)
 	_refresh_items()
 
 # "New", "New 2", "New 3", … — the first that no existing entry on this palette uses.

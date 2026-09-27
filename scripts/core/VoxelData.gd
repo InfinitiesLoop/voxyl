@@ -18,6 +18,27 @@ var cells: Dictionary = {}
 var _aabb_cache: Array = []
 var _aabb_dirty := true
 
+# True once `cells` reflects reality — false only for a project loaded lazily from disk
+# (ProjectStore.load_persisted calls mark_lazy() instead of unpack() so app launch doesn't
+# pay to rebuild every saved project's cells up front). A freshly-created VoxelData starts
+# true: its empty `cells` already IS the truth, nothing to unpack. Every accessor below
+# calls ensure_loaded() first, so a lazy project reads correctly however it's reached —
+# opened in the editor, or just inspected (Home screen details, project_list/info).
+var _loaded := true
+
+func is_loaded() -> bool:
+	return _loaded
+
+# Mark this data as not yet unpacked from its packed mirror. Called right after loading
+# the resource from disk, before anything reads `cells`.
+func mark_lazy() -> void:
+	_loaded = false
+
+# Unpack now if this data is still lazy; a no-op once loaded. Safe to call repeatedly.
+func ensure_loaded() -> void:
+	if not _loaded:
+		unpack()
+
 # --- Persisted mirror of `cells` --------------------------------------------
 # `cells` is the runtime structure (a live Dictionary of BlockCell objects). For
 # on-disk storage we don't embed one BlockCell sub-resource per voxel — a big build
@@ -42,6 +63,9 @@ var _aabb_dirty := true
 # Flatten `cells` into the @export packed mirror. Called by ProjectStore just before
 # saving so the written resource reflects the current grid.
 func pack() -> void:
+	if not _loaded:
+		return  # never unpacked, so nothing could have changed — the on-disk packed
+				# mirror is still authoritative; packing empty `cells` would wipe it
 	_packed_positions = PackedInt32Array()
 	_packed_type_ids = PackedStringArray()
 	_packed_orientations = PackedInt32Array()
@@ -83,6 +107,7 @@ func unpack() -> void:
 		var parts := unpack_parts(parts_by_index.get(i, []))
 		cells[pos] = BlockCell.new(_packed_type_ids[i], orientation, tags, parts)
 	_aabb_dirty = true
+	_loaded = true
 
 # Parts ⇄ plain [semantic, shape, slot] triples (compact on disk and in undo history).
 static func pack_parts(parts: Array) -> Array:
@@ -100,6 +125,7 @@ static func unpack_parts(packed: Array) -> Array:
 # Add one shaped part to the cell at pos, creating a part cell if it's empty. Replaces a
 # plain block if one is there — validity (ShapeRules) is the caller's job (VoxelWorld).
 func add_part(pos: Vector3i, part: Dictionary) -> void:
+	ensure_loaded()
 	var cell: BlockCell = cells.get(pos, null)
 	if cell == null or not cell.is_shaped():
 		cell = BlockCell.new()
@@ -110,6 +136,7 @@ func add_part(pos: Vector3i, part: Dictionary) -> void:
 
 # Remove the part at `index`; the cell is erased once its last part goes.
 func remove_part(pos: Vector3i, index: int) -> void:
+	ensure_loaded()
 	var cell: BlockCell = cells.get(pos, null)
 	if cell == null or index < 0 or index >= cell.parts.size():
 		return
@@ -123,6 +150,7 @@ func remove_part(pos: Vector3i, index: int) -> void:
 # Set (or update) the block at pos. An empty type_id erases. Orientation/tags
 # default to "plain" unless supplied — callers that care pass them explicitly.
 func set_block(pos: Vector3i, type_id: String, orientation: int = 0, tags: Dictionary = {}) -> void:
+	ensure_loaded()
 	if type_id.is_empty():
 		cells.erase(pos)
 	else:
@@ -131,6 +159,7 @@ func set_block(pos: Vector3i, type_id: String, orientation: int = 0, tags: Dicti
 
 # Replace the whole cell object (used when moving/duplicating cells verbatim).
 func set_cell(pos: Vector3i, cell: BlockCell) -> void:
+	ensure_loaded()
 	if cell == null or cell.type_id.is_empty():
 		cells.erase(pos)
 	else:
@@ -138,17 +167,21 @@ func set_cell(pos: Vector3i, cell: BlockCell) -> void:
 	_aabb_dirty = true
 
 func get_block(pos: Vector3i) -> String:
+	ensure_loaded()
 	var c: BlockCell = cells.get(pos, null)
 	return c.type_id if c else ""
 
 func get_cell(pos: Vector3i) -> BlockCell:
+	ensure_loaded()
 	return cells.get(pos, null)
 
 func get_orientation(pos: Vector3i) -> int:
+	ensure_loaded()
 	var c: BlockCell = cells.get(pos, null)
 	return c.orientation if c else 0
 
 func clear_block(pos: Vector3i) -> void:
+	ensure_loaded()
 	cells.erase(pos)
 	_aabb_dirty = true
 
@@ -157,6 +190,7 @@ func clear_block(pos: Vector3i) -> void:
 # call this many times between edits — without the cache that turns one redraw into
 # O(visible cells × total cells) instead of O(total cells) once.
 func get_used_aabb() -> Array:
+	ensure_loaded()
 	if _aabb_dirty:
 		_aabb_cache = _compute_used_aabb()
 		_aabb_dirty = false
