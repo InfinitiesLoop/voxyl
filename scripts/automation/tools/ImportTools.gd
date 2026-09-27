@@ -77,7 +77,7 @@ static func _nei_roster_import(args: Dictionary) -> Variant:
 	var split_created: Array[String] = []
 	if bool(args.get("split", false)):
 		svc.set_namespace_split(func(ns: String) -> BlockLibrary:
-			var split_name := "%s.%s" % [lib_name, ns]
+			var split_name := ImportService.sanitize_library_name("%s.%s" % [lib_name, ns])
 			if VoxelWorld.workspace.get_library(split_name) == null and split_name not in split_created:
 				split_created.append(split_name)
 			return VoxelWorld.workspace.get_or_add_library(split_name))

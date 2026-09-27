@@ -312,14 +312,16 @@ func _reset_target_to_new_placeholder() -> void:
 	_refresh_target_picker()
 
 # Split-mode resolver: a block's namespace → its target library. The optional prefix
-# prefixes the namespace ("gtnh" + "ztones" → "gtnh.ztones"; blank → "ztones"). A dot,
-# not a colon: the library name is also its on-disk folder, and ':' is illegal in a path
-# on Windows. Existing libraries of that name are reused (imports append to them); ones
-# this resolver creates are tracked so _close() can drop any left empty by a canceled or
-# partial import.
+# prefixes the namespace ("gtnh" + "ztones" → "gtnh.ztones"; blank → "ztones"). A dot, not
+# a colon: the library name is also its on-disk folder, and ':' is illegal in a path on
+# Windows — sanitize_library_name() swaps the rest of that set too (a raw modid can carry
+# "|", e.g. "BuildCraft|Core", "ProjRed|Illumination"; see its own doc comment). Existing
+# libraries of that name are reused (imports append to them); ones this resolver creates
+# are tracked so _close() can drop any left empty by a canceled or partial import.
 func _split_library_for(ns: String) -> BlockLibrary:
 	var prefix := _prefix_edit.text.strip_edges()
 	var lib_name := "%s.%s" % [prefix, ns] if not prefix.is_empty() else ns
+	lib_name = ImportService.sanitize_library_name(lib_name)
 	if lib_name == VoxelWorkspace.BASIC_LIBRARY:
 		lib_name = "%s_imported" % ns   # never route imports into the built-in floor
 	if VoxelWorld.workspace.get_library(lib_name) == null \

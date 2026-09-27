@@ -212,16 +212,18 @@ func _resolve_source(ns: String) -> Dictionary:
 		return {}
 	return {"source": _sources_by_ns[real.to_lower()], "ns": real}
 
-# A few mods split into several @Mod ids that all share ONE real assets/ folder — confirmed
-# against the GTNH-fork jar (e.g. ProjectRed's Core/Illumination/Transmission/Exploration/
-# Expansion/Fabrication submodules all register under "ProjRed|<Submodule>" but ship a single
-# combined "assets/projectred/"; no per-submodule folder exists on disk at all). Neither the
-# exact nor normalized match can bridge that — the real folder name doesn't derive from any one
-# submodule id — so it's an explicit alias, checked only after both regular matches miss.
+# A few mods' @Mod id doesn't reduce to their real assets/ folder name even after
+# letters+digits normalization — confirmed per jar, never guessed:
+#   - ProjectRed splits into several ids ("ProjRed|<Submodule>") that all share ONE combined
+#     "assets/projectred/"; no per-submodule folder exists on disk at all.
+#   - Extra Utilities registers as "ExtraUtilities" but ships "assets/extrautils/" — the
+#     folder just drops "-ities"; normalization can't shorten a word, only reformat it.
+# So these are explicit aliases, checked only after both regular matches miss.
 const _NAMESPACE_ALIASES := {
 	"projredcore": "projectred", "projredillumination": "projectred",
 	"projredtransmission": "projectred", "projredexploration": "projectred",
 	"projredexpansion": "projectred", "projredfabrication": "projectred",
+	"extrautilities": "extrautils",
 }
 
 # Letters and digits only, lowercased — collapses "BuildCraft|Core" and "buildcraftcore" (or

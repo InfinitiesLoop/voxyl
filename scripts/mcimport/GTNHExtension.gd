@@ -25,6 +25,7 @@ const _MODS := {
 	"catwalks": true,
 	"chisel": true,
 	"ProjRed|Illumination": true,
+	"ExtraUtilities": true,
 }
 
 func handles(ns: String) -> bool:
@@ -41,6 +42,8 @@ func heal(ctx: MCHealContext) -> void:
 		_heal_chisel(ctx)
 	elif ctx.ns == "ProjRed|Illumination":
 		_heal_projred_illumination(ctx)
+	elif ctx.ns == "ExtraUtilities":
+		_heal_extrautilities(ctx)
 	_strip_overlay_junk(ctx)
 
 # ---------------------------------------------------------------------------
@@ -597,6 +600,57 @@ func _heal_projred_illumination(ctx: MCHealContext) -> void:
 		var bt := ctx.add_cube(ctx.unique_name(display), faces, tex.average_color,
 			PackedStringArray(["light", "lamp", "projred"]), "ProjRed|Illumination")
 		ctx.confirm_registry(bt, _PROJRED_LAMP_REGISTRY, meta, "ProjRed|Illumination", display)
+
+# ===========================================================================
+# Extra Utilities — "Lapis Caelestis" (registry ExtraUtilities:greenscreen, meta 0-15): a
+# flat, borderless solid-color block, real in-game light source (its own BlockGreenScreen
+# overrides getLightValue as the average of its own RGB × 15 — a bright color like white/
+# cyan glows near max, a dark one like black or brown barely glows at all, confirmed from
+# source, see below). One shared, effectively blank texture in the jar (a tiny near-white
+# 16x16 PNG, greenscreen.png) recolored per meta purely in Java (BlockGreenScreen's own
+# `cols` array) — no blockstate/model, so nothing generic could ever find 16 variants from
+# one file. Synthesized here as 16 solid-color textures instead of reading the source art at
+# all (see MCHealContext.solid_texture) — reading it first and tinting it would produce the
+# same result, since it's blank, but this is simpler and doesn't depend on that staying true.
+# Colors + Latin/English names confirmed against the mod's real source (`cols` array,
+# https://github.com/sameer/ExtraUtilities/blob/master/ExtraUtilitiesBuilder/src/main/java/com/rwtema/extrautils/block/BlockGreenScreen.java)
+# cross-checked against the modpack's own NEI itempanel.csv display names.
+# ===========================================================================
+
+const _EXTRAUTILS_LAPIS_REGISTRY := "ExtraUtilities:greenscreen"
+# meta -> [display name, hex RGB] — both confirmed against real source, see class doc above.
+const _EXTRAUTILS_LAPIS_COLORS := [
+	["Lapis Caelestis Albus (White)", 0xFFFFFF],
+	["Lapis Caelestis Aurantiacus (Orange)", 0xFF8000],
+	["Lapis Caelestis Purpura Amethystinus (Magenta)", 0xFF00FF],
+	["Lapis Caelestis Caesicius (Light Blue)", 0x007EDD],
+	["Lapis Caelestis Flavus (Yellow)", 0xFFFF00],
+	["Lapis Caelestis Viridis (Green)", 0x00FF00],
+	["Lapis Caelestis Roseus (Pink)", 0xFF99A6],
+	["Lapis Caelestis Cinereus (Gray)", 0x7F7F7F],
+	["Lapis Caelestis Lux Cinereus (Light Gray)", 0xD3D3D3],
+	["Lapis Caelestis Callainus (Cyan)", 0x00FFFF],
+	["Lapis Caelestis Purpura (Purple)", 0xAB33FF],
+	["Lapis Caelestis Caeruleus (Blue)", 0x0000FF],
+	["Lapis Caelestis Fuscus (Brown)", 0x2A3300],
+	["Lapis Caelestis Paphiae Myrti (Dark Green)", 0x009900],
+	["Lapis Caelestis Rufus (Red)", 0xFF0000],
+	["Lapis Caelestis Nox (Black)", 0x000000],
+]
+
+func _heal_extrautilities(ctx: MCHealContext) -> void:
+	for meta in _EXTRAUTILS_LAPIS_COLORS.size():
+		var display: String = _EXTRAUTILS_LAPIS_COLORS[meta][0]
+		var color := Color.hex((int(_EXTRAUTILS_LAPIS_COLORS[meta][1]) << 8) | 0xFF)
+		var tex := ctx.solid_texture("extrautils:heal/greenscreen_%d" % meta, color)
+		var faces := {
+			BlockModel.Dir.UP: tex.id, BlockModel.Dir.DOWN: tex.id,
+			BlockModel.Dir.NORTH: tex.id, BlockModel.Dir.SOUTH: tex.id,
+			BlockModel.Dir.EAST: tex.id, BlockModel.Dir.WEST: tex.id,
+		}
+		var bt := ctx.add_cube(ctx.unique_name(display), faces, color,
+			PackedStringArray(["light", "lapis caelestis", "extrautils"]), "ExtraUtilities")
+		ctx.confirm_registry(bt, _EXTRAUTILS_LAPIS_REGISTRY, meta, "ExtraUtilities", display)
 
 # ---------------------------------------------------------------------------
 # Small helpers

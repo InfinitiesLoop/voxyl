@@ -89,6 +89,21 @@ func touched_library_names() -> Array:
 #                                      `versions/<ver>/<ver>.jar`, `resourcepacks/*.zip`…
 #   - otherwise the folder itself    → treated as the assets root.
 # Returns [] when the path can't be opened, so the caller can report it.
+# A split-import library name is also its on-disk folder (AssetLibrary.in_library joins it
+# straight into a filesystem path), but the raw @Mod modid it's built from can carry
+# characters a real filesystem rejects — "BuildCraft|Core", "ProjRed|Illumination", … — "|"
+# being the one that actually bit: every texture write for a library named "gtnh.ProjRed|
+# Illumination" failed on Windows (DirAccess/FileAccess can't create a path segment with
+# "|" in it), so the whole namespace silently imported zero blocks. Swap every
+# Windows-illegal filename character for "_" here rather than corrupting every write.
+const _ILLEGAL_LIBRARY_NAME_CHARS := ["<", ">", ":", "\"", "/", "\\", "|", "?", "*"]
+
+static func sanitize_library_name(name: String) -> String:
+	var out := name
+	for ch in _ILLEGAL_LIBRARY_NAME_CHARS:
+		out = out.replace(ch, "_")
+	return out
+
 static func detect_sources(path: String) -> Array[MCAssetSource]:
 	var lower := path.to_lower()
 	if lower.ends_with(".zip") or lower.ends_with(".jar"):

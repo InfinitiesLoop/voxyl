@@ -68,6 +68,19 @@ func composite_texture(out_id: String, base_ref: String, overlay_ref: String) ->
 	img.blend_rect(overlay, Rect2i(Vector2i.ZERO, size), Vector2i.ZERO)
 	return _emit_texture(out_id, img, overlay_ref)
 
+# A flat, single-color synthesized texture — no source art involved at all — for a block
+# whose look really is just a solid color with no border/pattern (e.g. Extra Utilities'
+# Lapis Caelestis: one shared near-white base texture in the jar, recolored per meta purely
+# in Java with no blockstate/model to read a tint from; see GTNHExtension's own citation).
+# Deduped by out_id, same as composite_texture.
+func solid_texture(out_id: String, color: Color, size := Vector2i(16, 16)) -> TextureAsset:
+	var existing := library.get_texture_asset(out_id)
+	if existing != null:
+		return existing
+	var img := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
+	img.fill(color)
+	return _emit_texture(out_id, img, "")
+
 # An opaque base image at `size`: the `base_ref` tile repeated to fill it (a hull is 16×16 but
 # an animated overlay is a taller frame strip), or a flat neutral grey when there's no base.
 func _tiled_base(base_ref: String, size: Vector2i) -> Image:
