@@ -122,6 +122,8 @@ static func _block_get(args: Dictionary) -> Dictionary:
 		out["mc_mod"] = McId.get_mod(bt)
 	if not McId.get_display(bt).is_empty():
 		out["mc_display"] = McId.get_display(bt)
+	if FmpParts.has_sawable_info(bt):
+		out["fmp_sawable"] = FmpParts.is_sawable(bt)
 	var model := VoxelWorld.workspace.resolve_block_model(bt.model_id, [owner]) if not bt.model_id.is_empty() else null
 	if model != null:
 		out["textures"] = model.textures.duplicate()

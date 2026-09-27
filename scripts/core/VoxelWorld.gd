@@ -825,12 +825,19 @@ func _resolve_semantic_uncached(semantic_name: String) -> Dictionary:
 			}
 		if e.is_shaped():
 			result["shape"] = e.shape_id
+			result["glow"] = e.shape_glow
 	return result
 
 # The ShapeCatalog id a semantic's winning entry cuts its base into, or "" for a plain
 # block semantic. This is what the hand places; placed parts keep their own stored shape.
 func get_shape_id_for_semantic(semantic_name: String) -> String:
 	return str(_resolve_semantic(semantic_name).get("shape", ""))
+
+# Whether a semantic's winning entry cuts its architecture shape as ArchitectureCraft's Glow
+# variant (see PaletteEntry.shape_glow). A material-layer re-skin, like block/color: it follows
+# the entry live, it isn't baked into a placed part.
+func get_shape_glow_for_semantic(semantic_name: String) -> bool:
+	return bool(_resolve_semantic(semantic_name).get("glow", false))
 
 func is_shaped_semantic(semantic_name: String) -> bool:
 	return not get_shape_id_for_semantic(semantic_name).is_empty()
@@ -1140,6 +1147,15 @@ func assign_palette_entry_block(palette: Palette, entry: PaletteEntry, block_typ
 # affects what's placed from now on: placed parts store their own shape.
 func set_palette_entry_shape(palette: Palette, entry: PaletteEntry, shape_id: String) -> void:
 	set_palette_entry_picks(palette, entry, entry.block_type_name, shape_id)
+
+# Give a shaped entry ArchitectureCraft's Glow variant (or not). Unlike shape_id this re-skins
+# every placed use immediately, same as a block change: it's purely which real block/material
+# the export writes, never the geometry.
+func set_palette_entry_glow(palette: Palette, entry: PaletteEntry, glow: bool) -> void:
+	if palette.builtin:
+		return
+	entry.shape_glow = glow
+	_palettes_changed(palette)
 
 # Both picks at once (what the entry dialog commits): block type + shape ("" = whole block).
 func set_palette_entry_picks(palette: Palette, entry: PaletteEntry, block_type_name: String, shape_id: String) -> void:

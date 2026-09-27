@@ -143,6 +143,9 @@ static func _prefab_save(args: Dictionary) -> Variant:
 	out["saved_from"] = {"min": r["min"], "max": r["max"]}
 	out.erase("missing_semantics")
 	out.erase("palettes_available")
+	var warnings: Dictionary = (SchematicaExporter.export_prefab(p)["report"] as Dictionary).get("material_warnings", {})
+	if not warnings.is_empty():
+		out["material_warnings"] = warnings
 	var cs: CaptureService = McpServer.capture_service()
 	if cs.is_rendering_available():
 		out["thumbnail"] = await cs.bake_prefab_thumbnail(p)

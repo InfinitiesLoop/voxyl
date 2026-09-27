@@ -19,6 +19,17 @@ extends RefCounted
 #   SchematicaMapping    : Compound {"<registry>": Short(local_id)} — THIS file's own local
 #                           ids, chosen when writing (from 1; 0 means air/empty), so the file
 #                           never depends on any particular instance's numeric block-id table.
+#   BlockMapping/         : The same mapping again, under the tag name GTNH's own WorldEdit
+#   ItemMapping             fork actually reads (worldedit-gtnh PR #14): on paste it rebuilds
+#                           each stored id's registry name from BlockMapping, then re-resolves
+#                           that name against whatever id the PASTING world's session currently
+#                           has — the fix for 1.7.10's block ids shifting between sessions
+#                           (mod load order isn't stable), confirmed against a real WorldEdit-
+#                           saved .schematic and worldedit-gtnh's source. Without this tag,
+#                           WorldEdit falls back to the raw stored id verbatim, which can collide
+#                           with an unrelated mod's block in a different session (this is what
+#                           was raining ModernMarkings items on paste). ItemMapping is the same
+#                           idea for item ids; voxyl never places by item, so it's always empty.
 
 static func write(size: Vector3i, local_ids: PackedInt32Array, metas: PackedByteArray,
 		mapping: Dictionary, tile_entities: Array = []) -> PackedByteArray:
@@ -58,6 +69,8 @@ static func write(size: Vector3i, local_ids: PackedInt32Array, metas: PackedByte
 		"Entities": NbtWriter.tag_list(NbtWriter.TYPE_COMPOUND, []),
 		"TileEntities": NbtWriter.tag_list(NbtWriter.TYPE_COMPOUND, tile_entities),
 		"SchematicaMapping": NbtWriter.tag_compound(mapping_compound),
+		"BlockMapping": NbtWriter.tag_compound(mapping_compound.duplicate()),
+		"ItemMapping": NbtWriter.tag_compound({}),
 	}
 	if needs_add:
 		root["AddBlocks"] = NbtWriter.tag_byte_array(add_blocks)

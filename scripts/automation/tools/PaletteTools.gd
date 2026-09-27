@@ -16,15 +16,15 @@ static func register(reg: McpRegistry) -> void:
 		{"properties": {
 			"name": {"type": "string"},
 			"libraries": {"type": "array", "items": {"type": "string"}, "description": "Library stack to draw blocks from, first match wins (the basic library is always the last fallback)"},
-			"entries": {"type": "array", "items": {"type": "object"}, "description": "[{semantic, block?, shape?}] — block \"\"/null = undecided; shape = a shape id from shape_list (makes it place parts)"},
+			"entries": {"type": "array", "items": {"type": "object"}, "description": "[{semantic, block?, shape?, glow?}] — block \"\"/null = undecided; shape = a shape id from shape_list (makes it place parts); glow = cut an architecture shape as ArchitectureCraft's Glow variant (always emits light, regardless of material)"},
 			"from": {"type": "string", "description": "Copy this palette's libraries and entries first"},
 		}, "required": ["name"]}, _palette_create, {"mutates": true})
 	reg.add("palette_update",
 		"Edit a palette: add / set / remove / rename entries, replace its library stack, or rename it. `set` changes an existing entry's block and/or shape (block null = undecided); changing a block re-skins every placed use, changing a shape only affects new placements.",
 		{"properties": {
 			"name": {"type": "string"},
-			"add": {"type": "array", "items": {"type": "object"}, "description": "[{semantic, block?, shape?}]"},
-			"set": {"type": "array", "items": {"type": "object"}, "description": "[{semantic, block?, shape?}] — only given keys change"},
+			"add": {"type": "array", "items": {"type": "object"}, "description": "[{semantic, block?, shape?, glow?}]"},
+			"set": {"type": "array", "items": {"type": "object"}, "description": "[{semantic, block?, shape?, glow?}] — only given keys change; glow = cut an architecture shape as ArchitectureCraft's Glow variant (always emits light, regardless of material)"},
 			"remove": {"type": "array", "items": {"type": "string"}},
 			"rename": {"type": "object", "description": "{old semantic: new semantic}"},
 			"libraries": {"type": "array", "items": {"type": "string"}},
@@ -68,14 +68,20 @@ static func describe(p: Palette) -> Dictionary:
 	var entries: Array = []
 	for e in p.entries:
 		var d := {"semantic": e.semantic_name, "block": e.block_type_name}
+		var bt: BlockType = null
 		if not e.block_type_name.is_empty():
-			var bt := VoxelWorld.workspace.resolve_block_type(e.block_type_name, p.library_names)
+			bt = VoxelWorld.workspace.resolve_block_type(e.block_type_name, p.library_names)
 			d["resolved"] = bt != null
 			if bt != null:
 				d["color"] = bt.color
 		if e.is_shaped():
 			d["shape"] = e.shape_id
 			d["shape_name"] = ShapeCatalog.name_of(e.shape_id)
+			if e.shape_glow:
+				d["glow"] = true
+			var warning := FmpParts.material_warning(bt, e.shape_id)
+			if not warning.is_empty():
+				d["warning"] = "'%s' %s" % [e.block_type_name, warning]
 		entries.append(d)
 	return {"name": p.name, "libraries": Array(p.library_names), "builtin": p.builtin, "entries": entries}
 
@@ -88,8 +94,14 @@ static func _check_entry(p: Palette, spec: Dictionary, warnings: Array) -> Strin
 	if not shape.is_empty() and not ShapeCatalog.has(shape):
 		return "'%s': unknown shape '%s' (see shape_list)" % [sem, shape]
 	var block := str(spec.get("block", "")) if spec.get("block") != null else ""
-	if not block.is_empty() and VoxelWorld.workspace.resolve_block_type(block, p.library_names) == null:
-		warnings.append("'%s': block '%s' isn't in the palette's libraries %s — it renders undecided" % [sem, block, str(Array(p.library_names))])
+	if not block.is_empty():
+		var bt := VoxelWorld.workspace.resolve_block_type(block, p.library_names)
+		if bt == null:
+			warnings.append("'%s': block '%s' isn't in the palette's libraries %s — it renders undecided" % [sem, block, str(Array(p.library_names))])
+		elif not shape.is_empty():
+			var warning := FmpParts.material_warning(bt, shape)
+			if not warning.is_empty():
+				warnings.append("'%s': '%s' %s" % [sem, block, warning])
 	return ""
 
 static func _palette_create(args: Dictionary) -> Dictionary:
@@ -152,6 +164,8 @@ static func _apply_entries(p: Palette, specs: Variant, add_new: bool, warnings: 
 		if spec.has("shape"):
 			shape = str(spec["shape"]) if spec["shape"] != null else ""
 		VoxelWorld.set_palette_entry_picks(p, e, block, shape)
+		if spec.has("glow"):
+			VoxelWorld.set_palette_entry_glow(p, e, bool(spec["glow"]))
 	return problems
 
 static func _palette_update(args: Dictionary) -> Dictionary:

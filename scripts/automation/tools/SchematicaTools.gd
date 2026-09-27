@@ -24,6 +24,11 @@ static func register(reg: McpRegistry) -> void:
 			"meta": {"type": "integer", "description": "Defaults to the block's current meta if omitted"},
 			"orient": {"type": "string", "enum": ["", "half", "stairs", "log_axis"]},
 		}, "required": ["library", "block"]}, _block_set_mc_id, {"mutates": true})
+	reg.add("fmp_sawable_import",
+		"Tag every block with a confirmed Minecraft identity, across all libraries, with whether Forge Multipart's saw can cut it into a microblock (cover/panel/slab/strip/post/pillar/corner/nook/notch) — read from the modpack's own config/microblocks.cfg. A block missing from that file usually can't be sawed and renders as missing-texture when cut with a microblock shape — but the cfg isn't the whole picture: a few FMP-sibling mods (confirmed for ProjectRed's Illumination Inverted Lamps) self-register materials in their own code, invisible to the cfg, so those known cases are left unchecked rather than marked false (see FmpParts.SELF_REGISTERING_PREFIXES). Once imported, palette_get/palette_update and schematic_export/prefab_save warn when a microblock shape is assigned to a material the cfg doesn't whitelist.",
+		{"properties": {
+			"path": {"type": "string", "description": "Path to the modpack's microblocks.cfg"},
+		}, "required": ["path"]}, _fmp_sawable_import, {"mutates": true})
 
 static func _schematic_export(args: Dictionary) -> Dictionary:
 	var path := str(args.get("path", ""))
@@ -89,3 +94,36 @@ static func _block_set_mc_id(args: Dictionary) -> Dictionary:
 	LibraryStore.save_library(lib)
 	return {"library": lib_name, "block": block_name, "registry": McId.get_registry(bt),
 		"meta": McId.get_mc_meta(bt), "orient": McId.get_orient(bt)}
+
+static func _fmp_sawable_import(args: Dictionary) -> Dictionary:
+	var path := str(args.get("path", ""))
+	if not FileAccess.file_exists(path):
+		return McpRegistry.fail("not_found", "no file at '%s'" % path)
+	var whitelist := MicroblocksCfgImporter.parse(path)
+	if whitelist.is_empty():
+		return McpRegistry.fail("bad_file", "no entries parsed from '%s' — is this really microblocks.cfg?" % path)
+	var checked := 0
+	var sawable := 0
+	var skipped_self_registering := 0
+	var touched: Array = []
+	for lib in VoxelWorld.workspace.libraries:
+		var changed := false
+		for bt in lib.block_types:
+			if not McId.has_registry(bt):
+				continue
+			var registry := McId.get_registry(bt)
+			var ok := MicroblocksCfgImporter.is_sawable(whitelist, registry, McId.get_mc_meta(bt))
+			if not ok and FmpParts.is_self_registering(registry):
+				skipped_self_registering += 1
+				continue
+			checked += 1
+			if ok:
+				sawable += 1
+			FmpParts.mark_sawable(bt, ok)
+			changed = true
+		if changed:
+			touched.append(lib.name)
+			LibraryStore.save_library(lib)
+	return {"path": path, "whitelist_entries": whitelist.size(), "checked": checked,
+		"sawable": sawable, "not_sawable": checked - sawable,
+		"skipped_self_registering": skipped_self_registering, "libraries": touched}

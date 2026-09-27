@@ -24,6 +24,7 @@ const _MODS := {
 	"etfuturum": true,
 	"catwalks": true,
 	"chisel": true,
+	"ProjRed|Illumination": true,
 }
 
 func handles(ns: String) -> bool:
@@ -38,6 +39,8 @@ func heal(ctx: MCHealContext) -> void:
 		_heal_catwalks(ctx)
 	elif ctx.ns == "chisel":
 		_heal_chisel(ctx)
+	elif ctx.ns == "ProjRed|Illumination":
+		_heal_projred_illumination(ctx)
 	_strip_overlay_junk(ctx)
 
 # ---------------------------------------------------------------------------
@@ -557,6 +560,43 @@ func _parse_chisel_lang(ctx: MCHealContext) -> Dictionary:
 		elif key.begins_with("tile.") and key.ends_with(".desc"):
 			out[key.trim_prefix("tile.").trim_suffix(".desc")] = val
 	return out
+
+# ===========================================================================
+# ProjectRed Illumination — the "Lamp" block (registry projectred.illumination.lamp): 32
+# metas, 16 vanilla-dye colors x off/on (0-15 = normal, lit only while powered; 16-31 =
+# "Inverted", lit only while UNpowered — a real, GTNH-microblocks.cfg-absent light source with
+# a flat, textureless color, unlike every ztones/concrete option). No blockstate/model JSON
+# ships in this mod at all (confirmed: 1.7.10 pure-Java icon registration), so the generic
+# importer can never find these on its own — each color+state is its own numbered file
+# (textures/blocks/lighting/lampoff/<0-15>.png, lampon/<0-15>.png). Shown at its natural idle
+# look: off for normal, on for inverted, matching how each would actually sit unpowered.
+# ProjectRed's other Illumination blocks (lanterns, fixtures, cage lamps, buttons) use flat
+# single-file textures with no per-color art at all (colors are a name/item distinction only,
+# not a texture one) — not modeled here; a real motive to add one shows they're wanted too.
+# ===========================================================================
+
+const _PROJRED_LAMP_REGISTRY := "ProjRed|Illumination:projectred.illumination.lamp"
+
+func _heal_projred_illumination(ctx: MCHealContext) -> void:
+	for meta in 32:
+		var inverted := meta >= 16
+		var color_idx := meta - 16 if inverted else meta
+		var state := "lampon" if inverted else "lampoff"
+		var ref := "projectred:blocks/lighting/%s/%d" % [state, color_idx]
+		if not ctx.source_has_texture(ref):
+			continue
+		var tex := ctx.ensure_texture(ref)
+		if tex == null:
+			continue
+		var display := "%s%s Lamp" % ["Inverted " if inverted else "", _DYE_COLORS[color_idx].capitalize()]
+		var faces := {
+			BlockModel.Dir.UP: tex.id, BlockModel.Dir.DOWN: tex.id,
+			BlockModel.Dir.NORTH: tex.id, BlockModel.Dir.SOUTH: tex.id,
+			BlockModel.Dir.EAST: tex.id, BlockModel.Dir.WEST: tex.id,
+		}
+		var bt := ctx.add_cube(ctx.unique_name(display), faces, tex.average_color,
+			PackedStringArray(["light", "lamp", "projred"]), "ProjRed|Illumination")
+		ctx.confirm_registry(bt, _PROJRED_LAMP_REGISTRY, meta, "ProjRed|Illumination", display)
 
 # ---------------------------------------------------------------------------
 # Small helpers

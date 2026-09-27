@@ -30,7 +30,15 @@ extends RefCounted
 #     the slot >= 24 case), trusting the rest of this file's geometry to port faithfully.
 
 const WORLD_REGISTRY := "ArchitectureCraft:shape"
+# The Glow variant: a second, separately-registered block (crafted with glowstone at the
+# sawbench) that always emits full light regardless of the base material, instead of the
+# material's own light value. Same tile entity either way — Shape/side/turn/BaseName/BaseData
+# don't change, only which block hosts the tile (see PaletteEntry.shape_glow).
+const GLOW_WORLD_REGISTRY := "ArchitectureCraft:shapeSE"
 const TILE_ID := "gcewing.shape"
+
+static func world_registry(glow: bool) -> String:
+	return GLOW_WORLD_REGISTRY if glow else WORLD_REGISTRY
 
 # ArchShapes id -> ArchitectureCraft's own Shape.id (not ordinal; see header comment).
 const SHAPE_ID := {
@@ -61,6 +69,7 @@ const SHAPE_ID := {
 	"balustrade_plain_end": 83, "banister_fancy_bottom": 84, "banister_fancy": 85,
 	"banister_fancy_top": 86, "banister_fancy_end": 87,
 	"banister_plain_inner_corner": 88,
+	"slab": 90,
 	"stairs": 91, "stairs_outer_corner": 92, "stairs_inner_corner": 93,
 	"slope_tile_a1": 94, "slope_tile_a2": 95, "slope_tile_b1": 96, "slope_tile_b2": 97,
 	"slope_tile_b3": 98, "slope_tile_c1": 99, "slope_tile_c2": 100, "slope_tile_c3": 101,

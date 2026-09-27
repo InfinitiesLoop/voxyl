@@ -68,6 +68,7 @@ static func export_cells(cells: Dictionary, size: Vector3i) -> Dictionary:
 	var used_ids := {}    # local id -> true, so a real legacy id and a fallback never collide
 	var mapped := {}      # registry string -> cell count, for the report
 	var unmapped := {}    # semantic name -> cell count (no confirmed identity)
+	var material_warnings := {}   # semantic name -> cell count (confirmed identity, not FMP-sawable)
 	var tile_entities := []
 	var cells_written := 0
 	var empty_part_cells := 0   # a part cell where nothing in it resolved to a real block
@@ -78,7 +79,7 @@ static func export_cells(cells: Dictionary, size: Vector3i) -> Dictionary:
 		var cell: BlockCell = cells[rel]
 		var idx := (rel.y * size.z + rel.z) * size.x + rel.x
 		if cell.is_shaped():
-			var placeholder := _export_parts(cell, rel, mapping, used_ids, mapped, unmapped, tile_entities)
+			var placeholder := _export_parts(cell, rel, mapping, used_ids, mapped, unmapped, tile_entities, material_warnings)
 			if placeholder.is_empty():
 				empty_part_cells += 1
 				continue
@@ -96,7 +97,7 @@ static func export_cells(cells: Dictionary, size: Vector3i) -> Dictionary:
 		cells_written += 1
 
 	var bytes := SchematicaWriter.write(size, local_ids, metas, mapping, tile_entities)
-	return {"bytes": bytes, "report": {
+	var report := {
 		"size": size,
 		"cells_written": cells_written,
 		"distinct_blocks": mapping.size(),
@@ -104,7 +105,10 @@ static func export_cells(cells: Dictionary, size: Vector3i) -> Dictionary:
 		"unmapped": unmapped,
 		"tile_entities": tile_entities.size(),
 		"empty_part_cells": empty_part_cells,
-	}}
+	}
+	if not material_warnings.is_empty():
+		report["material_warnings"] = material_warnings
+	return {"bytes": bytes, "report": report}
 
 # The local id for `registry`, assigning one on first use: this install's real numeric id when
 # it's known and fits the 12-bit cap and nothing else already claimed it, otherwise the lowest
@@ -133,10 +137,10 @@ static func _local_id(registry: String, mapping: Dictionary, used_ids: Dictionar
 # `mapping`/`mapped` (exactly like a whole block). Returns the placeholder's registry name, or
 # "" if nothing in the cell resolved to a confirmed Minecraft identity.
 static func _export_parts(cell: BlockCell, rel: Vector3i, mapping: Dictionary, used_ids: Dictionary,
-		mapped: Dictionary, unmapped: Dictionary, tile_entities: Array) -> String:
+		mapped: Dictionary, unmapped: Dictionary, tile_entities: Array, material_warnings: Dictionary) -> String:
 	if cell.parts.size() == 1 and ShapeCatalog.is_exclusive(str(cell.parts[0].get("shape", ""))):
 		return _export_arch_part(cell.parts[0], rel, mapping, used_ids, mapped, unmapped, tile_entities)
-	return _export_microblock_parts(cell.parts, rel, mapping, used_ids, mapped, unmapped, tile_entities)
+	return _export_microblock_parts(cell.parts, rel, mapping, used_ids, mapped, unmapped, tile_entities, material_warnings)
 
 static func _export_arch_part(part: Dictionary, rel: Vector3i, mapping: Dictionary, used_ids: Dictionary,
 		mapped: Dictionary, unmapped: Dictionary, tile_entities: Array) -> String:
@@ -147,11 +151,12 @@ static func _export_arch_part(part: Dictionary, rel: Vector3i, mapping: Dictiona
 		unmapped[semantic] = int(unmapped.get(semantic, 0)) + 1
 		return ""
 	tile_entities.append(tag)
-	_mark_placeholder(AcParts.WORLD_REGISTRY, mapping, used_ids, mapped)
-	return AcParts.WORLD_REGISTRY
+	var registry := AcParts.world_registry(VoxelWorld.get_shape_glow_for_semantic(semantic))
+	_mark_placeholder(registry, mapping, used_ids, mapped)
+	return registry
 
 static func _export_microblock_parts(parts: Array, rel: Vector3i, mapping: Dictionary, used_ids: Dictionary,
-		mapped: Dictionary, unmapped: Dictionary, tile_entities: Array) -> String:
+		mapped: Dictionary, unmapped: Dictionary, tile_entities: Array, material_warnings: Dictionary) -> String:
 	var part_tags := []
 	for part: Dictionary in parts:
 		var semantic := str(part.get("semantic", ""))
@@ -161,6 +166,8 @@ static func _export_microblock_parts(parts: Array, rel: Vector3i, mapping: Dicti
 			unmapped[semantic] = int(unmapped.get(semantic, 0)) + 1
 		else:
 			part_tags.append(tag)
+			if not FmpParts.material_warning(bt, str(part.get("shape", ""))).is_empty():
+				material_warnings[semantic] = int(material_warnings.get(semantic, 0)) + 1
 	if part_tags.is_empty():
 		return ""
 	tile_entities.append(FmpParts.tile_tag(rel, part_tags))

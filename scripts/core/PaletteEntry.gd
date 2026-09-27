@@ -12,6 +12,11 @@ extends Resource
 @export var semantic_name: String = ""
 @export var block_type_name: String = ""
 @export var shape_id: String = ""
+# An architecture-shape entry can be cut as ArchitectureCraft's Glow variant: a second,
+# separately-registered in-game block that always emits full light regardless of material
+# (crafted with glowstone at the sawbench), instead of the normal shape block. Purely a
+# material-layer/export pick, like block_type_name — never in voxel data.
+@export var shape_glow: bool = false
 # Legacy: an early version cut shaped entries from another entry's block (a "base"). Only
 # read on load, where Palette.migrate_legacy_shapes folds it into block_type_name and
 # clears it. Kept so older saved palettes keep their look (and as a hook if chaining

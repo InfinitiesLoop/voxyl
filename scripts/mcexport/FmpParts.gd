@@ -29,6 +29,59 @@ extends RefCounted
 const WORLD_REGISTRY := "ForgeMultipart:block"
 const TILE_ID := "savedMultipart"
 
+# Whether FMP's own saw can cut this block into a microblock — NOT fully decidable from
+# config/microblocks.cfg alone (confirmed the hard way): that whitelist (ForgeMultipart's
+# ConfigContent.scala, by registry name + an optional meta range) only covers materials whose
+# OWN mod didn't integrate with FMP itself. A mod written by/with FMP's own author can — and
+# does — self-register via MicroMaterialRegistry.registerMaterial() directly in its own code,
+# invisible to the cfg file entirely: confirmed for ProjectRed's Illumination "Inverted Lamp"
+# colors (metas 16-31 of ProjRed|Illumination:projectred.illumination.lamp — NOT the normal
+# 0-15 lamps, which really aren't registered) via its own source, LightMicroMaterial.register()
+# in https://github.com/GTNewHorizons/ProjectRed/blob/master/src/main/scala/mrtjp/projectred/illumination/lightmicroblocks.scala
+# So a cfg miss is genuinely ambiguous: Et Futurum's concrete really isn't sawable (confirmed
+# in-game — it also doesn't show up as a choosable material on the real saw), but a cfg miss
+# for an FMP-sibling mod can be a false negative. There's no dynamic way to tell them apart —
+# self-registration happens in that mod's own Java/Scala, nothing on disk records it — so this
+# stays a small, explicitly-cited exception list (SELF_REGISTERING_PREFIXES) rather than a
+# heuristic: `fmp_sawable_import` treats a cfg hit as reliably true and leaves a registry it
+# recognizes here unchecked on a miss instead of guessing false; anything else missing from the
+# cfg is marked false, same tradeoff microblocks.cfg itself makes. Absent (has_sawable_info
+# false) means "never checked or ambiguous", not "confirmed not sawable" — nothing warns until
+# the user actually imports a microblocks.cfg, and the warning text says "as far as the
+# modpack's config tells us" rather than asserting it outright.
+const KEY_SAWABLE := "fmp.sawable"
+
+# Registry prefixes known — from the cited real source above, never guessed — to self-register
+# some of their own materials with FMP outside config/microblocks.cfg. fmp_sawable_import
+# leaves these unchecked on a whitelist miss instead of marking them false. Add an entry only
+# against confirmed source (a real registerMaterial call), the same standard as everything else
+# in this file, with a comment citing it exactly like the one above.
+const SELF_REGISTERING_PREFIXES: PackedStringArray = ["ProjRed|Illumination:"]
+
+static func is_self_registering(registry: String) -> bool:
+	for prefix in SELF_REGISTERING_PREFIXES:
+		if registry.begins_with(prefix):
+			return true
+	return false
+
+static func has_sawable_info(bt: BlockType) -> bool:
+	return bt != null and bt.metadata.has(KEY_SAWABLE)
+
+static func is_sawable(bt: BlockType) -> bool:
+	return bool(bt.metadata.get(KEY_SAWABLE, false)) if bt != null else false
+
+static func mark_sawable(bt: BlockType, sawable: bool) -> void:
+	bt.metadata[KEY_SAWABLE] = sawable
+
+# A one-line warning if `bt` is a confirmed-not-sawable material being cut with a microblock
+# shape (never for an architecture shape — those don't go through FMP at all), else "".
+static func material_warning(bt: BlockType, shape_id: String) -> String:
+	if bt == null or not ShapeCatalog.has(shape_id) or ShapeCatalog.family_of(shape_id) == ShapeCatalog.Family.ARCH:
+		return ""
+	if not has_sawable_info(bt) or is_sawable(bt):
+		return ""
+	return "isn't in the modpack's microblocks.cfg whitelist, as far as fmp_sawable_import could tell — parts cut from it may render as missing texture in-game (verify on the real saw if unsure; a few FMP-sibling mods self-register materials the cfg never lists)"
+
 const _PART_ID := {
 	ShapeCatalog.Family.FACE: "mcr_face",
 	ShapeCatalog.Family.HOLLOW: "mcr_hllw",

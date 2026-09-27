@@ -12,8 +12,8 @@ extends ConfirmationDialog
 # confirm; the caller does the actual VoxelWorld mutation. That split is what makes Cancel
 # free — nothing changes unless `created` or `edited` fires. `shape_id` is "" for a Block.
 
-signal created(semantic_name: String, block_type_name: String, shape_id: String)
-signal edited(entry: PaletteEntry, semantic_name: String, block_type_name: String, shape_id: String)
+signal created(semantic_name: String, block_type_name: String, shape_id: String, glow: bool)
+signal edited(entry: PaletteEntry, semantic_name: String, block_type_name: String, shape_id: String, glow: bool)
 
 enum Kind { BLOCK, SHAPE }
 
@@ -31,6 +31,9 @@ var _page_tabs: Array[Button] = []
 var _shape_grid: GridContainer
 var _page := 0
 var _shape_id := ""
+var _glow := false
+var _glow_check: CheckBox
+var _warning_label: Label
 # Create mode, Shape kind: the name follows the picks ("Oak Planks Strip") until the user
 # types their own.
 var _name_auto := false
@@ -153,6 +156,17 @@ func _build_shape_page() -> Control:
 	hint.add_theme_font_size_override("font_size", 11)
 	hint.modulate = Color(1, 1, 1, 0.55)
 	left.add_child(hint)
+	_glow_check = CheckBox.new()
+	_glow_check.text = "Glow (ArchitectureCraft)"
+	_glow_check.tooltip_text = "Cut with AC's Glow variant instead: a separate in-game block that always emits full light, regardless of material. Re-skins every placed use immediately, like a block change."
+	_glow_check.toggled.connect(func(v: bool): _glow = v)
+	left.add_child(_glow_check)
+	_warning_label = Label.new()
+	_warning_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_warning_label.add_theme_font_size_override("font_size", 11)
+	_warning_label.modulate = Color(1, 0.75, 0.3)
+	_warning_label.visible = false
+	left.add_child(_warning_label)
 	_show_page(0)
 	return left
 
@@ -244,6 +258,7 @@ func setup_edit(palette: Palette, entry: PaletteEntry) -> void:
 	_name_auto = false
 	_chooser.configure(palette, entry.block_type_name)
 	_shape_id = entry.shape_id
+	_glow = entry.shape_glow
 	_show_page(_page_of(_shape_id))
 	_set_kind(Kind.SHAPE if entry.is_shaped() else Kind.BLOCK)
 
@@ -269,6 +284,15 @@ func _on_picks_changed() -> void:
 	# from it.
 	if _chooser and _palette:
 		_chooser.set_preview_shape(_shape_id if _kind == Kind.SHAPE else "")
+	var shaped := _kind == Kind.SHAPE and not _shape_id.is_empty()
+	if _glow_check:
+		_glow_check.visible = shaped and ShapeCatalog.family_of(_shape_id) == ShapeCatalog.Family.ARCH
+		_glow_check.set_pressed_no_signal(_glow)
+	if _warning_label:
+		var warning := FmpParts.material_warning(bt, _shape_id) if shaped else ""
+		_warning_label.visible = not warning.is_empty()
+		if not warning.is_empty():
+			_warning_label.text = "⚠ '%s' %s" % [_pretty_block_name(block), warning]
 
 # "minecraft:oak_planks" / "sets/azur/azur_ (14)" → "Oak Planks" / "Azur (14)".
 static func _pretty_block_name(block: String) -> String:
@@ -313,8 +337,9 @@ func _on_confirmed() -> void:
 		return
 	var block := _chooser.get_selected()
 	var shape := _shape_id if _kind == Kind.SHAPE else ""
+	var glow := _glow if not shape.is_empty() and ShapeCatalog.family_of(shape) == ShapeCatalog.Family.ARCH else false
 	if _editing_entry:
-		edited.emit(_editing_entry, n, block, shape)
+		edited.emit(_editing_entry, n, block, shape, glow)
 	else:
-		created.emit(n, block, shape)
+		created.emit(n, block, shape, glow)
 	queue_free()

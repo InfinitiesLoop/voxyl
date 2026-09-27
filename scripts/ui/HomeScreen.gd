@@ -1043,15 +1043,17 @@ func _open_entry_dialog(entry: PaletteEntry, block: String) -> void:
 		dlg.setup_edit(pal, entry)
 	else:
 		dlg.setup(pal, _unique_semantic_name("New"), block, true)
-	dlg.created.connect(func(semantic_name: String, block_type_name: String, shape_id: String):
+	dlg.created.connect(func(semantic_name: String, block_type_name: String, shape_id: String, glow: bool):
 		var e := VoxelWorld.add_palette_entry(pal, semantic_name)
 		if e:
 			VoxelWorld.set_palette_entry_picks(pal, e, block_type_name, shape_id)
+			VoxelWorld.set_palette_entry_glow(pal, e, glow)
 		_after_entry_dialog(semantic_name))
-	dlg.edited.connect(func(e: PaletteEntry, semantic_name: String, block_type_name: String, shape_id: String):
+	dlg.edited.connect(func(e: PaletteEntry, semantic_name: String, block_type_name: String, shape_id: String, glow: bool):
 		if semantic_name != e.semantic_name:
 			VoxelWorld.rename_palette_entry(pal, e, semantic_name)
 		VoxelWorld.set_palette_entry_picks(pal, e, block_type_name, shape_id)
+		VoxelWorld.set_palette_entry_glow(pal, e, glow)
 		_after_entry_dialog(e.semantic_name))
 	dlg.popup_centered(Vector2i(1200, 820))
 

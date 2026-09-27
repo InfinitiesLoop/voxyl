@@ -376,16 +376,17 @@ func _on_add_entry(block := "", as_shape := false) -> void:
 	var dlg := NewPaletteEntryDialog.new()
 	get_tree().root.add_child(dlg)
 	dlg.setup(palette, _unique_semantic_name(palette, "New"), block, as_shape)
-	dlg.created.connect(func(semantic_name: String, block_type_name: String, shape_id: String):
-		_create_entry(palette, semantic_name, block_type_name, shape_id))
+	dlg.created.connect(func(semantic_name: String, block_type_name: String, shape_id: String, glow: bool):
+		_create_entry(palette, semantic_name, block_type_name, shape_id, glow))
 	dlg.popup_centered(Vector2i(1200, 820))
 
 # A new shaped entry goes straight into the active hotbar slot too — making one is almost
 # always about placing it next.
-func _create_entry(palette: Palette, semantic_name: String, block_type_name: String, shape_id: String) -> void:
+func _create_entry(palette: Palette, semantic_name: String, block_type_name: String, shape_id: String, glow: bool) -> void:
 	var e := VoxelWorld.add_palette_entry(palette, semantic_name)
 	if e:
 		VoxelWorld.set_palette_entry_picks(palette, e, block_type_name, shape_id)
+		VoxelWorld.set_palette_entry_glow(palette, e, glow)
 		if not shape_id.is_empty():
 			VoxelWorld.set_hotbar_slot(VoxelWorld.active_slot, semantic_name)
 	_refresh_items()
@@ -396,15 +397,16 @@ func _open_edit_entry_dialog(palette: Palette, entry: PaletteEntry) -> void:
 	var dlg := NewPaletteEntryDialog.new()
 	get_tree().root.add_child(dlg)
 	dlg.setup_edit(palette, entry)
-	dlg.edited.connect(func(e: PaletteEntry, semantic_name: String, block_type_name: String, shape_id: String):
-		_apply_entry_edit(palette, e, semantic_name, block_type_name, shape_id))
+	dlg.edited.connect(func(e: PaletteEntry, semantic_name: String, block_type_name: String, shape_id: String, glow: bool):
+		_apply_entry_edit(palette, e, semantic_name, block_type_name, shape_id, glow))
 	dlg.popup_centered(Vector2i(1200, 820))
 
 func _apply_entry_edit(palette: Palette, entry: PaletteEntry, semantic_name: String,
-		block_type_name: String, shape_id: String) -> void:
+		block_type_name: String, shape_id: String, glow: bool) -> void:
 	if semantic_name != entry.semantic_name:
 		VoxelWorld.rename_palette_entry(palette, entry, semantic_name)
 	VoxelWorld.set_palette_entry_picks(palette, entry, block_type_name, shape_id)
+	VoxelWorld.set_palette_entry_glow(palette, entry, glow)
 	_refresh_items()
 
 # "New", "New 2", "New 3", … — the first that no existing entry on this palette uses.
