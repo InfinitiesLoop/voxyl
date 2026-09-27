@@ -19,6 +19,9 @@ static func register(reg: McpRegistry) -> void:
 	reg.add("region_stats",
 		"Counts inside a region (default: the whole build): whole blocks by semantic, parts by semantic and shape, bounds.",
 		{"properties": {"region": McpArgs.s_region("Region (default: the whole build)")}}, _region_stats)
+	reg.add("selection_get",
+		"The region selection's current state: box bounds, filter (whitelist/blacklist), whether grow/shrink turned it into an exact (possibly disjoint) cell set, and the same counts region_stats gives for what's actually selected.",
+		{}, _selection_get)
 
 static func _cell_get(args: Dictionary) -> Dictionary:
 	if VoxelWorld.active_project == null:
@@ -91,4 +94,20 @@ static func _region_stats(args: Dictionary) -> Dictionary:
 	var r: Variant = McpArgs.region(args.get("region"), true)
 	if McpRegistry.is_error(r):
 		return r
-	return RegionOps.stats(VoxelWorld.active_project.data, r["min"], r["max"])
+	return RegionOps.stats(VoxelWorld.active_project.data, r["min"], r["max"], r["filter"], r.get("positions"))
+
+static func _selection_get(_args: Dictionary) -> Dictionary:
+	if VoxelWorld.active_project == null:
+		return McpRegistry.fail("no_project", "no project is open")
+	if not VoxelWorld.has_selection:
+		return {"selection": null}
+	var out := {
+		"min": VoxelWorld.selection_min,
+		"max": VoxelWorld.selection_max,
+		"filter": VoxelWorld.selection_filter,
+		"masked": VoxelWorld.selection_mask != null,
+	}
+	var stats := RegionOps.stats(VoxelWorld.active_project.data, VoxelWorld.selection_min, VoxelWorld.selection_max,
+		VoxelWorld.selection_filter, VoxelWorld.selection_mask.keys() if VoxelWorld.selection_mask != null else null)
+	out.merge(stats)
+	return out

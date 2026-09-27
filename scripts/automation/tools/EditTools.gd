@@ -82,9 +82,26 @@ static func register(reg: McpRegistry) -> void:
 			"pivot": {"type": "array", "items": {"type": "number"}, "description": "[x, z]; default the region's own center"},
 		}, ["region"]), _region_transform, {"mutates": true})
 	reg.add("selection_set",
-		"Set the region selection every view shows (the Select tool's box).",
+		"Set the region selection every view shows (the Select tool's box). Drops any filter or grow/shrink mask from before — always starts a fresh box.",
 		{"properties": {"region": McpArgs.s_region()}, "required": ["region"]}, _selection_set, {"mutates": true})
 	reg.add("selection_clear", "Clear the region selection.", {}, _selection_clear, {"mutates": true})
+	reg.add("selection_filter",
+		"Narrow the region selection to matching semantics without changing its box — a whitelist and/or blacklist of semantic names (e.g. select a box spanning two pillars and a connecting wall, then whitelist just the pillar's semantic so copy/cut/delete/etc. only ever touch the pillars). clear:true removes the filter. Requires an active selection.",
+		{"properties": {
+			"whitelist": {"type": "array", "items": {"type": "string"}},
+			"blacklist": {"type": "array", "items": {"type": "string"}},
+			"clear": {"type": "boolean"},
+		}}, _selection_filter, {"mutates": true})
+	reg.add("selection_grow",
+		"Grow the selection by flood-filling same-semantic neighbors out from its current cells, `range` steps of face-adjacency (6-connectivity; diagonal:true adds the 12 edge/8 corner neighbors too) — never crosses a gap of non-matching cells, so it can end up disjoint. Each cell's own semantic is the growth target unless `semantic` overrides it for every seed. Replaces the selection with the exact grown cell set and folds whatever it grew into into the selection's filter, so a grow followed by copy/cut/delete/etc. only touches that material even where the grown area overlaps mixed cells.",
+		{"properties": {
+			"range": {"type": "integer", "description": "Steps to grow, default 1"},
+			"semantic": {"type": "string", "description": "Grow into this semantic instead of each seed's own"},
+			"diagonal": {"type": "boolean"},
+		}}, _selection_grow, {"mutates": true})
+	reg.add("selection_shrink",
+		"Erode the selection by `range` steps: repeatedly drops cells with a face-neighbor outside the current set. A plain box is first turned into an exact cell set (capped at 4,000,000 cells, same as any region).",
+		{"properties": {"range": {"type": "integer", "description": "Steps to shrink, default 1"}}}, _selection_shrink, {"mutates": true})
 
 static func _props(extra: Dictionary, required: Array = []) -> Dictionary:
 	var p := McpArgs.edit_props()
@@ -163,7 +180,7 @@ static func _cells_clear(args: Dictionary) -> Dictionary:
 		var r: Variant = McpArgs.region(args["region"])
 		if McpRegistry.is_error(r):
 			return r
-		edits.append_array(RegionOps.clear_edits(data, r["min"], r["max"], sem, parts_only))
+		edits.append_array(RegionOps.clear_edits(data, r["min"], r["max"], sem, parts_only, r["filter"], r.get("positions")))
 	if edits.is_empty() and not args.has("region") and not args.has("positions"):
 		return McpRegistry.fail("bad_argument", "give positions or region")
 	return McpArgs.commit("cells_clear", edits, args)
@@ -240,7 +257,8 @@ static func _region_fill(args: Dictionary) -> Dictionary:
 		if McpRegistry.is_error(o):
 			return o
 		template = {"op": "block", "semantic": sem, "orientation": o}
-	return McpArgs.commit("region_fill", RegionOps.fill_edits(r["min"], r["max"], style, template), args)
+	var edits := RegionOps.fill_edits(r["min"], r["max"], style, template, r["filter"], r.get("positions"), (pv as VoxelProject).data)
+	return McpArgs.commit("region_fill", edits, args)
 
 static func _region_replace(args: Dictionary) -> Dictionary:
 	var pv: Variant = McpArgs.project(args)
@@ -249,7 +267,7 @@ static func _region_replace(args: Dictionary) -> Dictionary:
 	var r: Variant = McpArgs.region(args.get("region"), true)
 	if McpRegistry.is_error(r):
 		return r
-	var edits := RegionOps.replace_edits((pv as VoxelProject).data, r["min"], r["max"], str(args["from"]), str(args["to"]))
+	var edits := RegionOps.replace_edits((pv as VoxelProject).data, r["min"], r["max"], str(args["from"]), str(args["to"]), r["filter"], r.get("positions"))
 	return McpArgs.commit("region_replace", edits, args)
 
 static func _region_move(args: Dictionary) -> Dictionary:
@@ -262,7 +280,8 @@ static func _region_move(args: Dictionary) -> Dictionary:
 	var by: Variant = McpArgs.vec3i_or_fail(args.get("by"), "by")
 	if McpRegistry.is_error(by):
 		return by
-	return McpArgs.commit("region_move", RegionOps.move_edits((pv as VoxelProject).data, r["min"], r["max"], by), args)
+	var edits := RegionOps.move_edits((pv as VoxelProject).data, r["min"], r["max"], by, r["filter"], r.get("positions"))
+	return McpArgs.commit("region_move", edits, args)
 
 static func _region_copy(args: Dictionary) -> Dictionary:
 	var pv: Variant = McpArgs.project(args)
@@ -271,7 +290,7 @@ static func _region_copy(args: Dictionary) -> Dictionary:
 	var r: Variant = McpArgs.region(args.get("region"))
 	if McpRegistry.is_error(r):
 		return r
-	var n := VoxelWorld.copy_region(r["min"], r["max"])
+	var n := VoxelWorld.copy_region(r["min"], r["max"], r["filter"], r.get("positions"))
 	return {"copied_cells": n, "size": VoxelWorld.clipboard_size()}
 
 static func _clipboard_paste(args: Dictionary) -> Dictionary:
@@ -332,19 +351,8 @@ static func _region_transform(args: Dictionary) -> Dictionary:
 				"pivot %s puts cells between cells for this turn; use a pivot whose x and z are both whole or both .5" % str([pivot.x, pivot.z]))
 		pivot.z = floorf(pivot.z) if not is_equal_approx(pivot.z, roundf(pivot.z)) else pivot.z - 0.5
 		t = SpatialXform.about(b, pivot)
-	var cells := RegionOps.cells_in(data, mn, mx)
-	var edits: Array = []
-	var rejected: Array = []
-	for p in cells:
-		edits.append({"pos": p, "op": "clear"})
-	for p in cells:
-		var np := t.apply_pos(p)
-		var nc := t.apply_cell(data.get_cell(p))
-		if nc == null:
-			rejected.append({"pos": p, "reason": "no_mirror_image", "detail": "a part here has no mirror image"})
-			continue
-		edits.append({"pos": np, "op": "cell", "cell": nc})
-	return McpArgs.commit("region_transform", edits, args, rejected)
+	var result := RegionOps.transform_edits(data, mn, mx, t, r["filter"], r.get("positions"))
+	return McpArgs.commit("region_transform", result["edits"], args, result["rejected"])
 
 static func _selection_set(args: Dictionary) -> Dictionary:
 	if VoxelWorld.active_project == null:
@@ -358,3 +366,29 @@ static func _selection_set(args: Dictionary) -> Dictionary:
 static func _selection_clear(_args: Dictionary) -> Dictionary:
 	VoxelWorld.clear_selection()
 	return {"selection": null}
+
+static func _selection_filter(args: Dictionary) -> Dictionary:
+	if not VoxelWorld.has_selection:
+		return McpRegistry.fail("no_selection", "there's no region selection")
+	VoxelWorld.set_selection_filter(args.get("whitelist", []), args.get("blacklist", []), bool(args.get("clear", false)))
+	return {"filter": VoxelWorld.selection_filter}
+
+static func _selection_grow(args: Dictionary) -> Dictionary:
+	if not VoxelWorld.has_selection:
+		return McpRegistry.fail("no_selection", "there's no region selection")
+	var result := VoxelWorld.grow_selection(int(args.get("range", 1)), str(args.get("semantic", "")), bool(args.get("diagonal", false)))
+	if result.has("error"):
+		match str(result["error"]):
+			"empty_selection": return McpRegistry.fail("empty_region", "the selection has no cells to grow from")
+			_: return McpRegistry.fail("no_selection", "there's no region selection")
+	return {"cells": result["cells"], "filter": VoxelWorld.selection_filter, "bounds": [VoxelWorld.selection_min, VoxelWorld.selection_max]}
+
+static func _selection_shrink(args: Dictionary) -> Dictionary:
+	if not VoxelWorld.has_selection:
+		return McpRegistry.fail("no_selection", "there's no region selection")
+	var result := VoxelWorld.shrink_selection(int(args.get("range", 1)))
+	if result.has("error"):
+		match str(result["error"]):
+			"too_large": return McpRegistry.fail("too_large", "the selection box has too many cells to shrink (max 4,000,000); narrow it first")
+			_: return McpRegistry.fail("no_selection", "there's no region selection")
+	return {"cells": result["cells"], "bounds": [VoxelWorld.selection_min, VoxelWorld.selection_max]}

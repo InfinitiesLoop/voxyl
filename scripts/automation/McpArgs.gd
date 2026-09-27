@@ -36,7 +36,10 @@ static func project(args: Dictionary) -> Variant:
 	return p
 
 # A Region (see McpConventions): { min, max } | { selection: true } | { semantic } |
-# { all: true }, with optional pad. Returns { min: Vector3i, max: Vector3i } or a failure.
+# { all: true }, with optional pad and an optional `filter` ({whitelist?, blacklist?} of
+# semantic names). Returns { min: Vector3i, max: Vector3i, filter: Dictionary } or a
+# failure; a masked selection (after selection_grow/shrink) also returns `positions`
+# (Array[Vector3i]) — the exact cells to use in place of scanning min/max.
 static func region(spec: Variant, default_all := false) -> Variant:
 	var data := VoxelWorld.active_project.data if VoxelWorld.active_project else null
 	if spec == null:
@@ -47,6 +50,8 @@ static func region(spec: Variant, default_all := false) -> Variant:
 		return McpRegistry.fail("bad_argument", "region must be an object, e.g. {min:[x,y,z], max:[x,y,z]} or {all:true}")
 	var mn: Vector3i
 	var mx: Vector3i
+	var filter := {}
+	var positions: Variant = null
 	if spec.has("min") or spec.has("max"):
 		var a: Variant = vec3i(spec.get("min"))
 		var b: Variant = vec3i(spec.get("max", spec.get("min")))
@@ -59,6 +64,9 @@ static func region(spec: Variant, default_all := false) -> Variant:
 			return McpRegistry.fail("no_selection", "there's no region selection")
 		mn = VoxelWorld.selection_min
 		mx = VoxelWorld.selection_max
+		filter = VoxelWorld.selection_filter
+		if VoxelWorld.selection_mask != null:
+			positions = VoxelWorld.selection_positions()
 	elif spec.has("semantic"):
 		var s := str(spec["semantic"])
 		var found := false
@@ -95,7 +103,19 @@ static func region(spec: Variant, default_all := false) -> Variant:
 	var vol := (mx.x - mn.x + 1) * (mx.y - mn.y + 1) * (mx.z - mn.z + 1)
 	if vol > 4_000_000:
 		return McpRegistry.fail("too_large", "region has %d cells (max 4,000,000); split it" % vol)
-	return {"min": mn, "max": mx}
+	if spec.has("filter"):
+		var f: Variant = spec["filter"]
+		if not (f is Dictionary):
+			return McpRegistry.fail("bad_argument", "filter must be an object {whitelist?, blacklist?}")
+		var wl: Variant = f.get("whitelist", [])
+		var bl: Variant = f.get("blacklist", [])
+		if not (wl is Array) or not (bl is Array):
+			return McpRegistry.fail("bad_argument", "filter.whitelist/blacklist must be arrays of semantic names")
+		filter = {"whitelist": wl, "blacklist": bl}
+	var out := {"min": mn, "max": mx, "filter": filter}
+	if positions != null:
+		out["positions"] = positions
+	return out
 
 # A plain block's orientation from {facing: word, top: bool} or {orientation: int}.
 static func orientation(spec: Dictionary) -> Variant:
@@ -225,7 +245,7 @@ static func unknown_semantics(edits: Array) -> PackedStringArray:
 static func s_vec3(desc := "[x, y, z]") -> Dictionary:
 	return {"type": "array", "items": {"type": "integer"}, "minItems": 3, "maxItems": 3, "description": desc}
 
-static func s_region(desc := "Region: {min:[x,y,z], max:[x,y,z]} | {selection:true} | {semantic:\"Name\"} | {all:true}; optional pad") -> Dictionary:
+static func s_region(desc := "Region: {min:[x,y,z], max:[x,y,z]} | {selection:true} | {semantic:\"Name\"} | {all:true}; optional pad, and optional filter:{whitelist?:[\"Name\",...], blacklist?:[\"Name\",...]} narrowing it to matching semantics (a {selection:true} region also picks up the selection's own filter/grow-shrink mask — see selection_filter/selection_grow/selection_shrink)") -> Dictionary:
 	return {"type": "object", "description": desc}
 
 static func edit_props() -> Dictionary:

@@ -51,7 +51,8 @@ static func _status(_args: Dictionary) -> Dictionary:
 		out["hotbar"] = {"slots": Array(VoxelWorld.hotbar), "active": VoxelWorld.active_slot}
 		out["selection"] = null
 		if VoxelWorld.has_selection:
-			out["selection"] = {"min": VoxelWorld.selection_min, "max": VoxelWorld.selection_max}
+			out["selection"] = {"min": VoxelWorld.selection_min, "max": VoxelWorld.selection_max,
+				"filter": VoxelWorld.selection_filter, "masked": VoxelWorld.selection_mask != null}
 		out["cutaway"] = ViewTools.cutaway_json()
 		var h := VoxelWorld.history_entries()
 		out["history"] = {"steps": (h["entries"] as Array).size(), "current": h["current"],

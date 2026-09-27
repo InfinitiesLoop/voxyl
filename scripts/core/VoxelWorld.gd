@@ -78,6 +78,18 @@ var selection_min: Vector3i = Vector3i.ZERO
 var selection_max: Vector3i = Vector3i.ZERO
 var _selection_anchor: Variant = null  # Vector3i first corner, or null between cycles
 
+# A whitelist/blacklist ({whitelist: [String], blacklist: [String]}) narrowing which
+# semantics inside the box the selection actually covers, and a mask that replaces the
+# box with an exact (possibly disjoint, non-cuboid) cell set once grow/shrink is used —
+# see selection_positions(). Both reset whenever a fresh box is picked (set_selection_box)
+# or the selection is cleared. Transient like _selection_anchor: not saved with the project.
+var selection_filter: Dictionary = {}
+var selection_mask = null  # Dictionary[Vector3i, true], or null for a plain box
+const _FACE_NEIGHBORS: Array[Vector3i] = [
+	Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
+	Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1),
+]
+
 # Cutaway: an inclusive box of cells the 3D views hide, to see into (and build inside) a
 # closed-in space — a roof lifted off, a wall sliced away, everything above a floor. Like the
 # selection it's project-tied editor state that names positions only (Principle 2): the data
@@ -255,6 +267,8 @@ func reset_for_tests() -> void:
 	active_slot = 0
 	has_selection = false
 	_selection_anchor = null
+	selection_filter = {}
+	selection_mask = null
 	has_cutaway = false
 	cutaway_enabled = true
 	_populate_defaults()
@@ -264,11 +278,13 @@ func open(project: VoxelProject) -> void:
 	active_project = project
 	_semantic_appearance_baseline_project = null  # force a fresh baseline under the new stack
 	_load_hotbar_from_project()
-	# Restore the saved region selection (transient anchor always starts clear).
+	# Restore the saved region selection (transient anchor/filter/mask always start clear).
 	has_selection = project.has_selection
 	selection_min = project.selection_min
 	selection_max = project.selection_max
 	_selection_anchor = null
+	selection_filter = {}
+	selection_mask = null
 	has_cutaway = project.has_cutaway
 	cutaway_min = project.cutaway_min
 	cutaway_max = project.cutaway_max
@@ -604,29 +620,28 @@ func _fx_steps(cells: Array) -> Array:
 func is_mid_operation() -> bool:
 	return _op_depth > 0
 
-# Copy the cells of an inclusive box into the clipboard (the Select tool's copy, for any box).
-func copy_region(mn: Vector3i, mx: Vector3i) -> int:
+# Copy the cells of an inclusive box into the clipboard (the Select tool's copy, for any
+# box), narrowed by `filter`/`positions` the same way every region operation is.
+func copy_region(mn: Vector3i, mx: Vector3i, filter := {}, positions: Variant = null) -> int:
 	if not active_project:
 		return 0
-	var data := active_project.data
+	var kept := RegionOps.cells_without(active_project.data, mn, mx, [], filter, positions)
 	var clip := {}
-	for x in range(mn.x, mx.x + 1):
-		for y in range(mn.y, mx.y + 1):
-			for z in range(mn.z, mx.z + 1):
-				var pos := Vector3i(x, y, z)
-				var cell := data.get_cell(pos)
-				if cell != null:
-					clip[pos - mn] = cell.duplicate_cell()
+	for p: Vector3i in kept:
+		clip[p - mn] = kept[p]
 	_clipboard = clip
 	_clipboard_size = mx - mn + Vector3i.ONE
 	_has_clipboard = true
 	return clip.size()
 
-# Set the region selection to an inclusive box (what two Select-tool clicks do).
+# Set the region selection to an inclusive box (what two Select-tool clicks do). Always
+# starts a fresh selection: any filter or grow/shrink mask from before is dropped.
 func set_selection_box(a: Vector3i, b: Vector3i) -> void:
 	selection_min = Vector3i(mini(a.x, b.x), mini(a.y, b.y), mini(a.z, b.z))
 	selection_max = Vector3i(maxi(a.x, b.x), maxi(a.y, b.y), maxi(a.z, b.z))
 	_selection_anchor = null
+	selection_filter = {}
+	selection_mask = null
 	has_selection = true
 	region_selection_changed.emit()
 	mark_dirty()
@@ -1410,13 +1425,16 @@ func select_region_click(cell: Variant) -> void:
 	selection_min = Vector3i(mini(a.x, corner.x), mini(a.y, corner.y), mini(a.z, corner.z))
 	selection_max = Vector3i(maxi(a.x, corner.x), maxi(a.y, corner.y), maxi(a.z, corner.z))
 	_selection_anchor = null
+	selection_filter = {}
+	selection_mask = null
 	has_selection = true
 	region_selection_changed.emit()
 	mark_dirty()
 
 # Move one face of the selection box by `delta` cells (axis 0/1/2 = x/y/z; max_side = the
 # + face), never past the opposite face — the fine-tuning for a box whose corners sit in air
-# where no click can reach.
+# where no click can reach. Drops a grow/shrink mask (if any): resizing a face after that
+# no longer has a clear meaning, so this falls back to the plain box it's nudging.
 func nudge_selection_face(axis: int, max_side: bool, delta: int) -> void:
 	if not has_selection:
 		return
@@ -1424,6 +1442,7 @@ func nudge_selection_face(axis: int, max_side: bool, delta: int) -> void:
 		selection_max[axis] = maxi(selection_min[axis], selection_max[axis] + delta)
 	else:
 		selection_min[axis] = mini(selection_max[axis], selection_min[axis] + delta)
+	selection_mask = null
 	region_selection_changed.emit()
 	mark_dirty()
 
@@ -1434,17 +1453,181 @@ func clear_selection() -> void:
 		return
 	has_selection = false
 	_selection_anchor = null
+	selection_filter = {}
+	selection_mask = null
 	region_selection_changed.emit()
 	mark_dirty()
 
 # The inclusive [min, max] box a view should outline: the completed cuboid, or the
-# pending single-cell first corner, or [] when there's neither.
+# pending single-cell first corner, or [] when there's neither. Tracks the mask's
+# bounding box once grow/shrink replaces the plain box (see _recompute_selection_bounds).
 func selection_box() -> Array:
 	if has_selection:
 		return [selection_min, selection_max]
 	if _selection_anchor != null:
 		return [_selection_anchor, _selection_anchor]
 	return []
+
+# The exact cells the selection covers right now: the grow/shrink mask if there is one,
+# else every occupied cell in the box — either way narrowed by selection_filter. Empty
+# when there's no selection. This is what every selection-consuming MCP tool actually
+# operates on ({selection:true} regions resolve through this).
+func selection_positions() -> Array[Vector3i]:
+	if not has_selection or not active_project:
+		return []
+	var data := active_project.data
+	if selection_mask != null:
+		var out: Array[Vector3i] = []
+		for p: Vector3i in selection_mask:
+			if data.cells.has(p) and RegionOps.matches_filter(data.cells[p], selection_filter):
+				out.append(p)
+		return out
+	return RegionOps.cells_in(data, selection_min, selection_max, selection_filter)
+
+# Set (or, with `clear`, remove) the whitelist/blacklist narrowing the selection. Requires
+# an active selection; the semantics named don't have to exist yet or currently be used.
+func set_selection_filter(whitelist: Array = [], blacklist: Array = [], clear := false) -> void:
+	if not has_selection:
+		return
+	selection_filter = {} if clear else {"whitelist": whitelist.duplicate(), "blacklist": blacklist.duplicate()}
+	region_selection_changed.emit()
+	mark_dirty()
+
+func _neighbor_offsets(diagonal: bool) -> Array[Vector3i]:
+	if not diagonal:
+		return _FACE_NEIGHBORS
+	var out: Array[Vector3i] = []
+	for dx in range(-1, 2):
+		for dy in range(-1, 2):
+			for dz in range(-1, 2):
+				if dx == 0 and dy == 0 and dz == 0:
+					continue
+				out.append(Vector3i(dx, dy, dz))
+	return out
+
+func _cell_semantics(cell: BlockCell) -> Array:
+	if cell.is_shaped():
+		var out := []
+		for part in cell.parts:
+			var s := str(part["semantic"])
+			if not (s in out):
+				out.append(s)
+		return out
+	return [cell.type_id]
+
+func _cell_has_semantic(cell: BlockCell, semantic: String) -> bool:
+	if cell.is_shaped():
+		for part in cell.parts:
+			if str(part["semantic"]) == semantic:
+				return true
+		return false
+	return cell.type_id == semantic
+
+# Grow the selection by flood-filling same-semantic neighbors (face-adjacent 6-connectivity,
+# or all 26 with `diagonal`) up to `range_steps` steps out from its current cells. Each
+# seed's own semantic is the growth target unless `semantic` overrides it for every seed.
+# Replaces the selection with an explicit mask (which can end up disjoint / non-cuboid —
+# growth never crosses a gap of non-matching cells) and folds whatever semantics it
+# actually grew into into selection_filter's whitelist, so a grow followed by delete/copy/
+# cut only ever touches that material even where the grown area overlaps a mixed cell.
+func grow_selection(range_steps := 1, semantic := "", diagonal := false) -> Dictionary:
+	if not has_selection or not active_project:
+		return {"error": "no_selection"}
+	var data := active_project.data
+	var seeds := selection_positions()
+	if seeds.is_empty():
+		return {"error": "empty_selection"}
+	var offsets := _neighbor_offsets(diagonal)
+	var mask := {}
+	for p in seeds:
+		mask[p] = true
+	var targets := {}
+	var frontier: Array = seeds.duplicate()
+	for _step in range(maxi(range_steps, 0)):
+		var next_frontier: Array = []
+		for p: Vector3i in frontier:
+			var seed_targets: Array = [semantic] if not semantic.is_empty() else _cell_semantics(data.cells[p])
+			for s in seed_targets:
+				if str(s).is_empty() or not RegionOps.filter_ok(selection_filter, str(s)):
+					continue
+				targets[str(s)] = true
+				for off: Vector3i in offsets:
+					var np: Vector3i = p + off
+					if mask.has(np) or not data.cells.has(np):
+						continue
+					if _cell_has_semantic(data.cells[np], str(s)):
+						mask[np] = true
+						next_frontier.append(np)
+		frontier = next_frontier
+		if frontier.is_empty():
+			break
+	selection_mask = mask
+	_recompute_selection_bounds()
+	if not targets.is_empty():
+		var wl: Array = (selection_filter.get("whitelist", []) as Array).duplicate()
+		for s in targets:
+			if not (s in wl):
+				wl.append(s)
+		selection_filter = {"whitelist": wl, "blacklist": (selection_filter.get("blacklist", []) as Array).duplicate()}
+	region_selection_changed.emit()
+	mark_dirty()
+	return {"cells": mask.size()}
+
+# Erode the selection by `range_steps` steps: repeatedly drop any cell with a face-neighbor
+# outside the current set. A plain box selection is first materialized into a mask (capped
+# like McpArgs.region()'s 4,000,000-cell guard, since this remembers every cell rather than
+# just two corners).
+func shrink_selection(range_steps := 1) -> Dictionary:
+	if not has_selection or not active_project:
+		return {"error": "no_selection"}
+	if selection_mask == null:
+		var size := selection_max - selection_min + Vector3i.ONE
+		var vol := size.x * size.y * size.z
+		if vol > 4_000_000:
+			return {"error": "too_large"}
+		var initial := {}
+		for p in selection_positions():
+			initial[p] = true
+		selection_mask = initial
+	var mask: Dictionary = selection_mask
+	for _step in range(maxi(range_steps, 0)):
+		var next_mask := {}
+		for p: Vector3i in mask:
+			var edge := false
+			for off in _FACE_NEIGHBORS:
+				if not mask.has(p + off):
+					edge = true
+					break
+			if not edge:
+				next_mask[p] = true
+		mask = next_mask
+		if mask.is_empty():
+			break
+	selection_mask = mask
+	_recompute_selection_bounds()
+	region_selection_changed.emit()
+	mark_dirty()
+	return {"cells": mask.size()}
+
+# Keeps selection_min/max tracking the mask's bounding box, so the highlight rectangle and
+# anything still reading selection_box()/selection_min/max see a sensible box even once
+# grow/shrink made the real selection disjoint or non-cuboid.
+func _recompute_selection_bounds() -> void:
+	if selection_mask == null or selection_mask.is_empty():
+		return
+	var lo: Vector3i
+	var hi: Vector3i
+	var first := true
+	for p: Vector3i in selection_mask:
+		if first:
+			lo = p
+			hi = p
+			first = false
+		else:
+			lo = Vector3i(mini(lo.x, p.x), mini(lo.y, p.y), mini(lo.z, p.z))
+			hi = Vector3i(maxi(hi.x, p.x), maxi(hi.y, p.y), maxi(hi.z, p.z))
+	selection_min = lo
+	selection_max = hi
 
 # ---------------------------------------------------------------------------
 # Cutaway — see the field comments above. Set from a selection or any box, then nudged
@@ -1509,37 +1692,37 @@ func clipboard_size() -> Vector3i:
 func clipboard_cells() -> Dictionary:
 	return _clipboard
 
+# The selection's mask as a plain Array for RegionOps' `positions` argument, or null in
+# plain-box mode (letting the callee box-scan filtered live, cheaper for a large box).
+func _selection_mask_positions() -> Variant:
+	return selection_mask.keys() if selection_mask != null else null
+
 # Deep-clone the selected region into the clipboard, keyed relative to selection_min so
-# paste can drop it anywhere. No-op without a completed selection.
+# paste can drop it anywhere. Honors selection_filter/a grow-shrink mask. No-op without a
+# completed selection.
 func copy_selection() -> void:
 	if not has_selection or not active_project:
 		return
-	copy_region(selection_min, selection_max)
+	copy_region(selection_min, selection_max, selection_filter, _selection_mask_positions())
 
-# Erase every block in the selection as one undo step — a delete without the clipboard copy
-# that cut_selection makes. The selection itself is kept (so DELETE can be followed by more
-# edits in the same region). No-op without a completed selection.
+# Erase the selection's matching cells as one undo step — a delete without the clipboard
+# copy that cut_selection makes. The selection itself is kept (so DELETE can be followed
+# by more edits in the same region). No-op without a completed selection.
 func delete_selection() -> void:
 	if not has_selection or not active_project:
 		return
-	begin_operation("Delete region")
-	for x in range(selection_min.x, selection_max.x + 1):
-		for y in range(selection_min.y, selection_max.y + 1):
-			for z in range(selection_min.z, selection_max.z + 1):
-				clear_block(Vector3i(x, y, z))
-	end_operation()
+	var edits := RegionOps.clear_edits(active_project.data, selection_min, selection_max,
+		"", false, selection_filter, _selection_mask_positions())
+	apply_edits(edits, "Delete region")
 
 # Copy the selection, then delete it as one undo step.
 func cut_selection() -> void:
 	if not has_selection or not active_project:
 		return
 	copy_selection()
-	begin_operation("Cut")
-	for x in range(selection_min.x, selection_max.x + 1):
-		for y in range(selection_min.y, selection_max.y + 1):
-			for z in range(selection_min.z, selection_max.z + 1):
-				clear_block(Vector3i(x, y, z))
-	end_operation()
+	var edits := RegionOps.clear_edits(active_project.data, selection_min, selection_max,
+		"", false, selection_filter, _selection_mask_positions())
+	apply_edits(edits, "Cut")
 
 # ---------------------------------------------------------------------------
 # Prefabs — named, reusable pieces of builds, global to the workspace (see Prefab). Saved
