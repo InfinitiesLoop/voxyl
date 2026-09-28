@@ -478,12 +478,14 @@ func _heal_catwalks_faces(ctx: MCHealContext, registry: String, meta: int, displ
 const _CHISEL_TEX := "chisel:blocks"
 const _CHISEL_SIDE_SUFFIXES := ["-side", "-ctmv", "-ctmh"]
 
-# Groups that are real Minecraft panes (glass_pane, and the 16 dyed stained_glass_pane_*
-# families — see ChiselVariations' own comment on that family) rather than a decorative
-# cube — these get PaneGeometry's real connecting geometry via _heal_chisel_pane instead
-# of add_cube's full-block fallback.
+# Groups that are real Minecraft panes/bars (glass_pane, iron_bars, and the 16 dyed
+# stained_glass_pane_* families — see ChiselVariations' own comment on that family)
+# rather than a decorative cube — these get PaneGeometry's real connecting geometry via
+# _heal_chisel_pane instead of add_cube's full-block fallback. iron_bars reuses the same
+# post/side/side_alt/noside/noside_alt shape real Minecraft's own bars_* models do — it's
+# numerically the identical thin-band convention as a pane, just under a different name.
 func _is_chisel_pane_group(group: String) -> bool:
-	return group == "glass_pane" or group.begins_with("stained_glass_pane_")
+	return group == "glass_pane" or group == "iron_bars" or group.begins_with("stained_glass_pane_")
 
 func _heal_chisel(ctx: MCHealContext) -> void:
 	var lang := _parse_chisel_lang(ctx)
@@ -512,22 +514,34 @@ func _heal_chisel(ctx: MCHealContext) -> void:
 
 # A pane-shaped Chisel group, healed with PaneGeometry's real connecting geometry
 # instead of a full cube. Chisel's own 1.7.10 pane renderer (team.chisel.block.
-# BlockCarvablePane, predating blockstate JSON) already split its look into the same
-# two textures vanilla's later blockstate/model JSON pane formalized — a "side" (the
-# flat visible face) and a "top" (the thin rim/end-cap) — confirmed by _chisel_top_side
-# actually finding both for every pane group in the real jar (block_get on a healed
-# pane before this fix showed both a "-side" and a "-top" texture bound to its one
-# cube face set), so the same top/side resolution _chisel_pair uses for a cube column
-# just needs to feed PaneGeometry instead of six cube faces.
+# BlockCarvablePane, predating blockstate JSON) already split most variants' look into
+# the same two textures vanilla's later blockstate/model JSON pane formalized — a
+# "side" (the flat visible face) and a "top" (the thin rim/end-cap) — so the same
+# top/side resolution _chisel_pair uses for a cube column just needs to feed
+# PaneGeometry instead of six cube faces. Not every variant ships a dedicated "-top"
+# though (confirmed against the real jar: e.g. glass_pane's "Screen Pane" is one bare
+# file, "glasspane/terrain-glass-screen", no top/side split at all) — those fall back
+# to PaneGeometry's single-texture mode (the same file for both roles), same spirit as
+# _chisel_faces' single-before-pair fallback for the cube path, just tried in the
+# opposite order since a pane specifically benefits from a real dedicated rim texture
+# when one's actually there.
 func _heal_chisel_pane(ctx: MCHealContext, registry: String, group: String, meta: int,
 		base: String, display: String) -> void:
-	var tex := _chisel_top_side(ctx, group, base)
-	if tex.is_empty():
+	var side_tex: String
+	var edge_tex: String
+	var pair := _chisel_top_side(ctx, group, base)
+	if not pair.is_empty():
+		side_tex = pair["side"]
+		edge_tex = pair["top"]
+	else:
+		side_tex = _chisel_single(ctx, group, base)
+		edge_tex = side_tex
+	if side_tex.is_empty():
 		ctx.warnings.append(
 			"chisel: no texture match for %s meta %d (%s), skipped" % [registry, meta, base])
 		return
-	var color := _avg(ctx, tex["side"])
-	var bt := ctx.add_pane(_stable_name(ctx, registry, meta, display), tex["side"], tex["top"], color,
+	var color := _avg(ctx, side_tex)
+	var bt := ctx.add_pane(_stable_name(ctx, registry, meta, display), side_tex, edge_tex, color,
 		PackedStringArray(["chisel", group.to_lower()]))
 	ctx.confirm_registry(bt, registry, meta, "Chisel", display)
 
