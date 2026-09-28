@@ -17,6 +17,12 @@ const DOLLY_STEP := 1.25
 # Base fly speed, in cells/second while WASD-flying (before any sprint multiplier).
 const _FLY_SPEED := 15.0
 
+# How far (in cells) the crosshair can hit a block or the floor plane — erase/place/pick/
+# slice-select all aim through this. Being able to reach across a build is handy, but with
+# no cap at all an accidental click (e.g. refocusing the window — see _on_app_focus_lost)
+# could land anywhere the camera happened to be pointed, including far outside the build.
+const _INTERACT_REACH := 32.0
+
 # Uniform scale applied to every voxel mesh. This is a view rendering style, not
 # model geometry: BlockModel elements are authored at true size (a full block fills
 # [0,1]). At 1.0 a full block occupies its whole cell, so adjacent full blocks meet
@@ -344,6 +350,8 @@ func _ready() -> void:
 	VoxelWorld.cutaway_changed.connect(_refresh_cutaway)
 	VoxelWorld.prefab_paste_requested.connect(_on_prefab_paste_requested)
 	visibility_changed.connect(_on_visibility_changed)
+	if not offscreen:
+		get_window().focus_exited.connect(_on_app_focus_lost)
 	set_process(true)
 	# A view created while a project is already open (e.g. spawned during a layout
 	# restore, after project_opened has already fired) must render the current build
@@ -361,6 +369,16 @@ func _on_visibility_changed() -> void:
 		_release_cursor()
 	if _slice_active:
 		_exit_slice_select()
+
+# The OS window lost focus (alt-tab, clicking another app, …). The OS forces the captured
+# cursor back to normal the moment that happens, whether or not we hear about it — so
+# without this, _fly_mode is left stale (true) and the very click the user makes to give
+# the window focus back arrives here still reading as an in-game left-click (erase). Drop
+# out of fly mode now, same as Minecraft popping its pause menu on tab-out: a click on the
+# unfocused window just recaptures the cursor (see _on_svc_input) instead of editing anything.
+func _on_app_focus_lost() -> void:
+	if _fly_mode:
+		_release_cursor()
 
 # Bake a preview thumbnail from the live 3D viewport just before the project is saved, so
 # the home-screen card shows the build from the perspective the camera was last in — with
@@ -2253,7 +2271,7 @@ func _update_crosshair_target() -> void:
 		_overlay.queue_redraw()
 		return
 
-	var result := _raycast_grid(_camera_pos, _get_look_dir(), 20.0)
+	var result := _raycast_grid(_camera_pos, _get_look_dir(), _INTERACT_REACH)
 	_target_hit = result.get("hit", false)
 	_target_part = -1
 
@@ -2465,7 +2483,7 @@ func _raycast_floor_plane(origin: Vector3, direction: Vector3) -> Dictionary:
 	if abs(dir.y) < 0.001:
 		return {hit = false}
 	var t := (float(_floor_y) - origin.y) / dir.y
-	if t < 0.05 or t > 80.0:
+	if t < 0.05 or t > _INTERACT_REACH:
 		return {hit = false}
 	var hit_world := origin + dir * t
 	var cell := Vector3i(int(floor(hit_world.x)), _floor_y, int(floor(hit_world.z)))
@@ -4205,7 +4223,7 @@ func _enter_slice_select() -> void:
 	if not VoxelWorld.active_project:
 		return
 	var look := _get_look_dir()
-	var result := _raycast_grid(_camera_pos, look, 20.0)
+	var result := _raycast_grid(_camera_pos, look, _INTERACT_REACH)
 	if result.get("hit", false):
 		# Looking at a block face → slice through that block, parallel to the face.
 		_slice_center = result.pos

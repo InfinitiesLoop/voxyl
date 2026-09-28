@@ -364,19 +364,21 @@ func _refresh_items() -> void:
 	for entry in palette.entries:
 		var it := BlockGrid.Item.new()
 		it.key = entry.semantic_name
-		it.label = entry.semantic_name
 		it.caption = entry.semantic_name
+		# Same rich tooltip body as the hotbar (see VoxelWorld.describe_entry): block +
+		# library, shape family, light emission — not just the semantic name again.
+		it.label = VoxelWorld.describe_entry(entry.semantic_name, entry.block_type_name,
+			palette.library_names, entry.shape_id, entry.shape_glow)
 		if entry.is_shaped():
 			# Its shape cut from its block, searchable by shape + block name too.
 			it.block_type = VoxelWorld.icon_block_type_for_shape(entry.shape_id, entry.block_type_name, palette)
 			it.placeholder_color = it.block_type.color if it.block_type else Color(0.35, 0.35, 0.35)
-			it.label = "%s — %s of %s" % [entry.semantic_name, ShapeCatalog.name_of(entry.shape_id),
-				entry.block_type_name if not entry.block_type_name.is_empty() else "(undecided)"]
 			it.search_text = "%s %s %s" % [entry.semantic_name, ShapeCatalog.name_of(entry.shape_id), entry.block_type_name]
 		else:
 			var bt := VoxelWorld.workspace.resolve_block_type(entry.block_type_name, palette.library_names)
 			it.block_type = bt
 			it.placeholder_color = bt.color if bt else Color(0.35, 0.35, 0.35)
+			it.search_text = entry.semantic_name
 		items.append(it)
 	if not palette.builtin:
 		items.append(BlockGrid.add_item("Add"))
@@ -530,9 +532,33 @@ func open() -> void:
 		return
 	if _page == "prefabs":
 		_refresh_prefabs()
+	var slot_semantic := _sync_selection_to_active_slot()
 	_on_stack_changed()
+	if not slot_semantic.is_empty():
+		_grid.set_selected(slot_semantic)
 	visible = true
 	opened.emit()
+
+# Point the screen at whichever palette the active hotbar slot's semantic currently
+# resolves through (same last-wins precedence as find_palette_and_entry_for_semantic), and
+# return that semantic so the caller can also highlight it in the grid. This is what makes
+# opening the inventory answer "what palette did this come from?" — the usual reason to
+# open it right after grabbing a block via middle-click, which could have come from
+# anywhere. An empty slot, or a semantic no palette in the stack defines (a stale hotbar
+# entry), leaves whatever was selected last time alone.
+func _sync_selection_to_active_slot() -> String:
+	if not VoxelWorld.active_project:
+		return ""
+	var slot := VoxelWorld.active_slot
+	var semantic: String = VoxelWorld.hotbar[slot] if slot < VoxelWorld.hotbar.size() else ""
+	if semantic.is_empty():
+		return ""
+	var found := VoxelWorld.find_palette_and_entry_for_semantic(semantic)
+	if found.is_empty():
+		return ""
+	_selected_palette_name = (found["palette"] as Palette).name
+	_stack.set_selected(_selected_palette_name)
+	return semantic
 
 func close() -> void:
 	if not visible:

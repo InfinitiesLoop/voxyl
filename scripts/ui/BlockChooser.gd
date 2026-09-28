@@ -122,7 +122,14 @@ func configure(palette: Palette, current_block_name: String) -> void:
 				# filter in _apply_filter (blanked when only one library is visible).
 				_all_items.append(BlockGrid.block_item(bt, lib_name, lib_name))
 	_rebuild_rail()
-	_apply_filter([])          # empty = All blocks
+	# Open already scoped to the current pick's own library, with the pick itself
+	# highlighted in the grid (_apply_filter selects _selected_block) — so editing an entry
+	# starts by showing where it actually lives, not buried in "All blocks". An undecided
+	# entry (no current pick) has no library to scope to, so it keeps showing everything.
+	var owner_name: String = _owner_by_key.get(current_block_name, "")
+	var initial_libs: Array = [owner_name] if owner_name != "" else []
+	_rail.set_selection(initial_libs)
+	_apply_filter(initial_libs)
 	_update_preview()
 	_refresh_current_chip()
 

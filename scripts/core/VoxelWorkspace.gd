@@ -103,6 +103,15 @@ func resolve_block_type(block_name: String, library_names: Array) -> BlockType:
 			return bt
 	return null
 
+# Same resolution as resolve_block_type, but names the library that supplied it instead of
+# the BlockType itself — for UI that wants to tell the user where a block comes from (e.g.
+# a tooltip), without every caller re-walking the scope by hand. "" if none does.
+func resolve_block_type_library(block_name: String, library_names: Array) -> String:
+	for lib in _scope(library_names):
+		if lib.get_block_type(block_name) != null:
+			return lib.name
+	return ""
+
 # Resolve a model id within the same scope (models referenced by a resolved block type).
 func resolve_block_model(model_id: String, library_names: Array) -> BlockModel:
 	if ShapeModels.is_shape_model_id(model_id):

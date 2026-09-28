@@ -944,18 +944,37 @@ func get_shape_glow_for_semantic(semantic_name: String) -> bool:
 func is_shaped_semantic(semantic_name: String) -> bool:
 	return not get_shape_id_for_semantic(semantic_name).is_empty()
 
-# A short human-readable description of what a semantic currently resolves to, for
-# tooltips (hotbar slots, …): "Semantic — Shape of Block", "Semantic — Block", or
-# "Semantic — (undecided)" when no palette in the stack maps it to anything yet.
+# A compact, multi-line tooltip body for one block pick: the semantic, the block it
+# resolves to and which library that block comes from, its shape family when it cuts one,
+# and whether that shape emits light. The shared source for every tooltip that shows a
+# palette entry (hotbar slots, the Inventory grid) so they can't drift out of sync on what
+# info they show or how — previously each built its own text, and a plain (unshaped) entry
+# showed none of this at all.
+func describe_entry(semantic_name: String, block_type_name: String, library_names: Array,
+		shape_id: String, glow: bool) -> String:
+	var lines: Array[String] = [semantic_name]
+	if block_type_name.is_empty():
+		lines.append("(undecided)")
+	else:
+		var lib_name := workspace.resolve_block_type_library(block_type_name, library_names) if workspace else ""
+		lines.append("%s — %s" % [block_type_name, lib_name] if not lib_name.is_empty() else block_type_name)
+	if not shape_id.is_empty():
+		var family_name := str(ShapeCatalog.FAMILY_NAMES.get(ShapeCatalog.family_of(shape_id), ""))
+		lines.append("%s (%s)" % [ShapeCatalog.name_of(shape_id), family_name] if not family_name.is_empty() \
+			else ShapeCatalog.name_of(shape_id))
+		if glow:
+			lines.append("Emits light")
+	return "\n".join(lines)
+
+# A short human-readable description of what a semantic currently resolves to (last-wins
+# across the active project's palette stack), for tooltips (hotbar slots, …) — see
+# describe_entry for the format. "(undecided)" in place of the block when no palette in the
+# stack maps this semantic to one yet.
 func describe_semantic(semantic_name: String) -> String:
 	var r := _resolve_semantic(semantic_name)
-	var block_name: String = r.get("name", "")
-	if r.has("shape"):
-		return "%s — %s of %s" % [semantic_name, ShapeCatalog.name_of(str(r["shape"])),
-			block_name if not block_name.is_empty() else "(undecided)"]
-	if not block_name.is_empty():
-		return "%s — %s" % [semantic_name, block_name]
-	return "%s — (undecided)" % semantic_name
+	var palette: Palette = r.get("palette")
+	var libs: Array = palette.library_names if palette else []
+	return describe_entry(semantic_name, str(r.get("name", "")), libs, str(r.get("shape", "")), bool(r.get("glow", false)))
 
 # The palette (and its entry) that currently owns `semantic_name` in the active project's
 # stack — same last-wins precedence as _resolve_semantic, but returned even when the entry
