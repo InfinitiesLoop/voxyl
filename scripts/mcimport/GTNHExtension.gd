@@ -478,14 +478,26 @@ func _heal_catwalks_faces(ctx: MCHealContext, registry: String, meta: int, displ
 const _CHISEL_TEX := "chisel:blocks"
 const _CHISEL_SIDE_SUFFIXES := ["-side", "-ctmv", "-ctmh"]
 
+# Groups that are real Minecraft panes (glass_pane, and the 16 dyed stained_glass_pane_*
+# families — see ChiselVariations' own comment on that family) rather than a decorative
+# cube — these get PaneGeometry's real connecting geometry via _heal_chisel_pane instead
+# of add_cube's full-block fallback.
+func _is_chisel_pane_group(group: String) -> bool:
+	return group == "glass_pane" or group.begins_with("stained_glass_pane_")
+
 func _heal_chisel(ctx: MCHealContext) -> void:
 	var lang := _parse_chisel_lang(ctx)
 	for group in ChiselVariations.VARIATIONS:
 		var metas: Dictionary = ChiselVariations.VARIATIONS[group]
 		var registry := "chisel:%s" % group
 		var group_name: String = lang.get("chisel.%s" % group, _prettify(group))
+		var is_pane := _is_chisel_pane_group(group)
 		for meta in metas:
 			var base: String = metas[meta]
+			var display := _chisel_display(lang, group, group_name, int(meta))
+			if is_pane:
+				_heal_chisel_pane(ctx, registry, group, int(meta), base, display)
+				continue
 			var fake_controller: String = _CHISEL_FAKE_CONTROLLER_CROP.get(group, {}).get(int(meta), "")
 			var faces := _chisel_icon_crop_faces(ctx, fake_controller) if not fake_controller.is_empty() \
 				else _chisel_faces(ctx, group, base)
@@ -493,20 +505,43 @@ func _heal_chisel(ctx: MCHealContext) -> void:
 				ctx.warnings.append(
 					"chisel: no texture match for %s meta %d (%s), skipped" % [registry, meta, base])
 				continue
-			var display: String
-			var sgp_key := "SGP_DISPLAY:%s:%d" % [group, meta]
-			if lang.has(sgp_key):
-				display = lang[sgp_key]   # stained_glass_pane_*: a real name even at meta 0 —
-				                          # see _add_stained_glass_names
-			elif int(meta) == 0:
-				display = group_name   # meta 0's .desc is often a tooltip, not a name (e.g.
-				                        # "tile.andesite.0.desc=Generates in your world")
-			else:
-				display = lang.get("%s.%d" % [group, meta], "%s %d" % [group_name, meta])
 			var color := _avg(ctx, faces[BlockModel.Dir.NORTH])
 			var bt := ctx.add_cube(_stable_name(ctx, registry, int(meta), display), faces, color,
 				PackedStringArray(["chisel", group.to_lower()]))
 			ctx.confirm_registry(bt, registry, int(meta), "Chisel", display)
+
+# A pane-shaped Chisel group, healed with PaneGeometry's real connecting geometry
+# instead of a full cube. Chisel's own 1.7.10 pane renderer (team.chisel.block.
+# BlockCarvablePane, predating blockstate JSON) already split its look into the same
+# two textures vanilla's later blockstate/model JSON pane formalized — a "side" (the
+# flat visible face) and a "top" (the thin rim/end-cap) — confirmed by _chisel_top_side
+# actually finding both for every pane group in the real jar (block_get on a healed
+# pane before this fix showed both a "-side" and a "-top" texture bound to its one
+# cube face set), so the same top/side resolution _chisel_pair uses for a cube column
+# just needs to feed PaneGeometry instead of six cube faces.
+func _heal_chisel_pane(ctx: MCHealContext, registry: String, group: String, meta: int,
+		base: String, display: String) -> void:
+	var tex := _chisel_top_side(ctx, group, base)
+	if tex.is_empty():
+		ctx.warnings.append(
+			"chisel: no texture match for %s meta %d (%s), skipped" % [registry, meta, base])
+		return
+	var color := _avg(ctx, tex["side"])
+	var bt := ctx.add_pane(_stable_name(ctx, registry, meta, display), tex["side"], tex["top"], color,
+		PackedStringArray(["chisel", group.to_lower()]))
+	ctx.confirm_registry(bt, registry, meta, "Chisel", display)
+
+# The display name for one meta of a Chisel group — shared by the cube and pane heal
+# paths.
+func _chisel_display(lang: Dictionary, group: String, group_name: String, meta: int) -> String:
+	var sgp_key := "SGP_DISPLAY:%s:%d" % [group, meta]
+	if lang.has(sgp_key):
+		return lang[sgp_key]   # stained_glass_pane_*: a real name even at meta 0 —
+		                       # see _add_stained_glass_names
+	if meta == 0:
+		return group_name   # meta 0's .desc is often a tooltip, not a name (e.g.
+		                     # "tile.andesite.0.desc=Generates in your world")
+	return lang.get("%s.%d" % [group, meta], "%s %d" % [group_name, meta])
 
 # All six faces bound to one texture, or UP/DOWN to a "top" face and the four horizontals to a
 # "side" face for a column/pillar-shaped group — {} if neither resolves (see class doc for the
@@ -571,6 +606,21 @@ func _chisel_single(ctx: MCHealContext, group: String, base: String) -> String:
 	return ""
 
 func _chisel_pair(ctx: MCHealContext, group: String, base: String) -> Dictionary:
+	var tex := _chisel_top_side(ctx, group, base)
+	if tex.is_empty():
+		return {}
+	return {
+		BlockModel.Dir.UP: tex["top"], BlockModel.Dir.DOWN: tex["top"],
+		BlockModel.Dir.NORTH: tex["side"], BlockModel.Dir.SOUTH: tex["side"],
+		BlockModel.Dir.EAST: tex["side"], BlockModel.Dir.WEST: tex["side"],
+	}
+
+# The resolved {"top":id, "side":id} texture pair for a column/pillar/pane-shaped
+# group, or {} if no candidate/suffix combination resolves both files (see class doc
+# for the fallback chain). Shared by _chisel_pair (a cube's UP/DOWN vs N/E/S/W faces)
+# and _heal_chisel_pane (a real pane's edge-rim vs flat-face textures) — same two
+# files, different geometry built from them.
+func _chisel_top_side(ctx: MCHealContext, group: String, base: String) -> Dictionary:
 	for candidate in _chisel_candidates(group, base):
 		var top_ref := "%s/%s-top" % [_CHISEL_TEX, candidate]
 		if not ctx.source_has_texture(top_ref):
@@ -582,11 +632,7 @@ func _chisel_pair(ctx: MCHealContext, group: String, base: String) -> Dictionary
 			var top := ctx.ensure_texture(top_ref)
 			var side := ctx.ensure_texture(side_ref)
 			if top != null and side != null:
-				return {
-					BlockModel.Dir.UP: top.id, BlockModel.Dir.DOWN: top.id,
-					BlockModel.Dir.NORTH: side.id, BlockModel.Dir.SOUTH: side.id,
-					BlockModel.Dir.EAST: side.id, BlockModel.Dir.WEST: side.id,
-				}
+				return {"top": top.id, "side": side.id}
 	return {}
 
 # { "chisel.<group>" -> "<group display>", "<group>.<meta>" -> "<variant display>" } parsed

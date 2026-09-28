@@ -224,6 +224,32 @@ func add_cube(name: String, dir_to_texture: Dictionary, color: Color,
 	bt.tags = tags
 	return bt
 
+# Emit (or replace) a connecting pane block: a thin center post plus four side arms/
+# caps that extend to meet an occupied neighbor or cap off flush when isolated — real
+# geometry, not the full-cube fallback add_cube gives a source with no per-shape data.
+# See PaneGeometry for the actual box/UV numbers (lifted verbatim from an imported
+# vanilla pane) and BlockStateMap's class doc for how a view turns this into per-cell
+# connection state at render time. `side_tex`/`edge_tex` as PaneGeometry.build_models.
+func add_pane(name: String, side_tex: String, edge_tex: String, color: Color,
+		tags: PackedStringArray, source_ns := "") -> BlockType:
+	var base_id := "%s:heal/%s" % [ns, name.validate_filename()]
+	var models := PaneGeometry.build_models(base_id, side_tex, edge_tex)
+	for m in models.values():
+		if library.get_block_model(m.id) == null:
+			library.add_block_model(m)
+		else:
+			library.remove_block_model(m.id)
+			library.add_block_model(m)
+	var bt := library.get_block_type(name)
+	if bt == null:
+		bt = library.add_block_type(name)
+	bt.source_namespace = source_ns if not source_ns.is_empty() else ns
+	bt.model_id = models["post"].id
+	bt.state_map = PaneGeometry.build_state_map(models)
+	bt.color = color
+	bt.tags = tags
+	return bt
+
 # Confirm a healed block's real Minecraft identity for export (McId.set_registry_id, always
 # `confirmed: true` — a heal binds a registry+meta straight from the NEI roster row that drove
 # it, never a guess). `orient` only matters for a slab/stairs/log-shaped semantic.
