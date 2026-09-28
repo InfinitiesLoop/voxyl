@@ -26,6 +26,7 @@ const _MODS := {
 	"chisel": true,
 	"ProjRed|Illumination": true,
 	"ExtraUtilities": true,
+	"Ztones": true,
 }
 
 func handles(ns: String) -> bool:
@@ -44,6 +45,8 @@ func heal(ctx: MCHealContext) -> void:
 		_heal_projred_illumination(ctx)
 	elif ctx.ns == "ExtraUtilities":
 		_heal_extrautilities(ctx)
+	elif ctx.ns == "Ztones":
+		_heal_ztones(ctx)
 	_strip_overlay_junk(ctx)
 
 # ---------------------------------------------------------------------------
@@ -360,7 +363,7 @@ func _heal_color_packed(ctx: MCHealContext, registry: String, file_fmt: String, 
 			BlockModel.Dir.NORTH: tex.id, BlockModel.Dir.SOUTH: tex.id,
 			BlockModel.Dir.EAST: tex.id, BlockModel.Dir.WEST: tex.id,
 		}
-		var bt := ctx.add_cube(ctx.unique_name(display), faces, tex.average_color,
+		var bt := ctx.add_cube(_stable_name(ctx, registry, meta, display), faces, tex.average_color,
 			PackedStringArray(["etfuturum"]))
 		ctx.confirm_registry(bt, registry, meta, "etfuturum", display)
 
@@ -442,7 +445,7 @@ func _heal_catwalks_faces(ctx: MCHealContext, registry: String, meta: int, displ
 			ctx.warnings.append("catwalks: missing texture %s for %s, skipped" % [ref, display])
 			return
 		faces[d] = tex.id
-	var bt := ctx.add_cube(ctx.unique_name(display), faces, _avg(ctx, faces[BlockModel.Dir.NORTH]),
+	var bt := ctx.add_cube(_stable_name(ctx, registry, meta, display), faces, _avg(ctx, faces[BlockModel.Dir.NORTH]),
 		PackedStringArray(["catwalks"]))
 	ctx.confirm_registry(bt, registry, meta, "catwalks", display)
 
@@ -483,19 +486,25 @@ func _heal_chisel(ctx: MCHealContext) -> void:
 		var group_name: String = lang.get("chisel.%s" % group, _prettify(group))
 		for meta in metas:
 			var base: String = metas[meta]
-			var faces := _chisel_faces(ctx, group, base)
+			var fake_controller: String = _CHISEL_FAKE_CONTROLLER_CROP.get(group, {}).get(int(meta), "")
+			var faces := _chisel_icon_crop_faces(ctx, fake_controller) if not fake_controller.is_empty() \
+				else _chisel_faces(ctx, group, base)
 			if faces.is_empty():
 				ctx.warnings.append(
 					"chisel: no texture match for %s meta %d (%s), skipped" % [registry, meta, base])
 				continue
 			var display: String
-			if int(meta) == 0:
+			var sgp_key := "SGP_DISPLAY:%s:%d" % [group, meta]
+			if lang.has(sgp_key):
+				display = lang[sgp_key]   # stained_glass_pane_*: a real name even at meta 0 —
+				                          # see _add_stained_glass_names
+			elif int(meta) == 0:
 				display = group_name   # meta 0's .desc is often a tooltip, not a name (e.g.
 				                        # "tile.andesite.0.desc=Generates in your world")
 			else:
 				display = lang.get("%s.%d" % [group, meta], "%s %d" % [group_name, meta])
 			var color := _avg(ctx, faces[BlockModel.Dir.NORTH])
-			var bt := ctx.add_cube(ctx.unique_name(display), faces, color,
+			var bt := ctx.add_cube(_stable_name(ctx, registry, int(meta), display), faces, color,
 				PackedStringArray(["chisel", group.to_lower()]))
 			ctx.confirm_registry(bt, registry, int(meta), "Chisel", display)
 
@@ -511,6 +520,43 @@ func _chisel_faces(ctx: MCHealContext, group: String, base: String) -> Dictionar
 			BlockModel.Dir.EAST: single, BlockModel.Dir.WEST: single,
 		}
 	return _chisel_pair(ctx, group, base)
+
+# "futura" metas 2/4/5 (controller/controllerPurple/uberWavy) are registered through
+# team.chisel.client.render.SubmapManagerFakeController, not a plain addVariation(String) or the
+# top/side pair every other column-shaped group above uses. Confirmed straight from the
+# decompiled Features$33.addBlocks(): getBaseIcon() for this submap doesn't return one of these
+# files' pixels whole the way "glotek"/"neonite" above do — each 32-wide "frame" of the
+# accompanying .mcmeta's animation is itself a 2x2 grid of four unrelated 16x16 icons (a fake
+# computer screen effect: Java picks one per placement, changing which quadrant shows). Treating
+# the whole 32x32 frame as this block's static appearance — what the generic top/side/single
+# resolution above would do — is the actual bug reported: every face shows all 4 icons squashed
+# together instead of one. There's no data-model equivalent for "a different icon per placed
+# cell" here (principle 1: a block TYPE has one texture, never one that varies by position), so
+# _chisel_icon_crop_faces below crops a fixed, representative icon instead — see
+# MCHealContext.cropped_texture. group -> {meta -> texture base to crop}.
+const _CHISEL_FAKE_CONTROLLER_CROP := {
+	"futura": {
+		2: "futura/WIP/controller",
+		4: "futura/WIP/controllerPurple",
+		5: "futura/WIP/uberWavy",
+	},
+}
+
+# All six faces bound to the top-left 16x16 icon cropped out of `base`'s first frame — see
+# _CHISEL_FAKE_CONTROLLER_CROP.
+func _chisel_icon_crop_faces(ctx: MCHealContext, base: String) -> Dictionary:
+	var ref := "%s/%s" % [_CHISEL_TEX, base]
+	if not ctx.source_has_texture(ref):
+		return {}
+	var out_id := "chisel:heal/icon_%s" % base.replace("/", "_")
+	var tex := ctx.cropped_texture(out_id, ref, Rect2i(0, 0, 16, 16))
+	if tex == null:
+		return {}
+	return {
+		BlockModel.Dir.UP: tex.id, BlockModel.Dir.DOWN: tex.id,
+		BlockModel.Dir.NORTH: tex.id, BlockModel.Dir.SOUTH: tex.id,
+		BlockModel.Dir.EAST: tex.id, BlockModel.Dir.WEST: tex.id,
+	}
 
 func _chisel_candidates(group: String, base: String) -> Array[String]:
 	return [base, "%s/%s" % [group.to_lower(), base]]
@@ -550,6 +596,7 @@ func _chisel_pair(ctx: MCHealContext, group: String, base: String) -> Dictionary
 # already has a prettified-group-name fallback.
 func _parse_chisel_lang(ctx: MCHealContext) -> Dictionary:
 	var out := {}
+	var raw_kv := {}
 	var text := ctx.source.read_text("chisel/lang/en_US.lang")
 	for raw in text.split("\n"):
 		var line := raw.strip_edges()
@@ -558,11 +605,63 @@ func _parse_chisel_lang(ctx: MCHealContext) -> Dictionary:
 			continue
 		var key := line.substr(0, eq).strip_edges()
 		var val := line.substr(eq + 1).strip_edges()
+		raw_kv[key] = val
 		if key.begins_with("tile.chisel.") and key.ends_with(".name"):
 			out["chisel.%s" % key.trim_prefix("tile.chisel.").trim_suffix(".name")] = val
 		elif key.begins_with("tile.") and key.ends_with(".desc"):
 			out[key.trim_prefix("tile.").trim_suffix(".desc")] = val
+	_add_stained_glass_names(out, raw_kv)
 	return out
+
+# Chisel's two dyed-glass families ("stained_glass_<color>" and "stained_glass_pane_<color>" —
+# see ChiselVariations' own table entries for the full derivation) name their variants as
+# "<featureColor>.<style>.desc" and "<featureColor>.pane.<style>.desc" respectively — not the
+# "tile.<group>.<meta>.desc" shape the loop above parses — so inject the same names under the
+# "SGP_DISPLAY:<group>:<meta>" keys _heal_chisel checks first, ahead of its meta-0 shortcut
+# (unlike every other group, meta 0 here IS a real named variant, not flavor text).
+# color -> meta base, one table per family (the two pack a different number of colors onto each
+# shared block: 4 colors/block for the plain family, 2 for the pane family — see the table's own
+# comment for the (i & 3) << 2 vs (i & 1) << 3 derivation).
+const _STAINED_GLASS_META_BASE := {
+	"white": 0, "orange": 4, "magenta": 8, "lightblue": 12,
+	"yellow": 0, "lime": 4, "pink": 8, "gray": 12,
+	"lightgray": 0, "cyan": 4, "purple": 8, "blue": 12,
+	"brown": 0, "green": 4, "red": 8, "black": 12,
+}
+const _STAINED_GLASS_PANE_META_BASE := {
+	"white": 0, "orange": 8, "magenta": 0, "lightblue": 8,
+	"yellow": 0, "lime": 8, "pink": 0, "gray": 8,
+	"lightgray": 0, "cyan": 8, "purple": 0, "blue": 8,
+	"brown": 0, "green": 8, "red": 0, "black": 8,
+}
+# featureColors[] disagrees with the color name above only for this one entry (see
+# ChiselVariations' comment) — every other color's lang-key prefix matches its group name.
+const _STAINED_GLASS_LANG_COLOR := {"gray": "darkgray"}
+# (meta offset from the color's base above, lang key's style fragment) — the plain family only
+# has the first 4 (no quadrant styles; see ChiselVariations' comment).
+const _STAINED_GLASS_STYLES := [
+	[0, "bubble"], [1, "glass"], [2, "glass.fancy"], [3, "glass.noborder"],
+]
+const _STAINED_GLASS_PANE_STYLES := _STAINED_GLASS_STYLES + [
+	[4, "glass.quadrant"], [5, "glass.fancyquadrant"],
+]
+
+func _add_stained_glass_names(out: Dictionary, raw_kv: Dictionary) -> void:
+	for color in _STAINED_GLASS_META_BASE:
+		_add_dyed_glass_names(out, raw_kv, "stained_glass_%s" % color,
+			_STAINED_GLASS_META_BASE[color], color, "")
+	for color in _STAINED_GLASS_PANE_META_BASE:
+		_add_dyed_glass_names(out, raw_kv, "stained_glass_pane_%s" % color,
+			_STAINED_GLASS_PANE_META_BASE[color], color, "pane.")
+
+func _add_dyed_glass_names(out: Dictionary, raw_kv: Dictionary, group: String, base: int,
+		color: String, infix: String) -> void:
+	var lang_color: String = _STAINED_GLASS_LANG_COLOR.get(color, color)
+	var styles := _STAINED_GLASS_PANE_STYLES if not infix.is_empty() else _STAINED_GLASS_STYLES
+	for style in styles:
+		var lang_key := "%s.%s%s.desc" % [lang_color, infix, style[1]]
+		if raw_kv.has(lang_key):
+			out["SGP_DISPLAY:%s:%d" % [group, base + int(style[0])]] = raw_kv[lang_key]
 
 # ===========================================================================
 # ProjectRed Illumination — the "Lamp" block (registry projectred.illumination.lamp): 32
@@ -597,8 +696,8 @@ func _heal_projred_illumination(ctx: MCHealContext) -> void:
 			BlockModel.Dir.NORTH: tex.id, BlockModel.Dir.SOUTH: tex.id,
 			BlockModel.Dir.EAST: tex.id, BlockModel.Dir.WEST: tex.id,
 		}
-		var bt := ctx.add_cube(ctx.unique_name(display), faces, tex.average_color,
-			PackedStringArray(["light", "lamp", "projred"]), "ProjRed|Illumination")
+		var bt := ctx.add_cube(_stable_name(ctx, _PROJRED_LAMP_REGISTRY, meta, display), faces,
+			tex.average_color, PackedStringArray(["light", "lamp", "projred"]), "ProjRed|Illumination")
 		ctx.confirm_registry(bt, _PROJRED_LAMP_REGISTRY, meta, "ProjRed|Illumination", display)
 
 # ===========================================================================
@@ -648,13 +747,62 @@ func _heal_extrautilities(ctx: MCHealContext) -> void:
 			BlockModel.Dir.NORTH: tex.id, BlockModel.Dir.SOUTH: tex.id,
 			BlockModel.Dir.EAST: tex.id, BlockModel.Dir.WEST: tex.id,
 		}
-		var bt := ctx.add_cube(ctx.unique_name(display), faces, color,
+		var bt := ctx.add_cube(_stable_name(ctx, _EXTRAUTILS_LAPIS_REGISTRY, meta, display), faces, color,
 			PackedStringArray(["light", "lapis caelestis", "extrautils"]), "ExtraUtilities")
 		ctx.confirm_registry(bt, _EXTRAUTILS_LAPIS_REGISTRY, meta, "ExtraUtilities", display)
+
+# ===========================================================================
+# Ztones — gives the "Flat Lamp" trio (registries lampf/lampt/lampb) a default LOOK closer
+# to what they actually are. Decompiling BlockLampFlat/Transparent/Black shows none of the
+# three are real full blocks: getCollisionBoundingBox is null, isOpaqueCube/
+# renderAsNormalBlock are both false, and setBlockBounds picks one of six 0.1-thick plates
+# flush against whichever face the block is placed on (a wall/ceiling/floor-mounted
+# fixture) — the presumptive import has no way to know that and falls back to a full cube,
+# which is what the library browser (outside any palette) was showing. This only replaces
+# the block's own DEFAULT model with the ceiling-mounted case (the most immediately
+# recognizable of the six as "a light fixture" rather than "a block"): never a substitute
+# for the palette's own Cover shape, which is still how a real placement picks its actual
+# face (up/down/sideways) and generates its own geometry regardless of this default.
+#
+# Deliberately NOT renamed: the three share Ztones' own single "Flat Lamp" name with no
+# distinguishing text at all, but that's a per-project palette/semantic naming choice, not
+# something to bake into the shared library block.
+# ===========================================================================
+
+const _ZTONES_LAMPS := ["lampf", "lampt", "lampb"]
+# The ceiling-mounted case from BlockLampFlat's own decompiled setBlockBounds: a 0.1-thick
+# plate flush against the top face.
+const _ZTONES_LAMP_FROM := Vector3(0, 0.9, 0)
+const _ZTONES_LAMP_TO := Vector3(1, 1, 1)
+
+func _heal_ztones(ctx: MCHealContext) -> void:
+	for reg_name in _ZTONES_LAMPS:
+		var bt := ctx.existing_for("Ztones:%s" % reg_name, 0)
+		if bt == null:
+			continue
+		var old_model := ctx.library.get_block_model(bt.model_id)
+		if old_model == null or old_model.textures.is_empty():
+			continue
+		var tex_id: String = old_model.textures.keys()[0]
+		var faces := {
+			BlockModel.Dir.UP: tex_id, BlockModel.Dir.DOWN: tex_id,
+			BlockModel.Dir.NORTH: tex_id, BlockModel.Dir.SOUTH: tex_id,
+			BlockModel.Dir.EAST: tex_id, BlockModel.Dir.WEST: tex_id,
+		}
+		ctx.add_cube(bt.name, faces, bt.color, bt.tags, "", _ZTONES_LAMP_FROM, _ZTONES_LAMP_TO)
 
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
+
+# The name to give a confirmed cube: the SAME block a previous run already confirmed for this
+# exact registry+meta, if there is one, so add_cube() updates it in place (texture/model/tags
+# refreshed, name and any palette references untouched) instead of unique_name() minting a
+# "Name 2", "Name 3", … duplicate every time the import runs again. Every heal function below
+# that confirms a real MC identity should name its cube through this, not unique_name() directly.
+func _stable_name(ctx: MCHealContext, registry: String, meta: int, display: String) -> String:
+	var existing := ctx.existing_for(registry, meta)
+	return existing.name if existing != null else ctx.unique_name(display)
 
 func _avg(ctx: MCHealContext, tex_id: String) -> Color:
 	if tex_id.is_empty():

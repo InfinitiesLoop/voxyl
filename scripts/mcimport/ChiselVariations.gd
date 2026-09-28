@@ -1065,6 +1065,266 @@ const VARIATIONS := {
 		16: "sandstone2/terrain-sandstone-brickflat",
 		17: "sandstone2/a0-sandstonepreview-smoothflat",
 	},
+	# Chisel's dyed "Stained Glass" family (Features$36.addBlocks(), team.chisel.block.
+	# BlockCarvableGlass): one registry per color ("stained_glass_<color>", 16 total, same
+	# General.sGNames dye order as the pane family below), each carrying 4 style variants
+	# (bubble/panel/panel-fancy/transparent -- no quadrant styles here, unlike the pane family;
+	# confirmed against the jar's own "glassdyed/" folder, which only ships those 4 per color).
+	# Four colors are packed onto ONE shared BlockCarvableGlass instance this time (4 instances
+	# total, ChiselBlocks.stainedGlass[i>>2]) at meta base (i&3)<<2 -- 0/4/8/12 -- one base per
+	# color in the group of 4, same registerBlock()-per-color-alias mechanism as the pane family.
+	# Texture files are plain flat "glassdyed/<color>-<style>.png", no top/side pair needed (the
+	# plain team.chisel.block.BlockCarvable-style addVariation overload, not glass_pane's paired
+	# one). Display text again needs GTNHExtension._add_stained_glass_names (it handles both
+	# families): "<featureColor>.<style>.desc", one level shallower than the pane family's
+	# "<featureColor>.pane.<style>.desc" -- and, per Chisel's own lang file, IDENTICAL text to the
+	# pane family's same-styled entry (e.g. both "White Bubble Glass"), so one of the two always
+	# ends up suffixed " 2" by unique_name() -- a real duplicate in Chisel's own data, not a bug
+	# here. A third registry, "stained_glass_forestry" (Features$36's tail, one block reusing
+	# whatever variation happens to share its numeric index with a Forestry-bee-house compat
+	# flag), is deliberately left out: it's not a color a user picks, just an alias with no
+	# visual of its own, the same standard "voidstone"/"tallow" above are held to.
+	"stained_glass_white": {
+		0: "glassdyed/white-bubble",
+		1: "glassdyed/white-panel",
+		2: "glassdyed/white-panel-fancy",
+		3: "glassdyed/white-transparent",
+	},
+	"stained_glass_orange": {
+		4: "glassdyed/orange-bubble",
+		5: "glassdyed/orange-panel",
+		6: "glassdyed/orange-panel-fancy",
+		7: "glassdyed/orange-transparent",
+	},
+	"stained_glass_magenta": {
+		8: "glassdyed/magenta-bubble",
+		9: "glassdyed/magenta-panel",
+		10: "glassdyed/magenta-panel-fancy",
+		11: "glassdyed/magenta-transparent",
+	},
+	"stained_glass_lightblue": {
+		12: "glassdyed/lightblue-bubble",
+		13: "glassdyed/lightblue-panel",
+		14: "glassdyed/lightblue-panel-fancy",
+		15: "glassdyed/lightblue-transparent",
+	},
+	"stained_glass_yellow": {
+		0: "glassdyed/yellow-bubble",
+		1: "glassdyed/yellow-panel",
+		2: "glassdyed/yellow-panel-fancy",
+		3: "glassdyed/yellow-transparent",
+	},
+	"stained_glass_lime": {
+		4: "glassdyed/lime-bubble",
+		5: "glassdyed/lime-panel",
+		6: "glassdyed/lime-panel-fancy",
+		7: "glassdyed/lime-transparent",
+	},
+	"stained_glass_pink": {
+		8: "glassdyed/pink-bubble",
+		9: "glassdyed/pink-panel",
+		10: "glassdyed/pink-panel-fancy",
+		11: "glassdyed/pink-transparent",
+	},
+	"stained_glass_gray": {
+		12: "glassdyed/gray-bubble",
+		13: "glassdyed/gray-panel",
+		14: "glassdyed/gray-panel-fancy",
+		15: "glassdyed/gray-transparent",
+	},
+	"stained_glass_lightgray": {
+		0: "glassdyed/lightgray-bubble",
+		1: "glassdyed/lightgray-panel",
+		2: "glassdyed/lightgray-panel-fancy",
+		3: "glassdyed/lightgray-transparent",
+	},
+	"stained_glass_cyan": {
+		4: "glassdyed/cyan-bubble",
+		5: "glassdyed/cyan-panel",
+		6: "glassdyed/cyan-panel-fancy",
+		7: "glassdyed/cyan-transparent",
+	},
+	"stained_glass_purple": {
+		8: "glassdyed/purple-bubble",
+		9: "glassdyed/purple-panel",
+		10: "glassdyed/purple-panel-fancy",
+		11: "glassdyed/purple-transparent",
+	},
+	"stained_glass_blue": {
+		12: "glassdyed/blue-bubble",
+		13: "glassdyed/blue-panel",
+		14: "glassdyed/blue-panel-fancy",
+		15: "glassdyed/blue-transparent",
+	},
+	"stained_glass_brown": {
+		0: "glassdyed/brown-bubble",
+		1: "glassdyed/brown-panel",
+		2: "glassdyed/brown-panel-fancy",
+		3: "glassdyed/brown-transparent",
+	},
+	"stained_glass_green": {
+		4: "glassdyed/green-bubble",
+		5: "glassdyed/green-panel",
+		6: "glassdyed/green-panel-fancy",
+		7: "glassdyed/green-transparent",
+	},
+	"stained_glass_red": {
+		8: "glassdyed/red-bubble",
+		9: "glassdyed/red-panel",
+		10: "glassdyed/red-panel-fancy",
+		11: "glassdyed/red-transparent",
+	},
+	"stained_glass_black": {
+		12: "glassdyed/black-bubble",
+		13: "glassdyed/black-panel",
+		14: "glassdyed/black-panel-fancy",
+		15: "glassdyed/black-transparent",
+	},
+	# Chisel's dyed "Stained Glass Pane" family (Features$37.addBlocks(), team.chisel.block.
+	# BlockCarvablePane): one registry PER COLOR ("stained_glass_pane_<color>", 16 total, built
+	# from the same General.sGNames dye order as "carpet"/"woolenClay" above), each carrying 6
+	# style variants (bubble/panel/panel-fancy/transparent/quad/quad-fancy). Confirmed straight
+	# from the loop bytecode: two colors are packed onto ONE shared BlockCarvablePane instance
+	# (8 instances total, ChiselBlocks.stainedGlassPane[i>>1]) at meta base 0 for the
+	# even-indexed color of the pair and meta base 8 for the odd one -- registerBlock() is called
+	# once per color with that color's own descKey, so both aliases resolve to the same block,
+	# just at disjoint meta ranges (0-5 vs 8-13), which is why the meta numbers below skip
+	# straight from 5 to 8 for the odd-indexed colors. Texture files are a genuine "glasspanedyed/
+	# <color>-<style>[-top|-side].png" pair per variant (confirmed against the jar's own files);
+	# GTNHExtension._heal_chisel resolves the top/side pair the same way it does for "glass_pane"
+	# above. Display text doesn't follow the usual "tile.<group>.<meta>.desc" lang shape Chisel
+	# uses everywhere else -- these are "<featureColor>.pane.<style>.desc" instead, and
+	# featureColor disagrees with the color name used here for one color ("darkgray" vs "gray")
+	# -- see GTNHExtension._add_stained_glass_names, which reads that shape directly rather
+	# than guessing display text.
+	"stained_glass_pane_white": {
+		0: "glasspanedyed/white-bubble",
+		1: "glasspanedyed/white-panel",
+		2: "glasspanedyed/white-panel-fancy",
+		3: "glasspanedyed/white-transparent",
+		4: "glasspanedyed/white-quad",
+		5: "glasspanedyed/white-quad-fancy",
+	},
+	"stained_glass_pane_orange": {
+		8: "glasspanedyed/orange-bubble",
+		9: "glasspanedyed/orange-panel",
+		10: "glasspanedyed/orange-panel-fancy",
+		11: "glasspanedyed/orange-transparent",
+		12: "glasspanedyed/orange-quad",
+		13: "glasspanedyed/orange-quad-fancy",
+	},
+	"stained_glass_pane_magenta": {
+		0: "glasspanedyed/magenta-bubble",
+		1: "glasspanedyed/magenta-panel",
+		2: "glasspanedyed/magenta-panel-fancy",
+		3: "glasspanedyed/magenta-transparent",
+		4: "glasspanedyed/magenta-quad",
+		5: "glasspanedyed/magenta-quad-fancy",
+	},
+	"stained_glass_pane_lightblue": {
+		8: "glasspanedyed/lightblue-bubble",
+		9: "glasspanedyed/lightblue-panel",
+		10: "glasspanedyed/lightblue-panel-fancy",
+		11: "glasspanedyed/lightblue-transparent",
+		12: "glasspanedyed/lightblue-quad",
+		13: "glasspanedyed/lightblue-quad-fancy",
+	},
+	"stained_glass_pane_yellow": {
+		0: "glasspanedyed/yellow-bubble",
+		1: "glasspanedyed/yellow-panel",
+		2: "glasspanedyed/yellow-panel-fancy",
+		3: "glasspanedyed/yellow-transparent",
+		4: "glasspanedyed/yellow-quad",
+		5: "glasspanedyed/yellow-quad-fancy",
+	},
+	"stained_glass_pane_lime": {
+		8: "glasspanedyed/lime-bubble",
+		9: "glasspanedyed/lime-panel",
+		10: "glasspanedyed/lime-panel-fancy",
+		11: "glasspanedyed/lime-transparent",
+		12: "glasspanedyed/lime-quad",
+		13: "glasspanedyed/lime-quad-fancy",
+	},
+	"stained_glass_pane_pink": {
+		0: "glasspanedyed/pink-bubble",
+		1: "glasspanedyed/pink-panel",
+		2: "glasspanedyed/pink-panel-fancy",
+		3: "glasspanedyed/pink-transparent",
+		4: "glasspanedyed/pink-quad",
+		5: "glasspanedyed/pink-quad-fancy",
+	},
+	"stained_glass_pane_gray": {
+		8: "glasspanedyed/gray-bubble",
+		9: "glasspanedyed/gray-panel",
+		10: "glasspanedyed/gray-panel-fancy",
+		11: "glasspanedyed/gray-transparent",
+		12: "glasspanedyed/gray-quad",
+		13: "glasspanedyed/gray-quad-fancy",
+	},
+	"stained_glass_pane_lightgray": {
+		0: "glasspanedyed/lightgray-bubble",
+		1: "glasspanedyed/lightgray-panel",
+		2: "glasspanedyed/lightgray-panel-fancy",
+		3: "glasspanedyed/lightgray-transparent",
+		4: "glasspanedyed/lightgray-quad",
+		5: "glasspanedyed/lightgray-quad-fancy",
+	},
+	"stained_glass_pane_cyan": {
+		8: "glasspanedyed/cyan-bubble",
+		9: "glasspanedyed/cyan-panel",
+		10: "glasspanedyed/cyan-panel-fancy",
+		11: "glasspanedyed/cyan-transparent",
+		12: "glasspanedyed/cyan-quad",
+		13: "glasspanedyed/cyan-quad-fancy",
+	},
+	"stained_glass_pane_purple": {
+		0: "glasspanedyed/purple-bubble",
+		1: "glasspanedyed/purple-panel",
+		2: "glasspanedyed/purple-panel-fancy",
+		3: "glasspanedyed/purple-transparent",
+		4: "glasspanedyed/purple-quad",
+		5: "glasspanedyed/purple-quad-fancy",
+	},
+	"stained_glass_pane_blue": {
+		8: "glasspanedyed/blue-bubble",
+		9: "glasspanedyed/blue-panel",
+		10: "glasspanedyed/blue-panel-fancy",
+		11: "glasspanedyed/blue-transparent",
+		12: "glasspanedyed/blue-quad",
+		13: "glasspanedyed/blue-quad-fancy",
+	},
+	"stained_glass_pane_brown": {
+		0: "glasspanedyed/brown-bubble",
+		1: "glasspanedyed/brown-panel",
+		2: "glasspanedyed/brown-panel-fancy",
+		3: "glasspanedyed/brown-transparent",
+		4: "glasspanedyed/brown-quad",
+		5: "glasspanedyed/brown-quad-fancy",
+	},
+	"stained_glass_pane_green": {
+		8: "glasspanedyed/green-bubble",
+		9: "glasspanedyed/green-panel",
+		10: "glasspanedyed/green-panel-fancy",
+		11: "glasspanedyed/green-transparent",
+		12: "glasspanedyed/green-quad",
+		13: "glasspanedyed/green-quad-fancy",
+	},
+	"stained_glass_pane_red": {
+		0: "glasspanedyed/red-bubble",
+		1: "glasspanedyed/red-panel",
+		2: "glasspanedyed/red-panel-fancy",
+		3: "glasspanedyed/red-transparent",
+		4: "glasspanedyed/red-quad",
+		5: "glasspanedyed/red-quad-fancy",
+	},
+	"stained_glass_pane_black": {
+		8: "glasspanedyed/black-bubble",
+		9: "glasspanedyed/black-panel",
+		10: "glasspanedyed/black-panel-fancy",
+		11: "glasspanedyed/black-transparent",
+		12: "glasspanedyed/black-quad",
+		13: "glasspanedyed/black-quad-fancy",
+	},
 	"stoneMoss": {
 		1: "cobblestonemossy/terrain-cobb-brickaligned",
 		2: "cobblestonemossy/terrain-cob-detailedbrick",

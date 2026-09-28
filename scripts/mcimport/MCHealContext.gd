@@ -30,11 +30,29 @@ var _write_tasks: Array[int] = []
 # without NEI dumps behind it. See NeiRosterImporter.legacy_id_for.
 var _legacy_id_lookup := Callable()
 
+# "registry@meta" -> the BlockType a PREVIOUS run of this (or an earlier) import already
+# confirmed for that exact MC identity — built once from whatever's already in the library, the
+# same way NeiRosterImporter does it. A heal that runs again (a code fix, or the user just
+# re-running the same import) looks itself up here first, so it updates that same block's
+# texture/model in place instead of unique_name() minting a fresh "Name 2", "Name 3", … every
+# time — see existing_for().
+var _by_identity := {}
+
 func _init(lib: BlockLibrary, src: MCAssetSource, namespace_id: String, legacy_id_lookup := Callable()) -> void:
 	library = lib
 	source = src
 	ns = namespace_id
 	_legacy_id_lookup = legacy_id_lookup
+	for bt in library.block_types:
+		if McId.has_registry(bt):
+			_by_identity["%s@%d" % [McId.get_registry(bt), McId.get_mc_meta(bt)]] = bt
+
+# The block a previous heal already confirmed for this exact registry+meta, if any. Pass its
+# name straight to add_cube() instead of unique_name(display) so a rerun refreshes that same
+# block (texture, model, tags) rather than duplicating it under a new name — a heal is keyed by
+# real MC identity, not by whatever display text it happens to compute this time.
+func existing_for(registry: String, meta: int) -> BlockType:
+	return _by_identity.get("%s@%d" % [registry, meta])
 
 # ---------------------------------------------------------------------------
 # Textures
@@ -67,6 +85,23 @@ func composite_texture(out_id: String, base_ref: String, overlay_ref: String) ->
 	var img := _tiled_base(base_ref, size)
 	img.blend_rect(overlay, Rect2i(Vector2i.ZERO, size), Vector2i.ZERO)
 	return _emit_texture(out_id, img, overlay_ref)
+
+# A rectangular sub-region cropped out of `source_ref`, stored under `out_id` as its own new
+# static texture. For content whose real appearance is one small piece of a larger sheet — a
+# submap/spritesheet icon, or a single frame Java would otherwise pick per-placement in a way
+# this importer has no data-model equivalent for (voxyl binds one texture per block TYPE, never
+# varies it per placed cell) — cropping to a fixed, representative piece beats importing the
+# whole sheet squashed onto a face. Deduped by out_id, same as composite_texture. No mcmeta
+# carries over: the crop is deliberately a single static frame, not an animation.
+func cropped_texture(out_id: String, source_ref: String, rect: Rect2i) -> TextureAsset:
+	var existing := library.get_texture_asset(out_id)
+	if existing != null:
+		return existing
+	var img := _load_ref_image(source_ref)
+	if img == null:
+		_warn("crop source missing: %s" % source_ref)
+		return null
+	return _emit_texture(out_id, img.get_region(rect), "")
 
 # A flat, single-color synthesized texture — no source art involved at all — for a block
 # whose look really is just a solid color with no border/pattern (e.g. Extra Utilities'
@@ -155,11 +190,15 @@ static func _ref_to_rel(ref: String) -> String:
 # Blocks
 # ---------------------------------------------------------------------------
 
-# Emit (or replace) a full-cube block bound to per-direction textures. `dir_to_texture` maps a
+# Emit (or replace) a cube block bound to per-direction textures. `dir_to_texture` maps a
 # BlockModel.Dir to a TextureAsset id (as returned by ensure_texture / composite_texture);
 # `color` is the planning hint, `source_ns` the provenance, `tags` the searchable labels.
+# `from`/`to` default to a full unit cube; pass a thinner box for a block whose real shape
+# isn't a full cube (this is only the block's own default look — e.g. what the library
+# browser shows outside any palette — never a substitute for the palette's own shaped-parts
+# system, which generates its own geometry per placement regardless of this model).
 func add_cube(name: String, dir_to_texture: Dictionary, color: Color,
-		tags: PackedStringArray, source_ns := "") -> BlockType:
+		tags: PackedStringArray, source_ns := "", from := Vector3.ZERO, to := Vector3.ONE) -> BlockType:
 	var faces := {}
 	var textures := {}
 	for d in dir_to_texture:
@@ -168,7 +207,7 @@ func add_cube(name: String, dir_to_texture: Dictionary, color: Color,
 		textures[tid] = tid
 	var model := BlockModel.new()
 	model.id = "%s:heal/%s" % [ns, name.validate_filename()]
-	model.elements = [{"from": Vector3.ZERO, "to": Vector3.ONE, "faces": faces}]
+	model.elements = [{"from": from, "to": to, "faces": faces}]
 	model.textures = textures
 	if library.get_block_model(model.id) == null:
 		library.add_block_model(model)
