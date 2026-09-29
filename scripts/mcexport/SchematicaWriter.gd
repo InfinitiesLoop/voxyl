@@ -10,8 +10,17 @@ extends RefCounted
 #   Blocks               : ByteArray[Width*Height*Length], index (y*Length+z)*Width+x, low 8
 #                           bits of each cell's LOCAL id (SchematicaMapping resolves it)
 #   AddBlocks            : ByteArray, present only when some local id needs bits 8-11 — one
-#                           nibble per block, two blocks packed per byte (low nibble = the
-#                           even index, high nibble = the odd one)
+#                           nibble per block, two blocks packed per byte. HIGH nibble = the even
+#                           index, low nibble = the odd one: that is how Schematica's reader
+#                           (SchematicAlpha.readFromNBT) unpacks it, and it is the REVERSE of
+#                           WorldEdit/MCEdit's layout. Packing it the WorldEdit way made
+#                           Schematica swap the high nibble of every neighbouring pair, so a
+#                           block above id 255 came out as its low byte with a stranger's high
+#                           nibble (real cubits/azur -> gravel/mushroom) and air next to one
+#                           became a real block (id 0xC00 etc). The two readers can't both be
+#                           satisfied by one AddBlocks, so SchematicaExporter keeps local ids
+#                           inside the Blocks byte (<= 255) and only falls back to this tag once
+#                           a file has more than 255 distinct blocks.
 #   Data                 : ByteArray[same size], each cell's metadata value
 #   Entities             : List<Compound>, always empty — voxyl has no MC entity concept
 #   TileEntities         : List<Compound>, one per FMP/AC/GT part cell (empty for a whole-
@@ -51,9 +60,9 @@ static func write(size: Vector3i, local_ids: PackedInt32Array, metas: PackedByte
 			var nib := (id >> 8) & 0xF
 			var byte_idx := i >> 1
 			if i % 2 == 0:
-				add_blocks[byte_idx] = (add_blocks[byte_idx] & 0xF0) | nib
-			else:
 				add_blocks[byte_idx] = (add_blocks[byte_idx] & 0x0F) | (nib << 4)
+			else:
+				add_blocks[byte_idx] = (add_blocks[byte_idx] & 0xF0) | nib
 
 	var mapping_compound := {}
 	for registry in mapping:

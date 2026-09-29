@@ -33,7 +33,8 @@ static func probe(bytes: PackedByteArray) -> Variant:
 	for i in blocks.size():
 		var id: int = blocks[i]
 		if not add_blocks.is_empty():
-			var nib: int = (add_blocks[i >> 1] & 0xF) if i % 2 == 0 else ((add_blocks[i >> 1] >> 4) & 0xF)
+			# Schematica's own unpacking order (even index = HIGH nibble) — see SchematicaWriter.
+			var nib: int = ((add_blocks[i >> 1] >> 4) & 0xF) if i % 2 == 0 else (add_blocks[i >> 1] & 0xF)
 			id = id | (nib << 8)
 		if id == 0:
 			continue

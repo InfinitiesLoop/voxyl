@@ -15,6 +15,8 @@ func _ready() -> void:
 	_test_schematica_meta()
 	_test_schematica_writer_add_blocks()
 	_test_schematica_exporter_region()
+	_test_schematica_exporter_local_ids()
+	_test_schematica_local_id_overflow()
 	_test_schematica_exporter_prefab()
 	_test_fmp_microblock_export()
 	_test_ac_shape_export()
@@ -140,6 +142,41 @@ func _test_schematica_writer_add_blocks() -> void:
 		int(probed["histogram"].get("testmod:normal", 0)) == 1)
 	_check("mapping round-trips", probed["mapping"].get("testmod:big") == 300)
 
+	# Round-tripping through our own probe can't catch a nibble-order mistake (the probe used to
+	# share the writer's assumption), so pin the raw bytes against Schematica's reader, which
+	# unpacks AddBlocks as: even index = HIGH nibble, odd index = LOW nibble.
+	var even_big := SchematicaWriter.write(size, PackedInt32Array([300, 1]), metas, mapping)
+	var odd_big := SchematicaWriter.write(size, PackedInt32Array([1, 300]), metas, mapping)
+	_check("an even-index id's bits 8-11 land in the HIGH nibble (Schematica's order)",
+		_add_blocks_of(even_big) == PackedByteArray([0x10]))
+	_check("an odd-index id's bits 8-11 land in the LOW nibble (Schematica's order)",
+		_add_blocks_of(odd_big) == PackedByteArray([0x01]))
+	var pair_ids := PackedInt32Array([0xC63, 0])   # a big block next to air — the case that broke
+	var pair_bytes := SchematicaWriter.write(size, pair_ids, metas, {"testmod:big": 0xC63})
+	var replay := _schematica_read_ids(pair_bytes)
+	_check("replaying Schematica's own unpacking recovers the exact ids (no blocks out of thin air)",
+		replay == pair_ids)
+
+func _add_blocks_of(bytes: PackedByteArray) -> PackedByteArray:
+	var parsed: Variant = NbtReader.read_file(bytes)
+	var fields: Dictionary = parsed["value"]
+	return fields["AddBlocks"]["value"] if fields.has("AddBlocks") else PackedByteArray()
+
+# What Schematica's SchematicAlpha.readFromNBT does with Blocks + AddBlocks, written out
+# independently of the writer/probe: id = Blocks[i] | (nibble << 8), nibble = high half of
+# AddBlocks[i/2] for an even i, low half for an odd i.
+func _schematica_read_ids(bytes: PackedByteArray) -> PackedInt32Array:
+	var fields: Dictionary = (NbtReader.read_file(bytes) as Dictionary)["value"]
+	var blocks: PackedByteArray = fields["Blocks"]["value"]
+	var add: PackedByteArray = fields["AddBlocks"]["value"] if fields.has("AddBlocks") else PackedByteArray()
+	var out := PackedInt32Array()
+	for i in blocks.size():
+		var nib := 0
+		if not add.is_empty():
+			nib = ((add[i >> 1] >> 4) & 0xF) if i % 2 == 0 else (add[i >> 1] & 0xF)
+		out.append((blocks[i] & 0xFF) | (nib << 8))
+	return out
+
 # --- SchematicaExporter (whole-block region export) --------------------------
 
 func _setup_export_project(lib_name: String) -> Dictionary:
@@ -201,6 +238,70 @@ func _test_schematica_exporter_region() -> void:
 	ws.remove_project(project.name)
 	ws.remove_palette("__schem_export__")
 	ws.remove_library("__schem_export_lib__")
+
+func _test_schematica_exporter_local_ids() -> void:
+	print("-- SchematicaExporter (local ids stay inside the Blocks byte)")
+	var ws := VoxelWorld.workspace
+	var lib := ws.get_or_add_library("__schem_ids_lib__")
+	var palette := ws.add_palette("__schem_ids__")
+	palette.library_names = ["__schem_ids_lib__"]
+	# {semantic/block name, registry, legacy id}: a modded id way past a byte, a vanilla-range id
+	# that fits, and one with no known id at all.
+	for spec in [["Big", "testmod:big", 3171], ["Small", "minecraft:stone", 1], ["Nameless", "testmod:nameless", -1]]:
+		var bt := lib.add_block_type(spec[0])
+		McId.set_registry_id(bt, spec[1], 0, "", true, "", "", spec[2])
+		var e := PaletteEntry.new()
+		e.semantic_name = spec[0]
+		e.block_type_name = spec[0]
+		palette.entries.append(e)
+	var project: VoxelProject = ws.add_project("__schem_ids_project__")
+	project.palette_names.append("__schem_ids__")
+	VoxelWorld.open(project)
+	# One row along x with air gaps — a big id next to air/a different id is what Schematica
+	# used to misread.
+	project.data.set_block(Vector3i(0, 0, 0), "Big")
+	project.data.set_block(Vector3i(2, 0, 0), "Small")
+	project.data.set_block(Vector3i(3, 0, 0), "Nameless")
+	project.data.set_block(Vector3i(4, 0, 0), "Big")
+
+	var bytes: PackedByteArray = SchematicaExporter.export_region(project.data, Vector3i(0, 0, 0), Vector3i(4, 0, 0))["bytes"]
+	var mapping: Dictionary = SchematicaProbe.probe(bytes)["mapping"]
+	_check("a block whose real id is thousands gets a byte-sized local id, not that id",
+		mapping["testmod:big"] >= 1 and mapping["testmod:big"] <= 255)
+	_check("a block whose real id fits a byte keeps it", mapping["minecraft:stone"] == 1)
+	_check("a block with no known id still gets a byte-sized local id",
+		mapping["testmod:nameless"] >= 1 and mapping["testmod:nameless"] <= 255)
+	_check("the three local ids are distinct",
+		mapping.values().size() == 3 and mapping["testmod:big"] != mapping["testmod:nameless"])
+	_check("no AddBlocks tag is written when every id fits a byte", _add_blocks_of(bytes).is_empty())
+	var read := _schematica_read_ids(bytes)
+	_check("Schematica's reader sees exactly what was placed — and air stays air",
+		read == PackedInt32Array([mapping["testmod:big"], 0, 1, mapping["testmod:nameless"], mapping["testmod:big"]]))
+
+	ws.remove_project(project.name)
+	ws.remove_palette("__schem_ids__")
+	ws.remove_library("__schem_ids_lib__")
+
+func _test_schematica_local_id_overflow() -> void:
+	print("-- SchematicaExporter (>255 distinct blocks spill into AddBlocks correctly)")
+	var mapping := {}
+	var used := {}
+	var ids := {}
+	for n in 300:
+		ids[SchematicaExporter._local_id("testmod:b%d" % n, mapping, used, -1)] = true
+	var in_byte := 0
+	for id: int in ids:
+		if id >= 1 and id <= 255:
+			in_byte += 1
+	_check("300 distinct blocks get 300 distinct local ids", ids.size() == 300)
+	_check("all 255 byte-sized ids are used before anything spills past 255", in_byte == 255)
+
+	# An odd-length row of mixed small/big/air ids through the real writer, read back the way
+	# Schematica reads it.
+	var row := PackedInt32Array([256, 0, 300, 5, 4095, 0, 3171])
+	var bytes := SchematicaWriter.write(Vector3i(7, 1, 1), row, PackedByteArray([0, 0, 0, 0, 0, 0, 0]), {})
+	_check("every id in a spilled-over file survives Schematica's AddBlocks unpacking",
+		_schematica_read_ids(bytes) == row)
 
 func _test_schematica_exporter_prefab() -> void:
 	print("-- SchematicaExporter (a whole prefab, via its own palette stack)")

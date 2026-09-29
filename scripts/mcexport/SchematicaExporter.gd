@@ -18,17 +18,18 @@ extends RefCounted
 # these always keep their cell to themselves, see .plans/shaped-parts.md). GT machines aren't
 # wired up yet.
 #
-# Local ids (Blocks/AddBlocks + SchematicaMapping): Schematica itself only ever reads
-# SchematicaMapping, so historically these were arbitrary small numbers (1, 2, 3…). But a tool
-# that DOESN'T know that tag (confirmed against GTNH's own WorldEdit fork) instead reads
-# Blocks/AddBlocks as raw live numeric block ids — and small arbitrary numbers collide head-on
-# with low vanilla ids (1 = stone, 3 = dirt, 4 = cobblestone, …), so the file silently pastes
-# the wrong blocks everywhere. Using this install's OWN real numeric id (McId.get_legacy_id,
-# captured from NEI's item.csv at import time) as the local id instead makes one file correct
-# for both kinds of reader — SchematicaMapping-aware or not — as long as that id fits the
-# format's 12-bit cap (0-4095; the same cap Schematica itself is limited by). Falls back to an
-# arbitrary free number when there's no known legacy id (a manually-set/healed identity with no
-# roster row, or one over the cap) — still correct for Schematica, just not for a raw reader.
+# Local ids (Blocks + SchematicaMapping/BlockMapping): every reader that matters resolves a
+# block through the name table (Schematica: SchematicaMapping; GTNH's WorldEdit fork:
+# BlockMapping), so the local numbers are arbitrary — but they are kept inside the Blocks byte
+# (1-255) so the file never needs AddBlocks at all. That tag is the one place the readers
+# disagree: Schematica unpacks its nibbles high-first, WorldEdit/MCEdit low-first, so any id past
+# 255 came out as garbage in one of them (an earlier version wrote this install's real numeric
+# ids, thousands for modded blocks, and Schematica showed gravel/mushrooms/soul sand and blocks
+# out of thin air — see SchematicaWriter). When the block's real id (McId.get_legacy_id, from
+# NEI's item.csv) happens to fit in a byte it is still used, so a raw-id reader on this install
+# stays correct for vanilla-range blocks; everything else gets a free id counted down from 255,
+# far from the low vanilla ids (1 stone, 3 dirt, …) a raw reader would otherwise paste. Only a
+# file with more than 255 distinct blocks spills past 255 into AddBlocks.
 
 # Export the box [mn, mx] (inclusive) of `data`, belonging to whichever project is currently
 # active/resolving. To export a project that isn't the open one, wrap the call in
@@ -48,7 +49,7 @@ static func export_prefab(prefab: Prefab) -> Dictionary:
 	VoxelWorld.end_resolve_as()
 	return out
 
-const _MAX_LOCAL_ID := 4095   # 12-bit cap: Blocks' byte + AddBlocks' nibble
+const _BYTE_MAX := 255   # the Blocks byte; ids past this need AddBlocks (see class doc)
 
 # The primitive both of the above (and SaveRegionDialog's UI export flow, which needs to
 # build its own `cells` after applying the user's include/exclude + trim choices) funnel
@@ -111,24 +112,25 @@ static func export_cells(cells: Dictionary, size: Vector3i) -> Dictionary:
 	return {"bytes": bytes, "report": report}
 
 # The local id for `registry`, assigning one on first use: this install's real numeric id when
-# it's known and fits the 12-bit cap and nothing else already claimed it, otherwise the lowest
-# free number — see the class doc for why real ids matter here.
+# it's known, fits the Blocks byte and nothing else already claimed it, otherwise the highest
+# free byte-sized id — see the class doc for why the ids stay under 256.
 static func _local_id(registry: String, mapping: Dictionary, used_ids: Dictionary, legacy_id: int) -> int:
 	if mapping.has(registry):
 		return mapping[registry]
 	var id: int
-	if legacy_id >= 1 and legacy_id <= _MAX_LOCAL_ID and not used_ids.has(legacy_id):
+	if legacy_id >= 1 and legacy_id <= _BYTE_MAX and not used_ids.has(legacy_id):
 		id = legacy_id
 	else:
-		# Every low, common vanilla id (1 stone, 3 dirt, 4 cobblestone, …) lives down here — a
-		# raw-id reader that doesn't know this file's SchematicaMapping (see class doc) would
-		# paste one of THOSE instead of leaving it as whatever the fallback was standing in for.
-		# Counting down from the top of the range instead is far less likely to land on
-		# something real and meaningful to such a reader (FMP/AC's own placeholder blocks are
-		# the only regulars here — no item form, so no legacy id to look up in the first place).
-		id = _MAX_LOCAL_ID
-		while used_ids.has(id):
+		# Counting down from the top of the byte keeps clear of the low, common vanilla ids
+		# (1 stone, 3 dirt, 4 cobblestone, …) a raw-id reader would paste in place of these.
+		id = _BYTE_MAX
+		while id >= 1 and used_ids.has(id):
 			id -= 1
+		if id < 1:
+			# All 255 byte-sized ids are taken: the only case that needs AddBlocks.
+			id = _BYTE_MAX + 1
+			while used_ids.has(id):
+				id += 1
 	mapping[registry] = id
 	used_ids[id] = true
 	return id

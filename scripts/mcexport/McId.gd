@@ -29,11 +29,11 @@ const KEY_MOD := "mc.mod"
 const KEY_DISPLAY := "mc.display"
 const KEY_CONFIRMED := "mc.confirmed"
 # "mc.legacy_id" is this install's own live numeric block id for mc.registry (straight from NEI's
-# item.csv "ID" column) — WorldEdit's legacy .schematic reader (unlike Schematica's own) doesn't
-# understand the SchematicaMapping name table and just reads Blocks/AddBlocks as raw numeric ids,
-# so SchematicaWriter uses this as the local id when it's known and fits the format's 12-bit cap
-# (0-4095), instead of an arbitrary made-up number, making one file work for both readers. -1
-# when unknown (a manually-set or healed identity with no roster row behind it).
+# item.csv "ID" column). A raw-id .schematic reader (one that ignores the name tables) pastes
+# whatever number is stored, so SchematicaExporter uses this as the local id when it's known and
+# fits the Blocks byte (1-255) — see SchematicaExporter's class doc for why ids past 255 are
+# avoided (Schematica and WorldEdit unpack AddBlocks in opposite nibble orders). -1 when unknown
+# (a manually-set or healed identity with no roster row behind it).
 const KEY_LEGACY_ID := "mc.legacy_id"
 
 # mc.orient values.
