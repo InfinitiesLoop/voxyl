@@ -838,10 +838,21 @@ void fragment() {
 	// aliasing sooner. Both floors keep their tier visible at a useful radius even standing
 	// on the ground, and the chunk grid's ceiling is clamped well short of the plane mesh's
 	// own 600-unit edge (see plane_mesh.size in _setup_viewport).
+	//
+	// Pushing the 1-unit grid's single radius out much further keeps it fully bright well past
+	// where it starts to alias at a steep or high viewpoint — the same smeared-haze problem
+	// this whole approach exists to avoid, just pushed further out (confirmed: it comes back,
+	// just fainter, if the radius alone is stretched with a gentler curve instead — dimmer
+	// noise is still noise, the eye still catches the pattern). So the close-in radius that's
+	// already confirmed clean stays exactly as it was, at full strength, and a second, much
+	// dimmer band extends a further ~5 chunks past it — since it never gets bright, whatever
+	// it aliases into at that range reads as a faint texture in the haze/nebula, not a grid.
 	float dist = length(world_pos.xz - CAMERA_POSITION_WORLD.xz);
 	float cam_height = abs(CAMERA_POSITION_WORLD.y);
 	float minor_radius = clamp(cam_height * 1.6, 75.0, 270.0);
 	float minor_fade = 1.0 - smoothstep(0.0, 1.0, dist / minor_radius);
+	float minor_far_radius = clamp(cam_height * 1.6, 160.0, 220.0);
+	float minor_far_fade = 1.0 - smoothstep(0.0, 1.0, dist / minor_far_radius);
 	float major_radius = clamp(cam_height * 11.0, 160.0, 435.0);
 	float major_fade = 1.0 - smoothstep(0.0, 1.0, dist / major_radius);
 
@@ -849,7 +860,8 @@ void fragment() {
 	vec3 major_color = vec3(0.30, 0.78, 0.92);
 
 	ALBEDO = mix(minor_color, major_color, major);
-	ALPHA = max(minor * 0.16 * minor_fade, major * 0.32 * major_fade);
+	float minor_alpha = max(minor * 0.16 * minor_fade, minor * 0.02 * minor_far_fade);
+	ALPHA = max(minor_alpha, major * 0.32 * major_fade);
 }
 """
 	return shader
