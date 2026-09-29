@@ -831,17 +831,18 @@ void fragment() {
 	// still read as a smeared, busy texture rather than a grid. A plain distance fade has
 	// no such band: past the radius, a tier is just off.
 	//
-	// The two tiers get different radii because they alias at very different distances. The
-	// 1-unit grid is fine enough to start reading as noise at a fairly short, fairly
-	// constant real-world distance regardless of camera height — it's only ever useful as a
-	// close-up placement reference anyway — so its radius is short and fixed. The 16-unit
-	// chunk grid doesn't alias until much farther past that, so its radius can scale with
-	// camera height instead, working as a wide-area reference when looking down on a whole
-	// build from above; it's clamped so it can't shrink to nothing near the ground or grow
-	// enough to reveal the plane mesh's own 300-unit edge.
+	// The two tiers get different radii because they alias at very different distances. Both
+	// scale with camera height (higher up reveals more ground before either tier's lines
+	// span few enough screen pixels to start reading as noise) but the 1-unit grid's ceiling
+	// is much lower than the 16-unit chunk grid's, since it's the finer of the two and starts
+	// aliasing sooner. Both floors keep their tier visible at a useful radius even standing
+	// on the ground, and the chunk grid's ceiling is clamped well short of the plane mesh's
+	// own 300-unit edge.
 	float dist = length(world_pos.xz - CAMERA_POSITION_WORLD.xz);
-	float minor_fade = 1.0 - smoothstep(0.0, 1.0, dist / 75.0);
-	float major_radius = clamp(abs(CAMERA_POSITION_WORLD.y) * 11.0, 100.0, 280.0);
+	float cam_height = abs(CAMERA_POSITION_WORLD.y);
+	float minor_radius = clamp(cam_height * 1.6, 75.0, 180.0);
+	float minor_fade = 1.0 - smoothstep(0.0, 1.0, dist / minor_radius);
+	float major_radius = clamp(cam_height * 11.0, 160.0, 290.0);
 	float major_fade = 1.0 - smoothstep(0.0, 1.0, dist / major_radius);
 
 	vec3 minor_color = vec3(0.24, 0.56, 0.64);
