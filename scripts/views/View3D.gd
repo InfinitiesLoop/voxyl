@@ -840,8 +840,8 @@ void fragment() {
 	// build from above; it's clamped so it can't shrink to nothing near the ground or grow
 	// enough to reveal the plane mesh's own 300-unit edge.
 	float dist = length(world_pos.xz - CAMERA_POSITION_WORLD.xz);
-	float minor_fade = 1.0 - smoothstep(0.0, 1.0, dist / 45.0);
-	float major_radius = clamp(abs(CAMERA_POSITION_WORLD.y) * 8.0, 70.0, 240.0);
+	float minor_fade = 1.0 - smoothstep(0.0, 1.0, dist / 75.0);
+	float major_radius = clamp(abs(CAMERA_POSITION_WORLD.y) * 11.0, 100.0, 280.0);
 	float major_fade = 1.0 - smoothstep(0.0, 1.0, dist / major_radius);
 
 	vec3 minor_color = vec3(0.24, 0.56, 0.64);
