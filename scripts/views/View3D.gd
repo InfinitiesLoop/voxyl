@@ -798,25 +798,57 @@ void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }
 
+// Anti-aliased coverage for one grid tier, `cell` world units apart, with the line
+// thickness given in (roughly) pixels — like a real line renderer, so it stays the same
+// visual weight regardless of distance or zoom. `deriv` (the screen-space derivative of
+// the cell-normalized coordinate, from fwidth()) is computed once per tier in fragment()
+// and passed in here. It's what drives the widening: as a cell spans fewer pixels the
+// line grows to compensate, instead of thinning into sub-pixel aliasing.
+float grid_tier(vec2 world_xz, float cell, float width_px, vec2 deriv) {
+	vec2 uv = world_xz / cell;
+	vec2 line_frac = clamp(deriv * width_px, 0.0, 1.0);   // line width, as a fraction of a cell
+	vec2 d = abs(fract(uv - 0.5) - 0.5);                  // 0 at a line, 0.5 at cell center
+	vec2 half_w = max(line_frac * 0.5, deriv * 0.5);      // never thinner than ~1px on screen
+	vec2 aa = deriv * 0.5;
+	vec2 mask = 1.0 - smoothstep(half_w - aa, half_w + aa, d);
+	return max(mask.x, mask.y);
+}
+
 void fragment() {
-	// 1-unit grid (cyan)
-	vec2 coord = world_pos.xz;
-	vec2 g = abs(fract(coord - 0.5) - 0.5) / fwidth(coord);
-	float line1 = 1.0 - clamp(min(g.x, g.y), 0.0, 1.0);
+	vec2 minor_deriv = fwidth(world_pos.xz) + 1e-7;
+	vec2 major_deriv = fwidth(world_pos.xz / 16.0) + 1e-7;
+	float minor = grid_tier(world_pos.xz, 1.0, 1.2, minor_deriv);    // 1-unit cell lines
+	float major = grid_tier(world_pos.xz, 16.0, 1.8, major_deriv);   // 16-unit chunk lines
 
-	// 16-unit chunk grid (purple, thicker)
-	vec2 coord8 = world_pos.xz / 16.0;
-	vec2 g8 = abs(fract(coord8 - 0.5) - 0.5) / (fwidth(coord8) * 3.0);
-	float line8 = 1.0 - clamp(min(g8.x, g8.y), 0.0, 1.0);
-
+	// Fade each tier out by distance from the camera instead of trying to filter the Moire
+	// a fine world-space grid gets once a screen pixel spans many cells — see "Simple
+	// Infinite Grid Shader" (Javier Salcedo Puyo,
+	// dev.to/javiersalcedopuyo/simple-infinite-grid-shader-5fah). An earlier version tried
+	// to suppress that aliasing directly (fade each tier by its own screen-space cell
+	// density instead of world distance) — it technically worked, but the density-to-alias
+	// mapping compresses so much of the visible ground into a wide, slowly-resolving
+	// transition band (at a shallow or high viewing angle especially) that the band itself
+	// still read as a smeared, busy texture rather than a grid. A plain distance fade has
+	// no such band: past the radius, a tier is just off.
+	//
+	// The two tiers get different radii because they alias at very different distances. The
+	// 1-unit grid is fine enough to start reading as noise at a fairly short, fairly
+	// constant real-world distance regardless of camera height — it's only ever useful as a
+	// close-up placement reference anyway — so its radius is short and fixed. The 16-unit
+	// chunk grid doesn't alias until much farther past that, so its radius can scale with
+	// camera height instead, working as a wide-area reference when looking down on a whole
+	// build from above; it's clamped so it can't shrink to nothing near the ground or grow
+	// enough to reveal the plane mesh's own 300-unit edge.
 	float dist = length(world_pos.xz - CAMERA_POSITION_WORLD.xz);
-	float fade = 1.0 - smoothstep(18.0, 55.0, dist);
+	float minor_fade = 1.0 - smoothstep(0.0, 1.0, dist / 30.0);
+	float major_radius = clamp(abs(CAMERA_POSITION_WORLD.y) * 6.0, 40.0, 200.0);
+	float major_fade = 1.0 - smoothstep(0.0, 1.0, dist / major_radius);
 
-	vec3 color = mix(vec3(0.08, 0.75, 1.0), vec3(0.65, 0.30, 1.0), line8);
-	float alpha = clamp(max(line1, line8 * 2.5), 0.0, 1.0) * fade;
+	vec3 minor_color = vec3(0.24, 0.56, 0.64);
+	vec3 major_color = vec3(0.30, 0.78, 0.92);
 
-	ALBEDO = color;
-	ALPHA = alpha;
+	ALBEDO = mix(minor_color, major_color, major);
+	ALPHA = max(minor * 0.16 * minor_fade, major * 0.32 * major_fade);
 }
 """
 	return shader
