@@ -466,7 +466,7 @@ func _setup_viewport() -> void:
 
 	_grid_plane = MeshInstance3D.new()
 	var plane_mesh := PlaneMesh.new()
-	plane_mesh.size = Vector2(600.0, 600.0)
+	plane_mesh.size = Vector2(1200.0, 1200.0)
 	_grid_plane.mesh = plane_mesh
 	var grid_mat := ShaderMaterial.new()
 	grid_mat.shader = _make_grid_shader()
@@ -837,12 +837,12 @@ void fragment() {
 	// is much lower than the 16-unit chunk grid's, since it's the finer of the two and starts
 	// aliasing sooner. Both floors keep their tier visible at a useful radius even standing
 	// on the ground, and the chunk grid's ceiling is clamped well short of the plane mesh's
-	// own 300-unit edge.
+	// own 600-unit edge (see plane_mesh.size in _setup_viewport).
 	float dist = length(world_pos.xz - CAMERA_POSITION_WORLD.xz);
 	float cam_height = abs(CAMERA_POSITION_WORLD.y);
-	float minor_radius = clamp(cam_height * 1.6, 75.0, 180.0);
+	float minor_radius = clamp(cam_height * 1.6, 75.0, 270.0);
 	float minor_fade = 1.0 - smoothstep(0.0, 1.0, dist / minor_radius);
-	float major_radius = clamp(cam_height * 11.0, 160.0, 290.0);
+	float major_radius = clamp(cam_height * 11.0, 160.0, 435.0);
 	float major_fade = 1.0 - smoothstep(0.0, 1.0, dist / major_radius);
 
 	vec3 minor_color = vec3(0.24, 0.56, 0.64);
