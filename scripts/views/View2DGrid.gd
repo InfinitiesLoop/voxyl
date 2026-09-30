@@ -65,6 +65,7 @@ var _applying_state := false
 
 @onready var _layer_label: Label = $Toolbar/LayerBar/LayerLabel
 @onready var _grid_area: Control = $GridArea
+var _compass: CompassRose
 
 func configure(p_axis: int, p_center: Vector3i, p_flipped: bool = false) -> void:
 	axis = p_axis
@@ -90,6 +91,15 @@ func _ready() -> void:
 	_grid_area.clip_contents = true
 	_grid_area.draw.connect(_draw_grid)
 	_grid_area.gui_input.connect(_on_grid_input)
+	# Which way north is, top right, in plan (Y) slices — the other slices are elevations.
+	_compass = CompassRose.new()
+	_compass.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+	_compass.offset_left = -CompassRose.SIZE - 10.0
+	_compass.offset_right = -10.0
+	_compass.offset_top = 10.0
+	_compass.offset_bottom = CompassRose.SIZE + 10.0
+	_grid_area.add_child(_compass)
+	VoxelWorld.project_settings_changed.connect(_grid_area.queue_redraw)
 	VoxelWorld.block_changed.connect(func(_p, _s): _grid_area.queue_redraw())
 	VoxelWorld.palette_stack_changed.connect(_grid_area.queue_redraw)
 	VoxelWorld.block_type_changed.connect(_grid_area.queue_redraw)
@@ -305,7 +315,21 @@ func _update_slice_label() -> void:
 # Drawing
 # ---------------------------------------------------------------------------
 
+# Point the compass at the project's north as this plan view is turned (screen-up is -v).
+func _update_compass() -> void:
+	if _compass == null:
+		return
+	_compass.visible = axis == 1
+	if axis != 1:
+		return
+	var v := _get_v_dir()
+	var project := VoxelWorld.active_project
+	_compass.mirrored = _mirror_h
+	_compass.heading = CompassRose.heading_for(Vector2(-v.x, -v.z),
+		project.north_vector() if project != null else Vector2(0, -1), _mirror_h)
+
 func _draw_grid() -> void:
+	_update_compass()
 	if not VoxelWorld.active_project:
 		return
 	var data := VoxelWorld.active_project.data

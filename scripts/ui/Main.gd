@@ -117,6 +117,7 @@ func _build_layout_controls() -> void:
 	_add_bar_button("2×2", func(): _shell.apply_preset(MultiViewShell.Preset.GRID))
 	_bar.add_child(VSeparator.new())
 	_build_agent_controls()
+	_add_bar_button("Project", func(): ProjectSettingsDialog.open(self)).tooltip_text = "Project settings: which way north points, where the major grid lines fall"
 	_add_bar_button("⚙", func(): SettingsDialog.open(self)).tooltip_text = "Settings"
 
 # Agent presence in the editor bar: a badge while an agent is connected / building, and a

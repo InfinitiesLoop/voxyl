@@ -111,6 +111,8 @@ var _highlight_mat: StandardMaterial3D
 var _overlay: Control
 var _world_env: WorldEnvironment
 var _grid_plane: MeshInstance3D
+var _grid_material: ShaderMaterial
+var _compass: CompassRose
 var _sky_sphere: MeshInstance3D
 
 # --- Skybox ---
@@ -325,6 +327,16 @@ func _ready() -> void:
 		_toolbar = ViewToolbar.new(self)
 		_toolbar.position = Vector2(6, 6)
 		add_child(_toolbar)
+		# Which way north is, top right. Not in the offscreen capture views: a render is framed
+		# by the agent, who reads the project's north from the tools instead.
+		_compass = CompassRose.new()
+		_compass.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+		_compass.offset_left = -CompassRose.SIZE - 10.0
+		_compass.offset_right = -10.0
+		_compass.offset_top = 10.0
+		_compass.offset_bottom = CompassRose.SIZE + 10.0
+		add_child(_compass)
+	VoxelWorld.project_settings_changed.connect(_apply_project_settings)
 	VoxelWorld.about_to_save.connect(_on_about_to_save)
 	VoxelWorld.block_changed.connect(func(p, _s): if source_project == null: _mark_cell_dirty(p))
 	VoxelWorld.palette_stack_changed.connect(func(): _schedule_appearance_check(); if _fly_mode: _overlay.queue_redraw())
@@ -359,6 +371,7 @@ func _ready() -> void:
 	if _project():
 		_mark_dirty()
 	_update_selection_box()
+	_apply_project_settings()
 
 func _on_visibility_changed() -> void:
 	if visible:
@@ -403,6 +416,7 @@ func _on_about_to_save(project: VoxelProject) -> void:
 func _on_project_opened(_p: VoxelProject) -> void:
 	if source_project != null:
 		return
+	_apply_project_settings()
 	_clear_placement_fx()  # drop any in-flight reveal from the previous build
 	_mark_dirty()
 	# Position camera to see the whole scene on first open
@@ -470,6 +484,7 @@ func _setup_viewport() -> void:
 	_grid_plane.mesh = plane_mesh
 	var grid_mat := ShaderMaterial.new()
 	grid_mat.shader = _make_grid_shader()
+	_grid_material = grid_mat
 	_grid_plane.material_override = grid_mat
 	_grid_plane.position.y = -0.01
 	_viewport.add_child(_grid_plane)
@@ -794,6 +809,10 @@ render_mode unshaded, cull_disabled, blend_mix, depth_draw_never;
 
 varying vec3 world_pos;
 
+// Where the heavy lines fall, in world units along x / z: a line runs at offset + 16k. Set
+// per project (VoxelProject.grid_offset) so the grid can line up with the world's chunk borders.
+uniform vec2 major_offset = vec2(0.0);
+
 void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }
@@ -818,7 +837,7 @@ void fragment() {
 	vec2 minor_deriv = fwidth(world_pos.xz) + 1e-7;
 	vec2 major_deriv = fwidth(world_pos.xz / 16.0) + 1e-7;
 	float minor = grid_tier(world_pos.xz, 1.0, 1.2, minor_deriv);    // 1-unit cell lines
-	float major = grid_tier(world_pos.xz, 16.0, 1.8, major_deriv);   // 16-unit chunk lines
+	float major = grid_tier(world_pos.xz - major_offset, 16.0, 1.8, major_deriv);   // 16-unit chunk lines
 
 	// Fade each tier out by distance from the camera instead of trying to filter the Moire
 	// a fine world-space grid gets once a screen pixel spans many cells — see "Simple
@@ -1537,10 +1556,30 @@ func _update_camera() -> void:
 		_grid_plane.position.z = _camera_pos.z
 	if _sky_sphere:
 		_sky_sphere.position = _camera_pos
+	_update_compass()
 	# Camera moved → the project's saved viewpoint is stale. Cheap debounce restart;
 	# skipped while we're applying a loaded state (that's not a user change).
 	if not _applying_state and not offscreen:
 		VoxelWorld.mark_dirty()
+
+# The project's settings as this view shows them: the heavy grid lines' offset, and the compass.
+func _apply_project_settings() -> void:
+	var p := _project()
+	if _grid_material != null:
+		_grid_material.set_shader_parameter("major_offset", Vector2(p.grid_offset) if p != null else Vector2.ZERO)
+	_update_compass()
+
+# Turn the compass to where north currently is on screen: from the camera's ground-plane
+# forward, or — looking straight down, where it has none — its screen-up direction.
+func _update_compass() -> void:
+	if _compass == null or _camera == null or not _camera.is_inside_tree():
+		return
+	var basis := _camera.global_transform.basis
+	var forward := Vector2(-basis.z.x, -basis.z.z)
+	if forward.length() < 0.2:
+		forward = Vector2(basis.y.x, basis.y.z)
+	var p := _project()
+	_compass.heading = CompassRose.heading_for(forward, p.north_vector() if p != null else Vector2(0, -1))
 
 func _get_look_dir() -> Vector3:
 	var yaw_rad := deg_to_rad(_yaw)

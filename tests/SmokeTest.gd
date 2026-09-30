@@ -55,6 +55,7 @@ func _ready() -> void:
 	_test_shaped_parts()
 	_test_arch_shapes()
 	_test_material_list()
+	_test_project_settings()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
@@ -1035,6 +1036,8 @@ func _test_project_persistence() -> void:
 	p.data.set_block(Vector3i(0, 0, 0), "Trim", 0, {"note": "hi"})  # a tagged cell
 	p.hotbar = ["Base", "", "Accent"]
 	p.active_slot = 2
+	p.north_dir = "east"
+	p.grid_offset = Vector2i(5, 11)
 	p.layout = {"tree": {"type": "pane", "current": 0, "focused": true,
 		"views": [{"kind": "3d", "yaw": 12.5}]}}
 	_check("save project ok", ProjectStore.save_project(p) == OK)
@@ -1062,6 +1065,7 @@ func _test_project_persistence() -> void:
 		_check("hotbar round-trips",
 			q.hotbar.size() == 3 and q.hotbar[0] == "Base" and q.hotbar[2] == "Accent")
 		_check("active slot round-trips", q.active_slot == 2)
+		_check("north and the major-grid offset round-trip", q.north_dir == "east" and q.grid_offset == Vector2i(5, 11))
 		_check("layout round-trips",
 			((q.layout.get("tree", {}) as Dictionary).get("type", "")) == "pane")
 
@@ -3034,3 +3038,43 @@ func _remap_twin_changes_rows(pal: Palette, project: VoxelProject) -> bool:
 	var rows := MaterialList.from_stats(RegionOps.stats(project.data, Vector3i.ZERO, Vector3i(5, 0, 0)))
 	var stone := rows.filter(func(r: Dictionary) -> bool: return r["block"] == "stone" and r["shape"] == "")
 	return stone.size() == 1 and stone[0]["count"] == 2
+
+# --- Project settings: north + major grid offset, and the compass math --------------------------
+
+func _test_project_settings() -> void:
+	print("-- project settings (north, major grid offset) + compass")
+	VoxelWorld.reset_for_tests()
+	var project := VoxelWorld.workspace.get_project("My First Build")
+	VoxelWorld.open(project)
+	_check("a project starts aligned: north is -Z, grid lines at the origin",
+		project.north_dir == "north" and project.grid_offset == Vector2i.ZERO and project.north_vector() == Vector2(0, -1))
+	_check("north_vector follows the direction",
+		(func() -> bool:
+			for pair in [["east", Vector2(1, 0)], ["south", Vector2(0, 1)], ["west", Vector2(-1, 0)]]:
+				project.north_dir = pair[0]
+				if project.north_vector() != pair[1]:
+					return false
+			project.north_dir = "north"
+			return true).call())
+
+	var fired := [0]
+	var on_change := func() -> void: fired[0] += 1
+	VoxelWorld.project_settings_changed.connect(on_change)
+	_check("setting them reports a change", VoxelWorld.set_project_settings("east", Vector2i(-3, 18)))
+	_check("…the offset wraps into 0..15 (−3 → 13, 18 → 2)", project.north_dir == "east" and project.grid_offset == Vector2i(13, 2))
+	_check("…and it announced itself once", fired[0] == 1)
+	_check("the same values again change nothing", not VoxelWorld.set_project_settings("east", Vector2i(13, 2)) and fired[0] == 1)
+	_check("an unknown direction is refused", not VoxelWorld.set_project_settings("up", Vector2i.ZERO) and project.north_dir == "east")
+	VoxelWorld.project_settings_changed.disconnect(on_change)
+	VoxelWorld.set_project_settings("north", Vector2i.ZERO)
+
+	var up := Vector2(0, -1)
+	_check("looking north, north is up", is_zero_approx(CompassRose.heading_for(Vector2(0, -1), up)))
+	_check("looking east, north is on the left", is_equal_approx(CompassRose.heading_for(Vector2(1, 0), up), -PI * 0.5))
+	_check("looking west, north is on the right", is_equal_approx(CompassRose.heading_for(Vector2(-1, 0), up), PI * 0.5))
+	_check("looking south, north is behind", is_equal_approx(absf(CompassRose.heading_for(Vector2(0, 1), up)), PI))
+	_check("if the project's north is east, looking −Z puts it on the right",
+		is_equal_approx(CompassRose.heading_for(Vector2(0, -1), Vector2(1, 0)), PI * 0.5))
+	_check("no ground direction to go by → no turn", CompassRose.heading_for(Vector2.ZERO, up) == 0.0)
+	_check("a view flipped left-right turns the other way",
+		is_equal_approx(CompassRose.heading_for(Vector2(0, -1), Vector2(1, 0), true), -PI * 0.5))

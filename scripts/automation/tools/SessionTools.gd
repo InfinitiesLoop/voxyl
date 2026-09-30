@@ -3,6 +3,7 @@ extends RefCounted
 # Session: what's open and what happened.
 
 const ViewTools := preload("res://scripts/automation/tools/ViewTools.gd")
+const ProjectTools := preload("res://scripts/automation/tools/ProjectTools.gd")
 
 static func register(reg: McpRegistry) -> void:
 	reg.add("status",
@@ -46,6 +47,8 @@ static func _status(_args: Dictionary) -> Dictionary:
 			"cells": p.data.cells.size(),
 			"bounds": _bounds(aabb),
 		}
+		if p.north_dir != "north" or p.grid_offset != Vector2i.ZERO:
+			out["project"]["settings"] = ProjectTools.settings_json(p)   # only when set up; see project_settings
 		if p.editing_prefab != null:
 			out["project"]["editing_prefab"] = true   # saves write back into the prefab of this name
 		out["hotbar"] = {"slots": Array(VoxelWorld.hotbar), "active": VoxelWorld.active_slot}

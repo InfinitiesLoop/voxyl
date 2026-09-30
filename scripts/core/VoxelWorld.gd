@@ -7,6 +7,8 @@ extends Node
 enum Tool { PAINT, ERASE, LINE, RECT, FILL, BUILD_TO_ME, WAND, SELECT, EXCHANGE }
 
 signal workspace_changed()
+# The open project's north / major-grid offset changed (Project dialog, agent tool).
+signal project_settings_changed()
 signal project_opened(project: VoxelProject)
 signal palette_stack_changed()
 signal block_changed(pos: Vector3i, semantic_name: String)
@@ -771,6 +773,22 @@ func _encode_cell(cell: BlockCell) -> Variant:
 func _decode_cell(encoded: Array) -> BlockCell:
 	var parts: Array = VoxelData.unpack_parts(encoded[3]) if encoded.size() > 3 else []
 	return BlockCell.new(encoded[0], encoded[1], (encoded[2] as Dictionary).duplicate(true), parts)
+
+# Change the open project's north and major-grid offset (see VoxelProject.north_dir /
+# grid_offset). The offset is wrapped into 0..15. Returns whether anything changed; an unknown
+# direction changes nothing.
+func set_project_settings(north_dir: String, grid_offset: Vector2i) -> bool:
+	var p := active_project
+	if p == null or not (north_dir in VoxelProject.NORTH_DIRS):
+		return false
+	var wrapped := Vector2i(posmod(grid_offset.x, VoxelProject.MAJOR_GRID), posmod(grid_offset.y, VoxelProject.MAJOR_GRID))
+	if p.north_dir == north_dir and p.grid_offset == wrapped:
+		return false
+	p.north_dir = north_dir
+	p.grid_offset = wrapped
+	project_settings_changed.emit()
+	mark_dirty()
+	return true
 
 func get_block(pos: Vector3i) -> String:
 	return active_project.data.get_block(pos) if active_project else ""

@@ -21,6 +21,13 @@ static func register(reg: McpRegistry) -> void:
 	reg.add("project_info",
 		"A project's bounds, counts by semantic, palette stack, semantics used but not in any of its palettes, and history depth. Defaults to the open project.",
 		{"properties": {"name": {"type": "string"}}}, _project_info)
+	reg.add("project_settings",
+		"Change the open project's settings (what the user's Project dialog edits; changes show live). `north`: which of the project's own directions points toward the real world's north (north = -Z, east = +X, south = +Z, west = -X; default north). It orients the user's compass and tells you how the build sits in the world; every direction word in these tools keeps meaning the project's own axes. `grid_offset` [x, z]: where the heavy 16-cell grid lines fall, along the west/north edge of cells at x = offset + 16k (wrapped into 0..15), so the grid lines up with the world's chunk borders. Give one or both; returns the current values. project_info and status report them too.",
+		{"properties": {
+			"north": {"type": "string", "enum": VoxelProject.NORTH_DIRS},
+			"grid_offset": {"type": "array", "items": {"type": "integer"}, "description": "[x, z]"},
+			"project": {"type": "string"},
+		}}, _project_settings, {"mutates": true})
 	reg.add("project_save",
 		"Save the open project now, or save it under a new name with `as` (this is how a scratch project becomes a real one).",
 		{"properties": {
@@ -101,7 +108,33 @@ static func _info(p: VoxelProject) -> Dictionary:
 		"palettes": Array(p.palette_names), "cells": p.data.cells.size(),
 		"bounds": _bounds(aabb),
 		"counts": counts, "undefined_semantics": missing,
+		"settings": settings_json(p),
 		"history_steps": (p.history.entries()["entries"] as Array).size() if p.history else 0}
+
+# The project's settings as tools report them.
+static func settings_json(p: VoxelProject) -> Dictionary:
+	return {"north": p.north_dir, "grid_offset": [p.grid_offset.x, p.grid_offset.y]}
+
+static func _project_settings(args: Dictionary) -> Dictionary:
+	var pv: Variant = McpArgs.project(args)
+	if McpRegistry.is_error(pv):
+		return pv
+	var p: VoxelProject = pv
+	var north := p.north_dir
+	if args.has("north"):
+		north = str(args["north"])
+		if not (north in VoxelProject.NORTH_DIRS):
+			return McpRegistry.fail("bad_argument", "north must be one of %s" % ", ".join(VoxelProject.NORTH_DIRS))
+	var offset := p.grid_offset
+	if args.has("grid_offset"):
+		var g: Variant = args["grid_offset"]
+		if not (g is Array) or (g as Array).size() != 2:
+			return McpRegistry.fail("bad_argument", "grid_offset must be [x, z]")
+		offset = Vector2i(int(g[0]), int(g[1]))
+	var changed := VoxelWorld.set_project_settings(north, offset)
+	var out := settings_json(p)
+	out["changed"] = changed
+	return out
 
 static func _project_save(args: Dictionary) -> Dictionary:
 	var pv: Variant = McpArgs.project(args)

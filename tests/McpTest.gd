@@ -48,6 +48,7 @@ func _run() -> void:
 	await _test_http()
 	await _test_build()
 	await _test_structure_find()
+	await _test_project_settings_tool()
 	await _test_prefabs()
 	await _test_semantic_rename()
 	await _test_nei_roster_import_tool()
@@ -523,6 +524,27 @@ func _test_structure_find() -> void:
 	await _tool("selection_clear", {})
 	await _tool("cells_clear", {"region": {"all": true}})
 	_check("(fixture cleared)", data.cells.is_empty())
+
+func _test_project_settings_tool() -> void:
+	print("-- project_settings")
+	var info0 := await _tool("project_info", {})
+	_check("project_info reports the defaults", info0["settings"]["north"] == "north" and _ints(info0["settings"]["grid_offset"]) == [0, 0])
+	var st0 := await _tool("status", {})
+	_check("status leaves them out until they're set", not (st0["project"] as Dictionary).has("settings"))
+	var set1 := await _tool("project_settings", {"north": "east", "grid_offset": [20, -1]})
+	_check("project_settings sets north and wraps the offset", not set1["_is_error"] and set1["north"] == "east"
+		and _ints(set1["grid_offset"]) == [4, 15] and bool(set1["changed"]))
+	_check("…on the open project", VoxelWorld.active_project.north_dir == "east" and VoxelWorld.active_project.grid_offset == Vector2i(4, 15))
+	var st1 := await _tool("status", {})
+	_check("status reports them once set", st1["project"]["settings"]["north"] == "east")
+	var same := await _tool("project_settings", {"north": "east"})
+	_check("giving only one leaves the other, and no change is reported", _ints(same["grid_offset"]) == [4, 15] and not bool(same["changed"]))
+	var bad_north := await _tool("project_settings", {"north": "sideways"})
+	_check("an unknown direction is refused", bad_north["_is_error"] and str(bad_north.get("code", "")) == "bad_argument")
+	var bad_off := await _tool("project_settings", {"grid_offset": [1]})
+	_check("a malformed offset is refused", bad_off["_is_error"] and str(bad_off.get("code", "")) == "bad_argument")
+	var undo_safe := await _tool("project_settings", {"north": "north", "grid_offset": [0, 0]})
+	_check("and it can be put back", not undo_safe["_is_error"] and VoxelWorld.active_project.north_dir == "north")
 
 func _test_prefabs() -> void:
 	print("-- prefabs through tools")

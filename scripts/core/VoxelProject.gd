@@ -26,6 +26,28 @@ extends Resource
 @export var hotbar: Array[String] = []
 @export var active_slot: int = 0
 
+# Where this project sits in the world it plans (project settings, edited in the Project dialog;
+# like layout/hotbar they belong to the build, never to a view, and are never voxel data):
+#   north_dir   — which of the project's own directions points toward the real world's north:
+#                 "north" (-Z, the default: the project is already aligned), "east" (+X),
+#                 "south" (+Z) or "west" (-X). It orients the compass and nothing else — every
+#                 direction word in the data and the tools keeps meaning the project's own axes.
+#   grid_offset — where the heavy 16-cell grid lines fall: along the west / north edge of the
+#                 cells whose x / z is this value (mod 16), so the grid can be lined up with the
+#                 world's chunk borders when the project's origin isn't on one. Kept in 0..15.
+const NORTH_DIRS := ["north", "east", "south", "west"]
+const MAJOR_GRID := 16
+@export var north_dir: String = "north"
+@export var grid_offset: Vector2i = Vector2i.ZERO
+
+# The project's north as a direction on the ground plane, in (x, z) — z grows southward.
+func north_vector() -> Vector2:
+	match north_dir:
+		"east": return Vector2(1, 0)
+		"south": return Vector2(0, 1)
+		"west": return Vector2(-1, 0)
+	return Vector2(0, -1)
+
 # Cuboid region selection (the Select tool), persisted as two opposite corners + a flag —
 # cheap, and enough to restore the exact box. Like layout/hotbar this is project-tied
 # editor state, not voxel data: it names positions, never a material.
