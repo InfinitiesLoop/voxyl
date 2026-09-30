@@ -1031,6 +1031,16 @@ func notify_block_type_changed() -> void:
 func get_block_type_for_semantic(semantic_name: String) -> String:
 	return _resolve_semantic(semantic_name).get("name", "")
 
+# The name of the library the block a semantic resolves to comes from (through its winning
+# palette's library stack, like describe_entry shows), or "" when undecided / unresolved.
+func get_library_name_for_semantic(semantic_name: String) -> String:
+	var r := _resolve_semantic(semantic_name)
+	var palette: Palette = r.get("palette")
+	var block_name := str(r.get("name", ""))
+	if palette == null or block_name.is_empty() or workspace == null:
+		return ""
+	return workspace.resolve_block_type_library(block_name, palette.library_names)
+
 # The resolved BlockType object for a semantic (last-wins palette walk), or null.
 # Views that need more than color/geometry — e.g. the 3D view reading a block's
 # state_map to drive orientation variants / multipart connection parts — go through

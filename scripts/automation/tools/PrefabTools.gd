@@ -25,7 +25,7 @@ static func register(reg: McpRegistry) -> void:
 		"All prefabs: size, cell count, anchor, preferred palettes, tags. `query` filters by name / tags / notes words.",
 		{"properties": {"query": {"type": "string"}}}, _prefab_list)
 	reg.add("prefab_get",
-		"One prefab in detail: size, anchor, semantics with counts, preferred palettes, tags, notes — and, with a project open, which of its semantics that project doesn't map and which of its palettes would.",
+		"One prefab in detail: size, anchor, semantics with counts, `materials` (the same contents as the ACTUAL blocks its own palettes resolve to, merged where semantics share a block: what to gather to build it in-game), preferred palettes, tags, notes — and, with a project open, which of its semantics that project doesn't map and which of its palettes would.",
 		{"properties": {"name": {"type": "string"}}, "required": ["name"]}, _prefab_get)
 	reg.add("prefab_render",
 		"An image of a prefab through its preferred palettes, no project needed: a sheet of four views (three-quarter, back, front elevation, top). Also refreshes its thumbnail in the user's browser. render = RenderSpec (mode textured|intent|clay|outline|xray|wire, lighting, background).",
@@ -89,6 +89,8 @@ static func describe(p: Prefab, full := false) -> Dictionary:
 		d["tags"] = Array(p.tags)
 	if full:
 		d["semantics"] = p.semantic_counts()
+		# The same contents as the actual blocks its own palettes resolve them to (merged).
+		d["materials"] = MaterialList.to_json(MaterialList.for_prefab(p))
 		if not p.notes.is_empty():
 			d["notes"] = p.notes
 		var missing_pal: Array = []

@@ -381,6 +381,16 @@ func _test_build() -> void:
 	var ad_hoc_stats := await _tool("region_stats", {"region": {"min": [200, 0, 200], "max": [204, 2, 200], "filter": {"whitelist": ["Mass"]}}})
 	_check("an ad hoc region filter isolates the pillars from the connecting wall",
 		int(ad_hoc_stats["cells"]) == 6 and not (ad_hoc_stats["blocks"] as Dictionary).has("Core"))
+	var mat_rows: Array = ad_hoc_stats["materials"]
+	_check("region_stats also groups by the actual block (Mass → base)", mat_rows.size() == 1
+		and str(mat_rows[0]["block"]) == "base" and int(mat_rows[0]["count"]) == 6)
+	# Core (a whole stone block) and Chamfer (stone cut into roof tiles) share a block but not an
+	# item, while Glow (a face of glass) stays apart: rows are keyed by block AND shape.
+	var all_mats := (await _tool("region_stats", {}))["materials"] as Array
+	var stone_rows := all_mats.filter(func(m: Dictionary) -> bool: return str(m["block"]) == "stone")
+	_check("a shape splits a block's row (whole stone vs stone roof tiles)", stone_rows.size() == 2
+		and stone_rows.any(func(m: Dictionary) -> bool: return not m.has("shape"))
+		and stone_rows.any(func(m: Dictionary) -> bool: return str(m.get("shape", "")) == "roof_tile"))
 
 	var filt_replace := await _tool("region_replace", {"region": {"min": [200, 0, 200], "max": [204, 2, 200], "filter": {"whitelist": ["Mass"]}}, "from": "Mass", "to": "Nope"})
 	_check("region_replace with a filter only touches the whitelisted pillars", int(filt_replace["placed"]) == 6)
@@ -497,6 +507,11 @@ func _test_prefabs() -> void:
 
 	var got := await _tool("prefab_get", {"name": "Seat Bench"})
 	_check("prefab_get lists semantics", (got["semantics"] as Dictionary).has("Seat") and (got["semantics"] as Dictionary).has("Mass"))
+	# Seat (Bench Pal) and Mass (Pillar Test) both map to the block "base": two semantics, one item.
+	var mats: Array = got["materials"]
+	_check("prefab_get's materials merge semantics that share a block", mats.size() == 1
+		and str(mats[0]["block"]) == "base" and int(mats[0]["count"]) == 2
+		and (mats[0]["semantics"] as Dictionary).size() == 2)
 	var upd := await _tool("prefab_update", {"name": "Seat Bench", "rename": "Seat Bench 2", "anchor": [1, 0, 0], "notes": "two cells"})
 	_check("prefab_update renames and re-anchors", not upd["_is_error"] and upd["name"] == "Seat Bench 2" and _ints(upd["anchor"]) == [1, 0, 0])
 	var home := VoxelWorld.active_project

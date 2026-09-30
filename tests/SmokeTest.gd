@@ -54,6 +54,7 @@ func _ready() -> void:
 	_test_shape_rules()
 	_test_shaped_parts()
 	_test_arch_shapes()
+	_test_material_list()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
@@ -2961,3 +2962,66 @@ func _test_arch_shapes() -> void:
 	_check("stairs placed on a block sit in the cell above",
 		not r.is_empty() and r["pos"] == Vector3i(0, 1, 0) and ArchShapes.side_of(int(r["part"]["slot"])) == 0)
 	VoxelWorld.reset_for_tests()
+
+# --- Material list: the actual blocks behind the semantics ----------------------------------
+
+func _test_material_list() -> void:
+	print("-- material list (contents by actual block)")
+	VoxelWorld.reset_for_tests()
+	var ws := VoxelWorld.workspace
+	var project := ws.get_project("My First Build")
+	var pal := ws.add_palette("__mat_pal__")
+	pal.library_names = [VoxelWorkspace.BASIC_LIBRARY]
+	for spec in [["MBase", "plank", ""], ["MTwin", "plank", ""], ["MStrip", "plank", "edge1"],
+			["MStone", "stone", ""], ["MLoose", "", "face1"]]:
+		var e := PaletteEntry.new()
+		e.semantic_name = spec[0]
+		e.block_type_name = spec[1]
+		e.shape_id = spec[2]
+		pal.entries.append(e)
+	project.palette_names.append("__mat_pal__")
+	VoxelWorld.open(project)
+	VoxelWorld.set_block(Vector3i(0, 0, 0), "MBase")
+	VoxelWorld.set_block(Vector3i(1, 0, 0), "MBase")
+	VoxelWorld.set_block(Vector3i(2, 0, 0), "MTwin")
+	VoxelWorld.set_block(Vector3i(3, 0, 0), "MStone")
+	VoxelWorld.add_part(Vector3i(4, 0, 0), BlockCell.make_part("MStrip", "edge1", 0))
+	VoxelWorld.add_part(Vector3i(5, 0, 0), BlockCell.make_part("MLoose", "face1", 0))
+
+	var stats := RegionOps.stats(project.data, Vector3i.ZERO, Vector3i(5, 0, 0))
+	var rows := MaterialList.from_stats(stats)
+	_check("five semantics fold into four items", rows.size() == 4)
+	var plank: Dictionary = rows[0]
+	_check("two semantics on one block merge into one row (busiest first)",
+		plank["block"] == "plank" and plank["shape"] == "" and plank["count"] == 3
+		and plank["semantics"] == {"MBase": 2, "MTwin": 1})
+	var strip := rows.filter(func(r: Dictionary) -> bool: return r["shape"] == "edge1")
+	_check("a shaped part is its own item, not more of the whole block",
+		strip.size() == 1 and strip[0]["block"] == "plank" and strip[0]["count"] == 1)
+	var loose := rows.filter(func(r: Dictionary) -> bool: return r["undecided"])
+	_check("an undecided semantic keeps a flagged row of its own",
+		loose.size() == 1 and loose[0]["semantics"] == {"MLoose": 1} and MaterialList.title(loose[0]).begins_with("Undecided"))
+	_check("the library it comes from is reported", plank["library"] == VoxelWorkspace.BASIC_LIBRARY)
+
+	# The legend control shows the same numbers both ways.
+	var legend := CountLegend.new()
+	add_child(legend)
+	var saved_mode := CountLegend._mode
+	CountLegend._mode = CountLegend.MODE_SEMANTIC
+	legend.set_data(stats)
+	_check("semantic view: one row per semantic", legend._list.get_child_count() == 5)
+	CountLegend._mode = CountLegend.MODE_BLOCK
+	legend.set_data(stats, null, 7)
+	_check("block view: one row per item, plus air", legend._list.get_child_count() == 4 + 1)
+	_check("block view keeps the list for Copy", MaterialList.to_text(legend._rows).contains("3× plank"))
+	CountLegend._mode = saved_mode
+	legend.queue_free()
+	_check("the palette can change it: remap the twin and the rows follow", _remap_twin_changes_rows(pal, project))
+
+func _remap_twin_changes_rows(pal: Palette, project: VoxelProject) -> bool:
+	for e: PaletteEntry in pal.entries:
+		if e.semantic_name == "MTwin":
+			e.block_type_name = "stone"
+	var rows := MaterialList.from_stats(RegionOps.stats(project.data, Vector3i.ZERO, Vector3i(5, 0, 0)))
+	var stone := rows.filter(func(r: Dictionary) -> bool: return r["block"] == "stone" and r["shape"] == "")
+	return stone.size() == 1 and stone[0]["count"] == 2

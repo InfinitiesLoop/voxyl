@@ -353,11 +353,33 @@ static func stats(data: VoxelData, mn: Vector3i, mx: Vector3i, filter := {}, pos
 				var s := str(part["semantic"])
 				if not filter_ok(filter, s):
 					continue
-				var key := "%s|%s" % [s, part["shape"]]
+				var key := part_key(s, str(part["shape"]))
 				parts[key] = int(parts.get(key, 0)) + 1
 		else:
 			blocks[cell.type_id] = int(blocks.get(cell.type_id, 0)) + 1
 	return {"cells": n, "blocks": blocks, "parts": parts, "bounds": [lo, hi] if n > 0 else []}
+
+# The key `stats` files a part's count under ("Semantic|shape"), and back. Every reader of
+# stats' `parts` goes through these so the format is spelled in one place.
+static func part_key(semantic: String, shape: String) -> String:
+	return "%s|%s" % [semantic, shape]
+
+static func split_part_key(key: String) -> Array:
+	var cut := key.rfind("|")
+	return [key.substr(0, cut), key.substr(cut + 1)]
+
+# Semantic → count for a `stats` result: whole-block cells plus parts, each under its own
+# semantic (what RegionOps.semantic_counts gives, but from already-tallied stats).
+static func stats_semantic_counts(tally: Dictionary) -> Dictionary:
+	var counts := {}
+	var blocks: Dictionary = tally.get("blocks", {})
+	for s: String in blocks:
+		counts[s] = int(counts.get(s, 0)) + int(blocks[s])
+	var parts: Dictionary = tally.get("parts", {})
+	for key: String in parts:
+		var s: String = split_part_key(key)[0]
+		counts[s] = int(counts.get(s, 0)) + int(parts[key])
+	return counts
 
 # Rotate/mirror the matching content of the box in place via `t` (any pivot already baked
 # in, e.g. SpatialXform.about). Only cells matching `filter`/`positions` are touched; a

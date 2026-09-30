@@ -17,10 +17,10 @@ static func register(reg: McpRegistry) -> void:
 			"at": {"type": "integer", "description": "Only this layer: a y for axis y, a z for axis z, an x for axis x"},
 		}}, _region_text)
 	reg.add("region_stats",
-		"Counts inside a region (default: the whole build): whole blocks by semantic, parts by semantic and shape, bounds.",
+		"Counts inside a region (default: the whole build): whole blocks by semantic, parts by semantic and shape, bounds. Also `materials`: the same contents grouped by the ACTUAL block each semantic resolves to (library, shape, Minecraft registry id when known), merging semantics that share a block, so its row count can differ from the semantic counts. This is what to gather to build the region in-game.",
 		{"properties": {"region": McpArgs.s_region("Region (default: the whole build)")}}, _region_stats)
 	reg.add("selection_get",
-		"The region selection's current state: box bounds, filter (whitelist/blacklist), whether grow/shrink turned it into an exact (possibly disjoint) cell set, and the same counts region_stats gives for what's actually selected.",
+		"The region selection's current state: box bounds, filter (whitelist/blacklist), whether grow/shrink turned it into an exact (possibly disjoint) cell set, and the same counts (including `materials`, the actual blocks) region_stats gives for what's actually selected.",
 		{}, _selection_get)
 
 static func _cell_get(args: Dictionary) -> Dictionary:
@@ -94,7 +94,9 @@ static func _region_stats(args: Dictionary) -> Dictionary:
 	var r: Variant = McpArgs.region(args.get("region"), true)
 	if McpRegistry.is_error(r):
 		return r
-	return RegionOps.stats(VoxelWorld.active_project.data, r["min"], r["max"], r["filter"], r.get("positions"))
+	var stats := RegionOps.stats(VoxelWorld.active_project.data, r["min"], r["max"], r["filter"], r.get("positions"))
+	stats["materials"] = MaterialList.to_json(MaterialList.from_stats(stats))
+	return stats
 
 static func _selection_get(_args: Dictionary) -> Dictionary:
 	if VoxelWorld.active_project == null:
@@ -110,4 +112,5 @@ static func _selection_get(_args: Dictionary) -> Dictionary:
 	var stats := RegionOps.stats(VoxelWorld.active_project.data, VoxelWorld.selection_min, VoxelWorld.selection_max,
 		VoxelWorld.selection_filter, VoxelWorld.selection_mask.keys() if VoxelWorld.selection_mask != null else null)
 	out.merge(stats)
+	out["materials"] = MaterialList.to_json(MaterialList.from_stats(stats))
 	return out

@@ -3881,9 +3881,10 @@ func _update_paste_offset_labels() -> void:
 	(_paste_offset_labels["z"] as Label).text = str(_paste_offset.z)
 
 # ---------------------------------------------------------------------------
-# Selection overlay content — the Select tool's read-out: the region's dimensions and a
-# per-semantic block tally (air included). Both the region and its contents change freely,
-# so the list is rebuilt wholesale on each refresh; the framing/open/close are shared above.
+# Selection overlay content — the Select tool's read-out: the region's dimensions and its
+# contents (air included), by semantic or by the actual blocks they resolve to (CountLegend).
+# Both the region and its contents change freely, so the list is rebuilt wholesale on each
+# refresh; the framing/open/close are shared above.
 # ---------------------------------------------------------------------------
 
 func _build_selection_overlay() -> ToolOverlayPanel:
@@ -3903,18 +3904,23 @@ func _refresh_selection_overlay() -> void:
 		return
 	var dims: Vector3i = stats["size"]
 	content.add_child(_overlay_note("%d × %d × %d  ·  %s cells" % [
-		dims.x, dims.y, dims.z, _grouped(stats["total"])]))
+		dims.x, dims.y, dims.z, CountLegend.grouped(stats["total"])]))
+	if stats["filtered"]:
+		# A whitelist/blacklist or a grow/shrink mask narrows what's selected to fewer cells
+		# than the box holds; say so, and leave out Air (it only means something for a plain box).
+		var picked: Dictionary = stats["stats"]
+		content.add_child(_overlay_note("Narrowed to %s cells" % CountLegend.grouped(int(picked["cells"]))))
 	content.add_child(HSeparator.new())
-	# Occupied semantics first (busiest first), then air — so the eye lands on what's built.
-	var counts: Dictionary = stats["counts"]
-	var semantics := counts.keys()
-	semantics.sort_custom(func(a, b):
-		return counts[a] > counts[b] if counts[a] != counts[b] else a < b)
-	for semantic: String in semantics:
-		content.add_child(_selection_count_row(
-			VoxelWorld.get_color_for_semantic(semantic), semantic, counts[semantic]))
-	# Air last, with a hollow swatch — it's a tally of what's NOT there, not a block type.
-	content.add_child(_selection_count_row(Color.TRANSPARENT, "Air", stats["air"], true))
+	# The region's contents: by semantic (intent) or by the actual blocks those resolve to —
+	# occupied things first, then air.
+	# Tall enough to show a typical build whole, but never most of a small window (the panel
+	# grows upward from the bottom edge); a bigger tally scrolls.
+	var legend := CountLegend.new(15, clampf(size.y * 0.42, 180.0, 420.0))
+	legend.set_data(stats["stats"], null, -1 if stats["filtered"] else int(stats["air"]))
+	legend.content_changed.connect(func() -> void:
+		if _selection_overlay.visible:
+			_position_tool_overlay(_selection_overlay))
+	content.add_child(legend)
 	content.add_child(HSeparator.new())
 	var cut_btn := _overlay_button("Cut away this region")
 	cut_btn.tooltip_text = "Hide these cells in the 3D views so you can see and build inside"
@@ -3973,54 +3979,18 @@ func _sel_nudge_button(text: String, axis: int, max_side: bool, dir: int) -> But
 		VoxelWorld.nudge_selection_face.call_deferred(axis, max_side, dir * step))
 	return b
 
-# One "[swatch] name … count" row. `hollow` dims the text and outlines the swatch (used for
-# the air row) so the count of empty cells reads as distinct from the placed block types.
-func _selection_count_row(fill: Color, label_text: String, count: int, hollow := false) -> HBoxContainer:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	row.add_child(_overlay_swatch(fill, hollow))
-	var name_label := Label.new()
-	name_label.text = label_text
-	name_label.add_theme_font_size_override("font_size", 15)
-	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(name_label)
-	var count_label := Label.new()
-	count_label.text = _grouped(count)
-	count_label.add_theme_font_size_override("font_size", 15)
-	count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	row.add_child(count_label)
-	if hollow:
-		var dim := Color(0.72, 0.76, 0.84)
-		name_label.add_theme_color_override("font_color", dim)
-		count_label.add_theme_color_override("font_color", dim)
-	return row
-
-# A 16px palette-color chip. Hollow (air) draws a faint outline over nothing instead of a
-# fill — the color is read live from the palette (Principle 3), never stored in the data.
-func _overlay_swatch(fill: Color, hollow: bool) -> Panel:
-	var box := Panel.new()
-	box.custom_minimum_size = Vector2(16, 16)
-	var sb := StyleBoxFlat.new()
-	if hollow:
-		sb.bg_color = Color.TRANSPARENT
-		sb.border_color = Color(0.5, 0.55, 0.62)
-		sb.set_border_width_all(1)
-	else:
-		sb.bg_color = fill
-	sb.set_corner_radius_all(3)
-	box.add_theme_stylebox_override("panel", sb)
-	return box
-
 func _overlay_note(text: String) -> Label:
 	var label := Label.new()
 	label.text = text
 	label.add_theme_font_size_override("font_size", 15)
 	return label
 
-# Dimensions + a semantic→count tally for the current region (air = volume − occupied), or
-# {} when there's no completed selection. Iterates the placed cells and tests membership
-# rather than walking the region volume (which can be millions of cells): the same tack
-# VoxelProject.semantic_counts takes, bounded by the project's block count, not the box size.
+# Dimensions + the contents of the current selection (a RegionOps.stats tally: whole blocks by
+# semantic, parts by semantic and shape), or {} when there's no completed selection. Counts
+# exactly what a selection-consuming tool would act on — the grow/shrink mask and the
+# whitelist/blacklist narrow it — and `air` (volume − occupied) is only meaningful for a plain
+# box, so `filtered` tells the caller to leave it out otherwise. Walks the placed cells rather
+# than the box volume (which can be millions of cells): bounded by the project's block count.
 func _selection_stats() -> Dictionary:
 	if not VoxelWorld.has_selection or not VoxelWorld.active_project:
 		return {}
@@ -4031,28 +4001,12 @@ func _selection_stats() -> Dictionary:
 	var hi: Vector3i = box[1]
 	var dims := hi - lo + Vector3i.ONE
 	var total := dims.x * dims.y * dims.z
-	var counts := {}
-	var occupied := 0
-	for pos: Vector3i in VoxelWorld.active_project.data.cells:
-		if pos.x < lo.x or pos.x > hi.x or pos.y < lo.y or pos.y > hi.y \
-				or pos.z < lo.z or pos.z > hi.z:
-			continue
-		var cell: BlockCell = VoxelWorld.active_project.data.cells[pos]
-		counts[cell.type_id] = counts.get(cell.type_id, 0) + 1
-		occupied += 1
-	return {"size": dims, "total": total, "counts": counts, "air": total - occupied}
-
-# Thousands-grouped string for the read-out — a region can span millions of cells.
-func _grouped(n: int) -> String:
-	var s := str(absi(n))
-	var out := ""
-	var c := 0
-	for i in range(s.length() - 1, -1, -1):
-		out = s[i] + out
-		c += 1
-		if c % 3 == 0 and i > 0:
-			out = "," + out
-	return ("-" if n < 0 else "") + out
+	var mask = VoxelWorld.selection_mask
+	var filtered: bool = mask != null or not VoxelWorld.selection_filter.is_empty()
+	var stats := RegionOps.stats(VoxelWorld.active_project.data, lo, hi,
+		VoxelWorld.selection_filter, mask.keys() if mask != null else null)
+	return {"size": dims, "total": total, "stats": stats, "air": total - int(stats["cells"]),
+		"filtered": filtered}
 
 # ---------------------------------------------------------------------------
 # Cutaway — hide a box of cells to see and build inside (VoxelWorld owns the box; see

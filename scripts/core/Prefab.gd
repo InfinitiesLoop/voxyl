@@ -45,6 +45,11 @@ func semantic_counts() -> Dictionary:
 			counts[cell.type_id] = counts.get(cell.type_id, 0) + 1
 	return counts
 
+# Its contents tallied the way RegionOps.stats does a region (whole blocks by semantic, parts by
+# semantic|shape), over the box its cells sit in.
+func stats() -> Dictionary:
+	return RegionOps.stats(data, Vector3i.ZERO, size - Vector3i.ONE)
+
 func used_semantics() -> Array[String]:
 	var out: Array[String] = []
 	out.assign(semantic_counts().keys())

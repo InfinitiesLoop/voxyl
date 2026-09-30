@@ -202,12 +202,10 @@ func _rebuild_detail() -> void:
 	_build_palettes(p)
 
 	_detail.add_child(HSeparator.new())
-	_detail.add_child(_caption("Semantics"))
-	var counts := p.semantic_counts()
-	var names := counts.keys()
-	names.sort_custom(func(a, b): return counts[a] > counts[b] if counts[a] != counts[b] else str(a) < str(b))
-	for sem in names:
-		_detail.add_child(_kv(str(sem), "×%d" % counts[sem]))
+	_detail.add_child(_caption("Contents — by semantic, or by the actual blocks its palettes resolve to (merged where several semantics share one)"))
+	var legend := CountLegend.new(14, 260.0, _DETAIL_W - 16)
+	legend.set_data(p.stats(), CaptureService.prefab_stage(p))
+	_detail.add_child(legend)
 
 	_detail.add_child(HSeparator.new())
 	var del := Button.new()
