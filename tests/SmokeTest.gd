@@ -3003,6 +3003,15 @@ func _test_material_list() -> void:
 		loose.size() == 1 and loose[0]["semantics"] == {"MLoose": 1} and MaterialList.title(loose[0]).begins_with("Undecided"))
 	_check("the library it comes from is reported", plank["library"] == VoxelWorkspace.BASIC_LIBRARY)
 
+	_check("a quantity reads as stacks: 500 = 7×64 + 52", MaterialList.stacks(500) == "7×64 + 52"
+		and MaterialList.equation(500) == "500 = 7×64 + 52")
+	_check("…an exact multiple drops the remainder, one stack is 1×64",
+		MaterialList.stacks(512) == "8×64" and MaterialList.stacks(64) == "1×64")
+	_check("…and under a stack there's nothing to break down",
+		MaterialList.stacks(63) == "" and MaterialList.equation(63) == "63")
+	_check("the copied list carries the stacks", MaterialList.to_text([{"count": 130, "block": "x", "shape": "",
+		"glow": false, "undecided": false, "semantics": {}, "registry": "", "meta": 0}]).contains("(2×64 + 2)"))
+
 	# The legend control shows the same numbers both ways.
 	var legend := CountLegend.new()
 	add_child(legend)

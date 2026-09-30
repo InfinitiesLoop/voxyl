@@ -19,6 +19,24 @@ extends RefCounted
 # project by default, or a prefab's own palettes inside VoxelWorld.begin_resolve_as (see
 # for_prefab). Input is a RegionOps.stats-shaped dictionary ({blocks, parts}).
 
+# One inventory stack. Everything here stacks to 64; a block that doesn't would need a per-block
+# override on top of this.
+const STACK_SIZE := 64
+
+# A quantity as stacks: "7×64 + 52" (or "8×64" when it fills them exactly), "" while it doesn't
+# reach one full stack — a number below 64 needs no breakdown.
+static func stacks(count: int) -> String:
+	if count < STACK_SIZE:
+		return ""
+	var rest := count % STACK_SIZE
+	var full := floori((count - rest) / float(STACK_SIZE))
+	return "%d×%d + %d" % [full, STACK_SIZE, rest] if rest > 0 else "%d×%d" % [full, STACK_SIZE]
+
+# The same as an equation, the way GTNH's Ctrl-hover tooltip writes it: "500 = 7×64 + 52".
+static func equation(count: int) -> String:
+	var breakdown := stacks(count)
+	return "%d = %s" % [count, breakdown] if not breakdown.is_empty() else str(count)
+
 # One row per distinct item, busiest first:
 #   {block, library, shape, glow, count, semantics {name: n}, color, undecided,
 #    registry, meta, display, confirmed}
@@ -112,6 +130,8 @@ static func to_json(rows: Array) -> Array:
 	var out: Array = []
 	for row: Dictionary in rows:
 		var d := {"block": row["block"], "count": row["count"], "semantics": row["semantics"]}
+		if int(row["count"]) >= STACK_SIZE:
+			d["stacks"] = stacks(int(row["count"]))
 		if row["undecided"]:
 			d["undecided"] = true
 		if not str(row["library"]).is_empty():
@@ -130,10 +150,13 @@ static func to_json(rows: Array) -> Array:
 		out.append(d)
 	return out
 
-# Plain text for the clipboard, one item per line: "42× Cubit(14) · Stairs  [chisel:cubit:14]".
+# Plain text for the clipboard, one item per line: "500× Cubit(14) · Stairs  (7×64 + 52)  [chisel:cubit:14]".
 static func to_text(rows: Array) -> String:
 	var lines: Array[String] = []
 	for row: Dictionary in rows:
 		var id := identity(row)
-		lines.append("%d× %s%s" % [row["count"], title(row), "  [%s]" % id if not id.is_empty() else ""])
+		var breakdown := stacks(int(row["count"]))
+		lines.append("%d× %s%s%s" % [row["count"], title(row),
+			"  (%s)" % breakdown if not breakdown.is_empty() else "",
+			"  [%s]" % id if not id.is_empty() else ""])
 	return "\n".join(lines)

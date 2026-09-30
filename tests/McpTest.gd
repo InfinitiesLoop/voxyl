@@ -388,6 +388,9 @@ func _test_build() -> void:
 	# item, while Glow (a face of glass) stays apart: rows are keyed by block AND shape.
 	var all_mats := (await _tool("region_stats", {}))["materials"] as Array
 	var stone_rows := all_mats.filter(func(m: Dictionary) -> bool: return str(m["block"]) == "stone")
+	var whole_stone := stone_rows.filter(func(m: Dictionary) -> bool: return not m.has("shape"))
+	_check("a big quantity carries its stack breakdown", whole_stone.size() == 1 and int(whole_stone[0]["count"]) >= 64
+		and str(whole_stone[0].get("stacks", "")).contains("×64"))
 	_check("a shape splits a block's row (whole stone vs stone roof tiles)", stone_rows.size() == 2
 		and stone_rows.any(func(m: Dictionary) -> bool: return not m.has("shape"))
 		and stone_rows.any(func(m: Dictionary) -> bool: return str(m.get("shape", "")) == "roof_tile"))

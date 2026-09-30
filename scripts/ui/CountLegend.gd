@@ -153,27 +153,61 @@ func _count_row(fill: Color, text: String, count: int, hollow := false) -> HBoxC
 		count_label.add_theme_color_override("font_color", _DIM)
 	return row
 
-# One item of the block list: its title and count, then dim detail lines (library + Minecraft
-# id; which semantics merged). Lines are single-line and trimmed, with the full text in the
-# tooltip, so every row has a fixed height and the list can size itself without a layout pass.
+# One item of the block list: a swatch, its title with dim detail lines (library + Minecraft id;
+# which semantics merged), and on the right its count with the stack breakdown under it ("500" /
+# "7×64 + 52") — stacks are what you actually fetch from a chest. Lines are single-line and
+# trimmed, with the full text in the tooltip, so every row has a fixed height and the list can
+# size itself without a layout pass.
 func _block_row(row: Dictionary) -> Control:
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 0)
-	box.add_child(_count_row(row["color"], MaterialList.title(row), row["count"], row["undecided"]))
+	var box := HBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	var chip := MarginContainer.new()
+	chip.add_theme_constant_override("margin_top", 2)
+	chip.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	var swatch := _swatch(row["color"], row["undecided"])
+	swatch.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	chip.add_child(swatch)
+	box.add_child(chip)
+
+	var left := VBoxContainer.new()
+	left.add_theme_constant_override("separation", 0)
+	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left.add_child(_trimmed_label(MaterialList.title(row), _font, Color.WHITE))
 	var lines := MaterialList.detail_lines(row)
 	for line in lines:
-		var pad := MarginContainer.new()
-		pad.add_theme_constant_override("margin_left", 24)
-		var label := Label.new()
-		label.text = line
-		label.add_theme_font_size_override("font_size", _font - 3)
-		label.add_theme_color_override("font_color", _DIM)
-		label.clip_text = true
-		label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		pad.add_child(label)
-		box.add_child(pad)
-	box.tooltip_text = "\n".join([MaterialList.title(row)] + lines)
+		left.add_child(_trimmed_label(line, _font - 3, _DIM))
+	box.add_child(left)
+
+	var count := int(row["count"])
+	var right := VBoxContainer.new()
+	right.add_theme_constant_override("separation", 0)
+	var count_label := Label.new()
+	count_label.text = grouped(count)
+	count_label.add_theme_font_size_override("font_size", _font)
+	count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	right.add_child(count_label)
+	var breakdown := MaterialList.stacks(count)
+	if not breakdown.is_empty():
+		var stack_label := Label.new()
+		stack_label.text = breakdown
+		stack_label.add_theme_font_size_override("font_size", _font - 3)
+		stack_label.add_theme_color_override("font_color", _DIM)
+		stack_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		right.add_child(stack_label)
+	box.add_child(right)
+	box.tooltip_text = "\n".join([MaterialList.title(row), MaterialList.equation(count)] + lines)
 	return box
+
+# A single-line label that trims with an ellipsis instead of widening its container.
+func _trimmed_label(text: String, font_size: int, color: Color) -> Label:
+	var label := Label.new()
+	label.text = text
+	label.add_theme_font_size_override("font_size", font_size)
+	if color != Color.WHITE:
+		label.add_theme_color_override("font_color", color)
+	label.clip_text = true
+	label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	return label
 
 # A 16px palette-color chip, read live from the palette. Hollow draws a faint outline over nothing.
 func _swatch(fill: Color, hollow: bool) -> Panel:
