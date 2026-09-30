@@ -28,6 +28,7 @@ Prefabs: named, reusable pieces (a pillar, a bay module, a tree), global to the 
 
 Seeing the build: capture renders offscreen from any camera without touching the user's views ({frame: Region, from: "se"|yaw, elevation: "low"|"eye"|"high"|"top"|deg}); capture_sheet gives labeled multi-view sheets; region_text is the cheapest exact view. view_set moves the user's own camera (only when handing a view over).
 
+After changing Voxyl's own code on disk, call restart to load it (needs the editor plugin; see the tool), then poll status until the app answers.
 Workflow that works: block_search / block_swatches to pick materials -> palette_create -> project_create (scratch:true for experiments) -> build with cells_place_layers + symmetry -> capture_sheet {preset:"review"} -> fix -> project_save. Use status first to see what's open."""
 
 static func resources() -> Array:

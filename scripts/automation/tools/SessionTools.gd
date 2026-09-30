@@ -4,6 +4,7 @@ extends RefCounted
 
 const ViewTools := preload("res://scripts/automation/tools/ViewTools.gd")
 const ProjectTools := preload("res://scripts/automation/tools/ProjectTools.gd")
+const EditorBridge := preload("res://scripts/automation/EditorBridge.gd")
 
 static func register(reg: McpRegistry) -> void:
 	reg.add("status",
@@ -28,6 +29,10 @@ static func register(reg: McpRegistry) -> void:
 			"slots": {"description": "Array of semantic names for slots 0.. (null/\"\" leaves a slot as is), or an object {\"0\": \"Mass\", ...}"},
 			"active": {"type": "integer", "description": "Slot to select"},
 		}, "required": ["slots"]}, _hotbar_set, {"mutates": true})
+
+	reg.add("restart",
+		"Restart Voxyl so changes made to its code on disk take effect (new tools, UI, scripts). Saves the open project, then asks the Godot editor that launched the app to stop and re-run it. Only works when Voxyl was started from the editor with the addons/voxyl_dev plugin enabled. The connection is down for a few seconds: poll status until it answers again. Waits for the user like any edit, since it closes their window.",
+		{}, _restart, {"mutates": true})
 
 static func _status(_args: Dictionary) -> Dictionary:
 	var p := VoxelWorld.active_project
@@ -68,6 +73,20 @@ static func _screen() -> String:
 	if shell == null:
 		return "headless"
 	return "editor" if shell.is_visible_in_tree() else "home"
+
+static func _restart(_args: Dictionary) -> Dictionary:
+	if not EditorBridge.attached():
+		return McpRegistry.fail("not_attached", "Voxyl wasn't started from the Godot editor, so nothing can restart it from here; ask the user to restart it")
+	if not await EditorBridge.ping():
+		return McpRegistry.fail("no_plugin", "the editor didn't answer: enable the Voxyl Dev Bridge plugin (Project > Project Settings > Plugins, or restart the editor once) and try again")
+	var p := VoxelWorld.active_project
+	var saved: Variant = null   # the name of what got saved, unless it's a scratch project
+	if p != null and not p.scratch:
+		saved = p.name
+	VoxelWorld.save_active_project()   # the editor kills the app outright, so the on-close save won't run
+	EditorBridge.restart_soon()   # not awaited: it waits for this reply to go out, then asks
+	return {"restarting": true, "saved": saved,
+		"note": "Voxyl is closing and starting again; the connection drops for a few seconds. Poll status until it answers."}
 
 static func _logs(args: Dictionary) -> Dictionary:
 	var level := str(args.get("level", "warning"))

@@ -110,6 +110,13 @@ func status_text() -> String:
 func is_busy() -> bool:
 	return _calls_in_flight > 0
 
+# True while any connection is mid-call or still has reply bytes waiting to be written.
+func has_unsent_replies() -> bool:
+	for c in _conns:
+		if c.busy or c.has_output():
+			return true
+	return false
+
 # The offscreen renderer for captures, created on first use.
 func capture_service() -> Node:
 	if capture == null:

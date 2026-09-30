@@ -49,6 +49,7 @@ func _run() -> void:
 	await _test_build()
 	await _test_structure_find()
 	await _test_project_settings_tool()
+	await _test_restart_tool()
 	await _test_prefabs()
 	await _test_semantic_rename()
 	await _test_nei_roster_import_tool()
@@ -524,6 +525,12 @@ func _test_structure_find() -> void:
 	await _tool("selection_clear", {})
 	await _tool("cells_clear", {"region": {"all": true}})
 	_check("(fixture cleared)", data.cells.is_empty())
+
+func _test_restart_tool() -> void:
+	print("-- restart")
+	var r := await _tool("restart", {})
+	_check("restart is registered and, headless, says there's no editor to do it",
+		r["_is_error"] and str(r.get("code", "")) == "not_attached")
 
 func _test_project_settings_tool() -> void:
 	print("-- project_settings")
