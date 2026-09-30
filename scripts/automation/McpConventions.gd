@@ -18,6 +18,7 @@ Shaped parts: a palette entry with a shape places parts, never whole blocks. A c
 Placements that couldn't exist are rejected with a reason (slot_taken, micro_conflict, native_block, ...).
 
 Regions: {min:[x,y,z], max:[x,y,z]} (inclusive), {selection:true}, {semantic:"Name"} (where it's used), {all:true}; add pad:n to grow.
+To act on "that walkway" instead of a box, structure_find {from:[x,y,z], semantics and/or palette, gap, diagonal} selects exactly the connected cells (a sparse selection: blocks that aren't part of it stay out even inside its bounding box); then pass {selection:true} as the region.
 
 Edit tools accept symmetry ({rotate4:{center:[x,z]}}, mirror_x, mirror_z, mirror_diag), repeat ({count, step}), dry_run and only_air. Design one quarter and let symmetry fill the rest.
 

@@ -47,6 +47,7 @@ func _run() -> void:
 	_check("server listens on the test port", McpServer.is_listening())
 	await _test_http()
 	await _test_build()
+	await _test_structure_find()
 	await _test_prefabs()
 	await _test_semantic_rename()
 	await _test_nei_roster_import_tool()
@@ -456,6 +457,72 @@ func _test_build() -> void:
 	_check("…and writes it", FileAccess.file_exists(ProjectStore.ROOT.path_join("MCP Test Saved.tres")))
 
 # --- Prefabs --------------------------------------------------------------------------
+
+# --- structure_find: connected, sparse selections --------------------------------------------
+
+func _test_structure_find() -> void:
+	print("-- structure_find")
+	await _tool("cells_clear", {"region": {"all": true}})
+	# L1: five Mass in a row at y=0. A Core just past its end. L2: three Mass one step up and
+	# two cells further on, so it touches the Core only diagonally and L1 not at all (a gap of 1).
+	# A Glow panel part sits on top of L1.
+	await _tool("region_fill", {"region": {"min": [500, 0, 500], "max": [504, 0, 500]}, "semantic": "Mass"})
+	await _tool("cells_set", {"cells": [{"pos": [505, 0, 500], "semantic": "Core"}]})
+	await _tool("region_fill", {"region": {"min": [506, 1, 500], "max": [508, 1, 500]}, "semantic": "Mass"})
+	await _tool("parts_add", {"items": [{"pos": [501, 1, 500], "semantic": "Glow", "slot": "north"}]})
+	var data := VoxelWorld.active_project.data
+
+	var one := await _tool("structure_find", {"from": [500, 0, 500], "semantics": ["Mass"]})
+	_check("adjacent cells of the allowed semantic only (gap 0)", not one["_is_error"] and int(one["cells"]) == 5)
+	_check("…it selects them, as an exact cell set", bool(one["selected"]) and VoxelWorld.selection_mask != null
+		and VoxelWorld.selection_mask.size() == 5)
+	var hop := await _tool("structure_find", {"from": [500, 0, 500], "semantics": ["Mass"], "gap": 1})
+	_check("gap 1 jumps the one-cell break to the second run", int(hop["cells"]) == 8)
+	_check("…and flags that its box holds more than the structure", bool(hop["sparse"])
+		and _ints(hop["size"]) == [9, 2, 1])
+	var sparse := await _tool("region_stats", {"region": {"selection": true}})
+	_check("the selection is sparse: only structure cells, not the empty space in its box",
+		int(sparse["cells"]) == 8 and VoxelWorld.selection_mask.size() == 8 and not VoxelWorld.selection_mask.has(Vector3i(505, 1, 500)))
+	var bridged := await _tool("structure_find", {"from": [500, 0, 500], "semantics": ["Mass", "Core"]})
+	_check("an included semantic bridges (Mass → Core → diagonal Mass)", int(bridged["cells"]) == 9)
+	var faces := await _tool("structure_find", {"from": [500, 0, 500], "semantics": ["Mass", "Core"], "diagonal": false})
+	_check("diagonal:false needs shared faces, so the diagonal run drops out", int(faces["cells"]) == 6)
+	var pal := await _tool("structure_find", {"from": [500, 0, 500], "palette": "Pillar Test"})
+	_check("a palette includes every semantic it defines (parts too)", int(pal["cells"]) == 10
+		and int((pal["parts"] as Dictionary).get("Glow|face4", 0)) == 1)
+	var pal_ex := await _tool("structure_find", {"from": [500, 0, 500], "palette": "Pillar Test", "exclude": ["Core"]})
+	_check("exclude takes a semantic back out", int(pal_ex["cells"]) == 6)
+	var bad_pal := await _tool("structure_find", {"from": [500, 0, 500], "palette": "No Such Palette"})
+	_check("an unknown palette is refused", bad_pal["_is_error"] and str(bad_pal.get("code", "")) == "not_found")
+
+	var seedless := await _tool("structure_find", {"from": [503, 1, 500]})
+	_check("with no allow-list it's the seed's own semantic, and an empty seed cell snaps to the nearest block",
+		int(seedless["cells"]) == 5 and seedless.get("expanded_into") == ["Mass"])
+	var snapped_seed := await _tool("structure_find", {"from": [505, 0, 500], "semantics": ["Mass"]})
+	_check("a seed on a non-matching cell snaps to the nearest matching one within reach",
+		int(snapped_seed["cells"]) == 5 and _ints(snapped_seed["seeds"][0]) == [504, 0, 500])
+	var far := await _tool("structure_find", {"from": [503, 6, 500], "semantics": ["Mass"]})
+	_check("a seed with nothing in reach is refused", far["_is_error"] and str(far.get("code", "")) == "no_seed")
+	var boxed := await _tool("structure_find", {"from": [500, 0, 500], "semantics": ["Mass"], "gap": 1,
+		"within": {"min": [500, 0, 500], "max": [504, 1, 500]}})
+	_check("within bounds the search", int(boxed["cells"]) == 5)
+	var from_box := await _tool("structure_find", {"from": {"min": [500, 0, 500], "max": [508, 1, 500]}})
+	_check("a region seeds it, and with no allow-list it's whatever the region holds",
+		int(from_box["cells"]) == 10 and from_box.get("expanded_into") == ["Core", "Glow", "Mass"])
+	var capped := await _tool("structure_find", {"from": [500, 0, 500], "semantics": ["Mass"], "max_cells": 3})
+	_check("max_cells stops a runaway fill and says so", int(capped["cells"]) == 3 and bool(capped["truncated"]))
+	var too_far := await _tool("structure_find", {"from": [500, 0, 500], "semantics": ["Mass"], "gap": 99})
+	_check("an absurd gap is refused", too_far["_is_error"] and str(too_far.get("code", "")) == "bad_argument")
+
+	await _tool("selection_set", {"region": {"min": [0, 0, 0], "max": [1, 1, 1]}})
+	var quiet := await _tool("structure_find", {"from": [500, 0, 500], "semantics": ["Mass"], "select": false})
+	_check("select:false reports without touching the user's selection", int(quiet["cells"]) == 5 and not bool(quiet["selected"])
+		and VoxelWorld.selection_mask == null and VoxelWorld.selection_max == Vector3i(1, 1, 1))
+	_check("the materials list comes with it", (quiet["materials"] as Array).size() == 1
+		and str(quiet["materials"][0]["block"]) == "base")
+	await _tool("selection_clear", {})
+	await _tool("cells_clear", {"region": {"all": true}})
+	_check("(fixture cleared)", data.cells.is_empty())
 
 func _test_prefabs() -> void:
 	print("-- prefabs through tools")

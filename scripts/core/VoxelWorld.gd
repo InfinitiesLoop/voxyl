@@ -1739,14 +1739,7 @@ func _neighbor_offsets(diagonal: bool) -> Array[Vector3i]:
 	return out
 
 func _cell_semantics(cell: BlockCell) -> Array:
-	if cell.is_shaped():
-		var out := []
-		for part in cell.parts:
-			var s := str(part["semantic"])
-			if not (s in out):
-				out.append(s)
-		return out
-	return [cell.type_id]
+	return RegionOps.semantics_of(cell)
 
 func _cell_has_semantic(cell: BlockCell, semantic: String) -> bool:
 	if cell.is_shaped():
@@ -1805,6 +1798,20 @@ func grow_selection(range_steps := 1, semantic := "", diagonal := false) -> Dict
 	region_selection_changed.emit()
 	mark_dirty()
 	return {"cells": mask.size()}
+
+# Select exactly these cells (a sparse, possibly disjoint set: the empty space inside their
+# bounding box is NOT selected). Their semantics become the selection's whitelist so a later
+# copy/cut/delete only touches that material where a cell is mixed. Replaces any selection.
+func set_selection_cells(cells: Dictionary, whitelist: Array = []) -> void:
+	if cells.is_empty():
+		return
+	selection_mask = cells
+	selection_filter = {"whitelist": whitelist.duplicate(), "blacklist": []} if not whitelist.is_empty() else {}
+	_selection_anchor = null
+	has_selection = true
+	_recompute_selection_bounds()
+	region_selection_changed.emit()
+	mark_dirty()
 
 # Erode the selection by `range_steps` steps: repeatedly drop any cell with a face-neighbor
 # outside the current set. A plain box selection is first materialized into a mask (capped

@@ -99,6 +99,21 @@ static func register(reg: McpRegistry) -> void:
 			"semantic": {"type": "string", "description": "Grow into this semantic instead of each seed's own"},
 			"diagonal": {"type": "boolean"},
 		}}, _selection_grow, {"mutates": true})
+	reg.add("structure_find",
+		"Find the connected structure a cell belongs to and (by default) select exactly its cells: a sparse selection, so blocks that aren't part of it stay unselected even inside its bounding box, and copy/cut/delete/replace/transform with {selection:true} touch only the structure. What belongs to it: cells holding one of `semantics` and/or any semantic a `palette` defines, minus `exclude`; with none of those given, just the seed cell's own semantic(s). Cells connect when adjacent, diagonals included (diagonal:false = faces only); `gap` N also lets it jump up to N empty or excluded cells, so a structure with a missing block or a window still reads as one. `from` is a cell [x,y,z] (snaps to the nearest matching cell within reach), a list of cells, or a region whose matching cells all seed the search; `within` bounds the search. Returns the cell count, bounds, whether the box holds more than the structure (`sparse`), per-semantic counts and `materials`. select:false only reports and leaves the user's selection alone.",
+		{"properties": {
+			"from": {"description": "Seed: a cell [x,y,z], a list of cells, or a region ({min,max} | {selection:true} | ...) whose cells of the allowed semantics all seed the search"},
+			"semantics": {"type": "array", "items": {"type": "string"}, "description": "Semantics the structure may expand into"},
+			"palette": {"type": "string", "description": "A palette name: every semantic it defines may be expanded into (added to `semantics`)"},
+			"palettes": {"type": "array", "items": {"type": "string"}, "description": "Several palette names"},
+			"exclude": {"type": "array", "items": {"type": "string"}, "description": "Semantics to leave out of the above (e.g. a palette's ground)"},
+			"gap": {"type": "integer", "description": "Empty or excluded cells it may jump, default 0 (must be adjacent); max %d" % MAX_STRUCTURE_GAP},
+			"diagonal": {"type": "boolean", "description": "Whether diagonal neighbors connect, default true"},
+			"within": McpArgs.s_region("Only search inside this region"),
+			"select": {"type": "boolean", "description": "Select the result in the user's views, default true"},
+			"max_cells": {"type": "integer", "description": "Stop after this many cells (default 400000); `truncated` says it did (it also stops after ~15 s)"},
+			"project": {"type": "string"},
+		}, "required": ["from"]}, _structure_find, {"mutates": true})
 	reg.add("selection_shrink",
 		"Erode the selection by `range` steps: repeatedly drops cells with a face-neighbor outside the current set. A plain box is first turned into an exact cell set (capped at 4,000,000 cells, same as any region).",
 		{"properties": {"range": {"type": "integer", "description": "Steps to shrink, default 1"}}}, _selection_shrink, {"mutates": true})
@@ -382,6 +397,141 @@ static func _selection_grow(args: Dictionary) -> Dictionary:
 			"empty_selection": return McpRegistry.fail("empty_region", "the selection has no cells to grow from")
 			_: return McpRegistry.fail("no_selection", "there's no region selection")
 	return {"cells": result["cells"], "filter": VoxelWorld.selection_filter, "bounds": [VoxelWorld.selection_min, VoxelWorld.selection_max]}
+
+const MAX_STRUCTURE_GAP := 6
+const _DEFAULT_STRUCTURE_CELLS := 400000
+const _STRUCTURE_BUDGET_MS := 15000
+
+static func _string_list(v: Variant) -> Variant:
+	if v == null:
+		return []
+	if not (v is Array):
+		return null
+	var out: Array[String] = []
+	for x in v:
+		out.append(str(x))
+	return out
+
+static func _structure_find(args: Dictionary) -> Dictionary:
+	var pv: Variant = McpArgs.project(args)
+	if McpRegistry.is_error(pv):
+		return pv
+	var data := VoxelWorld.active_project.data
+	if not args.has("from"):
+		return McpRegistry.fail("bad_argument", "from is required: a cell [x,y,z], a list of cells, or a region")
+	var gap := int(args.get("gap", 0))
+	if gap < 0 or gap > MAX_STRUCTURE_GAP:
+		return McpRegistry.fail("bad_argument", "gap must be 0..%d" % MAX_STRUCTURE_GAP)
+	var diagonal := bool(args.get("diagonal", true))
+	var reach := gap + 1
+
+	var within: Variant = null
+	if args.get("within") != null:
+		var w: Variant = McpArgs.region(args["within"])
+		if McpRegistry.is_error(w):
+			return w
+		within = [w["min"], w["max"]]
+
+	# What may belong to the structure.
+	var named: Variant = _string_list(args.get("semantics"))
+	var dropped: Variant = _string_list(args.get("exclude"))
+	var palette_names: Variant = _string_list(args.get("palettes"))
+	if named == null or dropped == null or palette_names == null:
+		return McpRegistry.fail("bad_argument", "semantics, exclude and palettes must be arrays of names")
+	if args.has("palette"):
+		palette_names.append(str(args["palette"]))
+	var allowed := {}
+	var explicit: bool = not (named as Array).is_empty() or not (palette_names as Array).is_empty()
+	for s in named:
+		allowed[s] = true
+	for pn in palette_names:
+		var pal := VoxelWorld.workspace.get_palette(pn)
+		if pal == null:
+			return McpRegistry.fail("not_found", "no palette named '%s' (see palette_list)" % pn)
+		for s in pal.semantic_names():
+			allowed[s] = true
+	for s in dropped:
+		allowed.erase(s)
+	if explicit and allowed.is_empty():
+		return McpRegistry.fail("bad_argument", "nothing is left to expand into once `exclude` is applied")
+
+	# Where it starts.
+	var from: Variant = args["from"]
+	var points: Array[Vector3i] = []
+	var seeds: Array[Vector3i] = []
+	if from is Dictionary:
+		var r: Variant = McpArgs.region(from)
+		if McpRegistry.is_error(r):
+			return r
+		var in_region := RegionOps.cells_in(data, r["min"], r["max"], r["filter"], r.get("positions"))
+		if in_region.is_empty():
+			return McpRegistry.fail("empty_region", "there are no cells in the `from` region")
+		if not explicit:
+			for p in in_region:
+				for s in RegionOps.semantics_of(data.cells[p]):
+					allowed[s] = true
+		for p in in_region:
+			seeds.append(p)
+	elif from is Array:
+		var list: Array = from
+		if list.size() >= 3 and not (list[0] is Array or list[0] is Dictionary):
+			list = [from]
+		for item in list:
+			var p: Variant = McpArgs.vec3i_or_fail(item, "from")
+			if McpRegistry.is_error(p):
+				return p
+			points.append(p)
+		if points.is_empty():
+			return McpRegistry.fail("bad_argument", "from is empty")
+		if not explicit:
+			# No allow-list: the structure is made of whatever the seed cell is made of.
+			for p in points:
+				var near: Variant = RegionOps.nearest_occupied(data, p, reach)
+				if near == null:
+					return McpRegistry.fail("no_seed", "nothing is within %d cell(s) of %s to start from" % [reach, [p.x, p.y, p.z]])
+				for s in RegionOps.semantics_of(data.cells[near]):
+					allowed[s] = true
+		for p in points:
+			var start: Variant = RegionOps.nearest_in_search(data, p, allowed, reach, within)
+			if start == null:
+				var held: Variant = data.cells.get(p)
+				var what := " (empty)" if held == null else " (it holds '%s')" % ", ".join(RegionOps.semantics_of(held))
+				return McpRegistry.fail("no_seed", "no cell holding one of the allowed semantics is within %d cell(s) of %s%s; add its semantic to `semantics` or pick another cell" % [
+					reach, [p.x, p.y, p.z], what])
+			seeds.append(start)
+	else:
+		return McpRegistry.fail("bad_argument", "from must be a cell [x,y,z], a list of cells, or a region")
+
+	var cap := int(args.get("max_cells", _DEFAULT_STRUCTURE_CELLS))
+	var res := RegionOps.connected_cells(data, seeds, allowed, gap, diagonal, within, maxi(cap, 0), _STRUCTURE_BUDGET_MS)
+	var found: Dictionary = res["cells"]
+	if found.is_empty():
+		return McpRegistry.fail("no_seed", "none of the seed cells holds an allowed semantic")
+
+	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
+	var hi := Vector3i(-(1 << 30), -(1 << 30), -(1 << 30))
+	for p: Vector3i in found:
+		lo = Vector3i(mini(lo.x, p.x), mini(lo.y, p.y), mini(lo.z, p.z))
+		hi = Vector3i(maxi(hi.x, p.x), maxi(hi.y, p.y), maxi(hi.z, p.z))
+	var allowed_list: Array = allowed.keys()
+	allowed_list.sort()
+	var stats := RegionOps.stats(data, lo, hi, {"whitelist": allowed_list}, found.keys())
+	var select := bool(args.get("select", true))
+	if select:
+		VoxelWorld.set_selection_cells(found, allowed_list)
+	var size := hi - lo + Vector3i.ONE
+	var out := {
+		"cells": found.size(), "bounds": [lo, hi], "size": size,
+		"sparse": found.size() < size.x * size.y * size.z,
+		"selected": select, "truncated": res["truncated"],
+		"seeds": seeds.slice(0, 10),
+		"semantics": RegionOps.stats_semantic_counts(stats),
+		"blocks": stats["blocks"], "parts": stats["parts"],
+		"materials": MaterialList.to_json(MaterialList.from_stats(stats)),
+	}
+	if not explicit:
+		out["expanded_into"] = allowed_list
+	return out
 
 static func _selection_shrink(args: Dictionary) -> Dictionary:
 	if not VoxelWorld.has_selection:

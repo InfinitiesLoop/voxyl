@@ -162,6 +162,146 @@ static func cells_in(data: VoxelData, mn: Vector3i, mx: Vector3i, filter := {}, 
 			out.append(p)
 	return out
 
+# --- Connected structures ---------------------------------------------------------------
+
+# Whether `cell` holds at least one of the `allowed` semantics (a set: name → true) — a whole
+# block's own, or any one of a part cell's parts.
+static func holds_any(cell: BlockCell, allowed: Dictionary) -> bool:
+	if cell.is_shaped():
+		for part in cell.parts:
+			if allowed.has(str(part["semantic"])):
+				return true
+		return false
+	return allowed.has(cell.type_id)
+
+# The distinct semantics a cell holds: its own for a whole block, every part's for a part cell.
+static func semantics_of(cell: BlockCell) -> Array:
+	if cell.is_shaped():
+		var out := []
+		for part in cell.parts:
+			var s := str(part["semantic"])
+			if not (s in out):
+				out.append(s)
+		return out
+	return [cell.type_id]
+
+# The closest occupied cell to `p` (p itself first) within `reach` cells, or null. Ties go to the
+# first found, scanning y then z then x.
+static func nearest_occupied(data: VoxelData, p: Vector3i, reach: int) -> Variant:
+	if data.cells.has(p):
+		return p
+	var best: Variant = null
+	var best_d := 1 << 30
+	for dy in range(-reach, reach + 1):
+		for dz in range(-reach, reach + 1):
+			for dx in range(-reach, reach + 1):
+				var d := dx * dx + dy * dy + dz * dz
+				if d < best_d and d > 0 and data.cells.has(p + Vector3i(dx, dy, dz)):
+					best = p + Vector3i(dx, dy, dz)
+					best_d = d
+	return best
+
+# The steps from a cell to its neighbours that are `reach` cells away at most: every cell within
+# that Chebyshev distance when `diagonal`, else only the ones straight along an axis. A reach
+# of 1 is plain adjacency (26 or 6 neighbours); each extra unit lets the search jump one empty
+# cell.
+static func reach_offsets(reach: int, diagonal: bool) -> Array[Vector3i]:
+	var out: Array[Vector3i] = []
+	if diagonal:
+		for dx in range(-reach, reach + 1):
+			for dy in range(-reach, reach + 1):
+				for dz in range(-reach, reach + 1):
+					if dx != 0 or dy != 0 or dz != 0:
+						out.append(Vector3i(dx, dy, dz))
+	else:
+		for k in range(1, reach + 1):
+			for unit in [Vector3i.RIGHT, Vector3i.UP, Vector3i.BACK]:
+				out.append(unit * k)
+				out.append(-unit * k)
+	return out
+
+# Whether `p` is a cell of the search: inside `within` ([min, max] or null) and holding an
+# allowed semantic.
+static func _in_search(data: VoxelData, p: Vector3i, allowed: Dictionary, within: Variant) -> bool:
+	if within != null:
+		var lo: Vector3i = within[0]
+		var hi: Vector3i = within[1]
+		if p.x < lo.x or p.x > hi.x or p.y < lo.y or p.y > hi.y or p.z < lo.z or p.z > hi.z:
+			return false
+	var cell: BlockCell = data.cells.get(p)
+	return cell != null and holds_any(cell, allowed)
+
+# The closest cell of the search to `p` (p itself first) within `reach` cells, or null. Ties go
+# to the first found, scanning y then z then x, so the answer is repeatable.
+static func nearest_in_search(data: VoxelData, p: Vector3i, allowed: Dictionary, reach: int,
+		within: Variant = null) -> Variant:
+	if _in_search(data, p, allowed, within):
+		return p
+	var best: Variant = null
+	var best_d := 1 << 30
+	for dy in range(-reach, reach + 1):
+		for dz in range(-reach, reach + 1):
+			for dx in range(-reach, reach + 1):
+				var d := dx * dx + dy * dy + dz * dz
+				if d >= best_d or d == 0:
+					continue
+				var q := p + Vector3i(dx, dy, dz)
+				if _in_search(data, q, allowed, within):
+					best = q
+					best_d = d
+	return best
+
+# The structure `seeds` belong to: every cell reachable by stepping between cells that hold an
+# `allowed` semantic. By default a step goes to an adjacent cell (diagonals included); `gap` > 0
+# also lets it jump up to that many empty (or excluded) cells, so a structure with a missing
+# block or a window between its parts still reads as one. `within` ([min, max]) bounds the
+# search; `max_cells` (0 = no cap) and `budget_ms` (0 = none) stop a runaway fill — a big
+# structure with a wide gap probes hundreds of neighbours per cell — and `truncated` says so.
+# Seeds that aren't cells of the search are ignored. Returns {cells: Dictionary[Vector3i, true],
+# truncated: bool} — sparse: only cells that matched, never the empty space inside their
+# bounding box.
+static func connected_cells(data: VoxelData, seeds: Array, allowed: Dictionary, gap := 0,
+		diagonal := true, within: Variant = null, max_cells := 0, budget_ms := 0) -> Dictionary:
+	var offsets := reach_offsets(maxi(gap, 0) + 1, diagonal)
+	var cells := data.cells
+	var bounded := within != null
+	var lo := Vector3i.ZERO
+	var hi := Vector3i.ZERO
+	if bounded:
+		lo = within[0]
+		hi = within[1]
+	var found := {}
+	var frontier: Array[Vector3i] = []
+	for s: Vector3i in seeds:
+		if not found.has(s) and _in_search(data, s, allowed, within):
+			found[s] = true
+			frontier.append(s)
+	var started := Time.get_ticks_msec()
+	var head := 0
+	var truncated := false
+	# The hot loop: most neighbours are empty, so test occupancy first and inline the rest.
+	while head < frontier.size() and not truncated:
+		var p := frontier[head]
+		head += 1
+		if budget_ms > 0 and (head & 127) == 0 and Time.get_ticks_msec() - started > budget_ms:
+			truncated = true
+			break
+		for off: Vector3i in offsets:
+			var q := p + off
+			var cell: BlockCell = cells.get(q)
+			if cell == null or found.has(q):
+				continue
+			if bounded and (q.x < lo.x or q.x > hi.x or q.y < lo.y or q.y > hi.y or q.z < lo.z or q.z > hi.z):
+				continue
+			if not holds_any(cell, allowed):
+				continue
+			found[q] = true
+			frontier.append(q)
+			if max_cells > 0 and found.size() >= max_cells:
+				truncated = true
+				break
+	return {"cells": found, "truncated": truncated}
+
 # Swap semantic `from` for `to` inside the box (optionally narrowed by `filter`/`positions`):
 # whole blocks keep their orientation and tags, parts keep their shape and slot (only
 # their semantic changes).
