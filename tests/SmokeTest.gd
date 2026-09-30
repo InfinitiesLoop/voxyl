@@ -56,6 +56,7 @@ func _ready() -> void:
 	_test_arch_shapes()
 	_test_material_list()
 	_test_project_settings()
+	_test_remembered_folders()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
@@ -3078,3 +3079,28 @@ func _test_project_settings() -> void:
 	_check("no ground direction to go by → no turn", CompassRose.heading_for(Vector2.ZERO, up) == 0.0)
 	_check("a view flipped left-right turns the other way",
 		is_equal_approx(CompassRose.heading_for(Vector2(0, -1), Vector2(1, 0), true), -PI * 0.5))
+
+# --- Remembered folders: file pickers reopen where the last one ended ---------------------------
+
+func _test_remembered_folders() -> void:
+	print("-- remembered folders")
+	var real_path := AppSettings.path
+	var tmp := OS.get_temp_dir().path_join("voxyl_dirs_%d" % Time.get_ticks_usec()).replace("\\", "/")
+	var exports := tmp.path_join("exports")
+	DirAccess.make_dir_recursive_absolute(exports)
+	AppSettings.path = tmp.path_join("settings.cfg")   # never touch the real settings
+	AppSettings.reload()
+	_check("nothing remembered yet -> the fallback", AppSettings.last_dir("pick", "FALLBACK") == "FALLBACK")
+	AppSettings.remember_dir("pick", exports)
+	_check("a remembered folder comes back", AppSettings.last_dir("pick", "FALLBACK") == exports)
+	AppSettings.reload()
+	_check("...from disk, not just memory", AppSettings.last_dir("pick", "FALLBACK") == exports)
+	_check("each picker has its own folder", AppSettings.last_dir("other", "FALLBACK") == "FALLBACK")
+	AppSettings.remember_dir("pick", "")
+	_check("an empty folder is ignored", AppSettings.last_dir("pick", "FALLBACK") == exports)
+	DirAccess.remove_absolute(exports)
+	_check("a folder that's since gone falls back", AppSettings.last_dir("pick", "FALLBACK") == "FALLBACK")
+	DirAccess.remove_absolute(AppSettings.path)
+	DirAccess.remove_absolute(tmp)
+	AppSettings.path = real_path
+	AppSettings.reload()

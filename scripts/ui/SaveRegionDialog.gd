@@ -322,6 +322,9 @@ func _export() -> void:
 	_close()
 	_pick_export_path(root, suggested, export_cb)
 
+# AppSettings key for the folder the last schematic went to.
+const _EXPORT_DIR_KEY := "schematic_export_dir"
+
 static func _pick_export_path(root: Node, suggested_name: String, export_cb: Callable) -> void:
 	var dialog := FileDialog.new()
 	dialog.access = FileDialog.ACCESS_FILESYSTEM
@@ -330,11 +333,13 @@ static func _pick_export_path(root: Node, suggested_name: String, export_cb: Cal
 	dialog.size = Vector2i(700, 500)
 	dialog.filters = PackedStringArray(["*.schematic ; Schematica files"])
 	dialog.current_file = _safe_filename(suggested_name) + ".schematic"
-	var docs := OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
-	if not docs.is_empty():
-		dialog.current_dir = docs
+	# Open where the last export went; the first time, in Documents.
+	var start := AppSettings.last_dir(_EXPORT_DIR_KEY, OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS))
+	if not start.is_empty():
+		dialog.current_dir = start
 	root.add_child(dialog)
 	dialog.file_selected.connect(func(path: String):
+		AppSettings.remember_dir(_EXPORT_DIR_KEY, path.get_base_dir())
 		_write_export(root, path, export_cb)
 		dialog.queue_free())
 	dialog.canceled.connect(dialog.queue_free)

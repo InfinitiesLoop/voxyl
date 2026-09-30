@@ -73,6 +73,20 @@ static func setup_command() -> String:
 		cmd += " --header \"Authorization: Bearer %s\"" % agent_token()
 	return cmd
 
+# --- Remembered folders ------------------------------------------------------------
+
+const SECTION_PATHS := "paths"
+
+# Where a file picker should open: the folder last used under `key`, or `fallback` if there is
+# none yet or it has since gone.
+static func last_dir(key: String, fallback := "") -> String:
+	var dir := str(get_value(SECTION_PATHS, key, ""))
+	return dir if not dir.is_empty() and DirAccess.dir_exists_absolute(dir) else fallback
+
+static func remember_dir(key: String, dir: String) -> void:
+	if not dir.is_empty() and dir != str(get_value(SECTION_PATHS, key, "")):
+		set_value(SECTION_PATHS, key, dir)
+
 # --- Command line ------------------------------------------------------------------
 
 # Apply the command-line overrides above. Called first thing by VoxelWorld (before anything
