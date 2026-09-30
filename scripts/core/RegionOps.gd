@@ -306,7 +306,7 @@ static func connected_cells(data: VoxelData, seeds: Array, allowed: Dictionary, 
 # whole blocks keep their orientation and tags, parts keep their shape and slot (only
 # their semantic changes).
 static func replace_edits(data: VoxelData, mn: Vector3i, mx: Vector3i, from: String, to: String,
-		filter := {}, positions: Variant = null) -> Array:
+		filter := {}, positions: Variant = null, reorient := -1) -> Array:
 	if not filter_ok(filter, from):
 		return []
 	var out: Array = []
@@ -323,7 +323,8 @@ static func replace_edits(data: VoxelData, mn: Vector3i, mx: Vector3i, from: Str
 				next.sync_type_id()
 				out.append({"pos": p, "op": "cell", "cell": next})
 		elif cell.type_id == from:
-			out.append({"pos": p, "op": "cell", "cell": BlockCell.new(to, cell.orientation, cell.tags.duplicate(true))})
+			# `reorient` >= 0 stamps a fixed orientation on the new blocks (else each keeps its own).
+			out.append({"pos": p, "op": "cell", "cell": BlockCell.new(to, cell.orientation if reorient < 0 else reorient, cell.tags.duplicate(true))})
 	return out
 
 # Clear the matching cells of the box (all, or only those using `semantic`; `parts_only`

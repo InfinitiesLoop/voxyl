@@ -58,6 +58,7 @@ func _run() -> void:
 	VoxelWorld.clear_block(Vector3i(0, 1, 0))
 
 	_check_ceiling_slab_placement(v3d)
+	_check_torch_placement(v3d)
 	_check_cutaway(v3d)
 
 	_check_textured_render(v3d)
@@ -218,6 +219,90 @@ func _check_ceiling_slab_placement(v3d: Node) -> void:
 		is_equal_approx(box.position.y, 4.5) and is_equal_approx(box.position.y + box.size.y, 5.0))
 	VoxelWorld.clear_block(Vector3i(2, 5, 2))
 	VoxelWorld.clear_block(Vector3i(2, 4, 2))
+
+# Torches: the same raycast + placement path, for a block that holds on to a neighbour. The top of
+# a block stands it, a wall's side leans it out of that wall, the underside refuses it outright (it
+# doesn't hang from the block above), R steps it through the poses it can take, and the view draws
+# the pose the facing says (a leaning torch sits higher in its cell than a standing one).
+func _check_torch_placement(v3d: Node) -> void:
+	var ws := VoxelWorld.workspace
+	var lib := ws.get_or_add_library("__torch_shell__")
+	var model := BlockModel.builtin_full()
+	model.id = "__torch_shell_model__"
+	model.textures = {"all": "__torch_shell_tex__"}
+	lib.add_block_model(model)
+	var bt := lib.add_block_type("torch_shell_block")
+	bt.model_id = model.id
+	bt.attachment = "torch"
+	var pal := ws.add_palette("__torch_shell_pal__")
+	pal.library_names = ["__torch_shell__"]
+	var entry := PaletteEntry.new()
+	entry.semantic_name = "ShellTorch"
+	entry.block_type_name = "torch_shell_block"
+	pal.entries.append(entry)
+	var project := VoxelWorld.active_project
+	project.palette_names.append(pal.name)
+	var data := project.data
+	VoxelWorld.selected_semantic = "ShellTorch"
+	VoxelWorld.set_block(Vector3i(2, 5, 2), "Slab")
+
+	_check("top face → a standing torch", Orientation.facing_of(v3d.call("_derive_place_orientation", Vector3i(2, 6, 2), Vector3i(0, 1, 0))) == Orientation.Facing.UP)
+	_check("a wall's east face → leaning east", Orientation.facing_of(v3d.call("_derive_place_orientation", Vector3i(3, 5, 2), Vector3i(1, 0, 0))) == Orientation.Facing.EAST)
+	_check("the underside of a block → refused", int(v3d.call("_derive_place_orientation", Vector3i(2, 4, 2), Vector3i(0, -1, 0))) == -1)
+
+	# Underneath the block, looking up: nothing is placed.
+	v3d.set("_camera_pos", Vector3(2.5, 4.5, 2.5))
+	v3d.set("_yaw", 0.0)
+	v3d.set("_pitch", 89.0)
+	v3d.call("_update_crosshair_target")
+	v3d.call("_place_targeted_block")
+	_check("a torch isn't placed on the underside of a block", data.get_cell(Vector3i(2, 4, 2)) == null)
+
+	# From above, looking down at its top: it stands.
+	v3d.set("_camera_pos", Vector3(2.5, 8.5, 2.5))
+	v3d.set("_pitch", -89.0)
+	v3d.call("_update_crosshair_target")
+	_check("looking down at the block targets its top face",
+		v3d.get("_target_hit") and v3d.get("_target_block") == Vector3i(2, 5, 2) and v3d.get("_target_place") == Vector3i(2, 6, 2))
+	v3d.call("_place_targeted_block")
+	var stood := data.get_cell(Vector3i(2, 6, 2))
+	_check("placed on top: a standing torch", stood != null and stood.type_id == "ShellTorch"
+		and Orientation.facing_of(stood.orientation) == Orientation.Facing.UP)
+
+	# Aimed at the block's east face: it leans out of that wall.
+	v3d.set("_target_hit", true)
+	v3d.set("_target_block", Vector3i(2, 5, 2))
+	v3d.set("_target_place", Vector3i(3, 5, 2))
+	v3d.call("_place_targeted_block")
+	var leaned := data.get_cell(Vector3i(3, 5, 2))
+	_check("placed on a wall: leaning out of it", leaned != null and Orientation.facing_of(leaned.orientation) == Orientation.Facing.EAST)
+
+	# R steps the leaning torch to the next pose its kind allows (up, north, east, south, west).
+	# Each rotate re-aims the crosshair itself, so the target is set again before every press.
+	var press_r := func(reverse: bool) -> int:
+		v3d.set("_target_hit", true)
+		v3d.set("_target_block", Vector3i(3, 5, 2))
+		v3d.set("_target_place", Vector3i(4, 5, 2))
+		v3d.call("_rotate_targeted_block", reverse)
+		return Orientation.facing_of(data.get_cell(Vector3i(3, 5, 2)).orientation)
+	_check("R turns it to the next pose (east → south)", press_r.call(false) == Orientation.Facing.SOUTH)
+	var seen: Array = []
+	for i in 4:
+		seen.append(press_r.call(false))
+	_check("it goes west, up, north, and back to east after five presses: never pointing down",
+		seen == [Orientation.Facing.WEST, Orientation.Facing.UP, Orientation.Facing.NORTH, Orientation.Facing.EAST])
+	_check("Shift+R turns the other way", press_r.call(true) == Orientation.Facing.NORTH)
+
+	v3d.call("_rebuild")
+	var upright: AABB = v3d.call("_cell_world_aabb", Vector3i(2, 6, 2))
+	var tilted: AABB = v3d.call("_cell_world_aabb", Vector3i(3, 5, 2))
+	_check("a standing torch stays inside its cell's footprint", maxf(upright.size.x, upright.size.z) < 1.01)
+	_check("a leaning one reaches out of its cell toward the way it leans", maxf(tilted.size.x, tilted.size.z) > 1.2)
+
+	for p in [Vector3i(2, 5, 2), Vector3i(2, 6, 2), Vector3i(3, 5, 2)]:
+		VoxelWorld.clear_block(p)
+	project.palette_names.erase(pal.name)
+	VoxelWorld.selected_semantic = "Slab"
 
 # Cutaway: cells in the box are hidden (not rebuilt), the crosshair ray passes through them
 # to what's behind, the bounds panel opens over the view, and clearing brings them back.

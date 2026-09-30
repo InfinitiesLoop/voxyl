@@ -133,6 +133,37 @@ static func orientation(spec: Dictionary) -> Variant:
 		facing = i
 	return Orientation.make(facing, bool(spec.get("top", false)))
 
+# Index into Orientation.Facing for a direction word ("north", "up", "south-east"…), -1 if unknown.
+static func facing_from_word(word: String) -> int:
+	var i := Orientation.NAMES.map(func(n: String) -> String: return n.to_lower()).find(word)
+	if i < 0:
+		var side := ShapeCatalog.side_from_name(word)
+		if side < 0:
+			return -1
+		i = Orientation.from_dir(Vector3(ShapeCatalog.side_vec(side)))
+	return i
+
+# The orientation for placing `semantic` from a spec. An ordinary block: orientation(spec). A
+# block that attaches to a neighbour (a torch) takes {facing} (the way it points: up = standing
+# on the block below, or the wall direction it leans toward) or {attached_to} (the side the
+# holding block is on: "down" = standing, "north" = on the north wall), and with neither stands
+# in its kind's default pose.
+static func orientation_for(semantic: String, spec: Dictionary) -> Variant:
+	var kind := VoxelWorld.attachment_for_semantic(semantic) if not semantic.is_empty() else Attachment.NONE
+	if kind.is_empty():
+		return orientation(spec)
+	if spec.has("attached_to"):
+		var f := facing_from_word(str(spec["attached_to"]).to_lower())
+		if f < 0:
+			return McpRegistry.fail("bad_argument", "unknown attached_to '%s' (down, north, east, south, west, up)" % spec["attached_to"])
+		return Orientation.make(Attachment.facing_held_by(Vector3i(Orientation.DIRS[f])))
+	if spec.has("facing") or spec.has("orientation"):
+		var o: Variant = orientation(spec)
+		if McpRegistry.is_error(o):
+			return o
+		return Orientation.make(Orientation.facing_of(int(o)))
+	return Orientation.make(Attachment.default_facing(kind))
+
 # The part a semantic places, at the slot a spec names: { slot } (a name or number) or
 # { orient: {up, facing, turn, shift, normals} } for architecture shapes. The shape always
 # comes from the semantic's palette entry, exactly as in the UI.

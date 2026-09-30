@@ -1734,6 +1734,14 @@ func _block_model_by_id(model_id: String) -> BlockModel:
 		_flush_memo[key] = VoxelWorld.workspace.get_block_model(model_id)
 	return _flush_memo[key]
 
+func _attachment_kind(semantic: String) -> String:
+	if not _flush_memo_live:
+		return VoxelWorld.attachment_for_semantic(semantic)
+	var key := "a:" + semantic
+	if not _flush_memo.has(key):
+		_flush_memo[key] = VoxelWorld.attachment_for_semantic(semantic)
+	return _flush_memo[key]
+
 func _semantic_model(semantic: String) -> BlockModel:
 	if not _flush_memo_live:
 		return VoxelWorld.get_model_for_semantic(semantic)
@@ -2084,6 +2092,11 @@ func _build_cell_node(pos: Vector3i, cell: BlockCell, semantic: String) -> Node3
 # ---------------------------------------------------------------------------
 
 func _resolve_cell_parts(pos: Vector3i, cell: BlockCell, semantic: String) -> Array:
+	# An attachable block (a torch) is drawn in the pose its facing gives, from its own texture.
+	if not _attachment_kind(semantic).is_empty():
+		var attached := VoxelWorld.attached_render_for_semantic(semantic, cell.orientation)
+		if not attached.is_empty():
+			return [{"model": attached["model"], "basis": BlockMesher.rotation_basis(0, int(attached["y_rot"]))}]
 	var bt := VoxelWorld.get_block_type_object_for_semantic(semantic)
 	var sm: BlockStateMap = bt.state_map if bt else null
 	# Connecting block: its post + a side part for each occupied neighbor.
@@ -2614,6 +2627,8 @@ func _build_to_me() -> void:
 	if groups.is_empty():
 		return
 	var orient := _derive_place_orientation(place, normal)
+	if orient < 0:
+		return   # an attachable block can't go on that face
 	VoxelWorld.begin_operation("Build to me")
 	for group in groups:
 		for cell: Vector3i in group:
@@ -2690,6 +2705,8 @@ func _wand() -> void:
 	var data := VoxelWorld.active_project.data
 	var placed := VoxelWorld.selected_semantic
 	var default_orient := _derive_place_orientation(block + normal, normal)
+	if default_orient < 0:
+		return   # an attachable block can't go on that face
 	# When both the placed block and the block it extends from are orientable, each new block
 	# copies the orientation of its own contact block — the cell it sits against, one step back
 	# along the face normal. So extending a run of mixed-orientation barrels keeps each barrel's
@@ -2783,6 +2800,8 @@ func _exchange() -> void:
 		return
 	var placed := VoxelWorld.selected_semantic
 	var orient := _derive_place_orientation(block, normal)
+	if orient < 0:
+		return   # an attachable block can't go on that face
 	VoxelWorld.begin_operation("Exchange")
 	for cell: Vector3i in cells:
 		VoxelWorld.set_block(cell, placed, orient)
@@ -3235,13 +3254,22 @@ func _place_targeted_block() -> void:
 	# looking up at a side face. Tweak afterwards with R (rotate about the face you're
 	# looking at).
 	var o := _derive_place_orientation(place_pos, face_normal)
+	if o < 0:
+		return   # an attachable block can't go on that face (a torch under a block)
 	VoxelWorld.begin_operation("Place")
 	VoxelWorld.set_block(place_pos, VoxelWorld.selected_semantic, o)
 	VoxelWorld.end_operation()
 	_update_crosshair_target()
 
+# The orientation a block gets when placed against the face `face_normal` points out of — or -1
+# when it can't go there at all (an attachable block on a face its kind refuses).
 func _derive_place_orientation(place_pos: Vector3i, face_normal: Vector3i) -> int:
 	var prof := VoxelWorld.orientation_profile_for_semantic(VoxelWorld.selected_semantic)
+	if prof["mode"] == "attached":
+		# A torch and its kin take the face clicked: top → standing, a wall's side → leaning out
+		# of it, the underside of a block → refused.
+		var held_facing := Attachment.facing_for_click(str(prof["kind"]), face_normal)
+		return Orientation.make(held_facing) if held_facing >= 0 else -1
 	if prof["mode"] == "full":
 		if not prof.get("directional", true):
 			# Non-directional cube (plain FULL block, no facing data): keep its model faces
@@ -3321,7 +3349,9 @@ func _rotate_targeted_block(reverse: bool) -> void:
 	var o := cell.orientation
 	var prof := VoxelWorld.orientation_profile_for_semantic(cell.type_id)
 	var normal_vertical := absi(normal.y) >= absi(normal.x) and absi(normal.y) >= absi(normal.z)
-	if prof["mode"] == "full":
+	if prof["mode"] == "attached":
+		o = Orientation.make(Attachment.next_facing(str(prof["kind"]), Orientation.facing_of(o), steps))
+	elif prof["mode"] == "full":
 		o = Orientation.rotate_around_axis(o, Orientation.dominant_axis(normal), steps)
 	elif prof["mode"] == "horizontal_half" and not normal_vertical:
 		o = Orientation.toggle_top(o)         # side face flips stairs/slabs upside-down

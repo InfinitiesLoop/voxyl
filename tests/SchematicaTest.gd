@@ -105,6 +105,21 @@ func _test_schematica_meta() -> void:
 		SchematicaMeta.final_meta(stairs, Orientation.make(Orientation.Facing.NORTH, false)) == 3)
 	_check("upside-down stairs sets bit 2",
 		SchematicaMeta.final_meta(stairs, Orientation.make(Orientation.Facing.SOUTH, true)) == (2 | 4))
+	# A torch-like block writes its pose: 1 east, 2 west, 3 south, 4 north, 5 standing.
+	var torch := lib.add_block_type("meta_torch")
+	McId.set_registry_id(torch, "test:torch", 0)
+	torch.attachment = "torch"
+	var torch_metas := []
+	for f in [Orientation.Facing.EAST, Orientation.Facing.WEST, Orientation.Facing.SOUTH, Orientation.Facing.NORTH, Orientation.Facing.UP]:
+		torch_metas.append(SchematicaMeta.final_meta(torch, Orientation.make(f)))
+	_check("a torch exports its facing as metadata (E1 W2 S3 N4 up5)", torch_metas == [1, 2, 3, 4, 5])
+	var plain_meta := lib.add_block_type("meta_plain_block")
+	McId.set_registry_id(plain_meta, "test:plain", 7)
+	_check("an ordinary block still passes its confirmed meta through",
+		SchematicaMeta.final_meta(plain_meta, Orientation.make(Orientation.Facing.EAST)) == 7)
+	McId.set_registry_id(torch, "test:torch", 0, McId.ORIENT_STAIRS)
+	_check("an explicit orientation family beats the attachment",
+		SchematicaMeta.final_meta(torch, Orientation.make(Orientation.Facing.SOUTH)) == 2)
 
 	var log_bt := lib.add_block_type("TestLog")
 	McId.set_registry_id(log_bt, "testmod:log", 1, McId.ORIENT_LOG_AXIS)

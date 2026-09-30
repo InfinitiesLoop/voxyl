@@ -11,7 +11,8 @@ static func register(reg: McpRegistry) -> void:
 			"semantic": {"type": "string"},
 			"cells": {"type": "array", "items": {"type": "object"}},
 			"positions": {"type": "array", "items": {"type": "array"}},
-			"facing": {"type": "string", "description": "Default facing for oriented blocks (north/east/south/west/up/down)"},
+			"facing": {"type": "string", "description": "Default facing for oriented blocks (north/east/south/west/up/down). For a torch-like block: the way it points, up = standing on the block below, north = leaning out of the wall on its south side"},
+			"attached_to": {"type": "string", "description": "For a torch-like block: which side the block holding it is on (down = standing on the floor, north = on the north wall). Torches can't attach to up (they don't hang from the block above)"},
 		}), _cells_set, {"mutates": true})
 	reg.add("parts_add",
 		"Add shaped parts. items: [{pos, semantic?, slot? | orient?}] — slot by name (\"north\", \"south-east\", \"down-north-west\", \"center-y\") for microblocks, orient {up, facing} for architecture shapes. The shape comes from the semantic's palette entry. Each rejected part comes back with a reason.",
@@ -49,7 +50,7 @@ static func register(reg: McpRegistry) -> void:
 			"orient": {"type": "object", "description": "For a shaped architecture semantic"},
 		}, ["region", "semantic"]), _region_fill, {"mutates": true})
 	reg.add("region_replace",
-		"Swap one semantic for another inside a region (whole blocks keep their facing; parts keep their shape and slot).",
+		"Swap one semantic for another inside a region (whole blocks keep their facing; parts keep their shape and slot; swapping an ordinary block for a torch-like one stands the torch up).",
 		_props({
 			"region": McpArgs.s_region(),
 			"from": {"type": "string"},
@@ -146,10 +147,13 @@ static func _cells_set(args: Dictionary) -> Dictionary:
 		var spec: Dictionary = it.duplicate()
 		if not spec.has("facing") and args.has("facing"):
 			spec["facing"] = args["facing"]
-		var o: Variant = McpArgs.orientation(spec)
+		if not spec.has("facing") and not spec.has("attached_to") and args.has("attached_to"):
+			spec["attached_to"] = args["attached_to"]
+		var sem := str(it.get("semantic", default_sem))
+		var o: Variant = McpArgs.orientation_for(sem, spec)
 		if McpRegistry.is_error(o):
 			return o
-		edits.append({"pos": pos, "op": "block", "semantic": str(it.get("semantic", default_sem)), "orientation": o})
+		edits.append({"pos": pos, "op": "block", "semantic": sem, "orientation": o})
 	return McpArgs.commit("cells_set", edits, args)
 
 static func _parts_add(args: Dictionary) -> Dictionary:
@@ -224,9 +228,9 @@ static func _place_layers(args: Dictionary) -> Dictionary:
 			if VoxelWorld.is_shaped_semantic(v):
 				problems.append("'%s' → '%s' is a shaped entry; write it as [{semantic, slot}]" % [key, v])
 				continue
-			resolved[key] = {"op": "block", "semantic": v, "orientation": 0}
+			resolved[key] = {"op": "block", "semantic": v, "orientation": VoxelWorld.default_orientation_for_semantic(v)}
 		elif v is Dictionary:
-			var o: Variant = McpArgs.orientation(v)
+			var o: Variant = McpArgs.orientation_for(str(v.get("semantic", "")), v)
 			if McpRegistry.is_error(o):
 				problems.append("'%s': %s" % [key, o[McpRegistry.ERROR_KEY]["message"]])
 				continue
@@ -268,7 +272,7 @@ static func _region_fill(args: Dictionary) -> Dictionary:
 			return part
 		template = {"op": "part", "part": part}
 	else:
-		var o: Variant = McpArgs.orientation(args)
+		var o: Variant = McpArgs.orientation_for(sem, args)
 		if McpRegistry.is_error(o):
 			return o
 		template = {"op": "block", "semantic": sem, "orientation": o}
@@ -282,7 +286,13 @@ static func _region_replace(args: Dictionary) -> Dictionary:
 	var r: Variant = McpArgs.region(args.get("region"), true)
 	if McpRegistry.is_error(r):
 		return r
-	var edits := RegionOps.replace_edits((pv as VoxelProject).data, r["min"], r["max"], str(args["from"]), str(args["to"]), r["filter"], r.get("positions"))
+	# Swapping an ordinary block for an attachable one (Stone -> Torch): the old facing means
+	# nothing to it, so it stands in its default pose rather than inheriting "north".
+	var reorient := -1
+	if not VoxelWorld.attachment_for_semantic(str(args["to"])).is_empty() \
+			and VoxelWorld.attachment_for_semantic(str(args["from"])).is_empty():
+		reorient = VoxelWorld.default_orientation_for_semantic(str(args["to"]))
+	var edits := RegionOps.replace_edits((pv as VoxelProject).data, r["min"], r["max"], str(args["from"]), str(args["to"]), r["filter"], r.get("positions"), reorient)
 	return McpArgs.commit("region_replace", edits, args)
 
 static func _region_move(args: Dictionary) -> Dictionary:

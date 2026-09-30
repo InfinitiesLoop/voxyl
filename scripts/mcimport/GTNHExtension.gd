@@ -29,10 +29,34 @@ const _MODS := {
 	"Ztones": true,
 }
 
+# Namespaces handled only for the attachment flags below: no healing, no junk strip.
+const _ATTACH_ONLY := {
+	"minecraft": true,
+	"GalacticraftCore": true,
+	"BloodArsenal": true,
+}
+
+# Blocks that hold on to a neighbour the way a vanilla torch does (stand on the block below, or
+# lean out of a wall) whose textures are a torch in vanilla's layout but which the flat import
+# could only draw as a cube. Matched by registry name. Flagging one (BlockType.attachment) gives
+# it real torch geometry, placement and rotation, and makes Schematica export write vanilla's
+# torch metadata, which these all inherit from BlockTorch; add a mod's torch here once you know
+# it does. (Magnum Torch is deliberately absent: a chunky custom model, not a vanilla torch.)
+const _TORCHES := [
+	"minecraft:torch", "minecraft:redstone_torch", "minecraft:unlit_redstone_torch",
+	"etfuturum:soul_torch",
+	"GalacticraftCore:tile.glowstoneTorch",
+	"BloodArsenal:blood_torch",
+]
+
 func handles(ns: String) -> bool:
-	return _MODS.has(ns)
+	return _MODS.has(ns) or _ATTACH_ONLY.has(ns)
 
 func heal(ctx: MCHealContext) -> void:
+	if _ATTACH_ONLY.has(ctx.ns):
+		_flag_attachments(ctx)
+		return
+	_flag_attachments(ctx)
 	if ctx.ns == "gregtech":
 		_heal_gregtech(ctx)
 	elif ctx.ns == "etfuturum":
@@ -61,6 +85,11 @@ func heal(ctx: MCHealContext) -> void:
 #   OVERLAY_SHUTTER / OVERLAY_COVER* / COVER_* / ENDERFLUIDLINK_OVERLAY   cover overlays
 # A block keeps its place if any texture isn't junk, so a real block that merely reuses one of
 # these as an accent survives. Healed blocks (model id ".../heal/…") are never touched.
+func _flag_attachments(ctx: MCHealContext) -> void:
+	for bt in ctx.library.block_types:
+		if bt.attachment.is_empty() and _TORCHES.has(McId.get_registry(bt)):
+			bt.attachment = Attachment.TORCH
+
 func _strip_overlay_junk(ctx: MCHealContext) -> void:
 	for bt in ctx.library.block_types.duplicate():
 		if bt.model_id.contains(":heal/"):

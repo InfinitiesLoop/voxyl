@@ -50,6 +50,7 @@ func _run() -> void:
 	await _test_structure_find()
 	await _test_project_settings_tool()
 	await _test_restart_tool()
+	await _test_attachment_tools()
 	await _test_prefabs()
 	await _test_semantic_rename()
 	await _test_nei_roster_import_tool()
@@ -525,6 +526,86 @@ func _test_structure_find() -> void:
 	await _tool("selection_clear", {})
 	await _tool("cells_clear", {"region": {"all": true}})
 	_check("(fixture cleared)", data.cells.is_empty())
+
+func _test_attachment_tools() -> void:
+	print("-- attachable blocks (torches)")
+	var saved_root := AssetLibrary.ROOT
+	AssetLibrary.ROOT = "user://__voxyl_mcpattach_lib__"   # block_set_attachment saves the library
+	_rm_rf(AssetLibrary.ROOT)
+	var ws := VoxelWorld.workspace
+	var lib := ws.get_or_add_library("__attach_lib__")
+	var cube := BlockModel.builtin_full()
+	cube.id = "__attach_cube__"
+	cube.textures = {"all": "__attach_tex__"}
+	lib.add_block_model(cube)
+	lib.add_block_type("attach_wick").model_id = cube.id
+	lib.add_block_type("attach_brick").model_id = cube.id
+	# A block whose MODEL is a torch (the vanilla layout), with nothing set on the block itself.
+	var torch_model := AttachmentModels.torch("__attach_tex__", false)
+	lib.add_block_model(torch_model)
+	lib.add_block_type("attach_real_torch").model_id = torch_model.id
+	await _tool("palette_create", {"name": "Attach Test", "libraries": ["__attach_lib__"], "entries": [
+		{"semantic": "Wick", "block": "attach_wick"}, {"semantic": "Brick", "block": "attach_brick"},
+		{"semantic": "Real Torch", "block": "attach_real_torch"}]})
+	await _tool("project_palettes_set", {"palettes": ["Pillar Test", "Attach Test"]})
+	await _tool("cells_clear", {"region": {"all": true}})
+
+	var plain := await _tool("block_get", {"name": "attach_wick", "library": "__attach_lib__"})
+	_check("a cube isn't attachable", not plain.has("attachment"))
+	var seen := await _tool("block_get", {"name": "attach_real_torch", "library": "__attach_lib__"})
+	_check("a block whose model is a torch is one, detected from its geometry",
+		seen.get("attachment") == "torch" and bool(seen.get("attachment_detected")))
+	var flagged := await _tool("block_set_attachment", {"library": "__attach_lib__", "block": "attach_wick", "attachment": "torch"})
+	_check("block_set_attachment flags a block the geometry can't identify",
+		not flagged["_is_error"] and flagged["attachment"] == "torch" and bool(flagged["changed"]))
+	var got_flag := await _tool("block_get", {"name": "attach_wick", "library": "__attach_lib__"})
+	_check("...and block_get reports it as set, not detected", got_flag.get("attachment") == "torch" and not got_flag.has("attachment_detected"))
+	var again := await _tool("block_set_attachment", {"library": "__attach_lib__", "block": "attach_wick", "attachment": "torch"})
+	_check("saying it again changes nothing", not bool(again["changed"]))
+	var bad := await _tool("block_set_attachment", {"library": "__attach_lib__", "block": "attach_wick", "attachment": "lantern"})
+	_check("an unknown kind is refused", bad["_is_error"] and str(bad.get("code", "")) == "bad_argument")
+	var missing := await _tool("block_set_attachment", {"library": "__attach_lib__", "block": "no_such", "attachment": "torch"})
+	_check("an unknown block is refused", missing["_is_error"] and str(missing.get("code", "")) == "not_found")
+
+	var put := await _tool("cells_set", {"cells": [
+		{"pos": [700, 0, 700], "semantic": "Wick"},                              # nothing said: stands
+		{"pos": [701, 0, 700], "semantic": "Wick", "attached_to": "north"},      # on the north wall
+		{"pos": [702, 0, 700], "semantic": "Wick", "facing": "east"},            # facing = the way it leans
+		{"pos": [703, 0, 700], "semantic": "Wick", "attached_to": "up"},         # hung from above: refused
+		{"pos": [704, 0, 700], "semantic": "Wick", "facing": "down"},            # the same thing said the other way
+		{"pos": [705, 0, 700], "semantic": "Brick", "facing": "down"},           # an ordinary block takes any facing
+		{"pos": [706, 0, 700], "semantic": "Real Torch"}]})                      # a detected torch stands too
+	_check("the two torches hung from above are refused, everything else placed",
+		not put["_is_error"] and int(put["placed"]) == 5 and int(put["rejected_count"]) == 2)
+	_check("...each with cant_attach and the reason", put["rejected"][0]["reason"] == "cant_attach" and str(put["rejected"][0]["detail"]).contains("above"))
+	var cells := (await _tool("cell_get", {"positions": [[700, 0, 700], [701, 0, 700], [702, 0, 700], [705, 0, 700], [706, 0, 700]]}))["cells"] as Array
+	_check("nothing said: standing (facing up, held by the block below)", cells[0]["facing"] == "up" and cells[0]["attached_to"] == "down")
+	_check("attached_to north: leaning south, out of the north wall", cells[1]["attached_to"] == "north" and cells[1]["facing"] == "south")
+	_check("facing east: leaning east, held from the west", cells[2]["facing"] == "east" and cells[2]["attached_to"] == "west")
+	_check("an ordinary block reports no attachment", cells[3]["facing"] == "down" and not cells[3].has("attached_to"))
+	_check("a detected torch stands by default", cells[4]["facing"] == "up" and cells[4]["attached_to"] == "down")
+
+	await _tool("cells_place_layers", {"origin": [710, 0, 700], "legend": {"w": "Wick", "n": {"semantic": "Wick", "attached_to": "west"}}, "layers": [["wn"]]})
+	var laid := (await _tool("cell_get", {"positions": [[710, 0, 700], [711, 0, 700]]}))["cells"] as Array
+	_check("a text layer's plain legend entry stands the torch; an object entry can attach it",
+		laid[0]["facing"] == "up" and laid[1]["attached_to"] == "west")
+	await _tool("region_fill", {"region": {"min": [720, 0, 700], "max": [722, 0, 700]}, "semantic": "Wick"})
+	_check("a fill stands them all up", (await _tool("cell_get", {"positions": [[721, 0, 700]]}))["cells"][0]["facing"] == "up")
+	await _tool("cells_set", {"cells": [{"pos": [730, 0, 700], "semantic": "Brick"}]})
+	await _tool("region_replace", {"region": {"min": [730, 0, 700], "max": [730, 0, 700]}, "from": "Brick", "to": "Wick"})
+	_check("swapping a brick for a torch stands the torch up (it doesn't inherit the brick's 'north')",
+		(await _tool("cell_get", {"positions": [[730, 0, 700]]}))["cells"][0]["facing"] == "up")
+	var bad_word := await _tool("cells_set", {"cells": [{"pos": [740, 0, 700], "semantic": "Wick", "attached_to": "sideways"}]})
+	_check("an unknown attached_to is refused", bad_word["_is_error"] and str(bad_word.get("code", "")) == "bad_argument")
+
+	var none := await _tool("block_set_attachment", {"library": "__attach_lib__", "block": "attach_real_torch", "attachment": "none"})
+	_check("a detected torch can be opted out", none["attachment"] == "none")
+	_check("...and then places as an ordinary block", (await _tool("cells_set", {"cells": [{"pos": [750, 0, 700], "semantic": "Real Torch", "facing": "down"}]}))["placed"] == 1)
+
+	await _tool("cells_clear", {"region": {"all": true}})
+	await _tool("project_palettes_set", {"palettes": ["Pillar Test"]})
+	_rm_rf(AssetLibrary.ROOT)
+	AssetLibrary.ROOT = saved_root
 
 func _test_restart_tool() -> void:
 	print("-- restart")

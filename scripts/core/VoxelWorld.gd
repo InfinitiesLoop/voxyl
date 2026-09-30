@@ -490,6 +490,7 @@ func apply_edits(edits: Array, op_name: String, opts := {}) -> Dictionary:
 	var sim := {}       # pos -> BlockCell (or null = emptied) — the batch's view of the world
 	var written := {}   # positions this batch has put something into
 	var only_air := bool(opts.get("only_air", false))
+	var kinds := {}     # semantic -> its Attachment kind, asked once per batch
 	for e: Dictionary in edits:
 		var pos: Vector3i = e["pos"]
 		var cur: BlockCell = sim[pos] if sim.has(pos) else data.get_cell(pos)
@@ -508,6 +509,12 @@ func apply_edits(edits: Array, op_name: String, opts := {}) -> Dictionary:
 				if is_shaped_semantic(sem):
 					_reject(report, pos, "shaped_semantic_needs_part",
 						"'%s' is a shaped entry (%s): place it as a part with a slot" % [sem, get_shape_id_for_semantic(sem)])
+					continue
+				if not kinds.has(sem):
+					kinds[sem] = attachment_for_semantic(sem)
+				var attach_why := _attachment_reason_for_kind(kinds[sem], int(e.get("orientation", 0)))
+				if not attach_why.is_empty():
+					_reject(report, pos, "cant_attach", attach_why)
 					continue
 				if only_air and cur != null:
 					report["skipped"] += 1
@@ -1105,6 +1112,9 @@ func has_full_facing_for_semantic(semantic_name: String) -> bool:
 #         "horizontal"      — 4 horizontal facings only, no vertical pose at all (chests,
 #                             furnaces, ladders): faces the player, never tips or top-flips.
 #         "horizontal_half" — 4 horizontal facings + a top/bottom half (stairs, slabs).
+#         "attached"        — a block that holds on to a neighbour (a torch: standing or leaning
+#                             out of a wall, never off the block above): only the facings its
+#                             Attachment kind allows, taken from the face clicked (`kind` says which).
 #   into_surface: bool      — a "full" block that faces INTO the surface instead of out of it
 #                             (hoppers: a state_map with a DOWN facing but no UP). Only
 #                             meaningful when mode == "full".
@@ -1113,6 +1123,9 @@ func has_full_facing_for_semantic(semantic_name: String) -> bool:
 # chest); else the state_map's own facings decide; else the built-in shape — FULL being the
 # least-restrictive default, matching "allow every pose when we can't tell".
 func orientation_profile_for_semantic(semantic_name: String) -> Dictionary:
+	var kind := attachment_for_semantic(semantic_name)
+	if not kind.is_empty():
+		return {"mode": "attached", "kind": kind, "into_surface": false, "directional": true}
 	var bt: BlockType = _resolve_semantic(semantic_name).get("bt")
 	if bt != null:
 		if bt.orient_mode == BlockType.OrientMode.HORIZONTAL:
@@ -1139,6 +1152,8 @@ func orientation_profile_for_semantic(semantic_name: String) -> Dictionary:
 # non-FULL built-in shape (slab/stairs); false for a plain undecided FULL cube, whose
 # orientation is visually inert so there's nothing worth inheriting.
 func is_orientable_for_semantic(semantic_name: String) -> bool:
+	if not attachment_for_semantic(semantic_name).is_empty():
+		return true
 	var bt: BlockType = _resolve_semantic(semantic_name).get("bt")
 	if bt != null:
 		if bt.orient_mode != BlockType.OrientMode.AUTO:
@@ -1146,6 +1161,75 @@ func is_orientable_for_semantic(semantic_name: String) -> bool:
 		if bt.state_map != null and not bt.state_map.is_empty():
 			return true
 	return get_shape_for_semantic(semantic_name) != BlockType.Shape.FULL
+
+# The Attachment kind of the block a semantic resolves to ("" = an ordinary block): what its
+# block type declares, or, where it declares nothing, what the model's geometry says.
+func attachment_for_semantic(semantic_name: String) -> String:
+	var r := _resolve_semantic(semantic_name)
+	var bt: BlockType = r.get("bt")
+	if bt == null:
+		return Attachment.NONE
+	if bt.attachment.is_empty():
+		return Attachment.kind_of(bt, _model_for_block_type(bt, (r["palette"] as Palette).library_names))
+	return Attachment.kind_of(bt, null)
+
+# The orientation a block gets when nothing says which way: an attachable block stands in
+# its kind's default pose (a torch stands on the floor), anything else the resting NORTH.
+func default_orientation_for_semantic(semantic_name: String) -> int:
+	var kind := attachment_for_semantic(semantic_name)
+	if kind.is_empty():
+		return Orientation.make(Orientation.Facing.NORTH)
+	return Orientation.make(Attachment.default_facing(kind))
+
+# Why `orientation` isn't allowed for this semantic's kind of attachment, or "" when it is (or
+# the block isn't attachable).
+func attachment_reason(semantic_name: String, orientation: int) -> String:
+	var kind := attachment_for_semantic(semantic_name)
+	return _attachment_reason_for_kind(kind, orientation)
+
+func _attachment_reason_for_kind(kind: String, orientation: int) -> String:
+	if kind.is_empty():
+		return ""
+	var facing := Orientation.facing_of(orientation)
+	return "" if Attachment.allows(kind, facing) else Attachment.refusal(kind, facing)
+
+# The model + vertical turn to draw an attachable block in, from its own texture and pose
+# ({} for an ordinary block, or one with no texture to build from — it draws as its own model).
+func attached_render_for_semantic(semantic_name: String, orientation: int) -> Dictionary:
+	var kind := attachment_for_semantic(semantic_name)
+	if kind.is_empty():
+		return {}
+	var texture_id := _attachment_texture(semantic_name)
+	if texture_id.is_empty():
+		return {}
+	return Attachment.render(kind, texture_id, Orientation.facing_of(orientation))
+
+# The texture an attachable block is built from: its model's first texture, preferring a lit
+# one — a redstone torch's blockstate lists its "off" model first, but a torch is placed lit.
+func _attachment_texture(semantic_name: String) -> String:
+	var r := _resolve_semantic(semantic_name)
+	var bt: BlockType = r.get("bt")
+	if bt == null:
+		return ""
+	var libs: Array = (r["palette"] as Palette).library_names
+	var model_ids: Array = [bt.model_id]
+	if bt.state_map != null:
+		for e in bt.state_map.entries:
+			model_ids.append(str(e.get("model_id", "")))
+	var unlit := ""
+	for model_id: String in model_ids:
+		var m := workspace.resolve_block_model(model_id, libs) if not model_id.is_empty() else null
+		if m == null:
+			continue
+		for key in m.textures:
+			var tex := str(m.textures[key])
+			if tex.is_empty():
+				continue
+			if not tex.ends_with("_off"):
+				return tex
+			if unlit.is_empty():
+				unlit = tex
+	return unlit
 
 # Resolved render geometry for a semantic, as a BlockModel. Same last-wins
 # palette-stack walk as color/shape: find the mapped block type, then return its

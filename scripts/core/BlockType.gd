@@ -77,6 +77,14 @@ enum OrientMode { AUTO, FULL, HORIZONTAL }
 	set(value):
 		orient_mode = value
 		revision += 1
+# How this block holds on to its neighbours (see Attachment): "torch" for a torch-like block,
+# "none" to opt out of geometry detection, "" (default) to let the model's own geometry decide.
+# Like orient_mode it's a material-layer fact about the block, recorded by an importer or set
+# by hand (block_set_attachment) when the data can't say; never in voxel data.
+@export var attachment: String = "":
+	set(value):
+		attachment = value
+		revision += 1
 @export var tint: Color = Color.WHITE:
 	set(value):
 		tint = value

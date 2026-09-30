@@ -17,6 +17,7 @@ Shaped parts: a palette entry with a shape places parts, never whole blocks. A c
 - architecture shapes (roofs, stairs, cylinders, arches, ...) take a whole cell; orient them with {up, facing} (facing = the side their open/low side looks toward, e.g. a roof tile's downhill side). shape_describe / shape_orient explain each shape.
 Placements that couldn't exist are rejected with a reason (slot_taken, micro_conflict, native_block, ...).
 
+Attachable blocks (torches: torch, redstone/soul torch, flagged mod torches) hold on to a neighbour: place them with {attached_to:"down"} (standing on the block below, the default) or {attached_to:"north"|"east"|"south"|"west"} (leaning out of the wall on that side), or {facing} = the way they point (up = standing). They never hang from the block above: attached_to "up" is rejected with cant_attach. Nothing checks the holding block is there. cell_get reports facing + attached_to; block_get reports attachment; block_set_attachment flags a block the geometry can't identify.
 Regions: {min:[x,y,z], max:[x,y,z]} (inclusive), {selection:true}, {semantic:"Name"} (where it's used), {all:true}; add pad:n to grow.
 To act on "that walkway" instead of a box, structure_find {from:[x,y,z], semantics and/or palette, gap, diagonal} selects exactly the connected cells (a sparse selection: blocks that aren't part of it stay out even inside its bounding box); then pass {selection:true} as the region.
 

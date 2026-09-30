@@ -57,6 +57,7 @@ func _ready() -> void:
 	_test_material_list()
 	_test_project_settings()
 	_test_remembered_folders()
+	_test_attachment()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
@@ -3104,3 +3105,120 @@ func _test_remembered_folders() -> void:
 	DirAccess.remove_absolute(tmp)
 	AppSettings.path = real_path
 	AppSettings.reload()
+
+# --- Attachment: torches and the kinds of block that hold on to a neighbour -----------------------
+
+func _test_attachment() -> void:
+	print("-- attachment (torches)")
+	var F := Orientation.Facing
+	_check("the torch kind exists; unknown kinds and \"\" don't",
+		Attachment.is_kind("torch") and not Attachment.is_kind("lantern") and not Attachment.is_kind(""))
+	_check("a torch can stand or lean out of any wall, but never hang from above",
+		Attachment.allows("torch", F.UP) and Attachment.allows("torch", F.NORTH) and Attachment.allows("torch", F.WEST)
+		and not Attachment.allows("torch", F.DOWN))
+	_check("unspecified, a torch stands", Attachment.default_facing("torch") == F.UP)
+	_check("clicking the top of a block stands it", Attachment.facing_for_click("torch", Vector3i(0, 1, 0)) == F.UP)
+	_check("clicking a wall's east face leans it east", Attachment.facing_for_click("torch", Vector3i(1, 0, 0)) == F.EAST)
+	_check("clicking the underside of a block is refused", Attachment.facing_for_click("torch", Vector3i(0, -1, 0)) == -1)
+	_check("the holding block is opposite the facing",
+		Attachment.support_dir(F.EAST) == Vector3i(-1, 0, 0) and Attachment.held_by_name(F.UP) == "down"
+		and Attachment.held_by_name(F.SOUTH) == "north")
+	_check("held-by and facing convert both ways",
+		Attachment.facing_held_by(Vector3i(0, -1, 0)) == F.UP and Attachment.facing_held_by(Vector3i(0, 0, -1)) == F.SOUTH)
+	_check("R steps through the allowed facings and wraps, never reaching DOWN",
+		Attachment.next_facing("torch", F.UP, 1) == F.NORTH and Attachment.next_facing("torch", F.WEST, 1) == F.UP
+		and Attachment.next_facing("torch", F.UP, -1) == F.WEST and Attachment.next_facing("torch", F.DOWN, 1) == F.UP)
+	_check("the refusal says why", Attachment.refusal("torch", F.DOWN).contains("above"))
+
+	var stand := AttachmentModels.torch("tex:a", false)
+	var lean := AttachmentModels.torch("tex:a", true)
+	_check("a standing torch is the post plus two crossed planes, upright",
+		stand.elements.size() == 3 and not stand.elements.any(func(el: Dictionary) -> bool: return el.has("rotation")))
+	_check("a leaning torch tips all three 22.5 degrees",
+		lean.elements.size() == 3 and lean.elements.all(func(el: Dictionary) -> bool:
+			return el.has("rotation") and is_equal_approx(absf(el["rotation"]["angle"]), deg_to_rad(22.5))))
+	_check("both are textured from the block's own texture", stand.textures == {"torch": "tex:a"} and lean.textures == {"torch": "tex:a"})
+	_check("models are shared per texture and pose",
+		AttachmentModels.torch("tex:a", false) == stand and AttachmentModels.torch("tex:b", false) != stand and stand != lean)
+	_check("the two poses and two textures have four different ids",
+		{stand.id: 1, lean.id: 1, AttachmentModels.torch("tex:b", false).id: 1, AttachmentModels.torch("tex:b", true).id: 1}.size() == 4)
+	_check("a torch reads as a torch from its geometry alone",
+		Attachment.detect(stand) == "torch" and Attachment.detect(lean) == "torch")
+	_check("a cube or a slab doesn't", Attachment.detect(BlockModel.builtin_full()) == "" and Attachment.detect(BlockModel.builtin_slab()) == "")
+
+	var bt := BlockType.new()
+	_check("a block that says nothing: its geometry decides",
+		Attachment.kind_of(bt, stand) == "torch" and Attachment.kind_of(bt, BlockModel.builtin_full()) == "")
+	bt.attachment = "torch"
+	_check("a block flagged torch is one whatever it looks like", Attachment.kind_of(bt, BlockModel.builtin_full()) == "torch")
+	bt.attachment = "none"
+	_check("a block opted out isn't, even if it looks like one", Attachment.kind_of(bt, stand) == "")
+	_check("no block type, nothing", Attachment.kind_of(null, stand) == "")
+
+	# Through the palette: a flagged block under a semantic.
+	var ws := VoxelWorld.workspace
+	var project := ws.get_project("My First Build")
+	var lib := ws.get_or_add_library("attach_diag")
+	var model := BlockModel.builtin_full()
+	model.id = "attach_diag_model"
+	model.textures = {"all": "attach_diag_tex"}
+	lib.add_block_model(model)
+	var torch_bt := lib.add_block_type("diag_torch")
+	torch_bt.model_id = model.id
+	torch_bt.attachment = "torch"
+	lib.add_block_type("diag_plain")
+	var pal := ws.add_palette("attach_diag_pal")
+	pal.library_names = ["attach_diag"]
+	for pair in [["DiagTorch", "diag_torch"], ["DiagPlain", "diag_plain"]]:
+		var e := PaletteEntry.new()
+		e.semantic_name = pair[0]
+		e.block_type_name = pair[1]
+		pal.entries.append(e)
+	project.palette_names.append("attach_diag_pal")
+	VoxelWorld.open(project)
+	_check("a flagged block's semantic is attachable, an ordinary one isn't",
+		VoxelWorld.attachment_for_semantic("DiagTorch") == "torch" and VoxelWorld.attachment_for_semantic("DiagPlain") == "")
+	var prof := VoxelWorld.orientation_profile_for_semantic("DiagTorch")
+	_check("its placement scheme is 'attached' (and ordinary blocks keep theirs)",
+		prof["mode"] == "attached" and prof["kind"] == "torch"
+		and VoxelWorld.orientation_profile_for_semantic("DiagPlain")["mode"] == "full")
+	_check("it counts as orientable, so the wand copies its facing", VoxelWorld.is_orientable_for_semantic("DiagTorch"))
+	_check("with nothing said it stands; an ordinary block rests NORTH",
+		Orientation.facing_of(VoxelWorld.default_orientation_for_semantic("DiagTorch")) == F.UP
+		and Orientation.facing_of(VoxelWorld.default_orientation_for_semantic("DiagPlain")) == F.NORTH)
+	_check("hanging from above is refused with a reason; a wall pose is fine; ordinary blocks never are",
+		VoxelWorld.attachment_reason("DiagTorch", Orientation.make(F.DOWN)).contains("above")
+		and VoxelWorld.attachment_reason("DiagTorch", Orientation.make(F.EAST)) == ""
+		and VoxelWorld.attachment_reason("DiagPlain", Orientation.make(F.DOWN)) == "")
+	var rep := VoxelWorld.apply_edits([
+		{"pos": Vector3i(900, 0, 900), "op": "block", "semantic": "DiagTorch", "orientation": Orientation.make(F.UP)},
+		{"pos": Vector3i(901, 0, 900), "op": "block", "semantic": "DiagTorch", "orientation": Orientation.make(F.DOWN)},
+		{"pos": Vector3i(902, 0, 900), "op": "block", "semantic": "DiagTorch", "orientation": Orientation.make(F.EAST)},
+		{"pos": Vector3i(903, 0, 900), "op": "block", "semantic": "DiagPlain", "orientation": Orientation.make(F.DOWN)},
+	], "attach test")
+	_check("apply_edits refuses only the torch hung from above, saying cant_attach",
+		rep["placed"] == 3 and (rep["rejected"] as Array).size() == 1
+		and rep["rejected"][0]["reason"] == "cant_attach" and rep["rejected"][0]["pos"] == Vector3i(901, 0, 900))
+
+	var up := VoxelWorld.attached_render_for_semantic("DiagTorch", Orientation.make(F.UP))
+	var east := VoxelWorld.attached_render_for_semantic("DiagTorch", Orientation.make(F.EAST))
+	_check("it draws from its own texture, standing upright", up["model"] == AttachmentModels.torch("attach_diag_tex", false) and int(up["y_rot"]) == 0)
+	_check("a wall pose draws the leaning model", east["model"] == AttachmentModels.torch("attach_diag_tex", true))
+	_check("and turns to face the wall it leans out of (east 0, south 90, west 180, north 270)",
+		int(east["y_rot"]) == 0
+		and int(VoxelWorld.attached_render_for_semantic("DiagTorch", Orientation.make(F.SOUTH))["y_rot"]) == 90
+		and int(VoxelWorld.attached_render_for_semantic("DiagTorch", Orientation.make(F.WEST))["y_rot"]) == 180
+		and int(VoxelWorld.attached_render_for_semantic("DiagTorch", Orientation.make(F.NORTH))["y_rot"]) == 270)
+	_check("a stray hanging-from-above cell still draws (standing) instead of vanishing",
+		VoxelWorld.attached_render_for_semantic("DiagTorch", Orientation.make(F.DOWN))["model"] == up["model"])
+	_check("an ordinary block has no attached render", VoxelWorld.attached_render_for_semantic("DiagPlain", 0).is_empty())
+
+	var saved := "user://__attach_bt__.tres"
+	ResourceSaver.save(torch_bt, saved)
+	var back := ResourceLoader.load(saved, "", ResourceLoader.CACHE_MODE_IGNORE) as BlockType
+	_check("the flag survives saving the block", back != null and back.attachment == "torch")
+	DirAccess.remove_absolute(saved)
+	for x in [900, 901, 902, 903]:
+		VoxelWorld.clear_block(Vector3i(x, 0, 900))
+	project.palette_names.erase("attach_diag_pal")
+	VoxelWorld.open(project)

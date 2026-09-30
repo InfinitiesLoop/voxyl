@@ -1,7 +1,7 @@
 extends RefCounted
 
-# Libraries and blocks: the material layer, read-only. Finding the right block is the
-# point; swatches (images) live with the other renders in ViewTools.
+# Libraries and blocks: the material layer. Finding the right block is the point (read-only);
+# the one edit is block_set_attachment. Swatches (images) live with the other renders in ViewTools.
 
 static func register(reg: McpRegistry) -> void:
 	reg.add("library_list",
@@ -24,6 +24,13 @@ static func register(reg: McpRegistry) -> void:
 			"name": {"type": "string"},
 			"library": {"type": "string", "description": "Disambiguate when several libraries have the name"},
 		}, "required": ["name"]}, _block_get)
+	reg.add("block_set_attachment",
+		"Say how a block attaches to its neighbours, for blocks whose geometry can't say so itself (an old mod torch imported as a flat texture): \"torch\" = stands on the block below or leans out of a wall, never hangs from above; \"none\" = not attachable even if its geometry looks like it; \"\" = let the geometry decide. Vanilla-format torches (torch, wall_torch, redstone/soul torches) are detected on their own. Once a block is a torch, every semantic that maps to it places, renders, rotates and exports like one.",
+		{"properties": {
+			"library": {"type": "string"},
+			"block": {"type": "string"},
+			"attachment": {"type": "string", "enum": ["torch", "none", ""]},
+		}, "required": ["library", "block", "attachment"]}, _block_set_attachment, {"mutates": true})
 
 static func _library_list(_args: Dictionary) -> Dictionary:
 	var out: Array = []
@@ -95,6 +102,25 @@ static func _block_search(args: Dictionary) -> Dictionary:
 		results.append(r)
 	return {"total": hits.size(), "offset": offset, "results": results}
 
+static func _block_set_attachment(args: Dictionary) -> Dictionary:
+	var lib_name := str(args.get("library", ""))
+	var block_name := str(args.get("block", ""))
+	var value := str(args.get("attachment", ""))
+	if not value.is_empty() and value != Attachment.OPT_OUT and not Attachment.is_kind(value):
+		return McpRegistry.fail("bad_argument", "attachment must be one of %s, \"none\" or \"\"" % ", ".join(Attachment.kinds()))
+	var lib := VoxelWorld.workspace.get_library(lib_name)
+	if lib == null:
+		return McpRegistry.fail("not_found", "no library named '%s'" % lib_name)
+	var bt := lib.get_block_type(block_name)
+	if bt == null:
+		return McpRegistry.fail("not_found", "no block '%s' in library '%s'" % [block_name, lib_name])
+	var changed := bt.attachment != value
+	bt.attachment = value
+	if changed:
+		LibraryStore.save_library(lib)
+		VoxelWorld.notify_block_type_changed()   # repaint every view that draws it
+	return {"library": lib_name, "block": block_name, "attachment": bt.attachment, "changed": changed}
+
 static func _block_get(args: Dictionary) -> Dictionary:
 	var name := str(args.get("name", ""))
 	var lib_name := str(args.get("library", ""))
@@ -127,6 +153,13 @@ static func _block_get(args: Dictionary) -> Dictionary:
 	var model := VoxelWorld.workspace.resolve_block_model(bt.model_id, [owner]) if not bt.model_id.is_empty() else null
 	if model != null:
 		out["textures"] = model.textures.duplicate()
+	var kind := Attachment.kind_of(bt, model)
+	if not kind.is_empty():
+		out["attachment"] = kind
+		if bt.attachment.is_empty():
+			out["attachment_detected"] = true   # from its geometry, not set on the block
+	elif bt.attachment == Attachment.OPT_OUT:
+		out["attachment"] = Attachment.OPT_OUT
 	var used: Array = []
 	for p in VoxelWorld.workspace.palettes:
 		for e in p.entries:

@@ -55,7 +55,11 @@ static func describe_cell(pos: Vector3i) -> Dictionary:
 	else:
 		d["semantic"] = cell.type_id
 		d["block"] = VoxelWorld.get_block_type_for_semantic(cell.type_id)
-		if cell.orientation != 0:
+		if not VoxelWorld.attachment_for_semantic(cell.type_id).is_empty():
+			var held := Orientation.facing_of(cell.orientation)
+			d["facing"] = Orientation.NAMES[held].to_lower()
+			d["attached_to"] = Attachment.held_by_name(held)
+		elif cell.orientation != 0:
 			d["facing"] = Orientation.NAMES[Orientation.facing_of(cell.orientation)].to_lower()
 			if Orientation.is_top(cell.orientation):
 				d["top"] = true

@@ -20,6 +20,10 @@ static func final_meta(bt: BlockType, orientation: int) -> int:
 		McId.ORIENT_LOG_AXIS:
 			return _log_axis_meta(base, orientation)
 		_:
+			# No orientation family set by hand: a block flagged attachable (a torch) writes its
+			# pose. An explicit mc.orient above still wins.
+			if bt != null and Attachment.is_kind(bt.attachment):
+				return _attached_meta(bt.attachment, base, orientation)
 			return base
 
 # Slabs: bit 3 (8) is the top/bottom half; bits 0-2 are the confirmed (bottom-half) slab type.
@@ -38,6 +42,20 @@ static func _stairs_meta(_base: int, orientation: int) -> int:
 	var facing: int = Orientation.facing_of(orientation)
 	var mc_facing: int = _STAIRS_FACING.get(facing, 3)
 	return mc_facing | (4 if Orientation.is_top(orientation) else 0)
+
+# Attachable blocks (Attachment): Minecraft 1.7's torch stores which way it points in its
+# metadata: 1 = east, 2 = west, 3 = south, 4 = north (leaning out of the wall on the opposite
+# side), 5 = standing on the block below. Any mod torch built on the vanilla torch follows it.
+const _TORCH_META := {
+	Orientation.Facing.EAST: 1, Orientation.Facing.WEST: 2,
+	Orientation.Facing.SOUTH: 3, Orientation.Facing.NORTH: 4,
+	Orientation.Facing.UP: 5,
+}
+
+static func _attached_meta(kind: String, base: int, orientation: int) -> int:
+	if kind == Attachment.TORCH:
+		return _TORCH_META.get(Orientation.facing_of(orientation), 5)
+	return base
 
 # Logs (and log-shaped decorative blocks): bits 0-1 are the confirmed wood-type meta; bits
 # 2-3 select the axis the log runs along — 0 = up-down (Y, the confirmed resting pose), 4 =
