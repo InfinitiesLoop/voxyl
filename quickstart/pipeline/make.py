@@ -130,12 +130,38 @@ def cmd_narrate(chapter: str, voice: str, speed: float):
 
 # --- render ------------------------------------------------------------------------
 
+def chapter_setup(chapter: str) -> dict:
+    """A chapter script may open with  `# quickstart: library=empty|real  seed=demo`.
+    library: where block libraries come from (real = this machine's, empty = a fresh install's).
+    seed: copy quickstart/demo/ (projects, palettes, prefabs) into the sandbox."""
+    opts = {"library": "real", "seed": ""}
+    m = re.search(r"^#\s*quickstart:\s*(.*)$", (CHAPTERS / f"{chapter}.gd").read_text(encoding="utf-8"), re.M)
+    if m:
+        for kv in m.group(1).split():
+            k, _, v = kv.partition("=")
+            opts[k] = v
+    return opts
+
+
+def seed_sandbox(sandbox: Path, seed: str):
+    if not seed:
+        return
+    demo = ROOT / "demo"
+    for sub in ("projects", "palettes", "prefabs"):
+        src = demo / sub
+        if src.is_dir():
+            shutil.copytree(src, sandbox / sub, dirs_exist_ok=True)
+            print(f"  seeded {sub}: {len(list((sandbox / sub).iterdir()))} files")
+
+
 def cmd_render(chapter: str, size: str, fps: int, burn: bool, timeout: int):
     out = ROOT / "out" / chapter
     out.mkdir(parents=True, exist_ok=True)
     sandbox = out / "sandbox"
     shutil.rmtree(sandbox, ignore_errors=True)
     sandbox.mkdir(parents=True)
+    setup = chapter_setup(chapter)
+    seed_sandbox(sandbox, setup["seed"])
     raw = out / "raw.avi"
     raw.unlink(missing_ok=True)
     (out / "timeline.json").unlink(missing_ok=True)
@@ -147,6 +173,8 @@ def cmd_render(chapter: str, size: str, fps: int, burn: bool, timeout: int):
     cmd = [find_godot(), "--path", PROJECT, "--write-movie", raw, "--fixed-fps", fps,
            "-s", "res://quickstart/director/Run.gd", "--",
            f"--chapter={chapter}", f"--out={out}", f"--sandbox={sandbox}"]
+    if setup["library"] == "empty":
+        cmd.append(f"--library={sandbox / 'library'}")
     if not burn:
         cmd.append("--no-captions")
     print("  $", " ".join(str(c) for c in cmd)[:300])

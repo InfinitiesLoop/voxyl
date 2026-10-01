@@ -60,9 +60,13 @@ var _card: PanelContainer
 var _card_label: Label
 var _fade: ColorRect
 var _keys: KeysHud
+var _hint: PanelContainer
+var _hint_label: RichTextLabel
+var _chat: ChatCard
+var _tween_hint: Tween
 var _tween_spot: Tween
 var _tween_zoom: Tween
-var _caption_top := false
+var _caption_mode := "bottom"   # bottom | top | left | right
 var _caption_margin := 122.0   # gap under the caption: clears the editor's hotbar
 
 func build(parent: Node, size: Vector2) -> void:
@@ -95,11 +99,16 @@ func build(parent: Node, size: Vector2) -> void:
 	_zoom_layer.visible = false
 
 	_keys = KeysHud.new()
-	_keys.position = Vector2(48, view_size.y - 250)
+	_keys.position = Vector2(36, view_size.y - 122.0 - 316.0)
 	_keys.visible = false
 	_top.add_child(_keys)
 	_build_caption()
 	_build_card()
+	_build_hint()
+	_chat = ChatCard.new()
+	_chat.position = Vector2(view_size.x - 48.0 - ChatCard.WIDTH, 150)
+	_chat.visible = false
+	_top.add_child(_chat)
 	_fade = ColorRect.new()
 	_fade.color = Color.BLACK
 	_fill_rect(_fade)
@@ -282,22 +291,34 @@ func _build_caption() -> void:
 	_caption_label.add_theme_color_override("font_color", Color(0.97, 0.98, 1.0))
 	_caption_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_caption_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_caption_label.custom_minimum_size.x = minf(view_size.x * 0.66, 1060.0)
+	_caption_label.custom_minimum_size.x = minf(view_size.x * 0.62, 1000.0)
 	_caption.add_child(_caption_label)
 	_caption.modulate.a = 0.0
 	_top.add_child(_caption)
 
 func set_caption_top(top: bool) -> void:
-	_caption_top = top
+	_caption_mode = "top" if top else "bottom"
+
+# Where captions go: bottom (centred), top, or a narrow column at the bottom left / right --
+# for screens where a panel owns the middle.
+func set_caption_mode(mode: String) -> void:
+	_caption_mode = mode
 
 func set_caption_margin(px: float) -> void:
 	_caption_margin = px
 
 func show_caption(text: String) -> void:
+	var narrow := _caption_mode == "left" or _caption_mode == "right"
+	_caption_label.custom_minimum_size.x = 470.0 if narrow else minf(view_size.x * 0.62, 1000.0)
 	_caption_label.text = text
 	_caption.reset_size()
-	var y := 46.0 if _caption_top else view_size.y - _caption_margin - _caption.size.y
-	_caption.position = Vector2((view_size.x - _caption.size.x) * 0.5, y)
+	var y := 46.0 if _caption_mode == "top" else view_size.y - _caption_margin - _caption.size.y
+	var x := (view_size.x - _caption.size.x) * 0.5
+	if _caption_mode == "left":
+		x = 48.0
+	elif _caption_mode == "right":
+		x = view_size.x - 48.0 - _caption.size.x
+	_caption.position = Vector2(x, y)
 	_caption.modulate.a = 1.0
 
 func hide_caption() -> void:
@@ -336,6 +357,61 @@ func show_card(text: String, hold := 2.4) -> void:
 	var out := create_tween()
 	out.tween_interval(hold)
 	out.tween_property(_card, "modulate:a", 0.0, 0.45)
+
+# --- Hint pill ---------------------------------------------------------------------
+
+# A short tag above the caption for things worth knowing but not worth saying aloud --
+# chiefly the right-hand key alternatives: "LEFT-HANDED  Delete also opens the inventory".
+func _build_hint() -> void:
+	_hint = PanelContainer.new()
+	_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.03, 0.04, 0.06, 0.9)
+	sb.set_corner_radius_all(10)
+	sb.border_color = ACCENT
+	sb.set_border_width_all(2)
+	sb.content_margin_left = 18
+	sb.content_margin_right = 20
+	sb.content_margin_top = 8
+	sb.content_margin_bottom = 9
+	_hint.add_theme_stylebox_override("panel", sb)
+	_hint_label = RichTextLabel.new()
+	_hint_label.bbcode_enabled = true
+	_hint_label.fit_content = true
+	_hint_label.scroll_active = false
+	_hint_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_hint_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hint_label.add_theme_font_size_override("normal_font_size", 24)
+	_hint_label.add_theme_font_size_override("bold_font_size", 24)
+	_hint.add_child(_hint_label)
+	_hint.modulate.a = 0.0
+	_top.add_child(_hint)
+
+func show_hint(tag: String, text: String, hold := 3.5) -> void:
+	_hint_label.text = "[color=#%s][b]%s[/b][/color]   %s" % [ACCENT.to_html(false), tag, text]
+	_hint.reset_size()
+	await get_tree().process_frame
+	_hint.reset_size()
+	_hint.position = Vector2((view_size.x - _hint.size.x) * 0.5, view_size.y - _caption_margin - 126.0 - _hint.size.y)
+	if _tween_hint != null and _tween_hint.is_valid():
+		_tween_hint.kill()
+	_tween_hint = create_tween()
+	_tween_hint.tween_property(_hint, "modulate:a", 1.0, 0.25)
+	_tween_hint.tween_interval(hold)
+	_tween_hint.tween_property(_hint, "modulate:a", 0.0, 0.4)
+
+# --- Agent chat card ---------------------------------------------------------------
+
+func chat_show(on: bool) -> void:
+	_chat.visible = on
+
+func chat_clear() -> void:
+	_chat.clear()
+
+# kind: user | tool | agent. Returns the label so the caller can type into it.
+func chat_add(kind: String, text := "") -> Label:
+	_chat.visible = true
+	return _chat.add(kind, text)
 
 # --- Key HUD -----------------------------------------------------------------------
 
@@ -450,10 +526,11 @@ class Callout extends Control:
 		draw_colored_polygon(head, ACCENT)
 
 class KeysHud extends Control:
+	# [keycode, label, grid position, width in keys, right-hand alternative]
 	const _ROWS := [
-		[[KEY_W, "W", Vector2(1, 0), 1.0]],
-		[[KEY_A, "A", Vector2(0, 1), 1.0], [KEY_S, "S", Vector2(1, 1), 1.0], [KEY_D, "D", Vector2(2, 1), 1.0]],
-		[[KEY_SPACE, "Space", Vector2(0, 2), 2.0], [KEY_SHIFT, "Shift", Vector2(2, 2), 1.4]],
+		[[KEY_W, "W", Vector2(1, 0), 1.0, "↑"]],
+		[[KEY_A, "A", Vector2(0, 1), 1.0, "←"], [KEY_S, "S", Vector2(1, 1), 1.0, "↓"], [KEY_D, "D", Vector2(2, 1), 1.0, "→"]],
+		[[KEY_SPACE, "Space", Vector2(0, 2), 2.0, "R-Ctrl"], [KEY_SHIFT, "Shift", Vector2(2, 2), 1.4, "/"]],
 	]
 	var _down := {}
 
@@ -481,5 +558,85 @@ class KeysHud extends Control:
 				var label: String = k[1]
 				var fs := 28 if label.length() == 1 else 22
 				var ts := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs)
-				draw_string(font, rect.position + Vector2((rect.size.x - ts.x) * 0.5, (rect.size.y + ts.y * 0.62) * 0.5),
+				draw_string(font, rect.position + Vector2((rect.size.x - ts.x) * 0.5, (rect.size.y + ts.y * 0.62) * 0.5 - 6.0),
 					label, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, INK if lit else Color.WHITE)
+				# The right-hand alternative, small, in the corner: the same movement for
+				# someone whose mouse hand is the left one.
+				var alt: String = k[4]
+				var af := 15
+				var as_ := font.get_string_size(alt, HORIZONTAL_ALIGNMENT_LEFT, -1, af)
+				draw_string(font, rect.position + Vector2((rect.size.x - as_.x) * 0.5, rect.size.y - 8.0),
+					alt, HORIZONTAL_ALIGNMENT_LEFT, -1, af, INK if lit else Color(ACCENT, 0.95))
+		draw_string(font, Vector2(0, 3 * (unit + 8) + 6.0), "small print = right-hand keys",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color(ACCENT, 0.9))
+
+class ChatCard extends PanelContainer:
+	const WIDTH := 520.0
+	var _box: VBoxContainer
+	var _mono: SystemFont
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		custom_minimum_size.x = WIDTH
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0.04, 0.05, 0.07, 0.94)
+		sb.set_corner_radius_all(14)
+		sb.border_color = Color(ACCENT, 0.7)
+		sb.set_border_width_all(2)
+		sb.content_margin_left = 20
+		sb.content_margin_right = 20
+		sb.content_margin_top = 14
+		sb.content_margin_bottom = 16
+		add_theme_stylebox_override("panel", sb)
+		_mono = SystemFont.new()
+		_mono.font_names = PackedStringArray(["Consolas", "Cascadia Mono", "Courier New", "monospace"])
+		var col := VBoxContainer.new()
+		col.add_theme_constant_override("separation", 10)
+		add_child(col)
+		var head := Label.new()
+		head.text = "●  Your agent  ·  connected over MCP"
+		head.add_theme_font_size_override("font_size", 20)
+		head.add_theme_color_override("font_color", ACCENT)
+		col.add_child(head)
+		col.add_child(HSeparator.new())
+		_box = VBoxContainer.new()
+		_box.add_theme_constant_override("separation", 12)
+		col.add_child(_box)
+
+	func clear() -> void:
+		for c in _box.get_children():
+			c.queue_free()
+		reset_size()
+
+	func add(kind: String, text: String) -> Label:
+		var l := Label.new()
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		l.custom_minimum_size.x = WIDTH - 40.0
+		l.text = text
+		match kind:
+			"user":
+				l.add_theme_font_size_override("font_size", 25)
+				l.add_theme_color_override("font_color", Color.WHITE)
+				var bubble := PanelContainer.new()
+				var sb := StyleBoxFlat.new()
+				sb.bg_color = Color(0.16, 0.2, 0.27)
+				sb.set_corner_radius_all(10)
+				sb.content_margin_left = 14
+				sb.content_margin_right = 14
+				sb.content_margin_top = 8
+				sb.content_margin_bottom = 9
+				bubble.add_theme_stylebox_override("panel", sb)
+				l.custom_minimum_size.x = WIDTH - 68.0
+				bubble.add_child(l)
+				_box.add_child(bubble)
+			"tool":
+				l.add_theme_font_override("font", _mono)
+				l.add_theme_font_size_override("font_size", 19)
+				l.add_theme_color_override("font_color", Color(0.62, 0.9, 1.0))
+				_box.add_child(l)
+			_:
+				l.add_theme_font_size_override("font_size", 25)
+				l.add_theme_color_override("font_color", Color(0.88, 0.92, 0.96))
+				_box.add_child(l)
+		reset_size()
+		return l

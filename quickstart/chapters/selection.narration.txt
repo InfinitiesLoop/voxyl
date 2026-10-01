@@ -1,23 +1,42 @@
-# Selection tool — spike chapter. One "[id] line" per spoken beat; blank line ends a beat.
+# Selection tool. One "[id] line" per spoken beat; a blank line ends a beat.
 # The same text becomes the voice-over, the burned-in captions and the SRT.
+# (Odd words are respelled for the voice only, in lexicon.txt: captions keep the real spelling.)
 
 [intro]
-The selection tool is the one you'll reach for all day. Let's grab a piece of this build.
+Selection is the tool you'll reach for all day. And it does a lot more than draw a box.
 
 [fly]
-Click into the view to take off. W, A, S and D to move, Space to rise, Shift to drop.
+Click into the view to take off. W, A, S and D to move, Space to rise, Shift to sink.
 
 [tool]
-Press E to open your inventory, and pick the Select tool.
+Press E for your inventory, then pick the Select tool.
 
 [corners]
-Now right-click two opposite corners. That's it. A box!
+Right-click two opposite corners on the ground, and you've claimed a footprint.
 
 [panel]
-Middle-click, and voxyl tells you exactly what's inside.
+Middle-click, and its panel opens. You get the exact dimensions straight away, which makes this a pretty handy tape measure too.
+
+[nudge]
+Now pull the top up to the height you want. Hold Shift to move it five cells at a time, and watch the numbers. Seventeen by eighteen by seventeen. That's the whole pillar.
+
+[semantics]
+Below that, what's inside, by meaning. Every semantic, and how many of each.
 
 [blocks]
-By meaning, or by the actual blocks you'd need to go and gather.
+Flip to Blocks, and it's the real shopping list: the actual blocks, with stack counts. Copy it, and you're ready to gather.
 
-[outro]
-Cut it. Copy it. Save it as a prefab. All from that one box.
+[agent_intro]
+Now the fun part. Your agent speaks semantics, so you can just say what you mean.
+
+[agent1]
+Only the glowing channels? One sentence.
+
+[agent2]
+Everything except the glow and the plinth? Another.
+
+[agent_outro]
+No coordinates. No counting. It knows what your blocks mean.
+
+[ops]
+And once you have a selection, you can copy it, cut it, delete it, cut it away to peek inside, save it as a prefab, or export it for Schematica.

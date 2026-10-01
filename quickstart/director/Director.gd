@@ -361,8 +361,50 @@ func card(text: String, hold := 2.4) -> void:
 func keys_hud(on: bool) -> void:
 	fx.show_keys(on)
 
+# A tag above the caption: hint("LEFT-HANDED", "Delete also opens the inventory").
+func hint(tag: String, text: String, hold := 3.5) -> void:
+	fx.show_hint(tag, text, hold)
+
+# The staged agent: a chat card on screen while the real tools run underneath (agent()).
+#   await d.chat_user("select just the glowing channels")
+#   await d.chat_tool("selection_filter", "whitelist: [Channel Glow]", func(): ...do it...)
+#   await d.chat_agent("Done: 84 cells.")
+func chat_user(text: String, cps := 38.0) -> void:
+	var l: Label = fx.chat_add("user")
+	for i in range(1, text.length() + 1):
+		l.text = text.substr(0, i)
+		await wait(1.0 / cps)
+	await wait(0.35)
+
+# Shows the call as running, runs `work` (a Callable, may be async) while it spins, then ticks it.
+func chat_tool(tool_name: String, args_text: String, work: Callable = Callable()) -> void:
+	var l: Label = fx.chat_add("tool", "...  %s  %s" % [tool_name, args_text])
+	await wait(0.5)
+	if work.is_valid():
+		await work.call()
+	await wait(0.25)
+	l.text = "OK  %s  %s" % [tool_name, args_text]
+	await wait(0.2)
+
+func chat_agent(text: String, cps := 60.0) -> void:
+	var l: Label = fx.chat_add("agent")
+	for i in range(1, text.length() + 1):
+		l.text = text.substr(0, i)
+		await wait(1.0 / cps)
+	await wait(0.3)
+
+func chat_clear() -> void:
+	fx.chat_clear()
+
+func chat_hide() -> void:
+	fx.chat_show(false)
+
 func caption_top(top: bool) -> void:
 	fx.set_caption_top(top)
+
+# bottom | top | left | right (the last two are narrow columns above the hotbar).
+func caption_at(where: String) -> void:
+	fx.set_caption_mode(where)
 
 # Gap between the caption and the bottom edge (default clears the editor's hotbar; use ~50 on
 # screens without one).
@@ -406,9 +448,13 @@ func cell_rect(cell: Vector3i, pad := 14.0) -> Rect2:
 
 # Turn the camera to put `cell` under the crosshair, smoothly.
 func aim_at_cell(cell: Vector3i, dur := 0.9) -> void:
+	await aim_at_point(Vector3(cell) + Vector3(0.5, 0.5, 0.5), dur)
+
+# ...or an exact world point (e.g. a spot on the ground plane, y = 0).
+func aim_at_point(point: Vector3, dur := 0.9) -> void:
 	var v := view3d()
 	var pos: Vector3 = v.get("_camera_pos")
-	var dir := (Vector3(cell) + Vector3(0.5, 0.5, 0.5) - pos).normalized()
+	var dir := (point - pos).normalized()
 	var yaw1 := rad_to_deg(atan2(dir.x, dir.z))
 	var pitch1 := clampf(rad_to_deg(asin(clampf(dir.y, -1.0, 1.0))), -89.0, 89.0)
 	var yaw0: float = v.get("_yaw")
@@ -427,6 +473,84 @@ func _look(v: Control, yaw: float, pitch: float) -> void:
 	v.set("_pitch", pitch)
 	v.call("_update_camera")
 	v.call("_update_crosshair_target")
+
+# Turn the camera so a world point lands at (screen_x, screen_y) of the 3D view (0..1 across, 0..1 down),
+# smoothly. Solved numerically on the camera angles, so it needs no camera maths of its own.
+func pan_to(world: Vector3, screen_x: float, screen_y := 0.5, dur := 1.0) -> void:
+	var v := view3d()
+	var cam: Camera3D = v.get("_camera")
+	var box := (cam.get_viewport().get_parent() as Control).size
+	var goal := Vector2(box.x * screen_x, box.y * screen_y)
+	var yaw0: float = v.get("_yaw")
+	var pitch0: float = v.get("_pitch")
+	var yaw := yaw0
+	var pitch := pitch0
+	for i in 8:
+		_aim(v, yaw, pitch)
+		var cur := cam.unproject_position(world)
+		var err := goal - cur
+		if err.length() < 0.5:
+			break
+		_aim(v, yaw + 0.5, pitch)
+		var dyaw := cam.unproject_position(world) - cur
+		_aim(v, yaw, pitch + 0.5)
+		var dpitch := cam.unproject_position(world) - cur
+		var det := dyaw.x * dpitch.y - dyaw.y * dpitch.x
+		if absf(det) < 0.000001:
+			break
+		yaw += 0.5 * (err.x * dpitch.y - err.y * dpitch.x) / det
+		pitch = clampf(pitch + 0.5 * (dyaw.x * err.y - dyaw.y * err.x) / det, -89.0, 89.0)
+	_aim(v, yaw0, pitch0)
+	var t0 := t
+	while t < t0 + dur:
+		var u := clampf((t - t0) / dur, 0.0, 1.0)
+		u = u * u * (3.0 - 2.0 * u)
+		_look(v, lerpf(yaw0, yaw, u), lerpf(pitch0, pitch, u))
+		await get_tree().process_frame
+	_look(v, yaw, pitch)
+
+func _aim(v: Control, yaw: float, pitch: float) -> void:
+	v.set("_yaw", yaw)
+	v.set("_pitch", pitch)
+	v.call("_update_camera")
+
+# The nearest ancestor whose script has this global class name (e.g. "ToolOverlayPanel").
+func ancestor_of(node: Node, class_name_: String) -> Control:
+	var n := node
+	while n != null:
+		var sc := n.get_script() as Script
+		if sc != null and sc.get_global_name() == class_name_:
+			return n as Control
+		n = n.get_parent()
+	return null
+
+# Move the camera along its look direction (negative = back away), smoothly.
+func dolly(dist: float, dur := 1.0) -> void:
+	var v := view3d()
+	var p0: Vector3 = v.get("_camera_pos")
+	var dir: Vector3 = v.call("_get_look_dir")
+	var t0 := t
+	while t < t0 + dur:
+		var u := clampf((t - t0) / dur, 0.0, 1.0)
+		u = u * u * (3.0 - 2.0 * u)
+		v.set("_camera_pos", p0 + dir * dist * u)
+		v.call("_update_camera")
+		await get_tree().process_frame
+	v.set("_camera_pos", p0 + dir * dist)
+	v.call("_update_camera")
+
+# Turn the camera by a few degrees, smoothly (positive yaw turns toward the right of the screen).
+func look_by(dyaw: float, dpitch: float, dur := 0.8) -> void:
+	var v := view3d()
+	var yaw0: float = v.get("_yaw")
+	var pitch0: float = v.get("_pitch")
+	var t0 := t
+	while t < t0 + dur:
+		var u := clampf((t - t0) / dur, 0.0, 1.0)
+		u = u * u * (3.0 - 2.0 * u)
+		_look(v, yaw0 + dyaw * u, clampf(pitch0 + dpitch * u, -89.0, 89.0))
+		await get_tree().process_frame
+	_look(v, yaw0 + dyaw, clampf(pitch0 + dpitch, -89.0, 89.0))
 
 # Slide the camera to `pos`, ending up looking at `target`.
 func glide_camera(pos: Vector3, target: Vector3, dur := 1.2) -> void:

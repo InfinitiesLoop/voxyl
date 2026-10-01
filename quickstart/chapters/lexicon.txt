@@ -1,2 +1,11 @@
-# How the voice should say things (caption text keeps the real spelling). "word = spoken form"
+# How the voice should say things. Captions keep the real spelling; only the synthesised
+# speech is rewritten.  "word = spoken form"  (whole words, case-insensitive, first match wins)
 voxyl = vox-ill
+prefabs = pree-fabs
+prefab = pree-fab
+WASD = W, A, S and D
+GTNH = G T N H
+NEI = N E I
+MCP = M C P
+Schematica = skuh-mat-ih-kuh
+schematic = skuh-mat-ic

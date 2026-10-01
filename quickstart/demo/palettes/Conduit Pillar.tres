@@ -1,0 +1,80 @@
+[gd_resource type="Resource" script_class="Palette" format=3]
+
+[ext_resource type="Script" path="res://scripts/core/PaletteEntry.gd" id="1_pk0w5"]
+[ext_resource type="Script" path="res://scripts/core/Palette.gd" id="2_ar0x6"]
+
+[sub_resource type="Resource" id="Resource_ypvxa"]
+script = ExtResource("1_pk0w5")
+semantic_name = "Core"
+block_type_name = "Korp ③"
+
+[sub_resource type="Resource" id="Resource_15581"]
+script = ExtResource("1_pk0w5")
+semantic_name = "Mass"
+block_type_name = "Korp ④"
+
+[sub_resource type="Resource" id="Resource_fa3r6"]
+script = ExtResource("1_pk0w5")
+semantic_name = "Joint"
+block_type_name = "Korp ⑪"
+shape_id = "face4"
+
+[sub_resource type="Resource" id="Resource_ctt0i"]
+script = ExtResource("1_pk0w5")
+semantic_name = "Corbel Step"
+block_type_name = "Korp ③"
+shape_id = "edge4"
+
+[sub_resource type="Resource" id="Resource_hbymt"]
+script = ExtResource("1_pk0w5")
+semantic_name = "Corner Rod"
+block_type_name = "Cubit(3)"
+shape_id = "edge4"
+
+[sub_resource type="Resource" id="Resource_xmy7l"]
+script = ExtResource("1_pk0w5")
+semantic_name = "Collar"
+block_type_name = "Cubit(3)"
+
+[sub_resource type="Resource" id="Resource_1bu58"]
+script = ExtResource("1_pk0w5")
+semantic_name = "Plinth Chamfer"
+block_type_name = "Cubit(3)"
+shape_id = "roof_tile"
+
+[sub_resource type="Resource" id="Resource_te7oq"]
+script = ExtResource("1_pk0w5")
+semantic_name = "Plinth Corner"
+block_type_name = "Cubit(3)"
+shape_id = "roof_outer_corner"
+
+[sub_resource type="Resource" id="Resource_xfl8p"]
+script = ExtResource("1_pk0w5")
+semantic_name = "Channel Edge"
+block_type_name = "Lapis Caelestis Albus (White)"
+shape_id = "edge1"
+
+[sub_resource type="Resource" id="Resource_wx8j3"]
+script = ExtResource("1_pk0w5")
+semantic_name = "Channel Sill"
+block_type_name = "Lapis Caelestis Albus (White)"
+shape_id = "face2"
+
+[sub_resource type="Resource" id="Resource_x7vsi"]
+script = ExtResource("1_pk0w5")
+semantic_name = "Channel Glow"
+block_type_name = "Lapis Caelestis Callainus (Cyan)"
+shape_id = "face4"
+
+[sub_resource type="Resource" id="Resource_jblyy"]
+script = ExtResource("1_pk0w5")
+semantic_name = "Beam Flange"
+block_type_name = "Korp ③"
+shape_id = "face4"
+
+[resource]
+script = ExtResource("2_ar0x6")
+name = "Conduit Pillar"
+id = 3
+entries = Array[ExtResource("1_pk0w5")]([SubResource("Resource_ypvxa"), SubResource("Resource_15581"), SubResource("Resource_fa3r6"), SubResource("Resource_ctt0i"), SubResource("Resource_hbymt"), SubResource("Resource_xmy7l"), SubResource("Resource_1bu58"), SubResource("Resource_te7oq"), SubResource("Resource_xfl8p"), SubResource("Resource_wx8j3"), SubResource("Resource_x7vsi"), SubResource("Resource_jblyy")])
+library_names = Array[String](["gtnh.Ztones", "minecraft", "gtnh.ProjRed_Illumination", "gtnh.ExtraUtilities", "gtnh.chisel"])
