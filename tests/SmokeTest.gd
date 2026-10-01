@@ -57,6 +57,8 @@ func _ready() -> void:
 	_test_material_list()
 	_test_project_settings()
 	_test_remembered_folders()
+	_test_project_folder_path()
+	_test_agent_setup()
 	_test_attachment()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
@@ -3101,6 +3103,64 @@ func _test_remembered_folders() -> void:
 	_check("an empty folder is ignored", AppSettings.last_dir("pick", "FALLBACK") == exports)
 	DirAccess.remove_absolute(exports)
 	_check("a folder that's since gone falls back", AppSettings.last_dir("pick", "FALLBACK") == "FALLBACK")
+	DirAccess.remove_absolute(AppSettings.path)
+	DirAccess.remove_absolute(tmp)
+	AppSettings.path = real_path
+	AppSettings.reload()
+
+# --- Projects folder: the Home screen's "Open folder" button ------------------------------------------
+
+func _test_project_folder_path() -> void:
+	print("-- projects folder path")
+	var real_root := ProjectStore.ROOT
+	ProjectStore.ROOT = "user://__voxyl_folderpath__/projects"
+	_rm_rf("user://__voxyl_folderpath__")
+	_check("a fresh install has no folder yet", not DirAccess.dir_exists_absolute(ProjectStore.ROOT))
+	var path := ProjectStore.folder_path()
+	_check("asking for it creates the folder", DirAccess.dir_exists_absolute(path))
+	_check("it's an OS path the file browser can open, not a user:// one", not path.contains("://") and path.is_absolute_path())
+	_check("it is the folder projects are saved in", path == ProjectSettings.globalize_path(ProjectStore.ROOT))
+	_check("asking again is harmless", ProjectStore.folder_path() == path)
+	_rm_rf("user://__voxyl_folderpath__")
+	ProjectStore.ROOT = real_root
+
+# --- Agent setup: the per-agent instructions in Settings → Agent connections --------------------------
+
+func _test_agent_setup() -> void:
+	print("-- agent setup")
+	var real_path := AppSettings.path
+	var tmp := OS.get_temp_dir().path_join("voxyl_agents_%d" % Time.get_ticks_usec()).replace("\\", "/")
+	DirAccess.make_dir_recursive_absolute(tmp)
+	AppSettings.path = tmp.path_join("settings.cfg")   # never touch the real settings
+	AppSettings.reload()
+	AppSettings.set_value(AppSettings.SECTION_AGENT, "port", 47999)
+	AppSettings.set_value(AppSettings.SECTION_AGENT, "token", "tok123")
+	AppSettings.set_value(AppSettings.SECTION_AGENT, "require_token", true)
+
+	var guides := AgentSetup.guides()
+	var titles: Array = guides.map(func(g): return g["title"])
+	_check("a tab each for Claude Code and Codex", titles == ["Claude Code", "Codex"])
+	var complete := true
+	for g in guides:
+		for key in ["title", "intro", "label", "snippet", "copy", "after"]:
+			complete = complete and g.has(key) and not str(g[key]).is_empty()
+	_check("every guide has all its fields", complete)
+
+	var claude := AgentSetup.claude_command()
+	_check("Claude's command targets the port and sends the token",
+		claude.contains("http://127.0.0.1:47999/mcp") and claude.contains("Authorization: Bearer tok123"))
+	var codex := AgentSetup.codex_config()
+	_check("Codex's entry targets the port and sends the token",
+		codex.begins_with("[mcp_servers.voxyl]") and codex.contains("url = \"http://127.0.0.1:47999/mcp\"")
+		and codex.contains("http_headers = { Authorization = \"Bearer tok123\" }"))
+	_check("each snippet is its guide's snippet", guides[0]["snippet"] == claude and guides[1]["snippet"] == codex)
+	_check("the config path says where Codex looks", AgentSetup.codex_config_path().replace("\\", "/").ends_with(".codex/config.toml"))
+
+	AppSettings.set_value(AppSettings.SECTION_AGENT, "require_token", false)
+	_check("with no token required, neither snippet carries one",
+		not AgentSetup.claude_command().contains("--header") and not AgentSetup.codex_config().contains("Bearer")
+		and not AgentSetup.codex_config().contains("http_headers"))
+
 	DirAccess.remove_absolute(AppSettings.path)
 	DirAccess.remove_absolute(tmp)
 	AppSettings.path = real_path

@@ -3,14 +3,15 @@ extends AcceptDialog
 
 # App settings (AppSettings), reachable from the Home screen and the editor bar. Today: the
 # "Agent connections" section — lets an AI agent such as Claude Code connect to this
-# running Voxyl over MCP (see McpServer). Off by default.
+# running Voxyl over MCP (see McpServer). Off by default. The server's own settings come first,
+# then a tab per agent saying how to register Voxyl with it (AgentSetup).
 
 var _enabled: CheckBox
 var _port: SpinBox
 var _require_token: CheckBox
 var _token: LineEdit
 var _status: Label
-var _command: TextEdit
+var _snippets: Array[TextEdit] = []   # one per AgentSetup guide, in tab order
 var _status_timer: Timer
 
 func _ready() -> void:
@@ -27,7 +28,7 @@ func _ready() -> void:
 	vbox.add_child(heading)
 
 	var blurb := Label.new()
-	blurb.text = "Let an AI agent (like Claude Code) build in this window over MCP. Its edits show up live and each one is an undo step. Only programs on this computer can connect."
+	blurb.text = "Let an AI agent (like Claude Code or Codex) build in this window over MCP. Its edits show up live and each one is an undo step. Only programs on this computer can connect."
 	blurb.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	blurb.custom_minimum_size = Vector2(580, 0)
 	blurb.add_theme_color_override("font_color", Color(0.7, 0.7, 0.72))
@@ -99,26 +100,12 @@ func _ready() -> void:
 	token_row.add_child(regen)
 	vbox.add_child(token_row)
 
-	var cmd_lbl := Label.new()
-	cmd_lbl.text = "Set up Claude Code (run once in a terminal):"
-	vbox.add_child(cmd_lbl)
-	_command = TextEdit.new()
-	_command.editable = false
-	_command.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
-	_command.custom_minimum_size = Vector2(580, 64)
-	vbox.add_child(_command)
-	var copy := Button.new()
-	copy.text = "Copy setup command"
-	copy.pressed.connect(func(): DisplayServer.clipboard_set(AppSettings.setup_command()))
-	vbox.add_child(copy)
-
-	var hint := Label.new()
-	hint.text = "Start Voxyl before your agent session, or reconnect from the agent (in Claude Code: /mcp → reconnect) after Voxyl starts."
-	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.custom_minimum_size = Vector2(580, 0)
-	hint.add_theme_color_override("font_color", Color(0.6, 0.6, 0.62))
-	hint.add_theme_font_size_override("font_size", 12)
-	vbox.add_child(hint)
+	# One tab per agent (AgentSetup): how to register Voxyl with it.
+	var tabs := TabContainer.new()
+	tabs.use_hidden_tabs_for_min_size = true   # the dialog keeps one height whichever tab is open
+	for guide in AgentSetup.guides():
+		tabs.add_child(_build_guide_tab(guide))
+	vbox.add_child(tabs)
 
 	_status = Label.new()
 	_status.add_theme_color_override("font_color", Color(0.55, 0.85, 0.65))
@@ -132,6 +119,42 @@ func _ready() -> void:
 	_status_timer.start()
 	_refresh()
 
+func _build_guide_tab(guide: Dictionary) -> Control:
+	var margin := MarginContainer.new()
+	margin.name = guide["title"]   # TabContainer takes the tab's title from the child's name
+	for side in ["left", "right", "top", "bottom"]:
+		margin.add_theme_constant_override("margin_" + side, 10)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	margin.add_child(box)
+
+	box.add_child(_wrapped_label(guide["intro"], Color(0.7, 0.7, 0.72)))
+	box.add_child(_wrapped_label(guide["label"]))
+	var snippet := TextEdit.new()
+	snippet.editable = false
+	snippet.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+	snippet.scroll_fit_content_height = true   # show the whole command, token included
+	snippet.custom_minimum_size = Vector2(560, 48)
+	box.add_child(snippet)
+	_snippets.append(snippet)
+	var copy := Button.new()
+	copy.text = guide["copy"]
+	copy.pressed.connect(func(): DisplayServer.clipboard_set(snippet.text))
+	box.add_child(copy)
+	box.add_child(_wrapped_label(guide["after"], Color(0.6, 0.6, 0.62), 12))
+	return margin
+
+func _wrapped_label(text: String, color := Color.TRANSPARENT, font_size := 0) -> Label:
+	var lbl := Label.new()
+	lbl.text = text
+	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lbl.custom_minimum_size = Vector2(560, 0)
+	if color.a > 0.0:
+		lbl.add_theme_color_override("font_color", color)
+	if font_size > 0:
+		lbl.add_theme_font_size_override("font_size", font_size)
+	return lbl
+
 func _apply() -> void:
 	McpServer.restart()
 	_refresh()
@@ -143,7 +166,11 @@ func _refresh() -> void:
 	_port.editable = on
 	_require_token.disabled = not on
 	_token.text = AppSettings.agent_token()
-	_command.text = AppSettings.setup_command()
+	# Set only on a change, so a selection the user is making isn't cleared by the 1s tick.
+	var guides := AgentSetup.guides()
+	for i in guides.size():
+		if _snippets[i].text != guides[i]["snippet"]:
+			_snippets[i].text = guides[i]["snippet"]
 	_status.text = McpServer.status_text()
 
 # Show the dialog (one per call site; frees itself when closed).

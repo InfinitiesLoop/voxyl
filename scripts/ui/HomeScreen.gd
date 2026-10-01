@@ -97,6 +97,12 @@ func _build_projects_tab() -> Control:
 		_rebuild_projects())
 	header.add_child(filter_edit)
 
+	var folder_btn := Button.new()
+	folder_btn.text = "Open folder"
+	folder_btn.tooltip_text = "Reveal the folder your projects are saved in, in your file browser"
+	folder_btn.pressed.connect(func(): OS.shell_open(ProjectStore.folder_path()))
+	header.add_child(folder_btn)
+
 	var new_btn := Button.new()
 	new_btn.text = "New Project"
 	new_btn.pressed.connect(_on_new_project)

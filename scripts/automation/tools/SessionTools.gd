@@ -91,7 +91,9 @@ static func _restart(_args: Dictionary) -> Dictionary:
 static func _logs(args: Dictionary) -> Dictionary:
 	var level := str(args.get("level", "warning"))
 	var n := clampi(int(args.get("lines", 40)), 1, 500)
-	var path := str(ProjectSettings.get_setting("debug/file_logging/log_path", "user://logs/godot.log"))
+	# With overrides applied: an exported build logs to user://, not the editor's res://.logs.
+	var configured: Variant = ProjectSettings.get_setting_with_override("debug/file_logging/log_path")
+	var path := str(configured) if configured != null else "user://logs/godot.log"
 	var lines: Array = []
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f != null:

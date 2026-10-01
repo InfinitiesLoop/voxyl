@@ -3,17 +3,22 @@ extends RefCounted
 
 # THE single definition of where imported assets live (decision 3). Every read or
 # write of an imported asset resolves its path through path_for(), so swapping the
-# storage root — res:// today, possibly user:// or an OS app-support dir later —
-# is a one-line change here with no call sites to touch. ROOT is a static var (not
-# a const) precisely so that swap, and tests, can repoint it.
+# storage root is a one-line change here with no call sites to touch. ROOT is a
+# static var (not a const) so tests and --sandbox runs can repoint it.
 #
 # Assets are LOOSE files imported at runtime, never run through Godot's editor
 # import pipeline (no `.import` sidecars are generated). That means texture pixels
 # can't be pulled in with load()/preload() — they're read by hand via
 # load_image()/load_texture(), which go straight to the file on disk.
 
-# res://-relative so imported assets sit next to the project install (decision 3).
-static var ROOT := "res://library"
+# Where the workspace's own data lives (the library, its palettes and prefabs, and the projects):
+# beside the project (res://) when run from a Godot editor build, so a dev checkout keeps its
+# library and projects with it, and in the user's data folder (user://) in an exported build,
+# where res:// is read-only. ProjectStore.ROOT follows the same rule.
+static func data_root() -> String:
+	return "res://" if OS.has_feature("editor") else "user://"
+
+static var ROOT := data_root().path_join("library")
 
 # Conventional sub-areas under ROOT (see the layout sketch in import-feature.md):
 #   models/        serialized BlockModel resources (geometry + texture bindings)

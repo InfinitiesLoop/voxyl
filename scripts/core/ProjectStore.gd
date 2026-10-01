@@ -5,16 +5,16 @@ extends RefCounted
 # single loose .tres under ROOT/, carrying its voxel data (packed into arrays by
 # VoxelData.pack — see there), its palette stack, its saved view layout, and its
 # hotbar state. Parallel to LibraryStore/AssetLibrary: libraries + palettes are the
-# swappable material layer under res://library/, projects are the builds under
-# res://projects/. The two are decoupled — a project only references palettes by name.
+# swappable material layer under library/, projects are the builds under projects/ (both in
+# AssetLibrary.data_root()). The two are decoupled — a project only references palettes by name.
 #
 # Like the library files these are loose .tres (no editor import sidecar) so a
 # runtime-saved project loads straight back via ResourceLoader. The encoding is an
 # implementation detail of this module; to move to JSON later, change it here.
 
-# res://-relative root for saved projects. A static var (not const) so tests can
-# repoint it to a scratch dir, mirroring AssetLibrary.ROOT.
-static var ROOT := "res://projects"
+# Root for saved projects. A static var (not const) so tests can repoint it to a scratch dir,
+# mirroring AssetLibrary.ROOT.
+static var ROOT := AssetLibrary.data_root().path_join("projects")
 
 # --- Save -------------------------------------------------------------------
 
@@ -162,6 +162,12 @@ static func _replace_project(workspace: VoxelWorkspace, project: VoxelProject) -
 
 static func _ensure_root() -> Error:
 	return DirAccess.make_dir_recursive_absolute(ROOT)
+
+# The projects folder as an OS path, for revealing it in the file browser. Created if it isn't
+# there yet: a fresh install has no folder until the first save.
+static func folder_path() -> String:
+	_ensure_root()
+	return ProjectSettings.globalize_path(ROOT)
 
 static func _path_for(project_name: String) -> String:
 	# validate_filename() keeps human names ("My First Build") usable as files while
