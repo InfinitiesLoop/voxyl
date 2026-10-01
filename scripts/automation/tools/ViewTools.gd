@@ -56,6 +56,7 @@ static func register(reg: McpRegistry) -> void:
 			"view": {"type": "string", "description": "\"focused\" (default) or an id from view_list"},
 			"camera": {"type": "object", "description": _CAMERA_DESC},
 			"render": {"type": "object", "description": "mode / lighting / projection / background"},
+			"orbit": {"type": "number", "description": "Make the camera circle the build on its own: degrees per second around its centre (about 6 slow, 12 medium, 24 fast; negative goes the other way; 0 stops). The user can leave one view orbiting while they work in another. Flying or dragging that view takes the camera back."},
 		}}, _view_set, {"mutates": true})
 	reg.add("cutaway",
 		"The user's cutaway: a box of cells hidden in their 3D views (and passed through by clicks) so they can see and build inside — a roof lifted off, a wall sliced away. Set it to hand them a view inside something you built; they can nudge each face, toggle it (H / End) or clear it. No arguments reads it. Captures don't use it unless asked (capture's own `cutaway`).",
@@ -105,6 +106,7 @@ static func view_list() -> Array:
 			var info: Dictionary = (v as View3D).camera_info()
 			d["camera"] = {"pos": st["camera_pos"], "looking": info["dir"]}
 			d["render"] = st["render"]
+			d["orbit"] = st["orbit"]
 		out.append(d)
 		i += 1
 	return out
@@ -147,9 +149,11 @@ static func _view_set(args: Dictionary) -> Dictionary:
 		if McpRegistry.is_error(pose):
 			return pose
 		view.set_camera_pose(pose["pos"], pose["target"], -1.0, float(pose["ortho_size"]) if ortho else -1.0)
+	if args.has("orbit"):
+		view.set_orbit(float(args["orbit"]))
 	var st := view.get_view_state()
 	return {"view": args.get("view", "focused"), "camera": {"pos": st["camera_pos"], "looking": view.camera_info()["dir"]},
-		"render": st["render"]}
+		"render": st["render"], "orbit": st["orbit"]}
 
 const _CUTAWAY_PROP := {"description": "Region of cells to leave out of the render, to see inside (e.g. {min:[..], max:[..]} over the roof), or \"user\" for the user's current cutaway"}
 

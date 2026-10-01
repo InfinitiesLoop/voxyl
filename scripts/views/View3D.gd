@@ -956,7 +956,9 @@ func _cycle_sky() -> void:
 # ---------------------------------------------------------------------------
 
 func _process(delta: float) -> void:
+	_fx_clock += delta
 	_tick_placement_fx()
+	_tick_orbit(delta)
 	if _sky_label_timer > 0.0:
 		_sky_label_timer -= delta
 		if _sky_label_timer <= 0.0:
@@ -1199,6 +1201,7 @@ func _on_svc_input(event: InputEvent) -> void:
 		var motion := event as InputEventMouseMotion
 		var delta: Vector2 = motion.position - _drag_last
 		_drag_last = motion.position
+		set_orbit(0.0)   # dragging the view takes the camera
 		_yaw -= delta.x * 0.4
 		_pitch = clamp(_pitch - delta.y * 0.4, -89.0, 89.0)
 		_update_camera()
@@ -1210,6 +1213,7 @@ func _on_svc_input(event: InputEvent) -> void:
 func _capture_cursor() -> void:
 	if not _active:
 		return
+	set_orbit(0.0)   # flying takes the camera
 	_fly_mode = true
 	# Recapturing the cursor always dismisses a tool overlay (the paste modal itself stays
 	# live — only its panel hides, since panels only show while the cursor is free).
@@ -1270,6 +1274,7 @@ func get_view_state() -> Dictionary:
 		"sky": _current_sky,
 		"render": render_options.duplicate(),
 		"ortho_size": _camera.size if _camera else 20.0,
+		"orbit": orbit_speed,
 	}
 
 func apply_view_state(state: Dictionary) -> void:
@@ -1284,9 +1289,61 @@ func apply_view_state(state: Dictionary) -> void:
 		_camera.size = float(state["ortho_size"])
 	if _world_env != null:
 		_apply_lighting()
+	orbit_speed = float(state.get("orbit", 0.0))
+	_orbit_blend = 1.0
 	if _camera != null:
 		_update_camera()
 	_applying_state = false
+
+# ---------------------------------------------------------------------------
+# Orbit — the camera circles the build on its own, so one view can turn slowly while you work
+# in another. A lens setting like the render mode: per view, saved with the layout, no effect on
+# the data. Deg/second around the build's centre (negative = the other way, 0 = off). It keeps
+# whatever distance and height the camera already has (the wheel still dollies), and stops the
+# moment you take the camera yourself: flying in this view, or dragging it.
+# ---------------------------------------------------------------------------
+
+var orbit_speed := 0.0
+var _orbit_center := Vector3.ZERO
+var _orbit_blend := 1.0   # 0 -> 1 over half a second after switching on: swing round to face the build, no snap
+
+func set_orbit(deg_per_sec: float) -> void:
+	deg_per_sec = clampf(deg_per_sec, -360.0, 360.0)
+	if is_equal_approx(deg_per_sec, orbit_speed):
+		return
+	var was_off := is_zero_approx(orbit_speed)
+	orbit_speed = deg_per_sec
+	if was_off and not is_zero_approx(deg_per_sec):
+		_orbit_center = _get_world_center()
+		# A camera inside the build or miles away has nothing to orbit: stand it off first.
+		var dist := _camera_pos.distance_to(_orbit_center)
+		if _project() != null and (dist < 3.0 or dist > 300.0):
+			var aabb := _project().data.get_used_aabb()
+			if not aabb.is_empty():
+				frame_cells(aabb[0], aabb[1], 45.0, 30.0)
+		_orbit_blend = 0.0
+	if not _applying_state and not offscreen:
+		VoxelWorld.mark_dirty()   # saved with the layout
+	settings_changed.emit()
+
+func _tick_orbit(delta: float) -> void:
+	if is_zero_approx(orbit_speed) or offscreen or _camera == null or _fly_mode or _slice_active \
+			or not is_visible_in_tree() or _project() == null:
+		return
+	var target := _get_world_center()
+	_orbit_center = _orbit_center.lerp(target, 1.0 - exp(-3.0 * delta))   # a growing build nudges the centre, never jerks it
+	var off := _camera_pos - _orbit_center
+	var turn := deg_to_rad(orbit_speed) * delta
+	off = Vector3(off.x * cos(turn) - off.z * sin(turn), off.y, off.x * sin(turn) + off.z * cos(turn))
+	_camera_pos = _orbit_center + off
+	var dir := (_orbit_center - _camera_pos).normalized()
+	var want_yaw := rad_to_deg(atan2(dir.x, dir.z))
+	var want_pitch := clampf(rad_to_deg(asin(clampf(dir.y, -1.0, 1.0))), -89.0, 89.0)
+	_orbit_blend = minf(_orbit_blend + delta * 2.0, 1.0)
+	var k := _orbit_blend * _orbit_blend * (3.0 - 2.0 * _orbit_blend)
+	_yaw = lerp_angle(deg_to_rad(_yaw), deg_to_rad(want_yaw), k if k < 1.0 else 1.0) * 180.0 / PI
+	_pitch = lerpf(_pitch, want_pitch, k)
+	_update_camera(false)
 
 # ---------------------------------------------------------------------------
 # Render options (see ViewOptions) — per view, saved with the layout like the camera.
@@ -1567,7 +1624,7 @@ func _guide_bounds() -> Array:
 # Camera  (same update path regardless of fly mode)
 # ---------------------------------------------------------------------------
 
-func _update_camera() -> void:
+func _update_camera(save_viewpoint := true) -> void:
 	if not _camera:
 		return
 	_camera.position = _camera_pos
@@ -1581,7 +1638,7 @@ func _update_camera() -> void:
 	_update_compass()
 	# Camera moved → the project's saved viewpoint is stale. Cheap debounce restart;
 	# skipped while we're applying a loaded state (that's not a user change).
-	if not _applying_state and not offscreen:
+	if save_viewpoint and not _applying_state and not offscreen:
 		VoxelWorld.mark_dirty()
 
 # The project's settings as this view shows them: the heavy grid lines' offset, and the compass.
@@ -3097,10 +3154,14 @@ func _paste_solid_texture_material(key: String, resolved: Dictionary, is_tinted:
 # cleared on a stagger that marches deeper into the build — so it reads as the blocks
 # building toward you. Data is untouched by any of this (Principle 2); tune or disable
 # via the PLACEMENT_FX_* constants.
+# The placement reveal runs on the frame clock (the sum of _process deltas), not the wall clock, so
+# it plays at the same pace when frames aren't real time (a fixed-fps recording).
+var _fx_clock := 0.0
+
 func _animate_placement(placed_by_step: Array) -> void:
 	if not PLACEMENT_FX_ENABLED or placed_by_step.is_empty():
 		return
-	var now := Time.get_ticks_msec() / 1000.0
+	var now := _fx_clock
 	for step_index in placed_by_step.size():
 		var reveal_at := now + PLACEMENT_FX_HOLD + step_index * PLACEMENT_FX_STEP
 		for cell: Vector3i in placed_by_step[step_index]:
@@ -3125,7 +3186,7 @@ func _spawn_placeholder(cell: Vector3i) -> MeshInstance3D:
 func _tick_placement_fx() -> void:
 	if _placement_fx.is_empty():
 		return
-	var now := Time.get_ticks_msec() / 1000.0
+	var now := _fx_clock
 	var still: Array = []
 	for fx in _placement_fx:
 		if now >= fx["reveal_at"]:
@@ -3591,8 +3652,9 @@ func _commit_paste() -> void:
 		return
 	var anchor = _paste_anchor()
 	if anchor == null:
-		_finish_paste()
-		return
+		if _paste_prefab == null:
+			_finish_paste()
+		return   # a prefab placement stays live: aim at something and place again
 	if _paste_prefab != null:
 		var m := VoxelWorld.prefab_missing(_paste_prefab, VoxelWorld.active_project)
 		if not (m["palettes"] as Array).is_empty():
@@ -3641,7 +3703,21 @@ func _place_paste(anchor: Vector3i) -> void:
 				VoxelWorld.set_cell(pos, cell)
 		VoxelWorld.end_operation()
 		_animate_placement(_group_by_distance(targets.keys(), anchor))
-	_finish_paste()
+	if _paste_prefab != null:
+		_next_placement()
+	else:
+		_finish_paste()
+
+# A prefab keeps being placed until Esc: each right-click drops one and the ghost goes back to
+# following the crosshair. The turn and mirror carry over (a row of them faces one way); the
+# fine-tune offset and the lock start fresh for each.
+func _next_placement() -> void:
+	_paste_offset = Vector3i.ZERO
+	_paste_locked = false
+	_update_paste_offset_labels()
+	_update_tool_overlay_visibility()
+	_update_crosshair_target()
+	_overlay.queue_redraw()
 
 func _finish_paste() -> void:
 	_paste_active = false
@@ -4656,8 +4732,8 @@ func _draw_paste_hud() -> void:
 		"  ·  mirrored" if _paste_mirror else ""]
 	_overlay.draw_string(font, Vector2(14.0, 30.0), title,
 		HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color(0.85, 1.0, 0.9, 0.95))
-	var hint := ("RMB place  ·  LMB lock/unlock  ·  MMB offset controls  ·  R rotate  ·  M mirror  ·  Esc cancel" if _fly_mode
-		else "MMB or click the view to resume aiming  ·  Esc or Cancel to abort")
+	var hint := ("RMB place  ·  LMB lock/unlock  ·  MMB offset controls  ·  R rotate  ·  M mirror  ·  Esc %s" % ("when done" if _paste_prefab != null else "cancel") if _fly_mode
+		else "MMB or click the view to resume aiming  ·  Esc or Cancel to %s" % ("finish" if _paste_prefab != null else "abort"))
 	_overlay.draw_string(font, Vector2(10.0, _overlay.size.y - 10.0), hint,
 		HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.7))
 

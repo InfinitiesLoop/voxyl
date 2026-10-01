@@ -17,11 +17,16 @@ const CAMERA_PRESETS := [
 	["Iso", "se", "iso"],
 ]
 
+# Orbit speeds in the Camera menu (degrees per second; the id is ORBIT_BASE + index).
+const ORBIT_SPEEDS := [["Orbit off", 0.0], ["Orbit slow", 6.0], ["Orbit medium", 12.0], ["Orbit fast", 24.0]]
+const ORBIT_BASE := 100
+
 enum { CUT_ABOVE, CUT_SELECTION, CUT_EDIT, CUT_TOGGLE, CUT_CLEAR }
 
 var view: View3D
 var _pickers := {}   # option id -> OptionButton
 var _cut_menu: MenuButton
+var _cam_menu: MenuButton
 
 func _init(p_view: View3D) -> void:
 	view = p_view
@@ -47,9 +52,14 @@ func _ready() -> void:
 	cam.text = "Camera ▾"
 	cam.flat = true
 	cam.focus_mode = Control.FOCUS_NONE
-	for p in CAMERA_PRESETS:
-		cam.get_popup().add_item(p[0])
-	cam.get_popup().id_pressed.connect(_on_camera_preset)
+	for i in CAMERA_PRESETS.size():
+		cam.get_popup().add_item(CAMERA_PRESETS[i][0], i)
+	cam.get_popup().add_separator()
+	for i in ORBIT_SPEEDS.size():
+		cam.get_popup().add_radio_check_item(ORBIT_SPEEDS[i][0], ORBIT_BASE + i)
+	cam.get_popup().id_pressed.connect(_on_camera_item)
+	cam.tooltip_text = "Camera presets, and Orbit: the camera circles the build on its own (flying or dragging this view stops it)"
+	_cam_menu = cam
 	add_child(cam)
 	_cut_menu = MenuButton.new()
 	_cut_menu.text = "Cutaway ▾"
@@ -78,6 +88,20 @@ func _sync() -> void:
 		var ob: OptionButton = _pickers[id]
 		var vals := ViewOptions.values(id)
 		ob.select(maxi(0, vals.find(str(view.render_options[id]))))
+	if _cam_menu != null:
+		var pm := _cam_menu.get_popup()
+		var nearest := 0
+		for i in ORBIT_SPEEDS.size():
+			if absf(float(ORBIT_SPEEDS[i][1]) - absf(view.orbit_speed)) < absf(float(ORBIT_SPEEDS[nearest][1]) - absf(view.orbit_speed)):
+				nearest = i
+		for i in ORBIT_SPEEDS.size():
+			pm.set_item_checked(pm.get_item_index(ORBIT_BASE + i), i == nearest)
+
+func _on_camera_item(id: int) -> void:
+	if id >= ORBIT_BASE:
+		view.set_orbit(float(ORBIT_SPEEDS[id - ORBIT_BASE][1]))
+	else:
+		_on_camera_preset(id)
 
 func _on_camera_preset(i: int) -> void:
 	var p: Array = CAMERA_PRESETS[i]

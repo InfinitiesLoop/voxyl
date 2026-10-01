@@ -68,6 +68,8 @@ func _run() -> void:
 	_check_tinted_render(v3d)
 	_check_flat_render(v3d)
 	_check_render_options(v3d)
+	_check_orbit(v3d)
+	_check_prefab_multi_place(v3d)
 	await _check_import_progress()
 	_check_import_progress_warning_totals()
 	_check_library_rename()
@@ -979,3 +981,62 @@ func _check_render_options(v3d: Node) -> void:
 	fresh.queue_free()
 	view.set_render_options(ViewOptions.defaults())
 	view.settings_changed.disconnect(cb)
+
+# Orbit: the camera circles the build's centre at the distance and height it already has, rides
+# along in the saved view state, and stops when the user takes the camera.
+func _check_orbit(v3d: Node) -> void:
+	var view := v3d as View3D
+	var center: Vector3 = view.call("_get_world_center")
+	view.set_camera_pose(center + Vector3(10.0, 4.0, 0.0), center)
+	var start := view.camera_info()["pos"] as Vector3
+	view.set_orbit(90.0)
+	_check("orbit speed is part of the saved view state", is_equal_approx(view.get_view_state()["orbit"], 90.0))
+	for i in 10:
+		view.call("_tick_orbit", 0.1)
+	var now := view.camera_info()["pos"] as Vector3
+	var r0 := Vector2(start.x - center.x, start.z - center.z).length()
+	var r1 := Vector2(now.x - center.x, now.z - center.z).length()
+	_check("orbiting keeps the distance from the centre", absf(r0 - r1) < 0.05)
+	_check("orbiting keeps the camera's height", absf(start.y - now.y) < 0.001)
+	var turned := rad_to_deg(Vector2(start.x - center.x, start.z - center.z).angle_to(Vector2(now.x - center.x, now.z - center.z)))
+	_check("a second at 90°/s turns it about a quarter circle (%.0f°)" % turned, absf(absf(turned) - 90.0) < 2.0)
+	var look := (view.camera_info()["dir"] as Vector3)
+	_check("the camera keeps looking at the centre", look.dot((center - now).normalized()) > 0.999)
+	var restored := View3D.new()
+	add_child(restored)
+	restored.apply_view_state(view.get_view_state())
+	_check("a restored view keeps orbiting", is_equal_approx(restored.orbit_speed, 90.0))
+	restored.queue_free()
+	view.set_orbit(0.0)
+	var held := view.camera_info()["pos"] as Vector3
+	view.call("_tick_orbit", 0.5)
+	_check("orbit off leaves the camera alone", held.is_equal_approx(view.camera_info()["pos"]))
+
+# A prefab placement stays live after each placement (Esc ends it); a clipboard paste does not.
+func _check_prefab_multi_place(v3d: Node) -> void:
+	var view := v3d as View3D
+	var pf := Prefab.new()
+	pf.name = "Test Pillar"
+	pf.size = Vector3i(1, 2, 1)
+	pf.data.set_block(Vector3i(0, 0, 0), "Wall")
+	pf.data.set_block(Vector3i(0, 1, 0), "Wall")
+	view.set("_paste_prefab", pf)
+	view.set("_paste_active", true)
+	view.set("_paste_offset", Vector3i(2, 0, 0))
+	view.set("_paste_locked", true)
+	view.call("_place_paste", Vector3i(20, 0, 0))
+	_check("the prefab was placed", VoxelWorld.get_block(Vector3i(20, 1, 0)) == "Wall")
+	_check("a prefab placement stays live for the next one", view.get("_paste_active") == true and view.get("_paste_prefab") == pf)
+	_check("…with the lock and fine-tune offset reset", view.get("_paste_locked") == false and view.get("_paste_offset") == Vector3i.ZERO)
+	view.call("_place_paste", Vector3i(24, 0, 0))
+	_check("and again", VoxelWorld.get_block(Vector3i(24, 1, 0)) == "Wall" and view.get("_paste_active") == true)
+	view.call("_cancel_paste")
+	_check("Esc ends it", view.get("_paste_active") == false)
+	view.set("_paste_prefab", null)
+	view.set("_paste_active", true)
+	view.call("_place_paste", Vector3i(28, 0, 0))
+	_check("a clipboard paste still ends after one placement", view.get("_paste_active") == false)
+	for x in [20, 24]:
+		VoxelWorld.clear_block(Vector3i(x, 0, 0))
+		VoxelWorld.clear_block(Vector3i(x, 1, 0))
+
