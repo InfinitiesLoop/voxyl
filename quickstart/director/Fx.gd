@@ -3,10 +3,12 @@ extends Node
 # The director's overlay stack: everything drawn on top of the real app, and so baked into
 # the recorded frames — spotlight, arrow callouts, the pointer, zoom, captions, chapter
 # cards, the key HUD, fades. Three CanvasLayers, bottom to top:
-#   world (10)  spotlight, callouts, pointer — these zoom along with the app
-#   zoom  (20)  re-draws everything below it magnified (a screen-texture shader)
-#   top   (30)  captions, chapter cards, key HUD, fade — never zoomed
-# Every control here ignores the mouse, so nothing can eat a click.
+#   world (1100)  spotlight, callouts, pointer — these zoom along with the app
+#   zoom  (1110)  re-draws everything below it magnified (a screen-texture shader)
+#   top   (1120)  captions, chapter cards, key HUD, fade — never zoomed
+# Layers sit above 1024, where the engine draws embedded sub-windows (the import panel, dialogs),
+# so overlays land on top of those too. Every control here ignores the mouse, so nothing can
+# eat a click.
 
 const ACCENT := Color(0.38, 0.86, 1.0)
 const INK := Color(0.05, 0.06, 0.08)
@@ -63,6 +65,8 @@ var _keys: KeysHud
 var _hint: PanelContainer
 var _hint_label: RichTextLabel
 var _chat: ChatCard
+var _term: TermCard
+var _term_backdrop: ColorRect
 var _tween_hint: Tween
 var _tween_spot: Tween
 var _tween_zoom: Tween
@@ -73,9 +77,9 @@ func build(parent: Node, size: Vector2) -> void:
 	name = "QuickstartFx"
 	view_size = size
 	parent.add_child(self)
-	_world = _layer(10)
-	_zoom_layer = _layer(20)
-	_top = _layer(30)
+	_world = _layer(1100)
+	_zoom_layer = _layer(1110)
+	_top = _layer(1120)
 
 	_spot = ColorRect.new()
 	_spot_mat = ShaderMaterial.new()
@@ -109,11 +113,36 @@ func build(parent: Node, size: Vector2) -> void:
 	_chat.position = Vector2(view_size.x - 48.0 - ChatCard.WIDTH, 150)
 	_chat.visible = false
 	_top.add_child(_chat)
+	_term_backdrop = ColorRect.new()
+	_term_backdrop.color = Color(0, 0, 0, 0.6)
+	_term_backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_term_backdrop.size = view_size
+	_term_backdrop.modulate.a = 0.0
+	_top.add_child(_term_backdrop)
+	_term = TermCard.new()
+	_term.modulate.a = 0.0
+	_top.add_child(_term)
 	_fade = ColorRect.new()
 	_fade.color = Color.BLACK
 	_fill_rect(_fade)
 	_fade.modulate.a = 0.0
 	_top.add_child(_fade)
+
+# Containers and separators default to catching the mouse, and they'd sit on top of the app: a card
+# parked at (0, 0) would swallow clicks meant for the real UI. Nothing here may ever take input, so
+# every control under the overlay layers is forced to ignore it (cheap: a few dozen nodes).
+func _process(_delta: float) -> void:
+	for layer in [_world, _zoom_layer, _top]:
+		if layer != null:
+			_ignore_all(layer)
+
+func _ignore_all(root: Node) -> void:
+	var stack: Array[Node] = [root]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		if n is Control and (n as Control).mouse_filter != Control.MOUSE_FILTER_IGNORE:
+			(n as Control).mouse_filter = Control.MOUSE_FILTER_IGNORE
+		stack.append_array(n.get_children())
 
 func _layer(n: int) -> CanvasLayer:
 	var l := CanvasLayer.new()
@@ -357,6 +386,206 @@ func show_card(text: String, hold := 2.4) -> void:
 	var out := create_tween()
 	out.tween_interval(hold)
 	out.tween_property(_card, "modulate:a", 0.0, 0.45)
+
+# --- Image interstitial ------------------------------------------------------------
+
+# Flash a picture over the app (dimmed behind it): a screenshot of something outside the app.
+func show_image(tex: Texture2D, height: float, hold: float) -> void:
+	var backdrop := ColorRect.new()
+	backdrop.color = Color(0, 0, 0, 0.62)
+	backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	backdrop.size = view_size
+	backdrop.modulate.a = 0.0
+	_top.add_child(backdrop)
+	_top.move_child(backdrop, 0)     # under the captions, key HUD and the rest
+	var frame := PanelContainer.new()
+	frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.03, 0.04, 0.06)
+	sb.set_corner_radius_all(14)
+	sb.set_border_width_all(4)
+	sb.border_color = ACCENT
+	sb.content_margin_left = 10
+	sb.content_margin_right = 10
+	sb.content_margin_top = 10
+	sb.content_margin_bottom = 10
+	sb.shadow_color = Color(0, 0, 0, 0.6)
+	sb.shadow_size = 24
+	frame.add_theme_stylebox_override("panel", sb)
+	var pic := TextureRect.new()
+	pic.texture = tex
+	pic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	pic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	pic.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	pic.custom_minimum_size = Vector2(height * float(tex.get_width()) / float(tex.get_height()), height)
+	frame.add_child(pic)
+	frame.modulate.a = 0.0
+	_top.add_child(frame)
+	_top.move_child(frame, 1)
+	await get_tree().process_frame
+	frame.reset_size()
+	frame.pivot_offset = frame.size * 0.5
+	frame.position = (view_size - frame.size) * 0.5
+	frame.scale = Vector2(0.94, 0.94)
+	var tw := create_tween().set_parallel(true).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(backdrop, "modulate:a", 1.0, 0.35)
+	tw.tween_property(frame, "modulate:a", 1.0, 0.35)
+	tw.tween_property(frame, "scale", Vector2.ONE, 0.5)
+	await tw.finished
+	await get_tree().create_timer(hold).timeout
+	var out := create_tween().set_parallel(true)
+	out.tween_property(backdrop, "modulate:a", 0.0, 0.4)
+	out.tween_property(frame, "modulate:a", 0.0, 0.4)
+	await out.finished
+	backdrop.queue_free()
+	frame.queue_free()
+
+# --- Title and step cards ----------------------------------------------------------
+
+# A big centred title over a dimmed picture (intro / outro).
+func show_title(title: String, subtitle: String, hold: float, dim := 0.55) -> void:
+	var box := Control.new()
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.size = view_size
+	box.modulate.a = 0.0
+	var back := ColorRect.new()
+	back.color = Color(0, 0, 0, dim)
+	back.size = view_size
+	back.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(back)
+	var t := Label.new()
+	t.text = title
+	t.add_theme_font_size_override("font_size", 150)
+	t.add_theme_color_override("font_color", Color.WHITE)
+	t.add_theme_color_override("font_outline_color", INK)
+	t.add_theme_constant_override("outline_size", 10)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	t.size = Vector2(view_size.x, 190.0)
+	t.position = Vector2(0.0, view_size.y * 0.30)
+	box.add_child(t)
+	var bar := ColorRect.new()
+	bar.color = ACCENT
+	bar.size = Vector2(160, 6)
+	bar.position = Vector2((view_size.x - 160.0) * 0.5, view_size.y * 0.30 + 205.0)
+	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(bar)
+	var sub := Label.new()
+	sub.text = subtitle
+	sub.add_theme_font_size_override("font_size", 46)
+	sub.add_theme_color_override("font_color", ACCENT)
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub.size = Vector2(view_size.x, 70.0)
+	sub.position = Vector2(0.0, view_size.y * 0.30 + 235.0)
+	box.add_child(sub)
+	_top.add_child(box)
+	_top.move_child(box, 0)
+	var tw := create_tween()
+	tw.tween_property(box, "modulate:a", 1.0, 0.6)
+	await tw.finished
+	await get_tree().create_timer(hold).timeout
+	var out := create_tween()
+	out.tween_property(box, "modulate:a", 0.0, 0.6)
+	await out.finished
+	box.queue_free()
+
+# Numbered steps appearing one after another in a card.
+func show_steps(heading: String, steps: Array, step_delay: float, hold: float) -> void:
+	var back := ColorRect.new()
+	back.color = Color(0, 0, 0, 0.62)
+	back.size = view_size
+	back.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	back.modulate.a = 0.0
+	_top.add_child(back)
+	_top.move_child(back, 0)
+	var card := PanelContainer.new()
+	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.04, 0.05, 0.07, 0.96)
+	sb.set_corner_radius_all(18)
+	sb.border_color = ACCENT
+	sb.set_border_width_all(3)
+	sb.content_margin_left = 54
+	sb.content_margin_right = 60
+	sb.content_margin_top = 40
+	sb.content_margin_bottom = 46
+	card.add_theme_stylebox_override("panel", sb)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 26)
+	card.add_child(col)
+	var h := Label.new()
+	h.text = heading
+	h.add_theme_font_size_override("font_size", 52)
+	h.add_theme_color_override("font_color", Color.WHITE)
+	col.add_child(h)
+	var rows: Array[Control] = []
+	for i in steps.size():
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 22)
+		var num := Label.new()
+		num.text = str(i + 1)
+		num.add_theme_font_size_override("font_size", 56)
+		num.add_theme_color_override("font_color", ACCENT)
+		num.custom_minimum_size.x = 44
+		row.add_child(num)
+		var txt := Label.new()
+		txt.text = str(steps[i])
+		txt.add_theme_font_size_override("font_size", 46)
+		txt.add_theme_color_override("font_color", Color(0.94, 0.96, 1.0))
+		row.add_child(txt)
+		row.modulate.a = 0.0
+		col.add_child(row)
+		rows.append(row)
+	card.modulate.a = 0.0
+	_top.add_child(card)
+	_top.move_child(card, 1)
+	await get_tree().process_frame
+	card.reset_size()
+	card.position = (view_size - card.size) * 0.5
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(back, "modulate:a", 1.0, 0.4)
+	tw.tween_property(card, "modulate:a", 1.0, 0.4)
+	await tw.finished
+	for r in rows:
+		var rt := create_tween()
+		rt.tween_property(r, "modulate:a", 1.0, 0.35)
+		await get_tree().create_timer(step_delay).timeout
+	await get_tree().create_timer(hold).timeout
+	var out := create_tween().set_parallel(true)
+	out.tween_property(back, "modulate:a", 0.0, 0.4)
+	out.tween_property(card, "modulate:a", 0.0, 0.4)
+	await out.finished
+	back.queue_free()
+	card.queue_free()
+
+# --- Terminal card -----------------------------------------------------------------
+
+# A terminal window flashed over the app (dimmed behind it), for the one thing Voxyl can't show
+# itself: the command you paste into your agent's terminal.
+func term_open(title: String) -> void:
+	_term.reset(title)
+	await get_tree().process_frame
+	_term.reset_size()
+	_term.position = Vector2((view_size.x - _term.size.x) * 0.5, view_size.y * 0.28)
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(_term_backdrop, "modulate:a", 1.0, 0.3)
+	tw.tween_property(_term, "modulate:a", 1.0, 0.3)
+	await tw.finished
+
+func term_line(text: String, dim := false) -> RichTextLabel:
+	var l := _term.add_line(text, dim)
+	_term.reset_size()
+	_term.position = Vector2((view_size.x - _term.size.x) * 0.5, view_size.y * 0.28)
+	return l
+
+func term_relayout() -> void:
+	_term.reset_size()
+	_term.position = Vector2((view_size.x - _term.size.x) * 0.5, view_size.y * 0.28)
+
+func term_close() -> void:
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(_term_backdrop, "modulate:a", 0.0, 0.35)
+	tw.tween_property(_term, "modulate:a", 0.0, 0.35)
+	await tw.finished
 
 # --- Hint pill ---------------------------------------------------------------------
 
@@ -639,4 +868,60 @@ class ChatCard extends PanelContainer:
 				l.add_theme_color_override("font_color", Color(0.88, 0.92, 0.96))
 				_box.add_child(l)
 		reset_size()
+		return l
+
+class TermCard extends PanelContainer:
+	const WIDTH := 1080.0
+	var _lines: VBoxContainer
+	var _title: Label
+	var _mono: SystemFont
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		custom_minimum_size.x = WIDTH
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0.03, 0.035, 0.045, 0.98)
+		sb.set_corner_radius_all(12)
+		sb.border_color = Color(0.35, 0.4, 0.48)
+		sb.set_border_width_all(2)
+		sb.shadow_color = Color(0, 0, 0, 0.6)
+		sb.shadow_size = 26
+		sb.content_margin_left = 22
+		sb.content_margin_right = 22
+		sb.content_margin_top = 14
+		sb.content_margin_bottom = 20
+		add_theme_stylebox_override("panel", sb)
+		_mono = SystemFont.new()
+		_mono.font_names = PackedStringArray(["Cascadia Mono", "Consolas", "Courier New", "monospace"])
+		var col := VBoxContainer.new()
+		col.add_theme_constant_override("separation", 10)
+		add_child(col)
+		_title = Label.new()
+		_title.add_theme_font_size_override("font_size", 19)
+		_title.add_theme_color_override("font_color", Color(0.62, 0.66, 0.72))
+		col.add_child(_title)
+		col.add_child(HSeparator.new())
+		_lines = VBoxContainer.new()
+		_lines.add_theme_constant_override("separation", 8)
+		col.add_child(_lines)
+
+	func reset(title: String) -> void:
+		_title.text = "●●●   " + title
+		for c in _lines.get_children():
+			c.queue_free()
+		reset_size()
+
+	func add_line(text: String, dim: bool) -> RichTextLabel:
+		var l := RichTextLabel.new()
+		l.bbcode_enabled = false
+		l.fit_content = true
+		l.scroll_active = false
+		l.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
+		l.custom_minimum_size.x = WIDTH - 44.0
+		l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		l.add_theme_font_override("normal_font", _mono)
+		l.add_theme_font_size_override("normal_font_size", 24)
+		l.add_theme_color_override("default_color", Color(0.62, 0.66, 0.72) if dim else Color(0.86, 0.95, 0.88))
+		l.text = text
+		_lines.add_child(l)
 		return l

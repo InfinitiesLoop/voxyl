@@ -1,0 +1,28 @@
+# Home screen and importing blocks (vanilla Minecraft, then a GTNH modpack).
+
+[home]
+This is home base: projects, palettes, prefabs, and libraries. Libraries first, because that's where your blocks live.
+
+[empty]
+It's empty right now, so let's fill it. Hit Add blocks.
+
+[vanilla]
+Point it at your own game files. Here's a Minecraft 1.21 jar. voxyl reads the models and textures straight from your install, and never ships any Minecraft content of its own.
+
+[search]
+Search for what you want, and import.
+
+[vanilla_done]
+And there they are. Each mod gets its own library.
+
+[gtnh]
+Playing a modpack? voxyl speaks NEI. In game, open NEI, then Options, Tools, Data Dumps. Dump the items, and the item panel in CSV mode.
+
+[gtnh_pick]
+Then choose the NEI roster format and point voxyl at your instance. Nearly nineteen thousand blocks, found.
+
+[gtnh_import]
+Add a prefix like G T N H to keep things tidy, search for Korp, and import.
+
+[done]
+Libraries, sorted by mod, ready for any palette.

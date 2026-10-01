@@ -1,0 +1,19 @@
+# Views, and flying around.
+
+[intro]
+Every build can have as many views as you like, and they're all live.
+
+[slice]
+Press Tab to slice through it. Tab again cycles the axis, W and S slide the plane, and Enter opens it as a flat 2D view, right beside the 3D one.
+
+[edit]
+Paint in the slice, and the 3D view changes right along with it. One build, many lenses.
+
+[layers]
+Step through the layers with the arrows, and turn the slice to taste.
+
+[fly]
+Back in 3D, click to fly. W, A, S and D to move, Space to rise, Shift to sink. Tap Control while you move to sprint, and Escape to let go.
+
+[end]
+Same build, whichever way you want to look at it.

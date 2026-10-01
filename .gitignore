@@ -36,3 +36,6 @@ builds/
 /quickstart/out/*
 !/quickstart/out/.gdignore
 /override.cfg
+
+__pycache__/
+*.pyc

@@ -37,6 +37,7 @@ var _last_px := Vector2.ZERO
 var _mask := 0
 var _bend := 1.0
 var _world: Node
+var _orbit_gen := 0
 var _mcp: Node
 
 func setup(p_main: Control, p_fx: Fx, p_out: String, p_chapter: String, p_burn: bool) -> void:
@@ -183,10 +184,27 @@ func finish() -> void:
 # --- Finding things ----------------------------------------------------------------
 
 func ctl(query: Variant) -> Control:
-	return Ui.find(main, query)
+	return Ui.find(get_tree().root, query)
+
+# First visible node anywhere on screen whose script has this global class name ("ImportPanel").
+func node_of_class(global_name: String) -> Node:
+	var stack: Array[Node] = [get_tree().root]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		if n.name == &"QuickstartFx" or n is SubViewport:
+			continue
+		var sc := n.get_script() as Script
+		if sc != null and sc.get_global_name() == global_name:
+			if not (n is Control) or (n as Control).is_visible_in_tree():
+				return n
+		stack.append_array(n.get_children(true))
+	return null
+
+func ctl_all(query: Variant) -> Array:
+	return Ui.find_all(get_tree().root, query)
 
 func rect_of(target: Variant) -> Rect2:
-	return Ui.rect_of(main, target)
+	return Ui.rect_of(get_tree().root, target)
 
 func view3d() -> Control:
 	var shell: Node = main.get_node("Editor/VBoxContainer/ContentArea/ViewShell")
@@ -201,7 +219,7 @@ func view3d() -> Control:
 # --- Pointer & mouse ---------------------------------------------------------------
 
 func move_to(target: Variant, dur := -1.0) -> void:
-	await _glide(Ui.center_of(main, target), dur)
+	await _glide(Ui.center_of(get_tree().root, target), dur)
 
 func click(target: Variant, button := MOUSE_BUTTON_LEFT) -> void:
 	await move_to(target)
@@ -269,6 +287,37 @@ func _button(idx: int, down: bool, at_center := false) -> void:
 
 func hide_pointer() -> void:
 	fx.hide_pointer()
+
+# Open an OptionButton's list, glide to the entry and choose it (the click on the entry is shown,
+# the selection made directly, since popup entries aren't controls we can target).
+func pick_option(button: OptionButton, index: int) -> void:
+	await click(button)
+	await wait(0.35)
+	var popup := button.get_popup()
+	var item_h := float(popup.size.y) / float(maxi(popup.item_count, 1))
+	var spot := Vector2(popup.position) + Vector2(60.0, item_h * (index + 0.5))
+	await move_to(spot)
+	await wait(0.2)
+	fx.set_pressed(true)
+	fx.click_fx()
+	await wait(0.1)
+	fx.set_pressed(false)
+	button.select(index)
+	button.item_selected.emit(index)
+	popup.hide()
+	await wait(0.3)
+
+# A click that only looks like one: the pointer glides, presses and ripples, but no event is sent.
+# For things the app would answer with an OS window the recording can't see (native file pickers) --
+# the chapter then makes the same change itself.
+func show_click(target: Variant) -> void:
+	await move_to(target)
+	await wait(0.14)
+	fx.set_pressed(true)
+	fx.click_fx()
+	await wait(0.09)
+	fx.set_pressed(false)
+	await wait(0.2)
 
 # The pointer reappears where the captured mouse was released: the middle of the window.
 func pointer_to_center() -> void:
@@ -361,6 +410,45 @@ func card(text: String, hold := 2.4) -> void:
 func keys_hud(on: bool) -> void:
 	fx.show_keys(on)
 
+# Flash a picture from quickstart/assets/ over the app for a few seconds.
+func flash_image(file_name: String, height := 760.0, hold := 3.0) -> void:
+	var path := ProjectSettings.globalize_path("res://quickstart/assets/%s" % file_name)
+	var img := Image.load_from_file(path)
+	if img == null:
+		push_error("quickstart: can't read %s" % path)
+		return
+	await fx.show_image(ImageTexture.create_from_image(img), height, hold)
+
+# Intro / outro title over the picture, and a numbered-steps card.
+func title_card(title: String, subtitle: String, hold := 2.5) -> void:
+	await fx.show_title(title, subtitle, hold)
+
+func steps_card(heading: String, steps: Array, step_delay := 1.0, hold := 1.5) -> void:
+	await fx.show_steps(heading, steps, step_delay, hold)
+
+# A terminal window over the app: terminal_open("Terminal"), terminal_type("cmd"), terminal_print("out"), terminal_close().
+func terminal_open(title := "Terminal") -> void:
+	await fx.term_open(title)
+
+func terminal_type(command: String, cps := 55.0) -> void:
+	var l: RichTextLabel = fx.term_line("$ ")
+	for i in range(1, command.length() + 1):
+		l.text = "$ " + command.substr(0, i)
+		if i % 6 == 0:
+			await get_tree().process_frame     # let the wrapped height settle before resizing the card
+			fx.term_relayout()
+		await wait(1.0 / cps)
+	await get_tree().process_frame
+	fx.term_relayout()
+	await wait(0.5)
+
+func terminal_print(text: String) -> void:
+	fx.term_line(text, true)
+	await wait(0.4)
+
+func terminal_close() -> void:
+	await fx.term_close()
+
 # A tag above the caption: hint("LEFT-HANDED", "Delete also opens the inventory").
 func hint(tag: String, text: String, hold := 3.5) -> void:
 	fx.show_hint(tag, text, hold)
@@ -425,7 +513,14 @@ func set_fade(alpha: float) -> void:
 # Run an MCP tool exactly as an agent would — the staged "agent builds it" beats and quiet
 # set-up both go through the same registry the HTTP server uses.
 func agent(tool_name: String, args := {}) -> Variant:
+	var badge: bool = _mcp.is_listening()
+	if badge:
+		_mcp.set("_calls_in_flight", int(_mcp.get("_calls_in_flight")) + 1)
+		_mcp.call_started.emit(tool_name)
 	var r: Variant = await _mcp.registry.call_tool(tool_name, args)
+	if badge:
+		_mcp.set("_calls_in_flight", maxi(int(_mcp.get("_calls_in_flight")) - 1, 0))
+		_mcp.call_finished.emit(tool_name)
 	if r is Dictionary and (r as Dictionary).has("__error"):
 		push_error("quickstart: %s failed: %s" % [tool_name, str(r["__error"])])
 	return r
@@ -434,6 +529,22 @@ func agent(tool_name: String, args := {}) -> Variant:
 func settle(frames := 6) -> void:
 	for i in frames:
 		await get_tree().process_frame
+
+# The visible 2D slice view, or null.
+func slice_view() -> Control:
+	var shell: Node = main.get_node("Editor/VBoxContainer/ContentArea/ViewShell")
+	for v in shell.call("all_views"):
+		if str(v.call("view_kind")) == "slice" and (v as Control).is_visible_in_tree():
+			return v
+	return null
+
+# Where a world cell's centre sits on screen in a 2D slice view (logical px).
+func slice_cell_screen(view: Control, cell: Vector3i) -> Vector2:
+	var hv: Vector2i = view.call("_world_to_grid", cell)
+	var area := view.get_node("GridArea") as Control
+	var origin: Vector2 = view.call("_draw_origin")
+	var px: float = view.get("_cell_px")
+	return Ui.global_rect(area).position + origin + (Vector2(hv) + Vector2(0.5, 0.5)) * px
 
 # Where a world-space point lands on screen (logical px) in the 3D view.
 func world_to_screen(world: Vector3) -> Vector2:
@@ -523,6 +634,21 @@ func ancestor_of(node: Node, class_name_: String) -> Control:
 			return n as Control
 		n = n.get_parent()
 	return null
+
+# Circle the camera around `center` (radius on the ground, `height` above it), bearing in degrees.
+func orbit(center: Vector3, radius: float, height: float, from_deg: float, to_deg: float, dur: float) -> void:
+	var v := view3d()
+	var t0 := t
+	_orbit_gen += 1
+	var mine := _orbit_gen          # a newer orbit takes over the camera
+	while t < t0 + dur:
+		if mine != _orbit_gen:
+			return
+		var a := deg_to_rad(lerpf(from_deg, to_deg, clampf((t - t0) / dur, 0.0, 1.0)))
+		v.call("set_camera_pose", center + Vector3(sin(a) * radius, height, cos(a) * radius), center)
+		await get_tree().process_frame
+	var b := deg_to_rad(to_deg)
+	v.call("set_camera_pose", center + Vector3(sin(b) * radius, height, cos(b) * radius), center)
 
 # Move the camera along its look direction (negative = back away), smoothly.
 func dolly(dist: float, dur := 1.0) -> void:

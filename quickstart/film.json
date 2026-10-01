@@ -1,0 +1,13 @@
+{
+  "title": "voxyl quickstart",
+  "chapters": [
+    {"id": "intro",     "title": "Welcome and install"},
+    {"id": "imports",   "title": "Home screen and importing blocks"},
+    {"id": "palettes",  "title": "Semantic blocks and palettes"},
+    {"id": "views",     "title": "Views and flying around"},
+    {"id": "selection", "title": "The selection tool"},
+    {"id": "prefabs",   "title": "Prefabs"},
+    {"id": "agent",     "title": "Connecting an AI agent"},
+    {"id": "outro",     "title": "Go make something"}
+  ]
+}

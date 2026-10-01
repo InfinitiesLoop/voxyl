@@ -32,7 +32,7 @@ static func _walk(n: Node, query: Variant, exact: Array, loose: Array) -> void:
 			match _score(c, query):
 				2: exact.append(c)
 				1: loose.append(c)
-	for ch in n.get_children():
+	for ch in n.get_children(true):      # internal ones too: a dialog's OK / Cancel buttons
 		_walk(ch, query, exact, loose)
 
 # 2 = exact match, 1 = partial, 0 = none.
@@ -90,17 +90,52 @@ static func _strip_glyph(s: String) -> String:
 		return " ".join(parts.slice(1))
 	return s
 
+# The rect of a tab in any TabContainer / TabBar on screen, by title: {"tab": "Libraries"}.
+static func find_tab(root: Node, title: String) -> Rect2:
+	var want := _norm(title)
+	var stack: Array[Node] = [root]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		if n.name == &"QuickstartFx" or n is SubViewport:
+			continue
+		var bar: TabBar = null
+		if n is TabContainer:
+			bar = (n as TabContainer).get_tab_bar()
+		elif n is TabBar:
+			bar = n as TabBar
+		if bar != null and bar.is_visible_in_tree():
+			for i in bar.tab_count:
+				if _norm(bar.get_tab_title(i)) == want:
+					var r := bar.get_tab_rect(i)
+					return Rect2(bar.get_global_rect().position + r.position, r.size)
+		stack.append_array(n.get_children(true))
+	return Rect2()
+
+# A control's rect in the main canvas, also for controls inside an embedded window (whose own
+# coordinates start at the window's client area).
+static func global_rect(c: Control) -> Rect2:
+	var r := c.get_global_rect()
+	var w := c.get_window()
+	if w != null and w != c.get_tree().root and w.is_embedded():
+		r.position += Vector2(w.position)
+	return r
+
 # Logical-px rect for a Control, Rect2, Vector2 (a point), or query.
 static func rect_of(root: Node, target: Variant) -> Rect2:
 	if target is Rect2:
 		return target
+	if target is Dictionary and (target as Dictionary).has("tab"):
+		var tab_rect := find_tab(root, str((target as Dictionary)["tab"]))
+		if tab_rect.size == Vector2.ZERO:
+			push_error("quickstart: no tab titled %s" % str(target["tab"]))
+		return tab_rect
 	if target is Vector2:
 		return Rect2(target, Vector2.ZERO)
 	var c: Control = target as Control if target is Control else find(root, target)
 	if c == null:
 		push_error("quickstart: nothing on screen matches %s" % str(target))
 		return Rect2()
-	return c.get_global_rect()
+	return global_rect(c)
 
 static func center_of(root: Node, target: Variant) -> Vector2:
 	var r := rect_of(root, target)

@@ -1,0 +1,100 @@
+extends RefCounted
+# quickstart: library=real seed=demo
+
+# Chapter: semantic blocks and palettes, on the demo Conduit Pillar. The alternate palettes are made
+# off camera with the same tools an agent would use; on camera the viewer adds them to the project.
+
+const PILLAR := Vector3(0.0, 9.0, 0.0)
+const SANDSTONE := {"Core": "cut_sandstone", "Mass": "sandstone", "Joint": "chiseled_sandstone",
+	"Corbel Step": "smooth_sandstone", "Corner Rod": "gold_block", "Collar": "smooth_sandstone",
+	"Plinth Chamfer": "smooth_sandstone", "Plinth Corner": "smooth_sandstone", "Channel Edge": "quartz_block",
+	"Channel Sill": "quartz_block", "Channel Glow": "glowstone", "Beam Flange": "cut_sandstone"}
+const COPPER := {"Core": "weathered_cut_copper", "Mass": "weathered_copper", "Joint": "copper_grate",
+	"Corbel Step": "cut_copper", "Corner Rod": "copper_block", "Collar": "cut_copper",
+	"Plinth Chamfer": "oxidized_cut_copper", "Plinth Corner": "oxidized_cut_copper", "Channel Edge": "copper_block",
+	"Channel Sill": "exposed_copper", "Channel Glow": "sea_lantern", "Beam Flange": "oxidized_copper"}
+
+func _make_palette(d, palette_name: String, mapping: Dictionary) -> void:
+	await d.agent("palette_create", {"name": palette_name, "from": "Conduit Pillar"})
+	var sets := []
+	for sem in mapping:
+		sets.append({"semantic": sem, "block": mapping[sem]})
+	await d.agent("palette_update", {"name": palette_name, "libraries": ["minecraft"], "set": sets})
+
+# Add a palette to the open project through the inventory, then close it again.
+func _add_palette(d, palette_name: String) -> void:
+	await d.press(KEY_E)
+	await d.wait(0.5)
+	var picker: OptionButton = d.ctl(func(c): return c is OptionButton and d.ancestor_of(c, "InventoryScreen") != null)
+	var index := -1
+	for i in picker.item_count:
+		if picker.get_item_text(i) == palette_name:
+			index = i
+	await d.pick_option(picker, index)
+	var plus: Control = d.ctl(func(c): return c is Button and (c as Button).text == "+" and c.get_parent() == picker.get_parent())
+	await d.click(plus)
+	await d.wait(0.8)
+	await d.press(KEY_E)
+	d.hide_pointer()
+
+func run(d) -> void:
+	d.set_fade(1.0)
+	await d.settle(10)
+	await _make_palette(d, "Warm Sandstone", SANDSTONE)
+	await _make_palette(d, "Oxidized Copper", COPPER)
+	await d.agent("project_open", {"name": "Conduit Pillar"})
+	await d.agent("selection_clear")
+	await d.settle(30)
+	var view = d.view3d()
+	view.call("set_camera_pose", Vector3(0.0, 13.0, 23.0), PILLAR)
+	await d.settle(20)
+	d.mark("start")
+	d.card("Palettes")
+	await d.fade_in(0.7)
+
+	# --- semantic blocks: the hotbar ----------------------------------------------
+	d.say("hotbar")
+	d.orbit(PILLAR, 23.0, 11.0, 0.0, 70.0, 6.0)     # runs alongside the narration
+	await d.wait(1.5)
+	var hotbar = d.node_of_class("Hotbar")
+	await d.spotlight(hotbar, 10.0)
+	await d.sync()
+	await d.spotlight_off()
+	d.say("meaning")
+	await d.sync()
+
+	# --- the palette: what each meaning looks like -------------------------------
+	d.say("palette")
+	await d.click({"text": "← Home"})
+	await d.click({"tab": "Palettes"})
+	await d.click({"text": "Conduit Pillar"})
+	await d.wait(0.5)
+	await d.click({"text": "Edit", "class": "Button"})
+	await d.wait(0.6)
+	await d.click({"tooltip": "Channel Glow"})
+	await d.wait(0.8)
+	await d.sync()
+	await d.click({"text": "← Back"})
+	await d.click({"tab": "Projects"})
+	await d.click({"text": "Conduit Pillar"})
+	await d.click({"text": "Open", "class": "Button"})
+	await d.wait(1.0)
+	d.hide_pointer()
+	view = d.view3d()
+	view.call("set_camera_pose", Vector3(17.0, 11.0, 17.0), PILLAR)
+
+	# --- the swap -----------------------------------------------------------------
+	d.say("swap")
+	await _add_palette(d, "Warm Sandstone")
+	await d.sync()
+	d.say("swap_result")
+	await d.orbit(PILLAR, 23.0, 11.0, 45.0, 100.0, 4.5)
+	await d.sync()
+	d.say("swap2")
+	await _add_palette(d, "Oxidized Copper")
+	await d.orbit(PILLAR, 23.0, 11.0, 100.0, 150.0, 4.0)
+	await d.sync()
+	d.say("principle")
+	await d.orbit(PILLAR, 23.0, 11.0, 150.0, 200.0, 4.5)
+	await d.sync()
+	await d.fade_out(0.9)

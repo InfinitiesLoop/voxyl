@@ -1,0 +1,10 @@
+# Opening: the pitch and the install.
+
+[hook]
+This is voxyl: a voxel editor for builders who'd rather design first, and choose materials later.
+
+[install]
+Getting started takes about a minute. Download the latest release, unzip it anywhere, and run voxyl.
+
+[open]
+That's it. Welcome home.

@@ -52,8 +52,8 @@ func _boot() -> void:
 	director.setup(main, fx, out_dir, chapter, not args.has("no-captions"))
 
 	var script := load("res://quickstart/chapters/%s.gd" % chapter) as GDScript
-	if script == null:
-		push_error("quickstart: no chapter script for '%s'" % chapter)
+	if script == null or not script.can_instantiate():
+		push_error("quickstart: chapter '%s' is missing or doesn't compile" % chapter)
 		quit(1)
 		return
 	_play.call_deferred(director, script.new())

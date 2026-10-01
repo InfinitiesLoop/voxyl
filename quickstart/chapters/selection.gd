@@ -54,13 +54,11 @@ func run(d) -> void:
 	var v: Control = d.view3d()
 	await d.click(v.get_global_rect().get_center())
 	d.hide_pointer()
-	d.keys_hud(true)
 	await d.wait(0.5)
 	await d.hold_keys([KEY_W], 1.0)
 	await d.hold_keys([KEY_SPACE], 0.25)
 	await d.hold_keys([KEY_SHIFT], 0.35)
 	await d.sync()
-	d.keys_hud(false)
 
 	# --- 2. pick the tool ---------------------------------------------------------
 	d.say("tool")

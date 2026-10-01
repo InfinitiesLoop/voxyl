@@ -1,0 +1,16 @@
+# Prefabs: save a region once, place it anywhere.
+
+[intro]
+Built something worth reusing? Save it as a prefab.
+
+[save]
+Select it, press Control P, give it a name and a few tags. The preview shows exactly what you're keeping, and you can untick any semantic to leave it out.
+
+[home]
+Prefabs live in your own library, and they're shown through the palettes they were made with.
+
+[place]
+To place one, open the inventory, pick it, and aim. It follows your crosshair. R rotates it, and right-click drops it.
+
+[repeat]
+Fly over, and do it again. A whole factory floor in a few clicks.

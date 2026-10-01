@@ -23,6 +23,12 @@ import sys
 import time
 from pathlib import Path
 
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 ROOT = Path(__file__).resolve().parent.parent          # quickstart/
 PROJECT = ROOT.parent                                  # the Godot project
 CHAPTERS = ROOT / "chapters"
@@ -102,7 +108,7 @@ def spoken(text: str, lexicon: list) -> str:
     return text
 
 
-def cmd_narrate(chapter: str, voice: str, speed: float):
+def cmd_narrate(chapter: str, voice: str, speed: float, engine: str = "kokoro", instructions: str = ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import tts
 
@@ -112,17 +118,18 @@ def cmd_narrate(chapter: str, voice: str, speed: float):
     meta_path = out / "narration.json"
     old = json.loads(meta_path.read_text()) if meta_path.exists() else {"lines": {}}
     lexicon = load_lexicon()
-    result = {"voice": voice, "speed": speed, "lines": {}}
+    voice = voice or tts.DEFAULT_VOICE[engine]
+    result = {"engine": engine, "voice": voice, "speed": speed, "lines": {}}
     for lid, text in parse_narration(chapter).items():
         said = spoken(text, lexicon)
-        key = hashlib.sha1(f"{voice}|{speed}|{said}".encode()).hexdigest()[:12]
+        key = hashlib.sha1(f"{engine}|{voice}|{speed}|{instructions}|{said}".encode()).hexdigest()[:12]
         prev = old.get("lines", {}).get(lid)
         wav = wav_dir / f"{lid}.wav"
         if prev and prev.get("key") == key and wav.exists():
             result["lines"][lid] = prev
             print(f"  = {lid} (cached, {prev['duration']:.1f}s)")
             continue
-        dur = tts.synth_to_wav(said, wav, voice=voice, speed=speed)
+        dur = tts.synth_to_wav(said, wav, voice=voice, speed=speed, engine=engine, instructions=instructions)
         result["lines"][lid] = {"key": key, "duration": dur, "wav": str(wav)}
         print(f"  + {lid}: {dur:.1f}s")
     meta_path.write_text(json.dumps(result, indent=2))
@@ -238,7 +245,7 @@ def cmd_encode(chapter: str, size: str, crf: int):
         parts.append(f"[{i}:a]adelay={ms}|{ms},aresample=48000[a{i}]")
     if says:
         mix = "".join(f"[a{i}]" for i in range(1, len(says) + 1))
-        parts.append(f"{mix}amix=inputs={len(says)}:normalize=0:dropout_transition=0,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000,aformat=channel_layouts=stereo[aout]")
+        parts.append(f"{mix}amix=inputs={len(says)}:normalize=0:dropout_transition=0,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000,aformat=channel_layouts=stereo,apad[aout]")
     parts.append(f"[0:v]scale={w}:{h}:flags=lanczos,format=yuv420p[vout]")
     script = out / "filter.txt"
     script.write_text(";\n".join(parts))
@@ -265,23 +272,106 @@ def cmd_stills(chapter: str, at: str):
         print("  ->", dest)
 
 
+# --- the whole film ----------------------------------------------------------------
+
+def probe_duration(path: Path) -> float:
+    out = subprocess.run([find_ffmpeg("ffprobe"), "-v", "error", "-show_entries", "format=duration",
+                          "-of", "default=nw=1:nk=1", str(path)], capture_output=True, text=True, check=True)
+    return float(out.stdout.strip())
+
+
+def parse_srt(path: Path):
+    cues = []
+    for block in path.read_text(encoding="utf-8").strip().split("\n\n"):
+        lines = block.strip().splitlines()
+        if len(lines) >= 3:
+            a, b = [x.strip() for x in lines[1].split("-->")]
+            cues.append((to_sec(a), to_sec(b), "\n".join(lines[2:])))
+    return cues
+
+
+def to_sec(ts: str) -> float:
+    h, m, rest = ts.replace(",", ".").split(":")
+    return int(h) * 3600 + int(m) * 60 + float(rest)
+
+
+def clock(sec: float) -> str:
+    sec = int(round(sec))
+    return f"{sec // 60}:{sec % 60:02d}"
+
+
+def cmd_assemble(name: str, only):
+    """Join the encoded chapters (film.json order) into out/<name>/<name>.mp4 with merged
+    captions and a YouTube chapter list."""
+    film = json.loads((ROOT / "film.json").read_text())
+    chapters = [c for c in film["chapters"] if not only or c["id"] in only]
+    out = ROOT / "out" / name
+    out.mkdir(parents=True, exist_ok=True)
+    lines, cues, listing, at = [], [], [], 0.0
+    for c in chapters:
+        mp4 = ROOT / "out" / c["id"] / f"{c['id']}.mp4"
+        if not mp4.exists():
+            sys.exit(f"missing {mp4}: run `make.py all {c['id']}` first")
+        dur = probe_duration(mp4)
+        lines.append(f"file '{mp4.as_posix()}'")
+        listing.append(f"{clock(at)} {c['title']}")
+        srt = ROOT / "out" / c["id"] / f"{c['id']}.srt"
+        if srt.exists():
+            cues += [(a + at, b + at, t) for a, b, t in parse_srt(srt)]
+        at += dur
+    (out / "concat.txt").write_text("\n".join(lines) + "\n")
+    final = out / f"{name}.mp4"
+    run([find_ffmpeg(), "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", out / "concat.txt",
+         "-c", "copy", "-movflags", "+faststart", final])
+    srt_out, vtt_out = [], ["WEBVTT", ""]
+    for i, (a, b, t) in enumerate(cues, 1):
+        srt_out += [str(i), f"{srt_time(a)} --> {srt_time(b)}", t, ""]
+        vtt_out += [f"{srt_time(a, True)} --> {srt_time(b, True)}", t, ""]
+    (out / f"{name}.srt").write_text("\n".join(srt_out), encoding="utf-8")
+    (out / f"{name}.vtt").write_text("\n".join(vtt_out), encoding="utf-8")
+    (out / "chapters.txt").write_text("\n".join(listing) + "\n", encoding="utf-8")
+    print(f"  -> {final} ({final.stat().st_size / 1e6:.1f} MB, {clock(at)})")
+    print("  chapters:")
+    for entry in listing:
+        print("   " + entry)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["narrate", "render", "encode", "stills", "all"])
-    ap.add_argument("chapter")
-    ap.add_argument("--voice", default="af_heart")
+    ap.add_argument("command", choices=["narrate", "render", "encode", "stills", "all", "assemble", "film"])
+    ap.add_argument("chapter", help="a chapter id, or the film's name for assemble / film")
+    ap.add_argument("--only", default="", help="film / assemble: comma-separated chapter ids")
+    ap.add_argument("--engine", choices=["kokoro", "openai"], default="kokoro",
+                    help="voice engine: kokoro (local, free) or openai (needs OPENAI_API_KEY)")
+    ap.add_argument("--voice", default="", help="voice name (kokoro: af_heart; openai: marin, cedar, coral...)")
+    ap.add_argument("--instructions", default="", help="openai: how the voice should sound (default: playful, confident)")
     ap.add_argument("--speed", type=float, default=1.05)
     ap.add_argument("--size", default="1920x1080", help="recording size (the app lays out in a 1600x900 canvas and scales)")
     ap.add_argument("--out-size", default=None, help="final video size (default: same as --size)")
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--no-captions", action="store_true", help="don't burn captions in (SRT/VTT are written regardless)")
-    ap.add_argument("--timeout", type=int, default=1800)
+    ap.add_argument("--timeout", type=int, default=900, help="kill a render that runs longer than this many seconds")
     ap.add_argument("--crf", type=int, default=18)
     ap.add_argument("--at", default="1,5,10", help="stills: seconds after the start mark, comma separated")
     a = ap.parse_args()
 
+    only = [x for x in a.only.split(",") if x]
+    if a.command == "film":
+        film = json.loads((ROOT / "film.json").read_text())
+        for c in film["chapters"]:
+            if only and c["id"] not in only:
+                continue
+            print(f"== {c['id']}")
+            cmd_narrate(c["id"], a.voice, a.speed, a.engine, a.instructions)
+            cmd_render(c["id"], a.size, a.fps, not a.no_captions, a.timeout)
+            cmd_encode(c["id"], a.out_size or a.size, a.crf)
+        cmd_assemble(a.chapter, only)
+        return
+    if a.command == "assemble":
+        cmd_assemble(a.chapter, only)
+        return
     if a.command in ("narrate", "all"):
-        cmd_narrate(a.chapter, a.voice, a.speed)
+        cmd_narrate(a.chapter, a.voice, a.speed, a.engine, a.instructions)
     if a.command in ("render", "all"):
         cmd_render(a.chapter, a.size, a.fps, not a.no_captions, a.timeout)
     if a.command in ("encode", "all"):

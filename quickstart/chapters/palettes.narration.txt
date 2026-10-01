@@ -1,0 +1,22 @@
+# Semantic blocks and palettes: the core idea.
+
+[hotbar]
+Look at the hotbar. There's no stone in it, no planks. It's holding meanings: Core, Mass, Collar, Channel Glow. Semantic blocks.
+
+[meaning]
+You build with what a block is for, not what it's made of.
+
+[palette]
+A palette decides what each meaning looks like. In this one, Channel Glow is a glowing cyan slab.
+
+[swap]
+So watch this. Add a different palette to the project.
+
+[swap_result]
+Same voxels. Completely different build.
+
+[swap2]
+And another.
+
+[principle]
+Not a single voxel changed. Build first, decide later.

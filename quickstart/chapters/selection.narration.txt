@@ -6,7 +6,7 @@
 Selection is the tool you'll reach for all day. And it does a lot more than draw a box.
 
 [fly]
-Click into the view to take off. W, A, S and D to move, Space to rise, Shift to sink.
+Click into the view and you're flying. Let's rise up for a better angle.
 
 [tool]
 Press E for your inventory, then pick the Select tool.
