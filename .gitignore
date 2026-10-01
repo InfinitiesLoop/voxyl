@@ -26,3 +26,13 @@ mono_crash.*.json
 
 # Export builds (see export_presets.cfg)
 builds/
+
+# Quickstart video pipeline: local venv, downloaded voice model, rendered output
+# (each keeps its .gdignore so Godot never tries to import them)
+/quickstart/.venv/*
+!/quickstart/.venv/.gdignore
+/quickstart/.cache/*
+!/quickstart/.cache/.gdignore
+/quickstart/out/*
+!/quickstart/out/.gdignore
+/override.cfg

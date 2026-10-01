@@ -1,0 +1,2 @@
+# How the voice should say things (caption text keeps the real spelling). "word = spoken form"
+voxyl = vox-ill

@@ -1,0 +1,23 @@
+# Selection tool — spike chapter. One "[id] line" per spoken beat; blank line ends a beat.
+# The same text becomes the voice-over, the burned-in captions and the SRT.
+
+[intro]
+The selection tool is the one you'll reach for all day. Let's grab a piece of this build.
+
+[fly]
+Click into the view to take off. W, A, S and D to move, Space to rise, Shift to drop.
+
+[tool]
+Press E to open your inventory, and pick the Select tool.
+
+[corners]
+Now right-click two opposite corners. That's it. A box!
+
+[panel]
+Middle-click, and voxyl tells you exactly what's inside.
+
+[blocks]
+By meaning, or by the actual blocks you'd need to go and gather.
+
+[outro]
+Cut it. Copy it. Save it as a prefab. All from that one box.
