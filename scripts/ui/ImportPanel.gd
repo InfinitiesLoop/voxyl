@@ -468,18 +468,29 @@ func _import() -> void:
 	_import_btn.disabled = _list.item_count == 0
 	var touched := _service.touched_library_names()
 	await dlg.dismissed
+	# Before telling the opener (which refreshes its library list): a split import leaves the
+	# placeholder target ("imported") empty, and it shouldn't show up in that refresh.
+	_drop_unused_libraries()
 	import_finished.emit(touched)
 	_close()
 
 func _close() -> void:
 	if _service != null:
 		_service.close()
-	# Drop any library this panel eagerly created (just by picking/typing a name or
-	# browsing a source) that never actually received an import — otherwise a
-	# canceled/failed import leaves a visible, empty library behind.
+	_drop_unused_libraries()
+	queue_free()
+
+# Drop any library this panel eagerly created (just by picking/typing a name or
+# browsing a source) that never actually received an import — otherwise a
+# canceled/failed import leaves a visible, empty library behind.
+func _drop_unused_libraries() -> void:
+	var dropped := false
 	for lib_name in _created_library_names:
 		var lib := VoxelWorld.workspace.get_library(lib_name)
 		if lib != null and lib.block_types.is_empty() and lib.block_models.is_empty() \
 				and lib.texture_assets.is_empty():
 			VoxelWorld.workspace.remove_library(lib_name)
-	queue_free()
+			dropped = true
+	_created_library_names.clear()
+	if dropped:
+		VoxelWorld.workspace_changed.emit()
