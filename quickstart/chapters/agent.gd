@@ -39,7 +39,6 @@ func run(d) -> void:
 	await d.settle(20)
 	var data: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(BUILD))
 	d.mark("start")
-	d.card("Agent setup")
 	await d.fade_in(0.7)
 
 	# --- settings -----------------------------------------------------------------

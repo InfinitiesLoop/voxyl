@@ -134,6 +134,27 @@ func line_timing(id: String) -> Dictionary:
 			return {"start": e["start"], "end": e["end"]}
 	return {"start": t, "end": t}
 
+# Wait until the video clock reaches `at` (seconds).
+func wait_until(at: float) -> void:
+	while t < at:
+		await get_tree().process_frame
+
+# Wait until the voice has (about) reached the end of `phrase` in line `id`, so an action lands on the words
+# that name it. Time is estimated from character counts, exactly as the captions are cut: it tracks the
+# captions, which is what the viewer is reading. `lead` finishes it earlier (seconds).
+func wait_for(id: String, phrase: String, lead := 0.0) -> void:
+	if not _narration.has(id):
+		push_error("quickstart: no narration line [%s]" % id)
+		return
+	var text: String = _narration[id]["text"]
+	var at := text.find(phrase)
+	if at < 0:
+		push_error("quickstart: [%s] doesn't contain '%s'" % [id, phrase])
+		return
+	var span := line_timing(id)
+	var frac := float(at + phrase.length()) / float(maxi(text.length(), 1))
+	await wait_until(float(span["start"]) + (float(span["end"]) - float(span["start"])) * frac - lead)
+
 # Wait until everything queued has been spoken.
 func sync() -> void:
 	while t < _speech_end:
@@ -746,6 +767,12 @@ func orbit(center: Vector3, radius: float, height: float, from_deg: float, to_de
 		await get_tree().process_frame
 	var b := deg_to_rad(to_deg)
 	v.call("set_camera_pose", center + Vector3(sin(b) * radius, height, cos(b) * radius), center)
+
+# Put the camera on the first frame of an orbit, so a scene can fade in already on its path (no jump when
+# the orbit starts).
+func orbit_pose(center: Vector3, radius: float, height: float, deg: float) -> void:
+	var a := deg_to_rad(deg)
+	view3d().call("set_camera_pose", center + Vector3(sin(a) * radius, height, cos(a) * radius), center)
 
 # Move the camera along its look direction (negative = back away), smoothly.
 func dolly(dist: float, dur := 1.0) -> void:

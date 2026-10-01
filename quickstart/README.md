@@ -70,7 +70,8 @@ draw it over the burned-in captions. Pass `--no-captions` to a render for a clea
 
 **Music:** `make.py assemble quickstart --music quickstart/assets/music/bed.wav` mixes a bed under the whole
 film (-20 dB, faded in and out, and ducked while the voice speaks; `--music-db`, `--no-duck`). `pipeline/music.py`
-generates an original bed (no licensing); any audio file works too.
+generates an original bed (no licensing): `--style chill` (chillstep, 140 bpm half-time, the default), `upbeat` or
+`calm`; any audio file works too.
 
 **Voice:** `--engine kokoro` (local, the default) or `--engine openai` (needs `OPENAI_API_KEY`).
 In a narration line, `*word*` adds emphasis, and `{caption|spoken}` respells one word for the voice only
@@ -96,6 +97,7 @@ await d.click(btn)                             # the pointer glides there and re
 await d.show_click(btn)                        # looks like a click, sends nothing (OS file pickers)
 await d.pick_option(option_button, 1)          # open a dropdown and choose an entry
 await d.zoom_to(panel); await d.zoom_out()
+await d.wait_for("slice", "press Tab")        # wait until the voice reaches those words (estimated from the captions' timing)
 await d.hint("LEFT-HANDED", "Delete opens the inventory too")   # a tag above the caption
 await d.chat_user("..."); await d.chat_tool("selection_filter", "...", func(): ...)   # the staged agent
 await d.terminal_open(); await d.terminal_type("claude mcp add ..."); await d.title_card("voxyl", "...")

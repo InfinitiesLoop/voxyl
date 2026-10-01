@@ -22,7 +22,7 @@ Playing a modpack? voxyl speaks NEI.
 In game, open NEI, then Options, Tools, Data Dumps. Dump the items, the blocks, and the item panel.
 
 [gtnh_pick]
-Then point voxyl at your instance. Nearly nineteen thousand blocks, found.
+Then point voxyl at your instance.
 
 [gtnh_import]
 Add a prefix like G T N H to keep things tidy, then import everything, or search for something specific.

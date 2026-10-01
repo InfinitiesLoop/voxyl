@@ -6,17 +6,6 @@ extends RefCounted
 
 const PILLAR := Vector3(0.0, 9.0, 0.0)
 
-# The fine-tune panel's X/Y/Z rows: the "+" button of the row ("-", value, "+").
-func _axis_button(d, axis: String, _idx: int) -> Control:
-	var label: Control = d.ctl({"text": axis + ":", "class": "Label"})
-	if label == null:
-		return null
-	var buttons := []
-	for c in label.get_parent().get_children():
-		if c is Button:
-			buttons.append(c)
-	return buttons[1] if buttons.size() >= 2 else null
-
 func run(d) -> void:
 	d.set_fade(1.0)
 	await d.settle(10)
@@ -27,7 +16,6 @@ func run(d) -> void:
 	await d.agent("selection_set", {"region": {"min": [-8, 13, -8], "max": [8, 17, 8]}})
 	await d.settle(20)
 	d.mark("start")
-	d.card("Prefabs")
 	await d.fade_in(0.7)
 
 	# --- save a selection as a prefab ---------------------------------------------
@@ -85,7 +73,7 @@ func run(d) -> void:
 	await d.agent("project_create", {"name": "Factory Floor", "palettes": ["Conduit Pillar"]})
 	await d.settle(30)
 	view = d.view3d()
-	view.call("set_camera_pose", Vector3(-14.0, 11.0, 18.0), Vector3(-14.0, 0.0, -2.0))
+	view.call("set_camera_pose", Vector3(-12.0, 4.0, 22.0), Vector3(-14.0, 6.0, -2.0))    # low and back: the view centres on the pillar's foot, so a whole pillar only fits from near ground level
 	await d.settle(10)
 	d.say("place")
 	var v: Control = d.view3d()
@@ -99,29 +87,15 @@ func run(d) -> void:
 	await d.click({"tooltip": "Conduit Pillar"})
 	d.hide_pointer()
 	await d.wait(0.7)
-	await d.aim_at_point(Vector3(-17.5, 0.0, -4.5), 0.9)
-	await d.press(KEY_R)
-	await d.wait(0.5)
-	await d.click_crosshair(MOUSE_BUTTON_LEFT)               # lock it where it is
-	await d.wait(0.5)
-	await d.click_crosshair(MOUSE_BUTTON_MIDDLE)             # fine-tune panel
-	d.pointer_to_center()
-	await d.wait(0.5)
-	var plus_x: Control = _axis_button(d, "X", 3)
-	if plus_x != null:
-		await d.click(plus_x)
-		await d.click(plus_x)
-	await d.wait(0.3)
 	await d.sync()
+	# Just like pasting: three drops, no more detail than that.
 	d.say("repeat")
-	await d.click(v.get_global_rect().get_center())          # back to aiming: it's still locked, nudged over
-	d.hide_pointer()
-	await d.wait(0.5)
-	await d.click_crosshair(MOUSE_BUTTON_RIGHT)              # drop it
-	await d.wait(0.7)
-	for spot in [Vector3(8.5, 0.0, -4.5), Vector3(32.5, 0.0, -4.5)]:
-		await d.hold_keys([KEY_D], 1.1)
-		await d.aim_at_point(spot, 0.8)
+	var first := true
+	for spot in [Vector3(-17.5, 0.0, -4.5), Vector3(8.5, 0.0, -4.5), Vector3(32.5, 0.0, -4.5)]:
+		if not first:
+			await d.hold_keys([KEY_D], 1.3)
+		first = false
+		await d.aim_at_point(spot, 0.9)
 		await d.wait(0.4)
 		await d.click_crosshair(MOUSE_BUTTON_RIGHT)
 		await d.wait(0.6)

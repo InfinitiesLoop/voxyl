@@ -29,6 +29,17 @@ func _nudge(d, axis: String, button: int, shift := false) -> void:
 		d.key_up(KEY_SHIFT)
 	await d.wait(0.25)   # the panel rebuilds itself after a nudge
 
+# The paste panel's "+" button for an axis (its row is "-", value, "+": two buttons, unlike the selection panel's four).
+func _paste_plus(d, axis: String) -> Control:
+	for label in d.ctl_all({"text": axis + ":", "class": "Label"}):
+		var buttons := []
+		for c in label.get_parent().get_children():
+			if c is Button:
+				buttons.append(c)
+		if buttons.size() == 2:
+			return buttons[1]
+	return null
+
 # How many cells the selection covers right now (read from the app, so the agent's reply is true).
 func _selected(d) -> int:
 	return d.get_node("/root/VoxelWorld").selection_positions().size()
@@ -44,7 +55,6 @@ func run(d) -> void:
 	view.call("set_camera_pose", Vector3(22.0, 11.0, 22.0), PILLAR)
 	await d.settle(20)
 	d.mark("start")
-	d.card("Selection")
 	await d.fade_in(0.7)
 
 	# --- 1. take off --------------------------------------------------------------
@@ -136,19 +146,39 @@ func run(d) -> void:
 
 	# --- 7. copy, paste, delete, undo ---------------------------------------------
 	d.caption_at("bottom")
+	var box := v.get_global_rect()
+	await d.click(Vector2(box.position.x + box.size.x * 0.86, box.position.y + box.size.y * 0.5))   # back into the view (clear of the panel): it puts itself away
 	d.hide_pointer()
-	await d.glide_camera(Vector3(20.0, 19.0, 14.0), Vector3(12.0, 6.0, 0.0), 1.0)
+	# From the north: a paste lands its min corner (x, z) on the crosshair, so that corner has to be near the camera
+	# (the crosshair only reaches 32 cells). Locking it (below) lets the camera pull back to show the whole thing.
+	await d.glide_camera(Vector3(40.0, 22.0, -2.0), Vector3(10.0, 6.0, 0.0), 0.9)
+	await d.glide_camera(Vector3(10.0, 20.0, -28.0), Vector3(10.0, 6.0, 0.0), 1.0)
 	d.say("copy")
+	await d.wait_for("copy", "Control C")
 	await d.press(KEY_C, ["ctrl"])
-	await d.wait(0.5)
+	await d.wait_for("copy", "Control V")
 	await d.press(KEY_V, ["ctrl"])                # paste mode: the copy follows the crosshair
-	await d.aim_at_point(Vector3(27.5, 0.0, -8.5), 0.9)
+	await d.aim_at_point(Vector3(20.5, 0.0, -10.5), 0.5)
+	await d.aim_at_point(Vector3(10.5, 0.0, -7.5), 1.4)
+	await d.wait_for("copy", "locks it in place,")
+	await d.click_crosshair(MOUSE_BUTTON_LEFT)    # lock it where it is...
+	await d.glide_camera(Vector3(10.0, 21.0, -33.0), Vector3(10.0, 7.0, 0.0), 1.2)     # ...so the camera can pull back and look at both
+	await d.wait_for("copy", "and then middle-click", 0.8)
+	await d.click_crosshair(MOUSE_BUTTON_MIDDLE)  # the fine-tune panel
+	d.pointer_to_center()
 	await d.wait(0.6)
-	await d.press(KEY_R)                          # turns about its handle, swinging in beside the original
-	await d.wait(1.0)
+	var plus_x := _paste_plus(d, "X")
+	if plus_x != null:
+		for i in 3:
+			await d.click(plus_x)
+			await d.wait(0.2)
+	await d.wait_for("copy", "turn it with R.")
+	await d.wait_for("copy", "Right-click", 0.6)
+	await d.click(v.get_global_rect().get_center())        # back to aiming: it's still locked, nudged over
+	d.hide_pointer()
+	await d.wait(0.4)
 	await d.click_crosshair(MOUSE_BUTTON_RIGHT)   # drop it
 	await d.settle(5)
-	await d.aim_at_point(Vector3(14.0, 8.0, 0.0), 0.8)    # look back up to see both
 	await d.sync()
 	await d.wait(0.5)
 	d.say("delete")
@@ -156,7 +186,6 @@ func run(d) -> void:
 	await d.sync()
 	await d.wait(0.6)
 	d.say("undo")
-	d.hint("LEFT-HANDED", "The Undo and Redo buttons up top do the same", 4.5)
 	await d.press(KEY_Z, ["ctrl"])                # the original comes back
 	await d.wait(1.2)
 	await d.press(KEY_Z, ["ctrl"])                # and the copy goes
@@ -169,7 +198,7 @@ func run(d) -> void:
 	await d.sync()
 	d.chat_clear()
 	d.say("agent1")
-	await d.chat_user("Select only the glowing channels.")
+	await d.chat_user("Hi, let's select only the glowing channels.")
 	await d.chat_tool("selection_filter", "whitelist: [Channel Glow]", func():
 		await d.agent("selection_filter", {"whitelist": ["Channel Glow"]}))
 	await d.chat_agent("Done: %d cells of Channel Glow." % _selected(d))

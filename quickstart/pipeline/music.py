@@ -1,6 +1,6 @@
 """A generated background-music bed for the quickstart video: original, so nothing to license.
 
-    quickstart/.venv/Scripts/python.exe quickstart/pipeline/music.py [--style upbeat|calm] [--bpm N] [--seed 7] [--out FILE]
+    quickstart/.venv/Scripts/python.exe quickstart/pipeline/music.py [--style chill|upbeat|calm] [--bpm N] [--seed 7] [--out FILE]
 
 A synth made from numpy only: a warm chord pad, a soft bass, and a plucked arpeggio with a ping-pong
 delay and a touch of reverb. Four chords (I - vi - IV - V) in a bright key,
@@ -296,16 +296,148 @@ def build_upbeat(bpm=118.0, seed=7, passes=10):
     return head
 
 
+# ---------------------------------------------------------------- chill (chillstep)
+# Half-time at 140 bpm (it feels like 70): a deep, soft kick on 1 and the "and" of 3, a muffled clap on 3,
+# quiet shuffled hats, a long sub bass, dark airy pads in A minor (Am - F - C - G, two bars each) and a sparse
+# bell-like pluck line through a long echo. Built as separate stems so the pad can be darkened and the bass kept
+# round without touching the rest, and it builds across the loop (pads and sub only -> drums -> hats and bells ->
+# a slow wobble in the bass) before settling again. Contemplative, never busy.
+
+CH_PROG = [
+    (33, [57, 60, 64, 67, 71]),    # Am9   (root A1)
+    (29, [53, 57, 60, 64, 67]),    # Fmaj9 (root F1)
+    (36, [55, 59, 64, 67, 71]),    # Cmaj9 (root C2)
+    (31, [55, 59, 62, 67, 69]),    # G6/9  (root G1)
+]
+CH_ARP = [0, 2, 3, 1, 4, 2, 3, 1]
+
+
+def sub_bass(f, dur, wob_rate=0.0, wob_depth=0.0, sr=SR):
+    """A deep, round bass note. The overtones are what small speakers can actually reproduce; the optional
+    wobble breathes only those (the fundamental stays steady), so it moves without turning aggressive."""
+    n = int(dur * sr)
+    t = np.arange(n) / sr
+    if wob_depth > 0:
+        lfo = 1.0 - wob_depth * (0.5 + 0.5 * np.sin(2 * np.pi * wob_rate * t - np.pi / 2))
+    else:
+        lfo = 1.0
+    x = np.sin(2 * np.pi * f * t) + lfo * (0.95 * np.sin(2 * np.pi * 2 * f * t) + 0.40 * np.sin(2 * np.pi * 3 * f * t))
+    return x * env_adsr(n, 0.06, 0.4, 0.85, 0.25, sr)
+
+
+def deep_kick(sr=SR):
+    n = int(0.34 * sr)
+    t = np.arange(n) / sr
+    f = 38.0 + 70.0 * np.exp(-t * 32.0)
+    ph = 2 * np.pi * np.cumsum(f) / sr
+    return np.sin(ph) * np.exp(-t * 9.0) * np.minimum(1.0, t / 0.005)
+
+
+def clap(rng, sr=SR):
+    """A muffled clap: three quick noise bursts and a short tail, band-limited so it sits back."""
+    n = int(0.32 * sr)
+    t = np.arange(n) / sr
+    x = rng.standard_normal(n)
+    spec = np.fft.rfft(x)
+    f = np.fft.rfftfreq(n, 1.0 / sr)
+    spec *= np.exp(-((f - 1500.0) / 1100.0) ** 2)
+    x = np.fft.irfft(spec, n)
+    x /= max(np.max(np.abs(x)), 1e-9)
+    env = np.zeros(n)
+    for off, g in ((0.0, 0.7), (0.011, 0.8), (0.023, 1.0)):
+        i = int(off * sr)
+        env[i:] = np.maximum(env[i:], g * np.exp(-t[:n - i] * 70.0))
+    env += 0.5 * np.exp(-t * 16.0) * np.minimum(1.0, t / 0.03)
+    return x * env * np.minimum(1.0, t / 0.002)
+
+
+def soft_hat(rng, open_=False, sr=SR):
+    n = int((0.22 if open_ else 0.05) * sr)
+    t = np.arange(n) / sr
+    x = rng.standard_normal(n)
+    spec = np.fft.rfft(x)
+    f = np.fft.rfftfreq(n, 1.0 / sr)
+    spec *= np.exp(-((f - 6500.0) / 2400.0) ** 2)
+    x = np.fft.irfft(spec, n)
+    return x / max(np.max(np.abs(x)), 1e-9) * np.exp(-t * (16.0 if open_ else 75.0)) * np.minimum(1.0, t / 0.004)
+
+
+def build_chill(bpm=140.0, seed=7, passes=8):
+    rng = np.random.default_rng(seed)
+    beat = 60.0 / bpm
+    bar = 4 * beat
+    step = beat / 4.0
+    bars = len(CH_PROG) * 2 * passes                               # two bars per chord
+    total = bars * bar
+    tail = 3.5
+    n = int((total + tail) * SR)
+    pads = np.zeros((2, n))
+    bass_b = np.zeros((2, n))
+    drums = np.zeros((2, n))
+    bells = np.zeros((2, n))
+    levels = [0, 0, 1, 1, 2, 3, 2, 1]                              # per 8-bar pass: the shape of the build
+    for b in range(bars):
+        pas = b // (len(CH_PROG) * 2)
+        level = levels[pas % len(levels)]
+        chord = CH_PROG[(b // 2) % len(CH_PROG)]
+        t0 = b * bar
+        if b % 2 == 0:                                             # pad: one long swell per chord
+            add_at(pads, pad([midi(m) for m in chord[1]], bar * 2.0 + 0.9, SR), t0, 0.95, 0.0)
+            if level >= 3:                                         # a high shimmer over it
+                add_at(pads, pad([midi(chord[1][0] + 24), midi(chord[1][2] + 24)], bar * 2.0 + 0.9, SR), t0, 0.22, 0.2)
+        wob = level >= 3
+        wob_rate = (bpm / 60.0) / 2.0 if wob else 0.0              # breathes once every two beats
+        add_at(bass_b, sub_bass(float(midi(chord[0])), bar * 0.95, wob_rate, 0.5 if wob else 0.0), t0, 0.30)
+        if level >= 1 and b % 2 == 1:                              # a little answering note on the last beat of every second bar
+            add_at(bass_b, sub_bass(float(midi(chord[0] + 7)), beat * 0.9), t0 + 3.0 * beat, 0.16)
+        if level >= 1:
+            add_at(drums, deep_kick(), t0, 0.55)                   # beat 1
+            add_at(drums, deep_kick(), t0 + 10 * step, 0.38)       # the "and" of 3
+            add_at(drums, clap(rng), t0 + 8 * step, 0.22, pan=0.08)   # beat 3: the half-time backbeat
+        if level >= 2:
+            for i in range(0, 16, 2):                              # eighth-note hats, leaning back a touch
+                at = t0 + i * step + (0.012 if (i // 2) % 2 else 0.0)
+                add_at(drums, soft_hat(rng), at, 0.065 if i % 4 else 0.09, pan=-0.25 + 0.5 * ((i // 2) % 3) / 2.0)
+            if b % 4 == 3:
+                add_at(drums, soft_hat(rng, True), t0 + 14 * step, 0.08, pan=0.2)
+        notes = chord[1] + [chord[1][0] + 12]
+        for i in range(8):                                         # bells: sparse in the early sections, flowing later
+            if level == 0 or (level == 1 and i % 4) or (level == 2 and i % 2 and i != 5):
+                continue
+            idx = CH_ARP[(i + b) % len(CH_ARP)]
+            m = notes[idx % len(notes)] + 12
+            at = t0 + i * 2 * step + (0.02 if i % 2 else 0.0)
+            vel = (0.24 if i % 4 == 0 else 0.15) * (1.0 + 0.08 * rng.standard_normal())
+            add_at(bells, pluck(float(midi(m + 12)), beat * 2.2, rng), at, vel, pan=-0.4 + 0.8 * ((i % 5) / 4.0))
+    # stems: the pad dark and wide, the bass round, the bells echoing in a big room
+    pads = np.stack([lowpass_fast(pads[0], 2600.0), lowpass_fast(pads[1], 2600.0)])
+    bass_b = np.stack([lowpass_fast(bass_b[0], 600.0), lowpass_fast(bass_b[1], 600.0)])
+    bells = delay_pingpong(bells, bpm, feedback=0.42, mix=0.40)
+    bells = reverb(bells, rng, seconds=3.2, mix=0.34)
+    drums = reverb(drums, rng, seconds=1.2, mix=0.14)
+    buf = pads + bass_b + drums + bells
+    buf = np.stack([lowpass_fast(buf[0], 8000.0), lowpass_fast(buf[1], 8000.0)])
+    loop_len = int(total * SR)
+    head = buf[:, :loop_len].copy()
+    tail_part = buf[:, loop_len:loop_len + int(tail * SR)]
+    head[:, :tail_part.shape[1]] += tail_part
+    head -= head.mean(axis=1, keepdims=True)
+    head *= 0.85 / np.max(np.abs(head))
+    return head
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--style", choices=["upbeat", "calm"], default="upbeat")
-    ap.add_argument("--bpm", type=float, default=0.0, help="default: 118 upbeat, 92 calm")
+    ap.add_argument("--style", choices=["chill", "upbeat", "calm"], default="chill")
+    ap.add_argument("--bpm", type=float, default=0.0, help="default: 140 chill (half-time), 118 upbeat, 92 calm")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--out", default=str(ROOT / "assets" / "music" / "bed.wav"))
     a = ap.parse_args()
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    if a.style == "upbeat":
+    if a.style == "chill":
+        audio = build_chill(a.bpm or 140.0, a.seed)
+    elif a.style == "upbeat":
         audio = build_upbeat(a.bpm or 118.0, a.seed)
     else:
         audio = build(a.bpm or 92.0, a.seed)

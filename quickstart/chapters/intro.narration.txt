@@ -1,7 +1,4 @@
-# Opening: the pitch and the install.
+# Opening: the pitch. (Install steps are covered elsewhere, in the release notes.)
 
 [hook]
 Meet voxyl: a build planner for builders who'd rather design first, and choose materials later.
-
-[install]
-Getting started takes about a minute. Download the latest release, unzip it anywhere, and run voxyl.

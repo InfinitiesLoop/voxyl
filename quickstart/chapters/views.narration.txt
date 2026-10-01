@@ -1,22 +1,22 @@
 # Views, and flying around.
 
 [intro]
-Every build can have as many views as you like, and they're all live.
+Projects can have many views of the same scene, and you can edit blocks in any of them.
 
 [slice]
-Press Tab to slice through it. Tab again cycles the axis, W and S slide the plane, and Enter opens it as a flat 2D view, right beside the 3D one.
+To create a 2D view of the scene, press Tab in the 3D view, and you'll be selecting a slice. Tab again cycles which axis, W and S slide the plane, and Enter opens it as a flat 2D view, right beside the 3D one.
 
 [edit]
 Paint in the slice, and the 3D view changes right along with it. One build, many lenses.
 
 [layers]
-Step through the layers with the arrows, and turn the slice to taste.
+Step through the layers with the arrows, and rotate the view to taste.
 
 [fly]
-Back in 3D, click to fly. W, A, S and D to move, Space to rise, Shift to sink. Tap Control while you move to sprint, and Escape to let go.
+Back in 3D, click to fly. W, A, S and D to move, Space to rise, Shift to sink. Tap Control while you move to sprint. Hit Escape to exit fly mode.
 
 [more]
-And two is just the start. Add a second 3D view from another angle, and a second slice from another axis.
+You can have more than 2 views, and you can arrange them however you like. For example, add a second 3D view from another angle, and a second slice from another axis.
 
 [clay]
 Every 3D view has its own render mode. Try Clay, for pure form. Or intent, x-ray, outline, wireframe. There are plenty to choose from.

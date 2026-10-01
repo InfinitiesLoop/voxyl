@@ -1,5 +1,5 @@
 [bye]
 That's the tour. Build first, decide later.
 
-[go nocaption]
-Now *go* make something.
+[thanks]
+Thanks for watching.

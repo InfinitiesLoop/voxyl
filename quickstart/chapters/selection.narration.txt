@@ -12,7 +12,7 @@ Click into the view and you're flying. Let's rise up for a better angle.
 Press E for your inventory, then pick the Select tool.
 
 [corners]
-Right-click two opposite corners on the ground, and you've claimed a footprint.
+Right-click two opposite corners on the ground, and you've claimed a footprint. It doesn't have to start on the ground, though. Right-click any two opposite blocks, and you get a full 3D box.
 
 [panel]
 Middle-click, and its panel opens. You get the exact dimensions straight away, which makes this a pretty handy tape measure too.
@@ -27,7 +27,7 @@ Below that, what's inside, by meaning. Every semantic, and how many of each.
 Flip to Blocks, and it's the real shopping list: the actual blocks, with stack counts. Copy it, and you're ready to gather.
 
 [copy]
-Copy it with Control C, then paste with Control V. The copy follows your crosshair, R turns it, and a right-click drops it.
+Copy it with Control C, then paste with Control V. The copy follows your crosshair. Left-click locks it in place, and then middle-click lets you fine tune the position, or turn it with R. Right-click drops it.
 
 [delete]
 Backspace erases whatever's selected.
@@ -39,7 +39,7 @@ Made a mistake? Control Z brings it right back. Press it again, and it keeps ste
 Now the fun part. Voxyl has a built-in MCP server, so an AI agent can work alongside you. We'll set it up at the end. It speaks semantics, so you can just say what you mean.
 
 [agent1]
-Only the glowing channels? One sentence.
+Hi, let's select only the glowing channels. One sentence.
 
 [agent2]
 Everything except the glow and the plinth? Another.

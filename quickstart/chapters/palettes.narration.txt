@@ -1,10 +1,10 @@
 # Semantic blocks and palettes: the core idea.
 
 [hotbar]
-Look at the hotbar. It holds your building blocks, but not directly. Instead of stone or planks, you give each one a meaning, like Floor, Wall, or Accent, and decide what block that is later.
+Look at the hotbar. It holds your building blocks, but not directly. Instead of stone or planks, you give each one a semantic meaning, like Floor, Wall, or Accent, and decide what block that is later.
 
 [meaning]
-You build with what a block *is for*, not what it's made of.
+You build with a palette, not with blocks. You can assign a block to each palette entry later.
 
 [palette]
 A palette decides what each meaning looks like. In this one, Channel Glow is a glowing cyan slab.
@@ -13,7 +13,7 @@ A palette decides what each meaning looks like. In this one, Channel Glow is a g
 Change your mind about an entry? Right-click it, pick a different block, and every voxel using it updates instantly.
 
 [edit_done]
-There. Every glow channel, changed at once.
+There, we just changed every glow channel all at once, by editing its palette entry.
 
 [swap]
 Or swap the whole look. Add a different palette to the project.
@@ -25,4 +25,4 @@ Same voxels. Completely different build.
 And another.
 
 [principle]
-Not a single voxel changed. Build first, decide later.
+Not a single block was modified. You can build structure first, and decide on the look later.

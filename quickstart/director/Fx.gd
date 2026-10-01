@@ -103,7 +103,7 @@ func build(parent: Node, size: Vector2) -> void:
 	_zoom_layer.visible = false
 
 	_keys = KeysHud.new()
-	_keys.position = Vector2(36, view_size.y - 122.0 - 316.0)
+	_keys.position = Vector2(56, view_size.y - 122.0 - 390.0)
 	_keys.visible = false
 	_top.add_child(_keys)
 	_build_caption()
@@ -807,7 +807,9 @@ class KeysHud extends Control:
 		[[KEY_W, "W", Vector2(1, 0), 1.0, "↑"]],
 		[[KEY_A, "A", Vector2(0, 1), 1.0, "←"], [KEY_S, "S", Vector2(1, 1), 1.0, "↓"], [KEY_D, "D", Vector2(2, 1), 1.0, "→"]],
 		[[KEY_SPACE, "Space", Vector2(0, 2), 2.0, "R-Ctrl"], [KEY_SHIFT, "Shift", Vector2(2, 2), 1.4, "/"]],
+		[[KEY_CTRL, "Ctrl", Vector2(0, 3), 2.0, "\\"]],
 	]
+	const _LEGEND := "small print = alternate keybinds"
 	var _down := {}
 
 	func _init() -> void:
@@ -820,6 +822,13 @@ class KeysHud extends Control:
 	func _draw() -> void:
 		var unit := 66.0
 		var font := ThemeDB.fallback_font
+		# A dark, see-through plate behind the lot, so the keys read over any build (the cyan glow channels included).
+		var legend_w := font.get_string_size(_LEGEND, HORIZONTAL_ALIGNMENT_LEFT, -1, 17).x
+		var plate := StyleBoxFlat.new()
+		plate.bg_color = Color(0.02, 0.03, 0.05, 0.72)
+		plate.set_corner_radius_all(14)
+		var plate_w := maxf(3.0 * (unit + 8.0) - 8.0, legend_w) + 40.0
+		draw_style_box(plate, Rect2(Vector2(-20.0, -18.0), Vector2(plate_w, 4.0 * (unit + 8.0) + 36.0)))
 		for row in _ROWS:
 			for k in row:
 				var lit: bool = _down.get(k[0], false)
@@ -843,7 +852,7 @@ class KeysHud extends Control:
 				var as_ := font.get_string_size(alt, HORIZONTAL_ALIGNMENT_LEFT, -1, af)
 				draw_string(font, rect.position + Vector2((rect.size.x - as_.x) * 0.5, rect.size.y - 8.0),
 					alt, HORIZONTAL_ALIGNMENT_LEFT, -1, af, INK if lit else Color(ACCENT, 0.95))
-		draw_string(font, Vector2(0, 3 * (unit + 8) + 6.0), "small print = right-hand keys",
+		draw_string(font, Vector2(0, 4 * (unit + 8) + 6.0), _LEGEND,
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color(ACCENT, 0.9))
 
 class ChatCard extends PanelContainer:

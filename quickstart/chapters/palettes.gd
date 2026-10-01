@@ -41,13 +41,17 @@ func _add_palette(d, palette_name: String) -> void:
 func _edit_entry(d, tooltip: String) -> void:
 	await d.press(KEY_E)
 	await d.wait(0.5)
-	await d.right_click(d.ctl({"tooltip": tooltip}))
+	var entry: Control = d.ctl({"tooltip": tooltip})
+	await d.right_click(entry)
 	await d.wait(0.35)
 	var menu: PopupMenu = null
 	for n in d.get_tree().root.get_children():
 		if n is PopupMenu and n.visible:
 			menu = n
+	# a vignette on the entry (and its menu) for as long as it takes to pick "Edit"
+	d.spotlight(d.rect_of(entry).merge(Rect2(Vector2(menu.position), Vector2(menu.size))), 16.0)
 	await d.click(Vector2(menu.position) + Vector2(26.0, 14.0))     # "Edit"
+	await d.spotlight_off()
 	if is_instance_valid(menu):
 		menu.hide()
 	await d.wait(1.0)
@@ -78,10 +82,9 @@ func run(d) -> void:
 	await d.agent("selection_clear")
 	await d.settle(30)
 	var view = d.view3d()
-	view.call("set_camera_pose", Vector3(0.0, 13.0, 23.0), PILLAR)
+	d.orbit_pose(PILLAR, 23.0, 11.0, 0.0)           # exactly where the orbit below begins
 	await d.settle(20)
 	d.mark("start")
-	d.card("Palettes")
 	await d.fade_in(0.7)
 
 	# --- semantic blocks: the hotbar ----------------------------------------------

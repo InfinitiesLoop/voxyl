@@ -36,15 +36,19 @@ func run(d) -> void:
 	d.set_fade(1.0)
 	await d.settle(20)
 	d.mark("start")
-	d.card("Libraries")
 	await d.fade_in(0.7)
 
 	# --- the home screen ----------------------------------------------------------
 	d.say("home")
-	await d.wait(0.6)
+	await d.wait(1.3)                                  # "This is the main screen:"
+	var tabs: Rect2 = d.rect_of({"tab": "Projects"})
+	for tab in ["Palettes", "Prefabs", "Libraries"]:
+		tabs = tabs.merge(d.rect_of({"tab": tab}))
+	await d.spotlight(tabs, 14.0)                      # a vignette on the tabs while they're named
 	for tab in ["Palettes", "Prefabs", "Libraries"]:
 		await d.click({"tab": tab})
-		await d.wait(0.9)
+		await d.wait(0.2)
+	await d.spotlight_off()
 	await d.sync()
 
 	# --- Add blocks ---------------------------------------------------------------
@@ -90,7 +94,7 @@ func run(d) -> void:
 	# The three Dump buttons the NEI roster needs, ringed one after another as they're named.
 	var line: Dictionary = d.line_timing("nei")
 	var span: float = float(line["end"]) - d.t
-	await d.flash_image("nei-data-dumps.png", 690.0, maxf(span - 1.0, 5.0), [
+	await d.flash_image("nei-data-dumps.png", 690.0, maxf(span, 5.0), [
 		{"rect": Rect2(928, 102, 208, 86), "at": span * 0.30},    # Items
 		{"rect": Rect2(928, 198, 208, 86), "at": span * 0.50},    # Blocks
 		{"rect": Rect2(928, 583, 208, 86), "at": span * 0.78},    # Item Panel
@@ -105,7 +109,7 @@ func run(d) -> void:
 	await d.click(_panel_prefix(d))
 	await d.type_text("gtnh", 10.0)
 	await d.click(_panel_search(d))
-	await d.type_text("korp", 10.0)
+	await d.type_text("brick", 10.0)       # matches blocks from a couple of dozen mods: one library each
 	await d.wait(0.5)
 	await d.click({"text": "Import selected", "class": "Button"})
 	await _finish_import(d)
