@@ -1,14 +1,17 @@
 extends RefCounted
 # quickstart: library=real seed=
 
-# Chapter: connecting an agent, then a staged build from a reference photo. The terminal is a card drawn
-# over the app (the real one is an OS window the recording can't see). The build itself is real: the
-# calls in watchtower.build.json (made by design/watchtower.py, the way an agent would write them from
-# assets/watchtower-reference.webp) go through the same tool registry the MCP server serves, so the
-# tower rises in the app exactly as it would for a connected agent.
+# Chapter: connecting an agent, then a staged build from a reference photo, then an iteration on it. The
+# terminal is a card drawn over the app (the real one is an OS window the recording can't see). The build
+# itself is real: the calls in watchtower.build.json (made by design/watchtower.py, the way an agent would
+# write them from assets/watchtower-reference.webp) go through the same tool registry the MCP server serves,
+# so the tower rises in the app exactly as it would for a connected agent.
 
 const BUILD := "res://quickstart/chapters/watchtower.build.json"
-const TOWER := Vector3(12.0, 21.0, 0.0)     # where the camera looks: east of the tower, so it sits left of the chat card
+# Where the camera looks: east of the tower, so the tower sits left of centre, clear of the chat card.
+const TOWER := Vector3(11.0, 22.0, 0.0)
+const RADIUS := 36.0
+const HEIGHT := 14.0
 
 func _masked(command: String) -> String:
 	var re := RegEx.new()
@@ -17,6 +20,19 @@ func _masked(command: String) -> String:
 	if m == null:
 		return command
 	return command.replace(m.get_string(0), "Bearer %s…%s" % [m.get_string(1), m.get_string(2)])
+
+func _cam(deg: float) -> Vector3:
+	return TOWER + Vector3(sin(deg_to_rad(deg)) * RADIUS, HEIGHT, cos(deg_to_rad(deg)) * RADIUS)
+
+# One chat line per step: the tool's name and what it's doing, with the real calls running under it.
+func _run_steps(d, steps: Array) -> void:
+	for step in steps:
+		var calls: Array = step["calls"]
+		var label := "%s · %d cells" % [step["label"], int(step["cells"])] if step.has("cells") 			else "%s · %s" % [step["label"], step.get("detail", "")]
+		await d.chat_tool(str(calls[0]["tool"]), label, func():
+			for c in calls:
+				await d.agent(str(c["tool"]), c["args"])
+			await d.wait(1.0))
 
 func run(d) -> void:
 	d.set_fade(1.0)
@@ -53,20 +69,14 @@ func run(d) -> void:
 	await d.click({"text": "Close", "class": "Button"})
 	await d.wait(0.4)
 
-	# --- open a project, see the badge --------------------------------------------
-	d.say("badge")
+	# --- open a project -----------------------------------------------------------
 	await d.click({"text": "My First Build"})
 	await d.click({"text": "Open", "class": "Button"})
+	d.hide_pointer()
 	await d.wait(0.8)
 	var view = d.view3d()
-	view.call("set_camera_pose", TOWER + Vector3(sin(deg_to_rad(15.0)) * 62.0, 12.0, cos(deg_to_rad(15.0)) * 62.0), TOWER)
-	await d.wait(0.6)
-	var badge: Control = d.ctl(func(c): return c is Label and str((c as Label).text).begins_with("●"))
-	if badge != null:
-		await d.spotlight(badge, 10.0)
-	await d.sync()
-	await d.wait(1.0)
-	await d.spotlight_off()
+	view.call("set_camera_pose", _cam(20.0), TOWER)
+	await d.wait(0.5)
 
 	# --- ask, with a reference image ----------------------------------------------
 	d.caption_at("left")
@@ -83,16 +93,20 @@ func run(d) -> void:
 		await d.agent("project_palettes_set", {"palettes": [pal["name"]]})
 		await d.agent("hotbar_set", {"slots": ["Tower Stone", "Tower Stone Light", "Corbel", "Merlon", "Paving", "Roof Slate",
 			"Timber", "Plaster", "Window", "Slit", "Railing", "Rock"], "active": 0}))
-	d.orbit(TOWER, 62.0, 12.0, 15.0, 75.0, 30.0)
-	for step in data["steps"]:
-		var calls: Array = step["calls"]
-		await d.chat_tool(str(calls[0]["tool"]), "%s · %d cells" % [step["label"], int(step["cells"])], func():
-			for c in calls:
-				await d.agent(str(c["tool"]), c["args"])
-			await d.wait(1.0))
+	d.orbit(TOWER, RADIUS, HEIGHT, 20.0, 92.0, 62.0)
+	await _run_steps(d, data["steps"])
 	await d.chat_agent("Done: a watchtower, 45 × 48 × 33.")
 	await d.sync()
-	await d.wait(1.2)
+	await d.wait(1.0)
+
+	# --- iterate: change what's there, don't start over ----------------------------
+	d.say("iterate")
+	d.chat_clear()
+	await d.chat_user("Add a pond near the entrance, and make the tower a bit taller.")
+	await _run_steps(d, data["iteration"])
+	await d.chat_agent("Done: a pond by the door, and the tower is three taller.")
+	await d.sync()
+	await d.wait(2.5)
 
 	# --- you stay in control ------------------------------------------------------
 	d.say("undo")

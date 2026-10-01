@@ -1,7 +1,8 @@
 extends RefCounted
 # quickstart: library=real seed=demo
 
-# Chapter: the closing card over the demo build.
+# Chapter: the closing card over the demo build. The last line is spoken as the card's own words appear,
+# so it isn't captioned.
 
 const PILLAR := Vector3(0.0, 9.0, 0.0)
 
@@ -15,7 +16,9 @@ func run(d) -> void:
 	d.orbit(PILLAR, 22.0, 10.0, 70.0, 150.0, 9.0)
 	await d.fade_in(0.8)
 	d.say("bye")
-	await d.wait(1.2)
-	await d.title_card("voxyl", "Go make something.", 4.0)
 	await d.sync()
+	d.say("go")
+	d.title_card("voxyl", "Go make something.", 4.2)
+	await d.sync()
+	await d.wait(1.2)
 	await d.fade_out(1.0)

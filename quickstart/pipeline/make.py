@@ -93,7 +93,7 @@ def parse_narration(chapter: str) -> dict:
         line = raw.strip()
         if line.startswith("#"):
             continue
-        m = re.match(r"^\[(\w+)\]\s*(.*)$", line)
+        m = re.match(r"^\[(\w+)(?:\s[^\]]*)?\]\s*(.*)$", line)
         if m:
             flush()
             cur_id, buf = m.group(1), ([m.group(2)] if m.group(2) else [])
@@ -140,7 +140,7 @@ def cmd_narrate(chapter: str, voice: str, speed: float, engine: str = "kokoro", 
     result = {"engine": engine, "voice": voice, "speed": speed, "lines": {}}
     for lid, text in parse_narration(chapter).items():
         said = spoken(text, lexicon)
-        key = hashlib.sha1(f"{engine}|{voice}|{speed}|{instructions}|{said}".encode()).hexdigest()[:12]
+        key = hashlib.sha1(f"{tts.TTS_VERSION}|{engine}|{voice}|{speed}|{instructions}|{said}".encode()).hexdigest()[:12]
         prev = old.get("lines", {}).get(lid)
         wav = wav_dir / f"{lid}.wav"
         if prev and prev.get("key") == key and wav.exists():

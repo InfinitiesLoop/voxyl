@@ -1,6 +1,6 @@
 """A generated background-music bed for the quickstart video: original, so nothing to license.
 
-    quickstart/.venv/Scripts/python.exe quickstart/pipeline/music.py [--bpm 92] [--seed 7] [--out quickstart/assets/music/bed.wav]
+    quickstart/.venv/Scripts/python.exe quickstart/pipeline/music.py [--style upbeat|calm] [--bpm N] [--seed 7] [--out FILE]
 
 A synth made from numpy only: a warm chord pad, a soft bass, and a plucked arpeggio with a ping-pong
 delay and a touch of reverb. Four chords (I - vi - IV - V) in a bright key,
@@ -192,15 +192,123 @@ def build(bpm=92.0, seed=7, sections=2):
     return head
 
 
+# ---------------------------------------------------------------- upbeat
+# I - V - vi - IV in C with added colour, one chord a bar: the bright "pop" loop. A soft four-on-the-floor kick,
+# a quiet snap on 2 and 4, off-beat chord stabs, a syncopated bass and a sixteenth-note pluck arpeggio. Three
+# energy levels across the loop (sparse -> groove -> full), all of it kept low and rounded off so it stays a bed.
+
+UP_PROG = [
+    (48, [60, 64, 67, 71]),    # Cmaj7
+    (43, [59, 62, 67, 74]),    # G (add9)
+    (45, [57, 60, 64, 67]),    # Am7
+    (41, [57, 60, 65, 72]),    # F (add9)
+]
+UP_ARP = [0, 2, 1, 3, 2, 1, 3, 2, 0, 2, 1, 3, 2, 3, 1, 2]
+
+
+def kick(rng, sr=SR):
+    n = int(0.22 * sr)
+    t = np.arange(n) / sr
+    f = 45.0 + 85.0 * np.exp(-t * 28.0)
+    ph = 2 * np.pi * np.cumsum(f) / sr
+    return np.sin(ph) * np.exp(-t * 14.0) * np.minimum(1.0, t / 0.004)
+
+
+def snap(rng, sr=SR):
+    n = int(0.12 * sr)
+    t = np.arange(n) / sr
+    x = rng.standard_normal(n)
+    spec = np.fft.rfft(x)
+    f = np.fft.rfftfreq(n, 1.0 / sr)
+    spec *= np.exp(-((f - 1800.0) / 1400.0) ** 2)               # band-limited, so it ticks rather than hisses
+    x = np.fft.irfft(spec, n)
+    return x / max(np.max(np.abs(x)), 1e-9) * np.exp(-t * 32.0) * np.minimum(1.0, t / 0.005)
+
+
+def hat(rng, sr=SR):
+    n = int(0.05 * sr)
+    t = np.arange(n) / sr
+    x = rng.standard_normal(n)
+    spec = np.fft.rfft(x)
+    f = np.fft.rfftfreq(n, 1.0 / sr)
+    spec *= np.exp(-((f - 7000.0) / 2200.0) ** 2)
+    x = np.fft.irfft(spec, n)
+    return x / max(np.max(np.abs(x)), 1e-9) * np.exp(-t * 70.0) * np.minimum(1.0, t / 0.004)
+
+
+def stab(notes, dur, sr=SR):
+    """A short electric-piano-ish chord hit."""
+    n = int(dur * sr)
+    t = np.arange(n) / sr
+    out = np.zeros(n)
+    for note in notes:
+        f = float(midi(note))
+        out += np.sin(2 * np.pi * f * t) + 0.4 * np.sin(2 * np.pi * 2 * f * t) * np.exp(-t * 9.0) + 0.15 * np.sin(2 * np.pi * 3 * f * t) * np.exp(-t * 14.0)
+    return out / len(notes) * np.exp(-t * 7.0) * np.minimum(1.0, t / 0.006)
+
+
+def build_upbeat(bpm=118.0, seed=7, passes=10):
+    rng = np.random.default_rng(seed)
+    beat = 60.0 / bpm
+    bar = 4 * beat
+    bars = len(UP_PROG) * passes
+    total = bars * bar
+    tail = 2.5
+    buf = np.zeros((2, int((total + tail) * SR)))
+    for b in range(bars):
+        chord = UP_PROG[b % len(UP_PROG)]
+        t0 = b * bar
+        level = 0 if b < len(UP_PROG) * 2 else (1 if b < len(UP_PROG) * 6 else 2)       # sparse -> groove -> full
+        add_at(buf, pad([midi(n) for n in chord[1]], bar + 0.5, SR), t0, 0.45, 0.0)
+        for k, (when, tone, ln, g) in enumerate([(0.0, 0, 0.9, 0.55), (1.5, 12, 0.45, 0.32), (2.0, 0, 0.9, 0.48), (3.5, 7, 0.45, 0.30)]):
+            if level == 0 and k > 0:
+                continue
+            add_at(buf, bass(float(midi(chord[0] + tone)), beat * ln), t0 + when * beat, g)
+        if level >= 1:
+            for k in range(4):                                                              # soft kick on every beat
+                add_at(buf, kick(rng), t0 + k * beat, 0.30 if level == 1 else 0.36)
+            for k in (1, 3):                                                                # snap on 2 and 4
+                add_at(buf, snap(rng), t0 + k * beat, 0.10 if level == 1 else 0.14, pan=0.1)
+            for i in range(8):                                                              # off-beat hats
+                if i % 2 == 1:
+                    add_at(buf, hat(rng), t0 + i * beat * 0.5, 0.045 if level == 1 else 0.06, pan=-0.2)
+            for when in (1.5, 3.5):                                                         # off-beat chord stabs
+                add_at(buf, stab(chord[1], beat * 0.9), t0 + when * beat, 0.20, pan=-0.15)
+        notes = chord[1] + [chord[1][0] + 12, chord[1][2] + 12]
+        steps = 16
+        for i in range(steps):
+            if level == 0 and i % 2:
+                continue
+            idx = UP_ARP[i % len(UP_ARP)]
+            n = notes[idx % len(notes)] + (12 if (level == 2 and i % 4 == 3) else 0)
+            at = t0 + i * beat * 0.25
+            vel = (0.22 if i % 4 == 0 else 0.13) * (1.0 + 0.08 * rng.standard_normal())
+            add_at(buf, pluck(float(midi(n + 12)), beat * 1.6, rng), at, vel, pan=-0.4 + 0.8 * ((i % 5) / 4.0))
+    buf = delay_pingpong(buf, bpm, feedback=0.3, mix=0.26)
+    buf = reverb(buf, rng, seconds=1.8, mix=0.16)
+    buf = np.stack([lowpass_fast(buf[0], 9000.0), lowpass_fast(buf[1], 9000.0)])
+    loop_len = int(total * SR)
+    head = buf[:, :loop_len].copy()
+    tail_part = buf[:, loop_len:loop_len + int(tail * SR)]
+    head[:, :tail_part.shape[1]] += tail_part
+    head -= head.mean(axis=1, keepdims=True)
+    head *= 0.85 / np.max(np.abs(head))
+    return head
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--bpm", type=float, default=92.0)
+    ap.add_argument("--style", choices=["upbeat", "calm"], default="upbeat")
+    ap.add_argument("--bpm", type=float, default=0.0, help="default: 118 upbeat, 92 calm")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--out", default=str(ROOT / "assets" / "music" / "bed.wav"))
     a = ap.parse_args()
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    audio = build(a.bpm, a.seed)
+    if a.style == "upbeat":
+        audio = build_upbeat(a.bpm or 118.0, a.seed)
+    else:
+        audio = build(a.bpm or 92.0, a.seed)
     sf.write(str(out), audio.T.astype(np.float32), SR)
     dur = audio.shape[1] / SR
     rms = float(np.sqrt(np.mean(audio ** 2)))

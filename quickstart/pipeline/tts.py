@@ -63,9 +63,33 @@ def _openai_samples(text: str, voice: str, instructions: str):
     return data, rate
 
 
-EMPHASIS_SLOWDOWN = 0.84     # an emphasised stretch is spoken this much slower...
-EMPHASIS_GAIN = 1.45         # ...and this much louder (about +3 dB)
-EMPHASIS_GAP = 0.07          # with a breath either side
+TTS_VERSION = 2   # bump when synthesis changes in a way that should invalidate cached lines
+
+_VOWELS = set("aeiouɑɐɒæɔəɛɜɪʊʌɚɝᵻɨ")
+_SECOND = set("ɪʊə")           # the second half of a diphthong (oʊ, aɪ, eɪ...)
+
+
+def _emphasise_word(ph: str) -> str:
+    """Make one word's phonemes stressed and a little longer. Kokoro reads stress marks as pitch and length,
+    so this lands as emphasis *inside* the sentence's own intonation. (Synthesising the emphasised words as
+    a separate clip and gluing it in leaves an audible break either side of it.)"""
+    core = ph.rstrip(",.;:!?")
+    tail = ph[len(core):]
+    if not core:
+        return ph
+    core = core.replace("ˌ", "ˈ")
+    if "ˈ" not in core:
+        core = "ˈ" + core
+    i = core.index("ˈ") + 1
+    while i < len(core) and core[i] not in _VOWELS:
+        i += 1
+    if i < len(core):
+        i += 1
+        if i < len(core) and core[i] in _SECOND:
+            i += 1
+        if i >= len(core) or core[i] != "ː":
+            core = core[:i] + "ː" + core[i:]
+    return core + tail
 
 
 def _split_emphasis(text: str):
@@ -88,17 +112,16 @@ def _split_emphasis(text: str):
 def _kokoro_with_emphasis(text: str, voice: str, speed: float):
     if "*" not in text:
         return synth(text, voice, speed)
+    from kokoro_onnx.tokenizer import Tokenizer
+    tok = Tokenizer()
     pieces = []
-    rate = SAMPLE_RATE
     for chunk, emph in _split_emphasis(text):
-        samples, rate = synth(chunk, voice, speed * (EMPHASIS_SLOWDOWN if emph else 1.0))
+        ph = tok.phonemize(chunk, "en-us")
         if emph:
-            samples = np.clip(samples * EMPHASIS_GAIN, -1.0, 1.0)
-            pieces += [np.zeros(int(rate * EMPHASIS_GAP), dtype=samples.dtype), samples,
-                       np.zeros(int(rate * EMPHASIS_GAP), dtype=samples.dtype)]
-        else:
-            pieces.append(samples)
-    return np.concatenate(pieces), rate
+            ph = " ".join(_emphasise_word(w) for w in ph.split(" "))
+        pieces.append(ph)
+    samples, rate = engine().create(" ".join(pieces), voice=voice, speed=speed, is_phonemes=True)
+    return samples, rate
 
 
 def synth_to_wav(text: str, path: Path, voice: str = "af_heart", speed: float = 1.0,

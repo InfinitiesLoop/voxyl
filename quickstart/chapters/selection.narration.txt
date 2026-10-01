@@ -26,8 +26,17 @@ Below that, what's inside, by meaning. Every semantic, and how many of each.
 [blocks]
 Flip to Blocks, and it's the real shopping list: the actual blocks, with stack counts. Copy it, and you're ready to gather.
 
+[copy]
+Copy it with Control C, then paste with Control V. The copy follows your crosshair, R turns it, and a right-click drops it.
+
+[delete]
+Backspace erases whatever's selected.
+
+[undo]
+Made a mistake? Control Z brings it right back. Press it again, and it keeps stepping back through every move.
+
 [agent_intro]
-Now the fun part. Voxyl has a built-in MCP server, so an AI agent can work right alongside you. We'll set that up at the end. And since it speaks semantics, you can just say what you mean.
+Now the fun part. Voxyl has a built-in MCP server, so an AI agent can work alongside you. We'll set it up at the end. It speaks semantics, so you can just say what you mean.
 
 [agent1]
 Only the glowing channels? One sentence.
@@ -39,4 +48,4 @@ Everything except the glow and the plinth? Another.
 No coordinates. No counting. It knows what your blocks mean.
 
 [ops]
-And once you have a selection, you can copy it, cut it, delete it, cut it away to peek inside, or save it as a prefab. Or export it as a Schematica file, a format that works with WorldEdit too.
+And a selection is the starting point for plenty more. Cut it away to peek inside, save it as a prefab, or export it as a Schematica file, a format that works with WorldEdit too.

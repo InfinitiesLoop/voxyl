@@ -26,6 +26,13 @@ func run(d) -> void:
 			var res = await d.agent(step_call["tool"], args)
 			var rej = res.get("rejected", []) if res is Dictionary else []
 			print("DESIGN ", step["label"], ": placed=", res.get("placed", "?") if res is Dictionary else "?", " rejected=", rej.size() if rej is Array else rej, " ", _err(res))
+	for step in data.get("iteration", []):
+		for step_call in step["calls"]:
+			var args2: Dictionary = (step_call["args"] as Dictionary).duplicate(true)
+			if step_call["tool"] != "region_copy":
+				args2["animate"] = false
+			var res2 = await d.agent(step_call["tool"], args2)
+			print("DESIGN iterate ", step["label"], ": ", str(res2).substr(0, 140))
 	await d.settle(40)
 	var shots := [
 		["hero",   {"frame": {"all": true}, "from": "se", "elevation": 22}],
@@ -33,7 +40,8 @@ func run(d) -> void:
 		["east",   {"frame": {"all": true}, "from": "e", "elevation": 12}],
 		["high",   {"frame": {"all": true}, "from": "sw", "elevation": 40}],
 		["roof",   {"frame": {"min": [-8, 20, -8], "max": [8, 48, 8]}, "from": "se", "elevation": 18}],
-		["hut",    {"frame": {"min": [22, 10, -4], "max": [36, 22, 4]}, "from": "se", "elevation": 22}],
+		["hut",    {"frame": {"min": [16, 10, -4], "max": [28, 24, 4]}, "from": "se", "elevation": 22}],
+		["pond",   {"frame": {"min": [-4, 0, 4], "max": [14, 12, 16]}, "from": "s", "elevation": 28}],
 	]
 	for s in shots:
 		var args: Dictionary = (s[1] as Dictionary).duplicate(true)

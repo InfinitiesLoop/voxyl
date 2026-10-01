@@ -290,6 +290,59 @@ def step(label, detail, cells):
             "calls": [{"tool": "cells_place_layers", "args": to_layers(cells, None)}]}
 
 
+# ------------------------------------------------------------------ the iteration: "add a pond near the
+# entrance and make the tower a bit taller", done with the advanced editing tools (move / copy / paste a
+# slice) rather than rebuilding.
+
+POND_PALETTE = [("Water", "light_blue_stained_glass"), ("Lily Pad", "lily_pad"), ("Pond Rim", "mossy_cobblestone")]
+RISE = 3
+
+
+def pond_layers():
+    cx, cz, ra, rb = 7.0, 10.5, 5.2, 3.8
+    x0, x1, z0, z1 = 2, 12, 7, 14
+    chars = {"W": "Water", "R": "Pond Rim", "L": "Lily Pad"}
+    layers = []
+    for y in range(0, 6):
+        rows = []
+        for z in range(z0, z1 + 1):
+            row = ""
+            for x in range(x0, x1 + 1):
+                e = ((x - cx) / ra) ** 2 + ((z - cz) / rb) ** 2
+                inside, rim = e <= 1.0, 1.0 < e <= 1.55
+                if y == 0:
+                    row += "W" if inside else ("R" if rim else ".")
+                elif y == 1:
+                    if inside:
+                        row += "L" if h01(x, 1, z, 21) < 0.2 else "_"
+                    elif rim:
+                        row += "R" if h01(x, 1, z, 22) < 0.65 else "_"
+                    else:
+                        row += "."
+                else:
+                    row += "_" if (inside or rim) else "."          # clear the mound above the pond
+            rows.append(row)
+        layers.append(rows)
+    return {"origin": [x0, 0, z0], "axis": "y", "legend": chars, "layers": layers}
+
+
+def iteration():
+    top = {"min": [-9, 22, -9], "max": [9, 52, 9]}
+    steps = [
+        {"label": "Pond materials", "detail": "Water · Lily Pad · Pond Rim",
+         "calls": [{"tool": "palette_update", "args": {"name": "Castle", "add": [{"semantic": s_, "block": b} for s_, b in POND_PALETTE]}}]},
+        {"label": "Pond by the door", "detail": "dig the mound, fill with Water",
+         "calls": [{"tool": "cells_place_layers", "args": pond_layers()}]},
+        {"label": "Lift the top", "detail": "everything above y=22, up %d" % RISE,
+         "calls": [{"tool": "region_move", "args": {"region": top, "by": [0, RISE, 0]}}]},
+        {"label": "Copy a slice of wall", "detail": "3 layers of the shaft",
+         "calls": [{"tool": "region_copy", "args": {"region": {"min": [-7, 19, -7], "max": [7, 21, 7]}}}]},
+        {"label": "Fill the gap", "detail": "paste it under the deck",
+         "calls": [{"tool": "clipboard_paste", "args": {"at": [-7, 22, -7]}}]},
+    ]
+    return steps
+
+
 def main():
     tower = tower_shaft()
     steps = [
@@ -303,7 +356,7 @@ def main():
     ]
     data = {"palette": {"name": "Castle", "libraries": ["minecraft"],
                         "entries": [{"semantic": s, "block": b} for s, b in PALETTE]},
-            "steps": steps}
+            "steps": steps, "iteration": iteration()}
     OUT.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
     total = sum(s["cells"] for s in steps)
     print(f"wrote {OUT} ({OUT.stat().st_size // 1024} KB): {len(steps)} steps, {total} cells")

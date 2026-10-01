@@ -66,25 +66,29 @@ func _load_narration() -> void:
 		print("quickstart: no narration file for '%s' (fine for a design run)" % chapter_name)
 		return
 	var id := ""
+	var burn := true
 	var buf: Array[String] = []
 	for raw in f.get_as_text().split("\n"):
 		var line := raw.strip_edges()
 		if line.begins_with("#"):
 			continue
 		if line.begins_with("[") and line.contains("]"):
-			_flush_line(id, buf)
-			id = line.substr(1, line.find("]") - 1)
+			_flush_line(id, buf, burn)
+			var head := line.substr(1, line.find("]") - 1).split(" ", false)
+			id = head[0]
+			burn = not head.has("nocaption")     # "[bye nocaption]": spoken, but not captioned on screen
 			buf = []
 			var rest := line.substr(line.find("]") + 1).strip_edges()
 			if not rest.is_empty():
 				buf.append(rest)
 		elif line.is_empty():
-			_flush_line(id, buf)
+			_flush_line(id, buf, burn)
 			id = ""
+			burn = true
 			buf = []
 		elif not id.is_empty():
 			buf.append(line)
-	_flush_line(id, buf)
+	_flush_line(id, buf, burn)
 	var jf := FileAccess.open(out_dir.path_join("narration.json"), FileAccess.READ)
 	if jf != null:
 		var parsed: Variant = JSON.parse_string(jf.get_as_text())
@@ -94,11 +98,11 @@ func _load_narration() -> void:
 					_narration[k]["duration"] = float(parsed["lines"][k]["duration"])
 					_narration[k]["wav"] = str(parsed["lines"][k].get("wav", ""))
 
-func _flush_line(id: String, buf: Array[String]) -> void:
+func _flush_line(id: String, buf: Array[String], burn := true) -> void:
 	if id.is_empty() or buf.is_empty():
 		return
 	var text := _plain(" ".join(buf))
-	_narration[id] = {"text": text, "duration": maxf(1.2, text.split(" ", false).size() / WORDS_PER_SEC + 0.5), "wav": ""}
+	_narration[id] = {"text": text, "duration": maxf(1.2, text.split(" ", false).size() / WORDS_PER_SEC + 0.5), "wav": "", "burn": burn}
 
 # The line as it reads in captions: `*emphasis*` loses its asterisks and `{caption|spoken}` keeps the caption.
 func _plain(text: String) -> String:
@@ -119,8 +123,9 @@ func say(id: String) -> void:
 	_speech_end = start + dur
 	timeline.append({"kind": "say", "id": id, "text": n["text"], "start": start, "end": start + dur, "wav": n["wav"]})
 	for cue in _cut_cues(str(n["text"]), start, dur):
+		cue["burn"] = bool(n.get("burn", true))
 		_cues.append(cue)
-		timeline.append({"kind": "cue", "text": cue["text"], "start": cue["start"], "end": cue["end"]})
+		timeline.append({"kind": "cue", "text": cue["text"], "start": cue["start"], "end": cue["end"], "burn": cue["burn"]})
 
 # When a line was queued to start and end (video seconds): {start, end}.
 func line_timing(id: String) -> Dictionary:
@@ -168,7 +173,7 @@ func _update_captions() -> void:
 		return
 	var idx := -1
 	for i in _cues.size():
-		if t >= float(_cues[i]["start"]) and t < float(_cues[i]["end"]):
+		if t >= float(_cues[i]["start"]) and t < float(_cues[i]["end"]) and bool(_cues[i].get("burn", true)):
 			idx = i
 			break
 	if idx == _cue_index:

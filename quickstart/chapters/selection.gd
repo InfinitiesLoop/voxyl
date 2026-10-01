@@ -41,7 +41,7 @@ func run(d) -> void:
 	await d.agent("selection_clear")      # the saved project remembers its last selection
 	await d.settle(30)
 	var view = d.view3d()
-	view.call("set_camera_pose", Vector3(26.0, 14.0, 26.0), PILLAR)
+	view.call("set_camera_pose", Vector3(22.0, 11.0, 22.0), PILLAR)
 	await d.settle(20)
 	d.mark("start")
 	d.card("Selection")
@@ -55,9 +55,9 @@ func run(d) -> void:
 	await d.click(v.get_global_rect().get_center())
 	d.hide_pointer()
 	await d.wait(0.5)
-	await d.hold_keys([KEY_W], 1.0)
-	await d.hold_keys([KEY_SPACE], 0.25)
-	await d.hold_keys([KEY_SHIFT], 0.35)
+	await d.hold_keys([KEY_W], 0.8)
+	await d.hold_keys([KEY_SPACE], 0.6)           # up to about 20 cells: a high angle for the rest of the chapter
+	await d.aim_at_point(Vector3(0.0, 8.0, 0.0), 0.9)
 	await d.sync()
 
 	# --- 2. pick the tool ---------------------------------------------------------
@@ -134,7 +134,36 @@ func run(d) -> void:
 	await d.arrows_off()
 	await d.zoom_out()
 
-	# --- 7. the agent: semantic selection -----------------------------------------
+	# --- 7. copy, paste, delete, undo ---------------------------------------------
+	d.caption_at("bottom")
+	d.hide_pointer()
+	await d.glide_camera(Vector3(20.0, 19.0, 14.0), Vector3(12.0, 6.0, 0.0), 1.0)
+	d.say("copy")
+	await d.press(KEY_C, ["ctrl"])
+	await d.wait(0.5)
+	await d.press(KEY_V, ["ctrl"])                # paste mode: the copy follows the crosshair
+	await d.aim_at_point(Vector3(27.5, 0.0, -8.5), 0.9)
+	await d.wait(0.6)
+	await d.press(KEY_R)                          # turns about its handle, swinging in beside the original
+	await d.wait(1.0)
+	await d.click_crosshair(MOUSE_BUTTON_RIGHT)   # drop it
+	await d.settle(5)
+	await d.aim_at_point(Vector3(14.0, 8.0, 0.0), 0.8)    # look back up to see both
+	await d.sync()
+	await d.wait(0.5)
+	d.say("delete")
+	await d.press(KEY_BACKSPACE)
+	await d.sync()
+	await d.wait(0.6)
+	d.say("undo")
+	d.hint("LEFT-HANDED", "The Undo and Redo buttons up top do the same", 4.5)
+	await d.press(KEY_Z, ["ctrl"])                # the original comes back
+	await d.wait(1.2)
+	await d.press(KEY_Z, ["ctrl"])                # and the copy goes
+	await d.sync()
+	await d.wait(0.5)
+
+	# --- 8. the agent: semantic selection -----------------------------------------
 	d.say("agent_intro")
 	d.hide_pointer()
 	await d.sync()
@@ -158,8 +187,12 @@ func run(d) -> void:
 	await d.sync()
 	d.chat_hide()
 
-	# --- 8. what you can do with it -----------------------------------------------
+	# --- 9. what else a selection is for -------------------------------------------
+	d.caption_at("right")
 	d.say("ops")
+	await d.click_crosshair(MOUSE_BUTTON_MIDDLE)    # the panel again
+	d.pointer_to_center()
+	await d.wait(0.6)
 	var cut_btn: Control = d.ctl({"text": "Cut away this region", "class": "Button"})
 	var export_btn: Control = d.ctl({"text": "Export to Schematica", "class": "Button"})
 	if cut_btn != null and export_btn != null:
