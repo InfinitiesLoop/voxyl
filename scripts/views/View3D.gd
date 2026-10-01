@@ -337,6 +337,7 @@ func _ready() -> void:
 		_compass.offset_top = 10.0
 		_compass.offset_bottom = CompassRose.SIZE + 10.0
 		add_child(_compass)
+	_raise_tool_overlays()
 	VoxelWorld.project_settings_changed.connect(_apply_project_settings)
 	VoxelWorld.about_to_save.connect(_on_about_to_save)
 	VoxelWorld.block_changed.connect(func(p, _s): if source_project == null: _mark_cell_dirty(p))
@@ -3926,6 +3927,16 @@ func _register_tool_overlay(id: String, panel: ToolOverlayPanel, refresh: Callab
 	_tool_overlays[id] = {"panel": panel, "refresh": refresh}
 	for tool in tools:
 		_tool_overlay_ids[tool] = id
+
+# The overlay cards sit above everything else in the view: the toolbar (made after them) and the
+# compass would otherwise draw over a tall card, and so would the shell's focus frame, which is a
+# sibling of the whole pane. Last in the child order puts them over (and in front for clicks); z_index 1
+# lifts them over the focus frame.
+func _raise_tool_overlays() -> void:
+	for id in _tool_overlays:
+		var panel: Control = _tool_overlays[id]["panel"]
+		move_child(panel, get_child_count() - 1)
+		panel.z_index = 1
 
 # The overlay that should be VISIBLE right now, or "" — panels only show while the cursor is
 # free (never over a captured fly view). Paste (a modal) wins; otherwise it's the active

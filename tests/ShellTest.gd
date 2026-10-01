@@ -69,6 +69,7 @@ func _run() -> void:
 	_check_flat_render(v3d)
 	_check_render_options(v3d)
 	_check_orbit(v3d)
+	_check_overlay_stacking(v3d)
 	_check_prefab_multi_place(v3d)
 	await _check_import_progress()
 	_check_import_progress_warning_totals()
@@ -1039,4 +1040,23 @@ func _check_prefab_multi_place(v3d: Node) -> void:
 	for x in [20, 24]:
 		VoxelWorld.clear_block(Vector3i(x, 0, 0))
 		VoxelWorld.clear_block(Vector3i(x, 1, 0))
+
+# The tool overlay cards (Selection, Paste, Cutaway) must draw over the view's own chrome: the toolbar and
+# compass are created after them, so without care a tall card shows its menus on top of it, and the shell's
+# focus frame (a sibling of the whole pane) drew over it too. Cards are last in the child order (above
+# the toolbar and compass, and first for clicks) and sit at z_index 1 (above the focus frame).
+func _check_overlay_stacking(v3d: Node) -> void:
+	var view := v3d as View3D
+	var overlays: Dictionary = view.get("_tool_overlays")
+	_check("a 3D view has tool overlay cards", not overlays.is_empty())
+	var kids := view.get_children()
+	var toolbar_i := kids.find(view.get("_toolbar"))
+	var ok_order := true
+	var ok_z := true
+	for id in overlays:
+		var panel: Control = overlays[id]["panel"]
+		ok_order = ok_order and kids.find(panel) > toolbar_i
+		ok_z = ok_z and panel.z_index >= 1
+	_check("overlay cards come after the toolbar in the child order", ok_order and toolbar_i >= 0)
+	_check("overlay cards sit above the shell's focus frame (z_index)", ok_z)
 
