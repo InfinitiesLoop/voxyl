@@ -219,6 +219,7 @@ var _guide: Dictionary = {}
 # _setup_viewport for the two-pass show-through material and _update_selection_box).
 var _sel_box: MeshInstance3D
 var _sel_box_mat: StandardMaterial3D
+var _sel_cells: MeshInstance3D   # shell over the exact cells of a narrowed selection
 
 # --- Paste mode -------------------------------------------------------------
 # Interactive drop of the clipboard (Ctrl+V): a live ghost preview follows the crosshair
@@ -600,6 +601,27 @@ func _setup_viewport() -> void:
 	_sel_box.material_override = _sel_box_mat
 	_sel_box.visible = false
 	_viewport.add_child(_sel_box)
+
+	# The cells of a narrowed selection (filter, grow/shrink, structure_find): the same
+	# dim-behind / bright-in-front pair, as translucent faces instead of lines.
+	var cells_behind := StandardMaterial3D.new()
+	cells_behind.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	cells_behind.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	cells_behind.cull_mode = BaseMaterial3D.CULL_DISABLED
+	cells_behind.no_depth_test = true
+	cells_behind.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	cells_behind.albedo_color = Color(0.3, 0.85, 1.0, 0.10)
+	var cells_front := StandardMaterial3D.new()
+	cells_front.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	cells_front.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	cells_front.cull_mode = BaseMaterial3D.CULL_DISABLED
+	cells_front.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	cells_front.albedo_color = Color(0.35, 0.9, 1.0, 0.42)
+	cells_behind.next_pass = cells_front
+	_sel_cells = MeshInstance3D.new()
+	_sel_cells.material_override = cells_behind
+	_sel_cells.visible = false
+	_viewport.add_child(_sel_cells)
 
 	# Cutaway frame: the same show-through recipe in red, so the cut's edges read even where
 	# the build around them hides them.
@@ -3386,6 +3408,7 @@ func _select_region_click() -> void:
 func _update_selection_box() -> void:
 	if _sel_box == null:
 		return
+	_update_selection_cells()
 	# Only show the selection highlight while the Select tool is active — the selection state
 	# persists under other tools (for copy/paste/DELETE), it's just not drawn.
 	if VoxelWorld.active_tool != VoxelWorld.Tool.SELECT:
@@ -3410,6 +3433,57 @@ func _update_selection_box() -> void:
 		im.surface_add_vertex(p[e[1]])
 	im.surface_end()
 	_sel_box.visible = true
+
+# Past this many cells a narrowed selection shows only its box (the shell would get heavy).
+const _SEL_CELLS_MAX := 60000
+const _SEL_FACES := [
+	[Vector3i(1, 0, 0), [Vector3(1, 0, 0), Vector3(1, 1, 0), Vector3(1, 1, 1), Vector3(1, 0, 1)]],
+	[Vector3i(-1, 0, 0), [Vector3(0, 0, 0), Vector3(0, 0, 1), Vector3(0, 1, 1), Vector3(0, 1, 0)]],
+	[Vector3i(0, 1, 0), [Vector3(0, 1, 0), Vector3(0, 1, 1), Vector3(1, 1, 1), Vector3(1, 1, 0)]],
+	[Vector3i(0, -1, 0), [Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(1, 0, 1), Vector3(0, 0, 1)]],
+	[Vector3i(0, 0, 1), [Vector3(0, 0, 1), Vector3(1, 0, 1), Vector3(1, 1, 1), Vector3(0, 1, 1)]],
+	[Vector3i(0, 0, -1), [Vector3(0, 0, 0), Vector3(0, 1, 0), Vector3(1, 1, 0), Vector3(1, 0, 0)]],
+]
+
+# A plain box says everything with its outline, but once a filter, grow/shrink or
+# structure_find narrows the selection the box alone hides which cells were picked — so draw
+# the exact cells, as a translucent shell (faces between two selected cells are skipped).
+func _update_selection_cells() -> void:
+	if _sel_cells == null:
+		return
+	_sel_cells.visible = false
+	if VoxelWorld.active_tool != VoxelWorld.Tool.SELECT or not VoxelWorld.has_selection:
+		return
+	if VoxelWorld.selection_mask == null and VoxelWorld.selection_filter.is_empty():
+		return
+	var cells := VoxelWorld.selection_positions()
+	if cells.is_empty() or cells.size() > _SEL_CELLS_MAX:
+		return
+	var picked := {}
+	for p in cells:
+		picked[p] = true
+	var verts := PackedVector3Array()
+	var indices := PackedInt32Array()
+	const grow := 0.012   # a hair outside the blocks, so the shell never z-fights them
+	for p in cells:
+		var origin := Vector3(p)
+		for face in _SEL_FACES:
+			if picked.has(p + (face[0] as Vector3i)):
+				continue
+			var base := verts.size()
+			for corner in face[1]:
+				verts.append(origin + (corner as Vector3) * (1.0 + 2.0 * grow) - Vector3.ONE * grow)
+			indices.append_array([base, base + 1, base + 2, base, base + 2, base + 3])
+	if verts.is_empty():
+		return
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	_sel_cells.mesh = mesh
+	_sel_cells.visible = true
 
 # ---------------------------------------------------------------------------
 # Paste mode (Ctrl+V) — drop the clipboard via the ghost-preview overlay
