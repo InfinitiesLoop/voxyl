@@ -356,14 +356,20 @@ def clock(sec: float) -> str:
     return f"{sec // 60}:{sec % 60:02d}"
 
 
-def add_music(video: Path, music: Path, db: float, final: Path, duck: bool):
+# How far the bed dips while someone speaks: threshold 0.06 / ratio 3 takes about 6 dB off (0.02 / 9, the first
+# setting, took about 15 dB: the bed vanished under the voice).
+DUCK_THRESHOLD = 0.06
+DUCK_RATIO = 3.0
+
+
+def add_music(video: Path, music: Path, db: float, final: Path, duck: bool, thr: float = DUCK_THRESHOLD, ratio: float = DUCK_RATIO):
     """Mix a music bed under the film's audio: faded in and out, and (optionally) ducked whenever
     the voice is speaking, so it breathes around the narration. The picture is copied untouched."""
     dur = probe_duration(video)
     voice = "[0:a]asplit=2[v1][v2];" if duck else ""
     bed = f"[1:a]volume={db}dB,afade=t=in:d=3,afade=t=out:st={max(dur - 5.0, 0):.2f}:d=5[m];"
     if duck:
-        mix = ("[m][v1]sidechaincompress=threshold=0.02:ratio=9:attack=25:release=700:makeup=1[bed];"
+        mix = (f"[m][v1]sidechaincompress=threshold={thr}:ratio={ratio}:attack=25:release=700:makeup=1[bed];"
                "[v2][bed]amix=inputs=2:normalize=0:duration=first,alimiter=limit=0.95[a]")
     else:
         mix = "[0:a][m]amix=inputs=2:normalize=0:duration=first,alimiter=limit=0.95[a]"
@@ -372,7 +378,8 @@ def add_music(video: Path, music: Path, db: float, final: Path, duck: bool):
          "-c:a", "aac", "-b:a", "192k", "-t", f"{dur:.3f}", "-movflags", "+faststart", final])
 
 
-def cmd_assemble(name: str, only, music: str = "", music_db: float = -20.0, duck: bool = True):
+def cmd_assemble(name: str, only, music: str = "", music_db: float = -20.0, duck: bool = True,
+                 duck_thr: float = DUCK_THRESHOLD, duck_ratio: float = DUCK_RATIO):
     """Join the encoded chapters (film.json order) into out/<name>/<name>.mp4 with merged
     captions and a YouTube chapter list."""
     film = json.loads((ROOT / "film.json").read_text())
@@ -397,7 +404,7 @@ def cmd_assemble(name: str, only, music: str = "", music_db: float = -20.0, duck
     run([find_ffmpeg(), "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", out / "concat.txt",
          "-c", "copy", "-movflags", "+faststart", joined])
     if music:
-        add_music(joined, Path(music), music_db, final, duck)
+        add_music(joined, Path(music), music_db, final, duck, duck_thr, duck_ratio)
         joined.unlink(missing_ok=True)
     srt_out, vtt_out = [], ["WEBVTT", ""]
     for i, (a, b, t) in enumerate(cues, 1):
@@ -421,6 +428,8 @@ def main():
     ap.add_argument("--music", default="", help="film / assemble: a music file to mix under the whole film")
     ap.add_argument("--music-db", type=float, default=-20.0, help="music level before ducking (default -20 dB)")
     ap.add_argument("--no-duck", action="store_true", help="don't lower the music while the voice speaks")
+    ap.add_argument("--duck-threshold", type=float, default=DUCK_THRESHOLD, help="sidechain threshold (higher = less ducking)")
+    ap.add_argument("--duck-ratio", type=float, default=DUCK_RATIO, help="sidechain ratio (lower = less ducking)")
     ap.add_argument("--engine", choices=["kokoro", "openai"], default="kokoro",
                     help="voice engine: kokoro (local, free) or openai (needs OPENAI_API_KEY)")
     ap.add_argument("--voice", default="", help="voice name (kokoro: af_heart; openai: marin, cedar, coral...)")
@@ -445,13 +454,13 @@ def main():
             cmd_narrate(c["id"], a.voice, a.speed, a.engine, a.instructions)
             cmd_render(c["id"], a.size, a.fps, not a.no_captions, a.timeout)
             cmd_encode(c["id"], a.out_size or a.size, a.crf)
-        cmd_assemble(a.chapter, only, a.music, a.music_db, not a.no_duck)
+        cmd_assemble(a.chapter, only, a.music, a.music_db, not a.no_duck, a.duck_threshold, a.duck_ratio)
         return
     if a.command == "design":
         cmd_design(a.chapter, a.timeout)
         return
     if a.command == "assemble":
-        cmd_assemble(a.chapter, only, a.music, a.music_db, not a.no_duck)
+        cmd_assemble(a.chapter, only, a.music, a.music_db, not a.no_duck, a.duck_threshold, a.duck_ratio)
         return
     if a.command in ("narrate", "all"):
         cmd_narrate(a.chapter, a.voice, a.speed, a.engine, a.instructions)

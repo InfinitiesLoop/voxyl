@@ -69,8 +69,9 @@ draw it over the burned-in captions. Pass `--no-captions` to a render for a clea
 `render.log` has the engine output; the script prints any error lines.
 
 **Music:** `make.py assemble quickstart --music quickstart/assets/music/bed.wav` mixes a bed under the whole
-film (-20 dB, faded in and out, and ducked while the voice speaks; `--music-db`, `--no-duck`). `pipeline/music.py`
-generates an original bed (no licensing): `--style chill` (chillstep, 140 bpm half-time, the default), `upbeat` or
+film (-20 dB, faded in and out, and ducked about 6 dB while the voice speaks; `--music-db`, `--no-duck`,
+`--duck-threshold` / `--duck-ratio` for more or less ducking). `pipeline/music.py`
+generates an original bed (no licensing): `--style chill` (chillstep, 150 bpm half-time, the default), `chill-slow` (the first, 140 bpm take), `upbeat` or
 `calm`; any audio file works too.
 
 **Voice:** `--engine kokoro` (local, the default) or `--engine openai` (needs `OPENAI_API_KEY`).

@@ -93,10 +93,24 @@ func run(d) -> void:
 		var slice_axis: int = slice.get("axis")
 		var slice_at: Vector3i = slice.get("_center")
 		slice_at[slice_axis] = int(slice.get("slice_pos"))
+		var painted: Array = []
 		for k in [3, 4, 5]:
-			var cell := Vector3i(k, 8, slice_at.z) if slice_axis == 2 else Vector3i(slice_at.x, 8, k)
-			await d.click(d.slice_cell_screen(slice, cell))
+			painted.append(Vector3i(k, 8, slice_at.z) if slice_axis == 2 else Vector3i(slice_at.x, 8, k))
+		# where those blocks show up in the 3D view, so the eye can follow them there
+		var where: Rect2 = d.cell_rect(painted[0], 14.0)
+		for cell in painted:
+			where = where.merge(d.cell_rect(cell, 14.0))
+		for i in painted.size():
+			await d.click(d.slice_cell_screen(slice, painted[i]))
+			if i == 0:
+				d.arrow(where, "Appearing in 3D", "auto")
 			await d.wait(0.25)
+		d.hide_pointer()
+		await d.wait(0.8)
+		await d.spotlight(where, 28.0, 0.5)                     # a closer look at what just appeared
+		await d.wait(1.4)
+		await d.spotlight_off()
+		await d.arrows_off()
 	await d.sync()
 
 	# --- layers -------------------------------------------------------------------

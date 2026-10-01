@@ -32,6 +32,13 @@ func _finish_import(d) -> void:
 	await d.click({"text": "Close", "class": "Button"})
 	await d.wait(0.6)
 
+# The first block tile of the library grid (or the first whose tooltip contains `want`): selecting one puts its
+# turning 3D preview in the panel on the right.
+func _tile(d, want := "") -> Control:
+	var found: Control = d.ctl(func(c):
+		return c.tooltip_text != "" and d.ancestor_of(c, "BlockGrid") != null and c.size.x >= 40.0 and c.size.y >= 40.0 			and (want.is_empty() or c.tooltip_text.to_lower().contains(want.to_lower())))
+	return found
+
 func run(d) -> void:
 	d.set_fade(1.0)
 	await d.settle(20)
@@ -81,6 +88,14 @@ func run(d) -> void:
 	d.caption_top(false)
 	d.say("vanilla_done")
 	await d.sync()
+	d.say("look")
+	var tile := _tile(d)
+	if tile != null:
+		await d.click(tile)          # the right-hand panel shows it, turning
+	await d.wait(1.0)
+	d.hide_pointer()
+	await d.sync()
+	await d.wait(1.2)
 
 	# --- GTNH: NEI dumps ----------------------------------------------------------
 	await d.click({"text": "Add blocks", "class": "Button"})
@@ -88,7 +103,7 @@ func run(d) -> void:
 	panel = d.node_of_class("ImportPanel")
 	d.caption_top(true)
 	d.say("gtnh")
-	await d.pick_option(d.ctl({"class": "OptionButton"}), 1)
+	await d.pick_option(d.ctl({"class": "OptionButton", "under": panel}), 1)
 	await d.sync()
 	d.say("nei")
 	# The three Dump buttons the NEI roster needs, ringed one after another as they're named.
@@ -114,8 +129,33 @@ func run(d) -> void:
 	await d.click({"text": "Import selected", "class": "Button"})
 	await _finish_import(d)
 
-	# --- the result ---------------------------------------------------------------
+	# --- a GTNH machine ---------------------------------------------------------------
+	# (GregTech's machines are rebuilt as a family when any of its blocks is imported, so they came in with the
+	# bricks above: no second import, just a look at one.)
 	d.caption_top(false)
+	d.say("machine")
+	await d.wait(0.8)
+	var gt: Control = d.ctl({"text": "gtnh.gregtech"})
+	if gt != null:
+		await d.click(gt)
+		await d.wait(0.6)
+	# the machines fill the library, so search it for the one we want, and look at that
+	var lib_search: Control = d.ctl(func(c): return c is LineEdit and (c as LineEdit).placeholder_text == "Search blocks…" 		and c.get_window() == d.get_tree().root)
+	if lib_search != null:
+		await d.click(lib_search)
+		await d.type_text("bender (lv)", 12.0)
+		await d.wait(0.8)
+	var machine := _tile(d)
+	if machine != null:
+		await d.click(machine)
+		d.hide_pointer()
+	await d.wait(3.2)
+	if lib_search != null:                      # (a search also trims the library rail: put it back for the next shot)
+		(lib_search as LineEdit).text = ""
+		(lib_search as LineEdit).text_changed.emit("")
+		await d.wait(0.5)
+
+	# --- the result ---------------------------------------------------------------
 	d.say("done")
 	var rail: Control = d.ctl({"text": "All blocks"})
 	if rail != null:

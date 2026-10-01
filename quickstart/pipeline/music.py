@@ -1,6 +1,6 @@
 """A generated background-music bed for the quickstart video: original, so nothing to license.
 
-    quickstart/.venv/Scripts/python.exe quickstart/pipeline/music.py [--style chill|upbeat|calm] [--bpm N] [--seed 7] [--out FILE]
+    quickstart/.venv/Scripts/python.exe quickstart/pipeline/music.py [--style chill|chill-slow|upbeat|calm] [--bpm N] [--seed 7] [--out FILE]
 
 A synth made from numpy only: a warm chord pad, a soft bass, and a plucked arpeggio with a ping-pong
 delay and a touch of reverb. Four chords (I - vi - IV - V) in a bright key,
@@ -362,7 +362,10 @@ def soft_hat(rng, open_=False, sr=SR):
     return x / max(np.max(np.abs(x)), 1e-9) * np.exp(-t * (16.0 if open_ else 75.0)) * np.minimum(1.0, t / 0.004)
 
 
-def build_chill(bpm=140.0, seed=7, passes=8):
+def build_chill(bpm=150.0, seed=7, passes=8, lively=True):
+    """lively=False is the first, slower take (140 bpm, eighth-note bells, hats only in the busy section).
+    lively=True keeps the same sound but moves along: 150 bpm, a syncopated bass, hats from the first groove,
+    sixteenth-note bells and soft off-beat chord stabs in the fullest section. Still a bed, not a track."""
     rng = np.random.default_rng(seed)
     beat = 60.0 / bpm
     bar = 4 * beat
@@ -375,7 +378,7 @@ def build_chill(bpm=140.0, seed=7, passes=8):
     bass_b = np.zeros((2, n))
     drums = np.zeros((2, n))
     bells = np.zeros((2, n))
-    levels = [0, 0, 1, 1, 2, 3, 2, 1]                              # per 8-bar pass: the shape of the build
+    levels = [0, 1, 2, 2, 3, 3, 2, 1] if lively else [0, 0, 1, 1, 2, 3, 2, 1]    # per 8-bar pass: the shape of the build
     for b in range(bars):
         pas = b // (len(CH_PROG) * 2)
         level = levels[pas % len(levels)]
@@ -390,33 +393,64 @@ def build_chill(bpm=140.0, seed=7, passes=8):
         add_at(bass_b, sub_bass(float(midi(chord[0])), bar * 0.95, wob_rate, 0.5 if wob else 0.0), t0, 0.30)
         if level >= 1 and b % 2 == 1:                              # a little answering note on the last beat of every second bar
             add_at(bass_b, sub_bass(float(midi(chord[0] + 7)), beat * 0.9), t0 + 3.0 * beat, 0.16)
+        if lively and level >= 1:                                  # the bass walks: short pulses off the beat
+            for st, tone, g in ((6, 12, 0.14), (10, 0, 0.16), (14, 7, 0.12)):
+                add_at(bass_b, sub_bass(float(midi(chord[0] + tone)), step * 1.7), t0 + st * step, g)
         if level >= 1:
             add_at(drums, deep_kick(), t0, 0.55)                   # beat 1
             add_at(drums, deep_kick(), t0 + 10 * step, 0.38)       # the "and" of 3
             add_at(drums, clap(rng), t0 + 8 * step, 0.22, pan=0.08)   # beat 3: the half-time backbeat
-        if level >= 2:
+        if lively and level >= 2:
+            add_at(drums, deep_kick(), t0 + 7 * step, 0.22)        # a ghost kick leading into the backbeat
+        if lively and level >= 1:
+            hat_step = 1 if level >= 2 else 2                      # sixteenths in the busy sections, eighths before
+            for i in range(0, 16, hat_step):
+                at = t0 + i * step + (0.010 if (i // 2) % 2 else 0.0)
+                accent = 0.085 if i % 4 == 2 else (0.060 if i % 2 == 0 else 0.038)
+                add_at(drums, soft_hat(rng), at, accent, pan=-0.25 + 0.5 * ((i // 2) % 3) / 2.0)
+            if b % 4 == 3:
+                add_at(drums, soft_hat(rng, True), t0 + 14 * step, 0.08, pan=0.2)
+            if b % 8 == 7:                                         # a little fill into the next phrase
+                for st in (12, 13, 14, 15):
+                    add_at(drums, clap(rng), t0 + st * step, 0.07 + 0.015 * (st - 12), pan=0.1)
+        elif level >= 2:
             for i in range(0, 16, 2):                              # eighth-note hats, leaning back a touch
                 at = t0 + i * step + (0.012 if (i // 2) % 2 else 0.0)
                 add_at(drums, soft_hat(rng), at, 0.065 if i % 4 else 0.09, pan=-0.25 + 0.5 * ((i // 2) % 3) / 2.0)
             if b % 4 == 3:
                 add_at(drums, soft_hat(rng, True), t0 + 14 * step, 0.08, pan=0.2)
+        if lively and level >= 3:                                  # soft off-beat chord stabs: the upbeat lift
+            for st in (3, 6, 11, 14):
+                add_at(bells, stab([m + 12 for m in chord[1][:4]], beat * 0.5), t0 + st * step, 0.075, pan=-0.2)
         notes = chord[1] + [chord[1][0] + 12]
-        for i in range(8):                                         # bells: sparse in the early sections, flowing later
-            if level == 0 or (level == 1 and i % 4) or (level == 2 and i % 2 and i != 5):
+        if lively:                                                 # bells: a few early on, eighths, then sixteenths
+            slots = 16 if level >= 2 else 8
+            unit = step if level >= 2 else 2 * step
+        else:
+            slots, unit = 8, 2 * step
+        for i in range(slots):
+            if lively:
+                if (level == 0 and i % 4) or (level == 1 and i % 2 and i != 5):
+                    continue
+                if level >= 2 and i % 4 == 1 and level == 2:        # leave breathing room in the middle section
+                    continue
+            elif level == 0 or (level == 1 and i % 4) or (level == 2 and i % 2 and i != 5):
                 continue
             idx = CH_ARP[(i + b) % len(CH_ARP)]
             m = notes[idx % len(notes)] + 12
-            at = t0 + i * 2 * step + (0.02 if i % 2 else 0.0)
-            vel = (0.24 if i % 4 == 0 else 0.15) * (1.0 + 0.08 * rng.standard_normal())
-            add_at(bells, pluck(float(midi(m + 12)), beat * 2.2, rng), at, vel, pan=-0.4 + 0.8 * ((i % 5) / 4.0))
+            at = t0 + i * unit + (0.015 if i % 2 else 0.0)
+            vel = (0.22 if i % 4 == 0 else 0.13) * (1.0 + 0.08 * rng.standard_normal())
+            add_at(bells, pluck(float(midi(m + 12)), beat * 2.0, rng), at, vel, pan=-0.4 + 0.8 * ((i % 5) / 4.0))
     # stems: the pad dark and wide, the bass round, the bells echoing in a big room
-    pads = np.stack([lowpass_fast(pads[0], 2600.0), lowpass_fast(pads[1], 2600.0)])
+    pad_cut = 3400.0 if lively else 2600.0
+    pads = np.stack([lowpass_fast(pads[0], pad_cut), lowpass_fast(pads[1], pad_cut)])
     bass_b = np.stack([lowpass_fast(bass_b[0], 600.0), lowpass_fast(bass_b[1], 600.0)])
     bells = delay_pingpong(bells, bpm, feedback=0.42, mix=0.40)
     bells = reverb(bells, rng, seconds=3.2, mix=0.34)
     drums = reverb(drums, rng, seconds=1.2, mix=0.14)
     buf = pads + bass_b + drums + bells
-    buf = np.stack([lowpass_fast(buf[0], 8000.0), lowpass_fast(buf[1], 8000.0)])
+    top = 9500.0 if lively else 8000.0
+    buf = np.stack([lowpass_fast(buf[0], top), lowpass_fast(buf[1], top)])
     loop_len = int(total * SR)
     head = buf[:, :loop_len].copy()
     tail_part = buf[:, loop_len:loop_len + int(tail * SR)]
@@ -428,15 +462,17 @@ def build_chill(bpm=140.0, seed=7, passes=8):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--style", choices=["chill", "upbeat", "calm"], default="chill")
-    ap.add_argument("--bpm", type=float, default=0.0, help="default: 140 chill (half-time), 118 upbeat, 92 calm")
+    ap.add_argument("--style", choices=["chill", "chill-slow", "upbeat", "calm"], default="chill")
+    ap.add_argument("--bpm", type=float, default=0.0, help="default: 150 chill (half-time), 140 chill-slow, 118 upbeat, 92 calm")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--out", default=str(ROOT / "assets" / "music" / "bed.wav"))
     a = ap.parse_args()
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     if a.style == "chill":
-        audio = build_chill(a.bpm or 140.0, a.seed)
+        audio = build_chill(a.bpm or 150.0, a.seed, lively=True)
+    elif a.style == "chill-slow":
+        audio = build_chill(a.bpm or 140.0, a.seed, lively=False)
     elif a.style == "upbeat":
         audio = build_upbeat(a.bpm or 118.0, a.seed)
     else:

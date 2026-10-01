@@ -15,6 +15,9 @@ Search for what you want, and import.
 [vanilla_done]
 And there they are. Each mod gets its own library.
 
+[look]
+Click any block to see it up close, turning, so you can look at it from every side.
+
 [gtnh]
 Playing a modpack? voxyl speaks NEI.
 
@@ -26,6 +29,9 @@ Then point voxyl at your instance.
 
 [gtnh_import]
 Add a prefix like G T N H to keep things tidy, then import everything, or search for something specific.
+
+[machine]
+Modded machines come across too. Here's a GregTech bending machine.
 
 [done]
 Libraries, sorted by mod, ready for any palette.
