@@ -10,6 +10,8 @@ extends RefCounted
 #   --mcp-token=T       use access token T for this run (not saved)
 #   --sandbox=DIR       keep projects, palettes, prefabs, captures and settings under DIR instead of
 #                       the real workspace (libraries are still read from the shared folder)
+#   --library=DIR       read and write imported block libraries under DIR instead of the shared folder
+#                       (an empty DIR is a fresh install's library)
 
 const SECTION_AGENT := "agent"
 const DEFAULT_PORT := 47823
@@ -100,6 +102,8 @@ static func apply_command_line() -> void:
 				_overrides["%s/require_token" % SECTION_AGENT] = not val.is_empty()
 			"--sandbox":
 				use_sandbox(val)
+			"--library":
+				AssetLibrary.ROOT = val.replace("\\", "/")
 
 # Keep everything this run writes under `dir` (see the header).
 static func use_sandbox(dir: String) -> void:
