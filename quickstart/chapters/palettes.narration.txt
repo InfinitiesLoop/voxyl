@@ -15,6 +15,9 @@ Change your mind about an entry? Right-click it, pick a different block, and eve
 [edit_done]
 There, we just changed every glow channel all at once, by editing its palette entry.
 
+[shapes]
+And entries aren't limited to whole blocks. Voxyl supports ArchitectureCraft shapes and Forge Microblocks too.
+
 [swap]
 Or swap the whole look. Add a different palette to the project.
 

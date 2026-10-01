@@ -91,9 +91,10 @@ func run(d) -> void:
 	# Just like pasting: three drops, no more detail than that.
 	d.say("repeat")
 	var first := true
-	for spot in [Vector3(-17.5, 0.0, -4.5), Vector3(8.5, 0.0, -4.5), Vector3(32.5, 0.0, -4.5)]:
+	# 17 cells apart: a pillar's top arms are 17 wide, so neighbours meet end to end at the top
+	for spot in [Vector3(-17.5, 0.0, -4.5), Vector3(-0.5, 0.0, -4.5), Vector3(16.5, 0.0, -4.5)]:
 		if not first:
-			await d.hold_keys([KEY_D], 1.3)
+			await d.hold_keys([KEY_D], 1.15)
 		first = false
 		await d.aim_at_point(spot, 0.9)
 		await d.wait(0.4)
@@ -101,6 +102,6 @@ func run(d) -> void:
 		await d.wait(0.6)
 	await d.press(KEY_ESCAPE)
 	await d.sync()
-	await d.glide_camera(Vector3(7.0, 15.0, 38.0), Vector3(7.0, 7.0, 0.0), 2.4)
+	await d.glide_camera(Vector3(-1.0, 17.0, 44.0), Vector3(-1.0, 9.0, 0.0), 2.4)
 	await d.wait(1.0)
 	await d.fade_out(0.9)

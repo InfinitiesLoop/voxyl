@@ -32,16 +32,17 @@ func _free_run(d, slice: Control, slice_axis: int, slice_at: Vector3i) -> Array:
 				return cells
 	return []
 
-# Slide a view's camera in (or out) while the zoom closes in, so the build fills the frame.
-func _push_in(d, view: Control, to: Vector3, secs: float) -> void:
+# Slide a view's own camera to `to`, ending up looking at `look`: a real close-up in the 3D view (its pixels stay
+# sharp), not a magnified video frame.
+func _camera_to(d, view: Control, to: Vector3, look: Vector3, secs: float, from_look := PILLAR) -> void:
 	var from: Vector3 = view.get("_camera_pos")
 	var t0: float = d.t
 	while d.t < t0 + secs:
 		var u := clampf((d.t - t0) / secs, 0.0, 1.0)
 		u = u * u * (3.0 - 2.0 * u)
-		view.call("set_camera_pose", from.lerp(to, u), PILLAR)
+		view.call("set_camera_pose", from.lerp(to, u), from_look.lerp(look, u))
 		await d.get_tree().process_frame
-	view.call("set_camera_pose", to, PILLAR)
+	view.call("set_camera_pose", to, look)
 
 func run(d) -> void:
 	d.set_fade(1.0)
@@ -178,8 +179,7 @@ func run(d) -> void:
 
 	# --- render modes: close in on that view, and step through every one --------------
 	d.say("clay")
-	_push_in(d, second3, Vector3(-12.0, 12.0, -12.0), 1.2)
-	await d.zoom_to(second3, 2.0, 0.9)
+	_camera_to(d, second3, Vector3(-6.0, 12.5, -6.0), Vector3(0.0, 12.0, 0.0), 1.4)     # in close, on the top of the shaft
 	var render_pick: OptionButton = d.ctl(func(c): return c is OptionButton and second3.is_ancestor_of(c) and c.get_item_text(0).begins_with("Render"))
 	await d.pick_option(render_pick, 2)                 # Clay
 	await d.wait(0.9)
@@ -189,7 +189,7 @@ func run(d) -> void:
 	await d.pick_option(render_pick, 0)                 # and back to Textured
 	await d.wait(0.6)
 	await d.sync()
-	await d.zoom_out(0.8)
+	await _camera_to(d, second3, Vector3(-17.0, 12.0, -17.0), PILLAR, 1.1, Vector3(0.0, 12.0, 0.0))     # and back out
 
 	# --- orbit --------------------------------------------------------------------
 	d.say("orbit")

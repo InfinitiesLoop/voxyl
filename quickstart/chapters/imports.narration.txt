@@ -15,9 +15,6 @@ Search for what you want, and import.
 [vanilla_done]
 And there they are. Each mod gets its own library.
 
-[look]
-Click any block to see it up close, turning, so you can look at it from every side.
-
 [gtnh]
 Playing a modpack? voxyl speaks NEI.
 

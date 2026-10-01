@@ -77,6 +77,15 @@ func run(d) -> void:
 	d.hint("LEFT-HANDED", "Delete opens the inventory too", 4.0)
 	await d.wait(0.5)
 	var select_btn: Control = d.ctl({"text": "Select", "class": "Button"})
+	# the build tools sit in one strip: vignette the whole strip while they're mentioned, then close in on Select
+	var strip: Rect2 = d.rect_of(select_btn)
+	for tool_name in ["Pencil", "Build to me", "Wand", "Exchange"]:
+		var tb: Control = d.ctl({"text": tool_name, "class": "Button"})
+		if tb != null:
+			strip = strip.merge(d.rect_of(tb))
+	await d.wait_for("tool", "Press E for your inventory.", 0.3)
+	await d.spotlight(strip, 16.0)
+	await d.wait_for("tool", "build tools.")
 	await d.spotlight(select_btn, 14.0)
 	d.arrow(select_btn, "Select tool", "above")
 	await d.click(select_btn)

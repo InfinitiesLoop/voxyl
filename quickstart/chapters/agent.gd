@@ -61,7 +61,7 @@ func run(d) -> void:
 	await d.show_click({"text": "Copy setup command", "class": "Button"})
 	await d.wait(0.3)
 	await d.terminal_open("Terminal")
-	await d.terminal_type(command)
+	await d.terminal_paste(command)
 	await d.terminal_print("Added HTTP MCP server voxyl to user config")
 	await d.sync()
 	await d.terminal_close()

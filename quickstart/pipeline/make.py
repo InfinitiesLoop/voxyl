@@ -362,6 +362,22 @@ DUCK_THRESHOLD = 0.06
 DUCK_RATIO = 3.0
 
 
+# Where the bed sits against the voice (which is normalised to about -16 LUFS). The bed is measured the way small
+# speakers hear it (a 150 Hz high-pass: a bass-heavy bed measures loud on paper and is barely there on a laptop),
+# then brought to this level before any ducking. -30 is about 13 dB under the voice.
+MUSIC_LUFS = -30.0
+
+
+def measure_lufs(path: Path, hpf: int = 150) -> float:
+    """Integrated loudness (LUFS) of an audio file as heard through a high-pass at `hpf` Hz."""
+    out = subprocess.run([find_ffmpeg(), "-nostats", "-i", str(path), "-af", f"highpass=f={hpf},ebur128=peak=true",
+                          "-f", "null", "-"], capture_output=True, text=True)
+    m = re.search(r"Integrated loudness:\s*\n\s*I:\s*(-?[\d.]+) LUFS", out.stderr)
+    if not m:
+        sys.exit("couldn't measure the music's loudness")
+    return float(m.group(1))
+
+
 def add_music(video: Path, music: Path, db: float, final: Path, duck: bool, thr: float = DUCK_THRESHOLD, ratio: float = DUCK_RATIO):
     """Mix a music bed under the film's audio: faded in and out, and (optionally) ducked whenever
     the voice is speaking, so it breathes around the narration. The picture is copied untouched."""
@@ -378,7 +394,7 @@ def add_music(video: Path, music: Path, db: float, final: Path, duck: bool, thr:
          "-c:a", "aac", "-b:a", "192k", "-t", f"{dur:.3f}", "-movflags", "+faststart", final])
 
 
-def cmd_assemble(name: str, only, music: str = "", music_db: float = -20.0, duck: bool = True,
+def cmd_assemble(name: str, only, music: str = "", music_db=None, duck: bool = True, music_lufs: float = MUSIC_LUFS,
                  duck_thr: float = DUCK_THRESHOLD, duck_ratio: float = DUCK_RATIO):
     """Join the encoded chapters (film.json order) into out/<name>/<name>.mp4 with merged
     captions and a YouTube chapter list."""
@@ -404,7 +420,9 @@ def cmd_assemble(name: str, only, music: str = "", music_db: float = -20.0, duck
     run([find_ffmpeg(), "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", out / "concat.txt",
          "-c", "copy", "-movflags", "+faststart", joined])
     if music:
-        add_music(joined, Path(music), music_db, final, duck, duck_thr, duck_ratio)
+        gain = music_db if music_db is not None else music_lufs - measure_lufs(Path(music))
+        print(f"  music gain {gain:+.1f} dB" + ("" if music_db is not None else f" (to {music_lufs} LUFS, speaker-weighted)"))
+        add_music(joined, Path(music), gain, final, duck, duck_thr, duck_ratio)
         joined.unlink(missing_ok=True)
     srt_out, vtt_out = [], ["WEBVTT", ""]
     for i, (a, b, t) in enumerate(cues, 1):
@@ -426,7 +444,8 @@ def main():
     ap.add_argument("chapter", help="a chapter id, or the film's name for assemble / film")
     ap.add_argument("--only", default="", help="film / assemble: comma-separated chapter ids")
     ap.add_argument("--music", default="", help="film / assemble: a music file to mix under the whole film")
-    ap.add_argument("--music-db", type=float, default=-20.0, help="music level before ducking (default -20 dB)")
+    ap.add_argument("--music-db", type=float, default=None, help="music gain in dB (default: automatic, to --music-lufs)")
+    ap.add_argument("--music-lufs", type=float, default=MUSIC_LUFS, help="music loudness before ducking, high-passed at 150 Hz (default -30)")
     ap.add_argument("--no-duck", action="store_true", help="don't lower the music while the voice speaks")
     ap.add_argument("--duck-threshold", type=float, default=DUCK_THRESHOLD, help="sidechain threshold (higher = less ducking)")
     ap.add_argument("--duck-ratio", type=float, default=DUCK_RATIO, help="sidechain ratio (lower = less ducking)")
@@ -454,13 +473,13 @@ def main():
             cmd_narrate(c["id"], a.voice, a.speed, a.engine, a.instructions)
             cmd_render(c["id"], a.size, a.fps, not a.no_captions, a.timeout)
             cmd_encode(c["id"], a.out_size or a.size, a.crf)
-        cmd_assemble(a.chapter, only, a.music, a.music_db, not a.no_duck, a.duck_threshold, a.duck_ratio)
+        cmd_assemble(a.chapter, only, a.music, a.music_db, not a.no_duck, duck_thr=a.duck_threshold, duck_ratio=a.duck_ratio, music_lufs=a.music_lufs)
         return
     if a.command == "design":
         cmd_design(a.chapter, a.timeout)
         return
     if a.command == "assemble":
-        cmd_assemble(a.chapter, only, a.music, a.music_db, not a.no_duck, a.duck_threshold, a.duck_ratio)
+        cmd_assemble(a.chapter, only, a.music, a.music_db, not a.no_duck, duck_thr=a.duck_threshold, duck_ratio=a.duck_ratio, music_lufs=a.music_lufs)
         return
     if a.command in ("narrate", "all"):
         cmd_narrate(a.chapter, a.voice, a.speed, a.engine, a.instructions)

@@ -87,15 +87,12 @@ func run(d) -> void:
 	await _finish_import(d)
 	d.caption_top(false)
 	d.say("vanilla_done")
-	await d.sync()
-	d.say("look")
 	var tile := _tile(d)
 	if tile != null:
 		await d.click(tile)          # the right-hand panel shows it, turning
-	await d.wait(1.0)
 	d.hide_pointer()
 	await d.sync()
-	await d.wait(1.2)
+	await d.wait(0.6)
 
 	# --- GTNH: NEI dumps ----------------------------------------------------------
 	await d.click({"text": "Add blocks", "class": "Button"})

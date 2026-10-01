@@ -9,7 +9,7 @@ Selection is the tool you'll reach for all day. And it does a lot more than draw
 Click into the view and you're flying. Let's rise up for a better angle.
 
 [tool]
-Press E for your inventory, then pick the Select tool.
+Press E for your inventory. It's also where you choose between the different build tools. We want Select.
 
 [corners]
 Right-click two opposite corners on the ground, and you've claimed a footprint. It doesn't have to start on the ground, though. Right-click any two opposite blocks, and you get a full 3D box.
@@ -18,7 +18,7 @@ Right-click two opposite corners on the ground, and you've claimed a footprint. 
 Middle-click, and its panel opens. You get the exact dimensions straight away, which makes this a pretty handy tape measure too.
 
 [nudge]
-Now pull the top up to the height you want. Hold Shift to move it five cells at a time, and watch the numbers. Seventeen by eighteen by seventeen. That's the whole pillar.
+Now pull the top up to the height you want. Hold Shift to move it five cells at a time, and watch the numbers. Seventeen by eighteen by seventeen. We've selected the entire build now.
 
 [semantics]
 Below that, what's inside, by meaning. Every semantic, and how many of each.

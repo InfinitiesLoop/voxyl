@@ -549,6 +549,13 @@ func terminal_type(command: String, cps := 55.0) -> void:
 	fx.term_relayout()
 	await wait(0.5)
 
+# The command appears all at once (a paste, not a typing): saves watching it come out a letter at a time.
+func terminal_paste(command: String) -> void:
+	fx.term_line("$ " + command)
+	await get_tree().process_frame
+	fx.term_relayout()
+	await wait(0.7)
+
 func terminal_print(text: String) -> void:
 	fx.term_line(text, true)
 	await wait(0.4)
