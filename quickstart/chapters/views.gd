@@ -88,6 +88,61 @@ func run(d) -> void:
 	await d.press(KEY_ESCAPE)
 	await d.sync()
 	d.keys_hud(false)
+	# --- more views: a second 3D from another angle, a second slice --------------
+	d.say("more")
+	d.caption_top(true)
+	await d.click({"text": "2×2", "class": "Button"})
+	await d.wait(0.9)
+	await d.click({"text": "+ 3D", "class": "Button"})
+	await d.wait(0.7)
+	var threes: Array = d.views3d()
+	var first3 = threes[0]
+	var second3 = threes[1]
+	second3.call("set_camera_pose", Vector3(-17.0, 12.0, -17.0), PILLAR)
+	await d.wait(1.2)
+	# a second slice, from the first 3D view, on another axis
+	await d.click(first3.get_global_rect().get_center())
+	await d.click(first3.get_global_rect().get_center())
+	d.hide_pointer()
+	await d.aim_at_cell(Vector3i(0, 6, 2), 0.7)
+	await d.press(KEY_TAB)
+	await d.press(KEY_TAB)
+	await d.wait(0.5)
+	await d.press(KEY_ENTER)
+	await d.wait(1.0)
+	await d.sync()
+
+	# --- render modes -------------------------------------------------------------
+	d.say("clay")
+	var render_pick: OptionButton = d.ctl(func(c): return c is OptionButton and second3.is_ancestor_of(c) and c.get_item_text(0).begins_with("Render"))
+	await d.pick_option(render_pick, 2)                 # Clay
+	await d.wait(1.6)
+	await d.pick_option(render_pick, 1)                 # Intent
+	await d.wait(1.1)
+	await d.pick_option(render_pick, 4)                 # X-ray
+	await d.wait(1.1)
+	await d.pick_option(render_pick, 2)                 # back to Clay
+	await d.sync()
+
+	# --- orbit --------------------------------------------------------------------
+	d.say("orbit")
+	var cam_menu: MenuButton = d.ctl(func(c): return c is MenuButton and second3.is_ancestor_of(c) and (c as MenuButton).text.begins_with("Camera"))
+	await d.pick_menu(cam_menu, ViewToolbar.ORBIT_BASE + 2)       # Orbit medium
+	d.hide_pointer()
+	await d.wait(1.0)
+	var slice2: Control = d.slice_views()[1]                       # the second slice, through the pillar
+	d.get_node("/root/VoxelWorld").select_slot(5)                  # Collar
+	var slice_axis: int = slice2.get("axis")
+	var slice_at: Vector3i = slice2.get("_center")
+	slice_at[slice_axis] = int(slice2.get("slice_pos"))
+	print("ORBIT speed=", second3.get("orbit_speed"), " slice axis=", slice_axis, " at=", slice_at)
+	for off in [Vector2i(3, 6), Vector2i(4, 6), Vector2i(5, 6), Vector2i(5, 7), Vector2i(5, 8)]:
+		var cell := Vector3i(off.x, off.y, slice_at.z) if slice_axis == 2 else Vector3i(slice_at.x, off.y, off.x)
+		await d.click(d.slice_cell_screen(slice2, cell))
+		await d.wait(0.35)
+	d.hide_pointer()
+	await d.sync()
+	await d.wait(2.0)
 	d.say("end")
 	await d.sync()
 	await d.fade_out(0.9)

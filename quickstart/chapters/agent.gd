@@ -1,11 +1,14 @@
 extends RefCounted
-# quickstart: library=empty seed=
+# quickstart: library=real seed=
 
-# Chapter: connecting an agent, then a staged build. The terminal is a card drawn over the app (the
-# real one is an OS window the recording can't see); the build itself is real: the same tools an agent
-# calls, animating into the open project.
+# Chapter: connecting an agent, then a staged build from a reference photo. The terminal is a card drawn
+# over the app (the real one is an OS window the recording can't see). The build itself is real: the
+# calls in watchtower.build.json (made by design/watchtower.py, the way an agent would write them from
+# assets/watchtower-reference.webp) go through the same tool registry the MCP server serves, so the
+# tower rises in the app exactly as it would for a connected agent.
 
-const TOWER := Vector3(4.0, 5.0, 4.0)
+const BUILD := "res://quickstart/chapters/watchtower.build.json"
+const TOWER := Vector3(12.0, 21.0, 0.0)     # where the camera looks: east of the tower, so it sits left of the chat card
 
 func _masked(command: String) -> String:
 	var re := RegEx.new()
@@ -15,15 +18,10 @@ func _masked(command: String) -> String:
 		return command
 	return command.replace(m.get_string(0), "Bearer %s…%s" % [m.get_string(1), m.get_string(2)])
 
-func _fill(d, mn: Array, mx: Array, sem: String, style := "solid", sym := {}) -> void:
-	var args := {"region": {"min": mn, "max": mx}, "semantic": sem, "style": style}
-	if not sym.is_empty():
-		args["symmetry"] = sym
-	await d.agent("region_fill", args)
-
 func run(d) -> void:
 	d.set_fade(1.0)
 	await d.settle(20)
+	var data: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(BUILD))
 	d.mark("start")
 	d.card("Agent setup")
 	await d.fade_in(0.7)
@@ -61,46 +59,51 @@ func run(d) -> void:
 	await d.click({"text": "Open", "class": "Button"})
 	await d.wait(0.8)
 	var view = d.view3d()
-	view.call("set_camera_pose", Vector3(15.0, 10.0, 15.0), TOWER)
+	view.call("set_camera_pose", TOWER + Vector3(sin(deg_to_rad(15.0)) * 62.0, 12.0, cos(deg_to_rad(15.0)) * 62.0), TOWER)
 	await d.wait(0.6)
 	var badge: Control = d.ctl(func(c): return c is Label and str((c as Label).text).begins_with("●"))
 	if badge != null:
 		await d.spotlight(badge, 10.0)
 	await d.sync()
+	await d.wait(1.0)
 	await d.spotlight_off()
 
-	# --- ask, and watch it build --------------------------------------------------
+	# --- ask, with a reference image ----------------------------------------------
 	d.caption_at("left")
 	d.say("ask")
-	await d.chat_user("Build me a little watchtower.")
-	var sym := {"rotate4": {"center": [4, 4]}}
-	d.orbit(TOWER, 15.0, 8.0, 45.0, 120.0, 12.0)
-	await d.chat_tool("region_fill", "Floor1 · floor", func():
-		await _fill(d, [0, 0, 0], [8, 0, 8], "Floor1"))
-	await d.chat_tool("region_fill", "Wall · walls", func():
-		await _fill(d, [0, 1, 0], [8, 10, 8], "Wall", "walls"))
-	await d.chat_tool("region_fill", "Trim · corners ×4", func():
-		await _fill(d, [0, 1, 0], [0, 10, 0], "Trim", "solid", sym))
-	await d.chat_tool("region_fill", "Window · ×4", func():
-		await _fill(d, [3, 4, 0], [5, 7, 0], "Window", "solid", sym))
-	await d.chat_tool("region_fill", "Accent · battlements", func():
-		await _fill(d, [0, 11, 0], [8, 11, 8], "Accent", "walls"))
-	await d.chat_tool("region_fill", "Roof", func():
-		await _fill(d, [1, 10, 1], [7, 10, 7], "Roof"))
-	await d.chat_agent("Done: a 9×12×9 watchtower.")
+	d.chat_clear()
+	await d.chat_image("watchtower-reference.webp")
+	await d.chat_user("Build me this watchtower.")
 	await d.sync()
+	d.say("build")
+	await d.chat_agent("A round stone tower with a machicolated deck and slate cone roof, a curtain wall, a timber hut.", 70.0)
+	var pal: Dictionary = data["palette"]
+	await d.chat_tool("palette_create", "Castle · from your minecraft library", func():
+		await d.agent("palette_create", {"name": pal["name"], "libraries": pal["libraries"], "entries": pal["entries"]})
+		await d.agent("project_palettes_set", {"palettes": [pal["name"]]})
+		await d.agent("hotbar_set", {"slots": ["Tower Stone", "Tower Stone Light", "Corbel", "Merlon", "Paving", "Roof Slate",
+			"Timber", "Plaster", "Window", "Slit", "Railing", "Rock"], "active": 0}))
+	d.orbit(TOWER, 62.0, 12.0, 15.0, 75.0, 30.0)
+	for step in data["steps"]:
+		var calls: Array = step["calls"]
+		await d.chat_tool(str(calls[0]["tool"]), "%s · %d cells" % [step["label"], int(step["cells"])], func():
+			for c in calls:
+				await d.agent(str(c["tool"]), c["args"])
+			await d.wait(1.0))
+	await d.chat_agent("Done: a watchtower, 45 × 48 × 33.")
+	await d.sync()
+	await d.wait(1.2)
 
 	# --- you stay in control ------------------------------------------------------
 	d.say("undo")
+	d.chat_hide()
 	var pause: Control = d.ctl({"text": "Pause agent", "class": "Button"})
 	var undo: Control = d.ctl({"text": "Undo", "class": "Button"})
-	d.orbit(TOWER, 15.0, 8.0, 120.0, 190.0, 6.0)
 	if pause != null and undo != null:
 		await d.spotlight(pause.get_global_rect().merge(undo.get_global_rect()).grow(4.0), 10.0)
 	await d.sync()
 	await d.spotlight_off()
-	d.chat_hide()
 	d.say("end")
 	await d.sync()
-	await d.wait(0.6)
+	await d.wait(1.5)
 	await d.fade_out(0.9)

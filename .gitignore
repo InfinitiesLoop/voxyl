@@ -39,3 +39,4 @@ builds/
 
 __pycache__/
 *.pyc
+/quickstart/assets/music/*.wav

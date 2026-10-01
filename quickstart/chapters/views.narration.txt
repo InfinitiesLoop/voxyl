@@ -15,5 +15,14 @@ Step through the layers with the arrows, and turn the slice to taste.
 [fly]
 Back in 3D, click to fly. W, A, S and D to move, Space to rise, Shift to sink. Tap Control while you move to sprint, and Escape to let go.
 
+[more]
+And two is just the start. Add a second 3D view from another angle, and a second slice from another axis.
+
+[clay]
+Every 3D view has its own render mode. Try Clay, for pure form. Or intent, x-ray, outline, wireframe. There are plenty to choose from.
+
+[orbit]
+Then switch on Orbit, and that view circles your build all by itself. Work in one view while another shows you every side.
+
 [end]
 Same build, whichever way you want to look at it.

@@ -6,21 +6,16 @@ extends RefCounted
 
 const PILLAR := Vector3(0.0, 9.0, 0.0)
 
-func _place_here(d, aim: Vector3, rotate_first := false) -> void:
-	await d.press(KEY_E)
-	await d.wait(0.5)
-	await d.click({"text": "Prefabs", "class": "Button"})
-	await d.wait(0.6)
-	await d.click({"tooltip": "Conduit Pillar"})
-	d.hide_pointer()
-	await d.wait(0.8)
-	await d.aim_at_point(aim, 0.9)
-	await d.wait(0.7)
-	if rotate_first:
-		await d.press(KEY_R)
-		await d.wait(0.9)
-	await d.click_crosshair(MOUSE_BUTTON_RIGHT)
-	await d.wait(0.8)
+# The fine-tune panel's X/Y/Z rows: the "+" button of the row ("-", value, "+").
+func _axis_button(d, axis: String, _idx: int) -> Control:
+	var label: Control = d.ctl({"text": axis + ":", "class": "Label"})
+	if label == null:
+		return null
+	var buttons := []
+	for c in label.get_parent().get_children():
+		if c is Button:
+			buttons.append(c)
+	return buttons[1] if buttons.size() >= 2 else null
 
 func run(d) -> void:
 	d.set_fade(1.0)
@@ -69,7 +64,21 @@ func run(d) -> void:
 	await d.click({"tooltip": "Conduit Pillar"})
 	await d.wait(2.0)
 	await d.click({"tooltip": "Conduit Crown"})
-	await d.wait(2.0)
+	await d.wait(1.0)
+	await d.sync()
+
+	# --- turn a prefab around -----------------------------------------------------
+	d.say("rotate")
+	await d.click({"tooltip": "Conduit Pillar"})
+	await d.wait(0.8)
+	var preview = d.node_of_class("PrefabPreview")
+	if preview != null:
+		var box: Rect2 = d.rect_of(preview)
+		var mid := box.get_center()
+		await d.drag_path([mid + Vector2(-170.0, 10.0), mid + Vector2(150.0, -30.0), mid + Vector2(-60.0, 40.0)], 1.8)
+		await d.scroll(mid, 3)
+		await d.wait(0.4)
+		await d.scroll(mid, -3)
 	await d.sync()
 
 	# --- place pillars into a new project -----------------------------------------
@@ -82,15 +91,42 @@ func run(d) -> void:
 	var v: Control = d.view3d()
 	await d.click(v.get_global_rect().get_center())
 	d.hide_pointer()
+	await d.wait(0.4)
+	await d.press(KEY_E)
 	await d.wait(0.5)
-	await _place_here(d, Vector3(-17.5, 0.0, -4.5))
+	await d.click({"text": "Prefabs", "class": "Button"})
+	await d.wait(0.5)
+	await d.click({"tooltip": "Conduit Pillar"})
+	d.hide_pointer()
+	await d.wait(0.7)
+	await d.aim_at_point(Vector3(-17.5, 0.0, -4.5), 0.9)
+	await d.press(KEY_R)
+	await d.wait(0.5)
+	await d.click_crosshair(MOUSE_BUTTON_LEFT)               # lock it where it is
+	await d.wait(0.5)
+	await d.click_crosshair(MOUSE_BUTTON_MIDDLE)             # fine-tune panel
+	d.pointer_to_center()
+	await d.wait(0.5)
+	var plus_x: Control = _axis_button(d, "X", 3)
+	if plus_x != null:
+		await d.click(plus_x)
+		await d.click(plus_x)
+	await d.wait(0.3)
 	await d.sync()
 	d.say("repeat")
-	await d.hold_keys([KEY_D], 1.6)
-	await _place_here(d, Vector3(8.5, 0.0, -4.5), true)
-	await d.hold_keys([KEY_D], 1.4)
-	await _place_here(d, Vector3(30.5, 0.0, -4.5))
+	await d.click(v.get_global_rect().get_center())          # back to aiming: it's still locked, nudged over
+	d.hide_pointer()
+	await d.wait(0.5)
+	await d.click_crosshair(MOUSE_BUTTON_RIGHT)              # drop it
+	await d.wait(0.7)
+	for spot in [Vector3(8.5, 0.0, -4.5), Vector3(32.5, 0.0, -4.5)]:
+		await d.hold_keys([KEY_D], 1.1)
+		await d.aim_at_point(spot, 0.8)
+		await d.wait(0.4)
+		await d.click_crosshair(MOUSE_BUTTON_RIGHT)
+		await d.wait(0.6)
+	await d.press(KEY_ESCAPE)
 	await d.sync()
-	await d.glide_camera(Vector3(7.0, 15.0, 36.0), Vector3(7.0, 7.0, 0.0), 2.4)
-	await d.wait(1.2)
+	await d.glide_camera(Vector3(7.0, 15.0, 38.0), Vector3(7.0, 7.0, 0.0), 2.4)
+	await d.wait(1.0)
 	await d.fade_out(0.9)

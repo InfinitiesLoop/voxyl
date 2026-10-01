@@ -1,2 +1,2 @@
 [bye]
-That's the tour. Build first, decide later. Now go make something.
+That's the tour. Build first, decide later. Now *go* make something.

@@ -1,22 +1,25 @@
-# Setting up an AI agent, then watching it build.
+# Setting up an AI agent, then watching it build from a reference image.
 
 [intro]
-Want an AI to build alongside you? voxyl is an MCP server, so agents like Claude Code or Codex can drive it directly.
+Want an AI to build alongside you? Voxyl runs an MCP server, so agents like Claude Code or Codex can drive it directly.
 
 [settings]
 Open Settings and switch on agent connections. voxyl hands you the exact command to run.
 
 [copy]
-Copy it, paste it into a terminal once, and you're connected.
+Copy it, paste it into a terminal, and you're connected.
 
 [badge]
 Now a little badge shows an agent is attached.
 
 [ask]
-Then just ask. It builds live, right in your window.
+Then just ask. You can even hand it a reference image.
+
+[build]
+It reads the picture, picks materials from your libraries, and builds, live, right in your window.
 
 [undo]
 Every edit is an undo step, and you can pause the agent whenever you like.
 
 [end]
-You stay in charge. The agent does the typing.
+You stay in charge. The agent does the work.

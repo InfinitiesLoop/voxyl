@@ -63,14 +63,54 @@ def _openai_samples(text: str, voice: str, instructions: str):
     return data, rate
 
 
+EMPHASIS_SLOWDOWN = 0.84     # an emphasised stretch is spoken this much slower...
+EMPHASIS_GAIN = 1.45         # ...and this much louder (about +3 dB)
+EMPHASIS_GAP = 0.07          # with a breath either side
+
+
+def _split_emphasis(text: str):
+    """'a *b c*, d' -> [('a', False), ('b c,', True), ('d', False)]  (punctuation after the closing
+    asterisk joins the emphasised stretch, so it keeps its falling or rising ending)."""
+    import re
+    out, pos = [], 0
+    for m in re.finditer(r"\*([^*]+)\*([,.;:!?]*)", text):
+        before = text[pos:m.start()].strip()
+        if before:
+            out.append((before, False))
+        out.append(((m.group(1) + m.group(2)).strip(), True))
+        pos = m.end()
+    rest = text[pos:].strip()
+    if rest:
+        out.append((rest, False))
+    return out or [(text, False)]
+
+
+def _kokoro_with_emphasis(text: str, voice: str, speed: float):
+    if "*" not in text:
+        return synth(text, voice, speed)
+    pieces = []
+    rate = SAMPLE_RATE
+    for chunk, emph in _split_emphasis(text):
+        samples, rate = synth(chunk, voice, speed * (EMPHASIS_SLOWDOWN if emph else 1.0))
+        if emph:
+            samples = np.clip(samples * EMPHASIS_GAIN, -1.0, 1.0)
+            pieces += [np.zeros(int(rate * EMPHASIS_GAP), dtype=samples.dtype), samples,
+                       np.zeros(int(rate * EMPHASIS_GAP), dtype=samples.dtype)]
+        else:
+            pieces.append(samples)
+    return np.concatenate(pieces), rate
+
+
 def synth_to_wav(text: str, path: Path, voice: str = "af_heart", speed: float = 1.0,
                  pad_end: float = 0.18, engine: str = "kokoro", instructions: str = "") -> float:
     """Write a mono WAV (a little silence on the end so lines don't run together) and
-    return its duration in seconds."""
+    return its duration in seconds. *word* marks emphasis."""
     if engine == "openai":
-        samples, rate = _openai_samples(text, voice, instructions or DEFAULT_INSTRUCTIONS)
+        import re
+        shouted = re.sub(r"\*([^*]+)\*", lambda m: m.group(1).upper(), text)   # caps carry emphasis for this model
+        samples, rate = _openai_samples(shouted, voice, instructions or DEFAULT_INSTRUCTIONS)
     else:
-        samples, rate = synth(text, voice, speed)
+        samples, rate = _kokoro_with_emphasis(text, voice, speed)
     samples = np.concatenate([samples, np.zeros(int(rate * pad_end), dtype=samples.dtype)])
     path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(str(path), samples, rate)

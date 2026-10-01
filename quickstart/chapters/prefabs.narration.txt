@@ -9,8 +9,11 @@ Select it, press Control P, give it a name and a few tags. The preview shows exa
 [home]
 Prefabs live in your own library, and they're shown through the palettes they were made with.
 
+[rotate]
+Drag a prefab to turn it around, and scroll to zoom in.
+
 [place]
-To place one, open the inventory, pick it, and aim. It follows your crosshair. R rotates it, and right-click drops it.
+To place one, open the inventory, pick it, and aim. It follows your crosshair, and R rotates it. Left-click locks it in place, and then middle-click lets you fine tune the position.
 
 [repeat]
-Fly over, and do it again. A whole factory floor in a few clicks.
+Drop it with a right-click. It stays live, so keep placing more, and press Escape when you're done. A whole factory floor in a few clicks.

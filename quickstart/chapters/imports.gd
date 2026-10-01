@@ -85,8 +85,16 @@ func run(d) -> void:
 	d.caption_top(true)
 	d.say("gtnh")
 	await d.pick_option(d.ctl({"class": "OptionButton"}), 1)
-	await d.wait(0.5)
-	await d.flash_image("nei-data-dumps.png", 780.0, 4.5)
+	await d.sync()
+	d.say("nei")
+	# The three Dump buttons the NEI roster needs, ringed one after another as they're named.
+	var line: Dictionary = d.line_timing("nei")
+	var span: float = float(line["end"]) - d.t
+	await d.flash_image("nei-data-dumps.png", 690.0, maxf(span - 1.0, 5.0), [
+		{"rect": Rect2(928, 102, 208, 86), "at": span * 0.30},    # Items
+		{"rect": Rect2(928, 198, 208, 86), "at": span * 0.50},    # Blocks
+		{"rect": Rect2(928, 583, 208, 86), "at": span * 0.78},    # Item Panel
+	])
 	await d.sync()
 	d.say("gtnh_pick")
 	await d.show_click({"text": "Choose folder", "class": "Button"})

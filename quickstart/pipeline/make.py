@@ -37,6 +37,21 @@ OVERRIDE = PROJECT / "override.cfg"
 
 # --- tools -------------------------------------------------------------------------
 
+def keep_display_awake():
+    """Windows: wake the display and stop it sleeping while this process runs. With the display
+    asleep (an untouched PC overnight) the GPU's presentation is throttled and Movie Maker renders
+    about 4x slower (155 ms a frame instead of 40). The flag lasts as long as this thread does."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000002 | 0x00000001)
+        ctypes.windll.user32.mouse_event(0x0001, 1, 0, 0, 0)     # a one-pixel nudge wakes a sleeping display
+        ctypes.windll.user32.mouse_event(0x0001, -1, 0, 0, 0)
+    except Exception:
+        pass
+
+
 def find_godot() -> str:
     for cand in (os.environ.get("GODOT"), r"C:\godot.exe", "/Applications/Godot.app/Contents/MacOS/Godot"):
         if cand and Path(cand).exists():
@@ -103,6 +118,9 @@ def load_lexicon() -> list:
 
 
 def spoken(text: str, lexicon: list) -> str:
+    """What the voice should say. `{word|spoken}` in a line is a one-off respelling (the captions
+    keep `word`); lexicon.txt applies everywhere; `*word*` marks emphasis (left for tts.py)."""
+    text = re.sub(r"\{([^|}]*)\|([^}]*)\}", r"\2", text)
     for pat, repl in lexicon:
         text = pat.sub(repl, text)
     return text
@@ -164,6 +182,7 @@ def seed_sandbox(sandbox: Path, seed: str):
 def cmd_render(chapter: str, size: str, fps: int, burn: bool, timeout: int):
     out = ROOT / "out" / chapter
     out.mkdir(parents=True, exist_ok=True)
+    keep_display_awake()
     sandbox = out / "sandbox"
     shutil.rmtree(sandbox, ignore_errors=True)
     sandbox.mkdir(parents=True)
@@ -205,6 +224,39 @@ def cmd_render(chapter: str, size: str, fps: int, burn: bool, timeout: int):
         sys.exit(f"no timeline.json — the chapter didn't finish (see {log})")
 
 
+def cmd_design(chapter: str, timeout: int):
+    """Run a chapter script live (no recording) in a fresh sandbox, for building and looking:
+    anything it captures lands in out/<chapter>/sandbox/captures/. Used to develop builds like the
+    watchtower before they're filmed."""
+    out = ROOT / "out" / chapter
+    sandbox = out / "sandbox"
+    shutil.rmtree(sandbox, ignore_errors=True)
+    sandbox.mkdir(parents=True)
+    out.mkdir(parents=True, exist_ok=True)
+    setup = chapter_setup(chapter)
+    seed_sandbox(sandbox, setup["seed"])
+    cmd = [find_godot(), "--path", PROJECT, "-s", "res://quickstart/director/Run.gd", "--",
+           f"--chapter={chapter}", f"--out={out}", f"--sandbox={sandbox}", "--no-captions", "--keep-mouse"]
+    if setup["library"] == "empty":
+        cmd.append(f"--library={sandbox / 'library'}")
+    log = out / "design.log"
+    with open(log, "w", encoding="utf-8") as lf:
+        proc = subprocess.Popen([str(c) for c in cmd], cwd=PROJECT, stdout=lf, stderr=subprocess.STDOUT)
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            sys.exit(f"timed out after {timeout}s (see {log})")
+    text = log.read_text(encoding="utf-8", errors="replace")
+    for l in text.splitlines():
+        if l.startswith(("SCRIPT ERROR", "ERROR:", "DESIGN")) and "res://.logs" not in l and "log file" not in l:
+            print("  ", l)
+    caps = sorted((sandbox / "captures").glob("*.png")) if (sandbox / "captures").is_dir() else []
+    print(f"  {len(caps)} capture(s) in {sandbox / 'captures'}")
+    for c in caps:
+        print("   ", c.name)
+
+
 # --- encode ------------------------------------------------------------------------
 
 def srt_time(sec: float, vtt=False) -> str:
@@ -216,6 +268,10 @@ def srt_time(sec: float, vtt=False) -> str:
 
 
 def write_captions(events, t0: float, end: float, base: Path):
+    """SRT/VTT for upload sites, in a captions/ folder, never beside the mp4: players such as VLC
+    load a same-named .srt automatically, and it would draw over the captions burned into the picture."""
+    base = base.parent / "captions" / base.name
+    base.parent.mkdir(parents=True, exist_ok=True)
     cues = [e for e in events if e["kind"] == "cue" and e["end"] > t0]
     srt, vtt = [], ["WEBVTT", ""]
     for i, c in enumerate(cues, 1):
@@ -300,7 +356,23 @@ def clock(sec: float) -> str:
     return f"{sec // 60}:{sec % 60:02d}"
 
 
-def cmd_assemble(name: str, only):
+def add_music(video: Path, music: Path, db: float, final: Path, duck: bool):
+    """Mix a music bed under the film's audio: faded in and out, and (optionally) ducked whenever
+    the voice is speaking, so it breathes around the narration. The picture is copied untouched."""
+    dur = probe_duration(video)
+    voice = "[0:a]asplit=2[v1][v2];" if duck else ""
+    bed = f"[1:a]volume={db}dB,afade=t=in:d=3,afade=t=out:st={max(dur - 5.0, 0):.2f}:d=5[m];"
+    if duck:
+        mix = ("[m][v1]sidechaincompress=threshold=0.02:ratio=9:attack=25:release=700:makeup=1[bed];"
+               "[v2][bed]amix=inputs=2:normalize=0:duration=first,alimiter=limit=0.95[a]")
+    else:
+        mix = "[0:a][m]amix=inputs=2:normalize=0:duration=first,alimiter=limit=0.95[a]"
+    run([find_ffmpeg(), "-y", "-loglevel", "error", "-i", video, "-stream_loop", "-1", "-i", music,
+         "-filter_complex", voice + bed + mix, "-map", "0:v", "-map", "[a]", "-c:v", "copy",
+         "-c:a", "aac", "-b:a", "192k", "-t", f"{dur:.3f}", "-movflags", "+faststart", final])
+
+
+def cmd_assemble(name: str, only, music: str = "", music_db: float = -20.0, duck: bool = True):
     """Join the encoded chapters (film.json order) into out/<name>/<name>.mp4 with merged
     captions and a YouTube chapter list."""
     film = json.loads((ROOT / "film.json").read_text())
@@ -315,20 +387,25 @@ def cmd_assemble(name: str, only):
         dur = probe_duration(mp4)
         lines.append(f"file '{mp4.as_posix()}'")
         listing.append(f"{clock(at)} {c['title']}")
-        srt = ROOT / "out" / c["id"] / f"{c['id']}.srt"
+        srt = ROOT / "out" / c["id"] / "captions" / f"{c['id']}.srt"
         if srt.exists():
             cues += [(a + at, b + at, t) for a, b, t in parse_srt(srt)]
         at += dur
     (out / "concat.txt").write_text("\n".join(lines) + "\n")
     final = out / f"{name}.mp4"
+    joined = out / "_joined.mp4" if music else final
     run([find_ffmpeg(), "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", out / "concat.txt",
-         "-c", "copy", "-movflags", "+faststart", final])
+         "-c", "copy", "-movflags", "+faststart", joined])
+    if music:
+        add_music(joined, Path(music), music_db, final, duck)
+        joined.unlink(missing_ok=True)
     srt_out, vtt_out = [], ["WEBVTT", ""]
     for i, (a, b, t) in enumerate(cues, 1):
         srt_out += [str(i), f"{srt_time(a)} --> {srt_time(b)}", t, ""]
         vtt_out += [f"{srt_time(a, True)} --> {srt_time(b, True)}", t, ""]
-    (out / f"{name}.srt").write_text("\n".join(srt_out), encoding="utf-8")
-    (out / f"{name}.vtt").write_text("\n".join(vtt_out), encoding="utf-8")
+    (out / "captions").mkdir(exist_ok=True)
+    (out / "captions" / f"{name}.srt").write_text("\n".join(srt_out), encoding="utf-8")
+    (out / "captions" / f"{name}.vtt").write_text("\n".join(vtt_out), encoding="utf-8")
     (out / "chapters.txt").write_text("\n".join(listing) + "\n", encoding="utf-8")
     print(f"  -> {final} ({final.stat().st_size / 1e6:.1f} MB, {clock(at)})")
     print("  chapters:")
@@ -338,9 +415,12 @@ def cmd_assemble(name: str, only):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["narrate", "render", "encode", "stills", "all", "assemble", "film"])
+    ap.add_argument("command", choices=["narrate", "render", "encode", "stills", "all", "assemble", "film", "design"])
     ap.add_argument("chapter", help="a chapter id, or the film's name for assemble / film")
     ap.add_argument("--only", default="", help="film / assemble: comma-separated chapter ids")
+    ap.add_argument("--music", default="", help="film / assemble: a music file to mix under the whole film")
+    ap.add_argument("--music-db", type=float, default=-20.0, help="music level before ducking (default -20 dB)")
+    ap.add_argument("--no-duck", action="store_true", help="don't lower the music while the voice speaks")
     ap.add_argument("--engine", choices=["kokoro", "openai"], default="kokoro",
                     help="voice engine: kokoro (local, free) or openai (needs OPENAI_API_KEY)")
     ap.add_argument("--voice", default="", help="voice name (kokoro: af_heart; openai: marin, cedar, coral...)")
@@ -365,10 +445,13 @@ def main():
             cmd_narrate(c["id"], a.voice, a.speed, a.engine, a.instructions)
             cmd_render(c["id"], a.size, a.fps, not a.no_captions, a.timeout)
             cmd_encode(c["id"], a.out_size or a.size, a.crf)
-        cmd_assemble(a.chapter, only)
+        cmd_assemble(a.chapter, only, a.music, a.music_db, not a.no_duck)
+        return
+    if a.command == "design":
+        cmd_design(a.chapter, a.timeout)
         return
     if a.command == "assemble":
-        cmd_assemble(a.chapter, only)
+        cmd_assemble(a.chapter, only, a.music, a.music_db, not a.no_duck)
         return
     if a.command in ("narrate", "all"):
         cmd_narrate(a.chapter, a.voice, a.speed, a.engine, a.instructions)

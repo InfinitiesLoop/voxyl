@@ -37,6 +37,38 @@ func _add_palette(d, palette_name: String) -> void:
 	await d.press(KEY_E)
 	d.hide_pointer()
 
+# Right-click an inventory entry, choose Edit, pick another block in the chooser and save.
+func _edit_entry(d, tooltip: String) -> void:
+	await d.press(KEY_E)
+	await d.wait(0.5)
+	await d.right_click(d.ctl({"tooltip": tooltip}))
+	await d.wait(0.35)
+	var menu: PopupMenu = null
+	for n in d.get_tree().root.get_children():
+		if n is PopupMenu and n.visible:
+			menu = n
+	await d.click(Vector2(menu.position) + Vector2(26.0, 14.0))     # "Edit"
+	if is_instance_valid(menu):
+		menu.hide()
+	await d.wait(1.0)
+	# The chooser shows the block it points at now (cyan); take the magenta one two rows below the top.
+	var target := Vector2(845.0, 538.0)
+	var tile: Control = d.ctl(func(c): return c.tooltip_text != "" and c.get_window() != d.get_tree().root 		and not (c is Button) and Ui_dist(d, c, target) < 28.0)
+	if tile == null:
+		tile = d.ctl(func(c): return c.tooltip_text != "" and not (c is Button) and Ui_dist(d, c, target) < 40.0)
+	if tile != null:
+		await d.click(tile)
+	else:
+		await d.click(target)
+	await d.wait(1.0)
+	await d.click({"text": "Save", "class": "Button"})
+	await d.wait(0.8)
+	await d.press(KEY_E)
+	d.hide_pointer()
+
+func Ui_dist(d, c: Control, p: Vector2) -> float:
+	return d.rect_of(c).get_center().distance_to(p)
+
 func run(d) -> void:
 	d.set_fade(1.0)
 	await d.settle(10)
@@ -82,6 +114,16 @@ func run(d) -> void:
 	d.hide_pointer()
 	view = d.view3d()
 	view.call("set_camera_pose", Vector3(17.0, 11.0, 17.0), PILLAR)
+
+	# --- edit an entry: every voxel using it updates ------------------------------
+	d.orbit(PILLAR, 23.0, 11.0, 45.0, 120.0, 14.0)
+	d.say("edit")
+	await d.wait(1.0)
+	await _edit_entry(d, "Channel Glow")
+	await d.sync()
+	d.say("edit_done")
+	await d.sync()
+	await d.wait(1.0)
 
 	# --- the swap -----------------------------------------------------------------
 	d.say("swap")

@@ -12,9 +12,10 @@ quickstart/
                <name>.narration.txt  the voice-over (also the captions and the SRT)
                lexicon.txt           how the voice should pronounce things ("voxyl = vox-ill")
   director/    Run.gd (entry) · Director.gd (timing, input, API) · Fx.gd (overlays) · Ui.gd (finding controls)
-  pipeline/    make.py (narrate / render / encode / assemble) · tts.py · voice_test.py
+  pipeline/    make.py (narrate / render / encode / assemble / design) · tts.py · music.py · voice_test.py
+  design/      generators for builds the film shows (watchtower.py -> chapters/watchtower.build.json)
   demo/        the demo build (the Conduit Pillar: project, palette, prefabs). Semantics only; no textures
-  assets/      images flashed in the video (nei-data-dumps.png: the NEI Data Dumps screen)
+  assets/      images flashed in the video (the NEI Data Dumps screen, the watchtower reference photo) and music/
   out/ .venv/ .cache/    rendered output, local Python env, downloaded voice model (all gitignored)
 ```
 
@@ -35,6 +36,8 @@ Godot is found via `GODOT`, `C:\godot.exe`, the macOS app path, or `godot` on PA
 
 ## What a render needs
 
+- **A sleeping display slows a render about 4x** (Windows throttles presentation). `make.py` wakes it and keeps
+  it awake for the run, so an untouched PC is fine.
 - **Close Voxyl first.** The agent chapter turns the MCP server on (default port 47823) and a
   render takes over the GPU. Don't touch the mouse during fly-mode beats: the real cursor is captured.
 - **Chapters that say `library=real`** (palettes, views, selection, prefabs, intro, outro) read the
@@ -58,10 +61,24 @@ $PY quickstart/pipeline/make.py film quickstart --size 1920x1080     # every cha
 $PY quickstart/pipeline/make.py assemble quickstart                  # just join the encoded chapters
 ```
 
-Output: `out/<chapter>/<chapter>.mp4`, `.srt`, `.vtt`, plus `timeline.json` (what was said and when).
-`assemble` writes `out/<name>/<name>.mp4` with merged captions and `chapters.txt` (paste it into a
-YouTube description). Captions are burned in; pass `--no-captions` for a clean picture (the SRT/VTT
-are always written). `render.log` has the engine output; the script prints any error lines.
+Output: `out/<chapter>/<chapter>.mp4`, plus `timeline.json` (what was said and when).
+`assemble` writes `out/<name>/<name>.mp4` and `chapters.txt` (paste it into a YouTube description).
+Captions are burned into the picture. The `.srt` / `.vtt` (for uploading as caption tracks) are written to a
+`captions/` folder and never beside the mp4: players like VLC load a same-named .srt automatically and would
+draw it over the burned-in captions. Pass `--no-captions` to a render for a clean picture.
+`render.log` has the engine output; the script prints any error lines.
+
+**Music:** `make.py assemble quickstart --music quickstart/assets/music/bed.wav` mixes a bed under the whole
+film (-20 dB, faded in and out, and ducked while the voice speaks; `--music-db`, `--no-duck`). `pipeline/music.py`
+generates an original bed (no licensing); any audio file works too.
+
+**Voice:** `--engine kokoro` (local, the default) or `--engine openai` (needs `OPENAI_API_KEY`).
+In a narration line, `*word*` adds emphasis, and `{caption|spoken}` respells one word for the voice only
+(`where your blocks {live|liv}`). `chapters/lexicon.txt` respells words everywhere. To check a respelling
+without listening, look at its phonemes: `kokoro_onnx.tokenizer.Tokenizer().phonemize(text, "en-us")`.
+
+**Developing a build:** `make.py design <chapter>` runs a chapter live (no recording) in a fresh sandbox and
+leaves any `capture` images in `out/<chapter>/sandbox/captures/` (see `chapters/design_tower.gd`).
 
 ## Writing a chapter
 

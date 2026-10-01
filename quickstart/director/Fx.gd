@@ -390,7 +390,9 @@ func show_card(text: String, hold := 2.4) -> void:
 # --- Image interstitial ------------------------------------------------------------
 
 # Flash a picture over the app (dimmed behind it): a screenshot of something outside the app.
-func show_image(tex: Texture2D, height: float, hold: float) -> void:
+# marks: [{rect: Rect2 in the image's own pixels, at: seconds after it appears}] -- pulsing rings that
+# point at parts of the picture.
+func show_image(tex: Texture2D, height: float, hold: float, marks: Array = []) -> void:
 	var backdrop := ColorRect.new()
 	backdrop.color = Color(0, 0, 0, 0.62)
 	backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -412,13 +414,37 @@ func show_image(tex: Texture2D, height: float, hold: float) -> void:
 	sb.shadow_color = Color(0, 0, 0, 0.6)
 	sb.shadow_size = 24
 	frame.add_theme_stylebox_override("panel", sb)
+	var pic_size := Vector2(height * float(tex.get_width()) / float(tex.get_height()), height)
+	var holder := Control.new()
+	holder.custom_minimum_size = pic_size
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var pic := TextureRect.new()
 	pic.texture = tex
 	pic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	pic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	pic.stretch_mode = TextureRect.STRETCH_SCALE
 	pic.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	pic.custom_minimum_size = Vector2(height * float(tex.get_width()) / float(tex.get_height()), height)
-	frame.add_child(pic)
+	pic.size = pic_size
+	holder.add_child(pic)
+	var px := pic_size.y / float(tex.get_height())
+	var rings: Array = []
+	for m in marks:
+		var r: Rect2 = m["rect"]
+		var ring := Panel.new()
+		var rsb := StyleBoxFlat.new()
+		rsb.bg_color = Color(ACCENT, 0.12)
+		rsb.set_corner_radius_all(10)
+		rsb.border_color = ACCENT
+		rsb.set_border_width_all(5)
+		rsb.shadow_color = Color(ACCENT, 0.5)
+		rsb.shadow_size = 14
+		ring.add_theme_stylebox_override("panel", rsb)
+		ring.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		ring.position = r.position * px
+		ring.size = r.size * px
+		ring.modulate.a = 0.0
+		holder.add_child(ring)
+		rings.append([ring, float(m.get("at", 0.0))])
+	frame.add_child(holder)
 	frame.modulate.a = 0.0
 	_top.add_child(frame)
 	_top.move_child(frame, 1)
@@ -432,7 +458,20 @@ func show_image(tex: Texture2D, height: float, hold: float) -> void:
 	tw.tween_property(frame, "modulate:a", 1.0, 0.35)
 	tw.tween_property(frame, "scale", Vector2.ONE, 0.5)
 	await tw.finished
-	await get_tree().create_timer(hold).timeout
+	var shown := 0.0
+	for pair in rings:
+		var at: float = pair[1]
+		if at > shown:
+			await get_tree().create_timer(at - shown).timeout
+			shown = at
+		var ring: Control = pair[0]
+		ring.create_tween().tween_property(ring, "modulate:a", 1.0, 0.3)
+		ring.pivot_offset = ring.size * 0.5
+		var pulse := ring.create_tween().set_loops()      # bound to the ring: it ends when the ring is freed
+		pulse.tween_property(ring, "scale", Vector2(1.03, 1.12), 0.5).set_trans(Tween.TRANS_SINE)
+		pulse.tween_property(ring, "scale", Vector2.ONE, 0.5).set_trans(Tween.TRANS_SINE)
+	if hold > shown:
+		await get_tree().create_timer(hold - shown).timeout
 	var out := create_tween().set_parallel(true)
 	out.tween_property(backdrop, "modulate:a", 0.0, 0.4)
 	out.tween_property(frame, "modulate:a", 0.0, 0.4)
@@ -637,6 +676,14 @@ func chat_show(on: bool) -> void:
 func chat_clear() -> void:
 	_chat.clear()
 
+func chat_trim_tools(keep: int) -> void:
+	_chat.trim_tools(keep)
+
+# An attached picture in the chat (the reference image), scaled to fit the card.
+func chat_add_image(tex: Texture2D) -> void:
+	_chat.visible = true
+	_chat.add_image(tex)
+
 # kind: user | tool | agent. Returns the label so the caller can type into it.
 func chat_add(kind: String, text := "") -> Label:
 	_chat.visible = true
@@ -803,6 +850,7 @@ class ChatCard extends PanelContainer:
 	const WIDTH := 520.0
 	var _box: VBoxContainer
 	var _mono: SystemFont
+	var _tool_rows: Array[Control] = []
 
 	func _init() -> void:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -835,6 +883,36 @@ class ChatCard extends PanelContainer:
 	func clear() -> void:
 		for c in _box.get_children():
 			c.queue_free()
+		_tool_rows.clear()
+		reset_size()
+
+	# Keep at most `keep` tool lines: the oldest fold away (they've all succeeded by then), so a long
+	# build fits the card instead of running off the screen.
+	func trim_tools(keep: int) -> void:
+		while _tool_rows.size() > keep:
+			var old: Control = _tool_rows.pop_front()
+			if is_instance_valid(old):
+				old.queue_free()
+		reset_size()
+
+	func add_image(tex: Texture2D) -> void:
+		var frame := PanelContainer.new()
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0.16, 0.2, 0.27)
+		sb.set_corner_radius_all(10)
+		sb.content_margin_left = 8
+		sb.content_margin_right = 8
+		sb.content_margin_top = 8
+		sb.content_margin_bottom = 8
+		frame.add_theme_stylebox_override("panel", sb)
+		var pic := TextureRect.new()
+		pic.texture = tex
+		pic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		pic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		var w := WIDTH - 56.0
+		pic.custom_minimum_size = Vector2(w, w * float(tex.get_height()) / float(tex.get_width()))
+		frame.add_child(pic)
+		_box.add_child(frame)
 		reset_size()
 
 	func add(kind: String, text: String) -> Label:
@@ -863,6 +941,7 @@ class ChatCard extends PanelContainer:
 				l.add_theme_font_size_override("font_size", 19)
 				l.add_theme_color_override("font_color", Color(0.62, 0.9, 1.0))
 				_box.add_child(l)
+				_tool_rows.append(l)
 			_:
 				l.add_theme_font_size_override("font_size", 25)
 				l.add_theme_color_override("font_color", Color(0.88, 0.92, 0.96))

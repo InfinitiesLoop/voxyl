@@ -1,7 +1,7 @@
 # Home screen and importing blocks (vanilla Minecraft, then a GTNH modpack).
 
 [home]
-This is home base: projects, palettes, prefabs, and libraries. Libraries first, because that's where your blocks live.
+This is the main screen: projects, palettes, prefabs, and libraries. Let's explore libraries first, because that's where your blocks {live|liv}.
 
 [empty]
 It's empty right now, so let's fill it. Hit Add blocks.
@@ -16,13 +16,16 @@ Search for what you want, and import.
 And there they are. Each mod gets its own library.
 
 [gtnh]
-Playing a modpack? voxyl speaks NEI. In game, open NEI, then Options, Tools, Data Dumps. Dump the items, and the item panel in CSV mode.
+Playing a modpack? voxyl speaks NEI.
+
+[nei]
+In game, open NEI, then Options, Tools, Data Dumps. Dump the items, the blocks, and the item panel.
 
 [gtnh_pick]
-Then choose the NEI roster format and point voxyl at your instance. Nearly nineteen thousand blocks, found.
+Then point voxyl at your instance. Nearly nineteen thousand blocks, found.
 
 [gtnh_import]
-Add a prefix like G T N H to keep things tidy, search for Korp, and import.
+Add a prefix like G T N H to keep things tidy, then import everything, or search for something specific.
 
 [done]
 Libraries, sorted by mod, ready for any palette.

@@ -1,6 +1,8 @@
 # How the voice should say things. Captions keep the real spelling; only the synthesised
-# speech is rewritten.  "word = spoken form"  (whole words, case-insensitive, first match wins)
-voxyl = vox-ill
+# speech is rewritten.  "word = spoken form"  (whole words / phrases, case-insensitive, first match wins)
+# For a one-off in a single line use {caption|spoken} right in the narration, e.g. where your blocks {live|liv}.
+# (Check a respelling without listening: its phonemes, via kokoro_onnx.tokenizer.Tokenizer().phonemize(text, "en-us").)
+voxyl = voxel
 prefabs = pree-fabs
 prefab = pree-fab
 WASD = W, A, S and D
@@ -8,9 +10,7 @@ GTNH = G T N H
 NEI = N E I
 CSV = C S V
 MCP = M C P
-jar = jar
+WorldEdit = world edit
 Ztones = zee-tones
 Korp = corp
 1.21 = one twenty-one
-Schematica = skuh-mat-ih-kuh
-schematic = skuh-mat-ic

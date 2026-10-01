@@ -1,8 +1,8 @@
 extends RefCounted
 # quickstart: library=real seed=demo
 
-# Chapter: the opening. A hero shot of the demo build behind the title, the three install steps, then the
-# first launch (the home screen).
+# Chapter: the opening. A hero shot of the demo build behind the title, then the three install steps.
+# (The next chapter opens on the home screen itself.)
 
 const PILLAR := Vector3(0.0, 9.0, 0.0)
 
@@ -22,12 +22,4 @@ func run(d) -> void:
 	d.say("install")
 	await d.steps_card("Getting started", ["Download the latest release", "Unzip it anywhere", "Run voxyl.exe"], 1.4, 1.6)
 	await d.sync()
-	await d.fade_out(0.6)
-	await d.click({"text": "← Home"})
-	d.say("open")
-	d.hide_pointer()
-	await d.wait(0.2)
-	await d.fade_in(0.7)
-	await d.sync()
-	await d.wait(0.6)
-	await d.fade_out(0.8)
+	await d.fade_out(0.7)

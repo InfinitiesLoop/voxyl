@@ -63,7 +63,7 @@ func _load_narration() -> void:
 	var path := "res://quickstart/chapters/%s.narration.txt" % chapter_name
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null:
-		push_error("quickstart: no narration file at %s" % path)
+		print("quickstart: no narration file for '%s' (fine for a design run)" % chapter_name)
 		return
 	var id := ""
 	var buf: Array[String] = []
@@ -97,8 +97,14 @@ func _load_narration() -> void:
 func _flush_line(id: String, buf: Array[String]) -> void:
 	if id.is_empty() or buf.is_empty():
 		return
-	var text := " ".join(buf)
+	var text := _plain(" ".join(buf))
 	_narration[id] = {"text": text, "duration": maxf(1.2, text.split(" ", false).size() / WORDS_PER_SEC + 0.5), "wav": ""}
+
+# The line as it reads in captions: `*emphasis*` loses its asterisks and `{caption|spoken}` keeps the caption.
+func _plain(text: String) -> String:
+	var hint_re := RegEx.new()
+	hint_re.compile(r"\{([^|}]*)\|[^}]*\}")
+	return hint_re.sub(text, "$1", true).replace("*", "")
 
 # Queue a line. It starts when the previous one finishes (or now), and its captions are cut to
 # fit. Returns immediately: do the on-screen action while it plays, then sync().
@@ -107,6 +113,7 @@ func say(id: String) -> void:
 		push_error("quickstart: no narration line [%s]" % id)
 		return
 	var n: Dictionary = _narration[id]
+	print("[quickstart] say %s  video=%.1fs  wall=%.0fs" % [id, t, Time.get_ticks_msec() / 1000.0])
 	var start := maxf(t, _speech_end)
 	var dur: float = n["duration"]
 	_speech_end = start + dur
@@ -114,6 +121,13 @@ func say(id: String) -> void:
 	for cue in _cut_cues(str(n["text"]), start, dur):
 		_cues.append(cue)
 		timeline.append({"kind": "cue", "text": cue["text"], "start": cue["start"], "end": cue["end"]})
+
+# When a line was queued to start and end (video seconds): {start, end}.
+func line_timing(id: String) -> Dictionary:
+	for e in timeline:
+		if e["kind"] == "say" and e["id"] == id:
+			return {"start": e["start"], "end": e["end"]}
+	return {"start": t, "end": t}
 
 # Wait until everything queued has been spoken.
 func sync() -> void:
@@ -307,6 +321,73 @@ func pick_option(button: OptionButton, index: int) -> void:
 	popup.hide()
 	await wait(0.3)
 
+# Open a MenuButton's menu and choose the item with this id (the click on the item is shown; the
+# choice is made directly, since popup items aren't controls we can target).
+func pick_menu(button: MenuButton, item_id: int) -> void:
+	await click(button)
+	await wait(0.35)
+	var popup := button.get_popup()
+	var idx := popup.get_item_index(item_id)
+	var item_h := float(popup.size.y) / float(maxi(popup.item_count, 1))
+	var spot := Vector2(popup.position) + Vector2(70.0, item_h * (idx + 0.5))
+	await move_to(spot)
+	await wait(0.25)
+	fx.set_pressed(true)
+	fx.click_fx()
+	await wait(0.1)
+	fx.set_pressed(false)
+	popup.id_pressed.emit(item_id)
+	popup.hide()
+	await wait(0.3)
+
+# Every 3D view in the editor, in pane order (offscreen ones excluded).
+func views3d() -> Array:
+	var shell: Node = main.get_node("Editor/VBoxContainer/ContentArea/ViewShell")
+	var out := []
+	for v in shell.call("all_views"):
+		if v.has_method("set_camera_pose") and not bool(v.get("offscreen")):
+			out.append(v)
+	return out
+
+# Every 2D slice view, in pane order.
+func slice_views() -> Array:
+	var shell: Node = main.get_node("Editor/VBoxContainer/ContentArea/ViewShell")
+	var out := []
+	for v in shell.call("all_views"):
+		if str(v.call("view_kind")) == "slice":
+			out.append(v)
+	return out
+
+# Press the left button, glide the pointer through `points` (logical px) over `dur` seconds, release.
+func drag_path(points: Array, dur := 1.2, button := MOUSE_BUTTON_LEFT) -> void:
+	await move_to(points[0])
+	await wait(0.15)
+	_button(button, true)
+	fx.set_pressed(true)
+	var legs := points.size() - 1
+	for i in legs:
+		var a: Vector2 = points[i]
+		var b: Vector2 = points[i + 1]
+		var t0 := t
+		var leg_dur := dur / float(legs)
+		while t < t0 + leg_dur:
+			var u := clampf((t - t0) / leg_dur, 0.0, 1.0)
+			_set_pointer(a.lerp(b, u * u * (3.0 - 2.0 * u)))
+			await get_tree().process_frame
+		_set_pointer(b)
+	_button(button, false)
+	fx.set_pressed(false)
+	await wait(0.2)
+
+# Scroll the wheel `ticks` times over a point (positive = up).
+func scroll(at: Vector2, ticks: int) -> void:
+	await move_to(at)
+	for i in absi(ticks):
+		var idx := MOUSE_BUTTON_WHEEL_UP if ticks > 0 else MOUSE_BUTTON_WHEEL_DOWN
+		_button(idx, true)
+		_button(idx, false)
+		await wait(0.12)
+
 # A click that only looks like one: the pointer glides, presses and ripples, but no event is sent.
 # For things the app would answer with an OS window the recording can't see (native file pickers) --
 # the chapter then makes the same change itself.
@@ -411,13 +492,13 @@ func keys_hud(on: bool) -> void:
 	fx.show_keys(on)
 
 # Flash a picture from quickstart/assets/ over the app for a few seconds.
-func flash_image(file_name: String, height := 760.0, hold := 3.0) -> void:
+func flash_image(file_name: String, height := 760.0, hold := 3.0, rings: Array = []) -> void:
 	var path := ProjectSettings.globalize_path("res://quickstart/assets/%s" % file_name)
 	var img := Image.load_from_file(path)
 	if img == null:
 		push_error("quickstart: can't read %s" % path)
 		return
-	await fx.show_image(ImageTexture.create_from_image(img), height, hold)
+	await fx.show_image(ImageTexture.create_from_image(img), height, hold, rings)
 
 # Intro / outro title over the picture, and a numbered-steps card.
 func title_card(title: String, subtitle: String, hold := 2.5) -> void:
@@ -465,7 +546,8 @@ func chat_user(text: String, cps := 38.0) -> void:
 	await wait(0.35)
 
 # Shows the call as running, runs `work` (a Callable, may be async) while it spins, then ticks it.
-func chat_tool(tool_name: String, args_text: String, work: Callable = Callable()) -> void:
+func chat_tool(tool_name: String, args_text: String, work: Callable = Callable(), keep := 3) -> void:
+	fx.chat_trim_tools(keep - 1)
 	var l: Label = fx.chat_add("tool", "...  %s  %s" % [tool_name, args_text])
 	await wait(0.5)
 	if work.is_valid():
@@ -480,6 +562,16 @@ func chat_agent(text: String, cps := 60.0) -> void:
 		l.text = text.substr(0, i)
 		await wait(1.0 / cps)
 	await wait(0.3)
+
+# Attach a picture from quickstart/assets/ to the chat (a reference image for the agent).
+func chat_image(file_name: String) -> void:
+	var path := ProjectSettings.globalize_path("res://quickstart/assets/%s" % file_name)
+	var img := Image.load_from_file(path)
+	if img == null:
+		push_error("quickstart: can't read %s" % path)
+		return
+	fx.chat_add_image(ImageTexture.create_from_image(img))
+	await wait(0.6)
 
 func chat_clear() -> void:
 	fx.chat_clear()
