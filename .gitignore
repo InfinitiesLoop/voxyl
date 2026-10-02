@@ -7,8 +7,12 @@ exports/
 
 # Imported asset library (AssetLibrary.ROOT). These are the user's own MC/resource
 # assets, read at runtime — never bundled or committed (see import-feature.md).
-/library/
-/projects/
+# Each keeps its .gdignore so the editor never scans/imports it: the app reads these
+# files straight off disk (Image.load, ResourceLoader on .tres), never via the importer.
+/library/*
+!/library/.gdignore
+/projects/*
+!/projects/.gdignore
 
 # Godot-specific ignores
 .import/

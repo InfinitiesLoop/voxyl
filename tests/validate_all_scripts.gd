@@ -18,7 +18,11 @@ func _get_files(path: String, suffix: String) -> Array[String]:
 			if elem.ends_with(suffix):
 				files.append(elem_path)
 		elif dir.dir_exists(elem_path):
-			directories.append(elem_path)
+			# Skip what the editor's own scan skips: dot-folders (.godot's import cache,
+			# .claude) and any folder with a .gdignore (quickstart/out, .venv, ...). None
+			# can hold project scripts, and walking them stats 100k+ files (~8s).
+			if not elem.begins_with(".") and not dir.file_exists(elem_path.path_join(".gdignore")):
+				directories.append(elem_path)
 
 		elem = dir.get_next()
 
