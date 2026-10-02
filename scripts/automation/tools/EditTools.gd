@@ -118,6 +118,13 @@ static func register(reg: McpRegistry) -> void:
 	reg.add("selection_shrink",
 		"Erode the selection by `range` steps: repeatedly drops cells with a face-neighbor outside the current set. A plain box is first turned into an exact cell set (capped at 4,000,000 cells, same as any region).",
 		{"properties": {"range": {"type": "integer", "description": "Steps to shrink, default 1"}}}, _selection_shrink, {"mutates": true})
+	reg.add("region_apply_set",
+		"Apply a set operation (union, except, intersect, xor) between two regions: the `base` region and an `op` region. Creates a sparse selection of the result cells. union keeps cells in either; except keeps cells in base but not op; intersect keeps cells in both; xor keeps cells in exactly one. Useful for composing complex shapes — e.g. to hollow out a region, except its interior.",
+		_props({
+			"base": McpArgs.s_region(),
+			"op": McpArgs.s_region(),
+			"operation": {"type": "string", "enum": ["union", "except", "intersect", "xor"]},
+		}, ["base", "op", "operation"]), _region_apply_set, {"mutates": true})
 
 static func _props(extra: Dictionary, required: Array = []) -> Dictionary:
 	var p := McpArgs.edit_props()
@@ -552,3 +559,64 @@ static func _selection_shrink(args: Dictionary) -> Dictionary:
 			"too_large": return McpRegistry.fail("too_large", "the selection box has too many cells to shrink (max 4,000,000); narrow it first")
 			_: return McpRegistry.fail("no_selection", "there's no region selection")
 	return {"cells": result["cells"], "bounds": [VoxelWorld.selection_min, VoxelWorld.selection_max]}
+
+static func _region_apply_set(args: Dictionary) -> Dictionary:
+	var pv: Variant = McpArgs.project(args)
+	if McpRegistry.is_error(pv):
+		return pv
+
+	var base_r: Variant = McpArgs.region(args.get("base"))
+	if McpRegistry.is_error(base_r):
+		return base_r
+
+	var op_r: Variant = McpArgs.region(args.get("op"))
+	if McpRegistry.is_error(op_r):
+		return op_r
+
+	var operation := str(args.get("operation", ""))
+	if operation not in ["union", "except", "intersect", "xor"]:
+		return McpRegistry.fail("bad_argument", "operation must be union, except, intersect, or xor")
+
+	var data := (pv as VoxelProject).data
+	var base_cells := RegionOps.cells_in(data, base_r["min"], base_r["max"], base_r["filter"], base_r.get("positions"))
+	var op_cells := RegionOps.cells_in(data, op_r["min"], op_r["max"], op_r["filter"], op_r.get("positions"))
+
+	var base_set: Dictionary = {}
+	for p in base_cells:
+		base_set[p] = true
+
+	var op_set: Dictionary = {}
+	for p in op_cells:
+		op_set[p] = true
+
+	var result: Dictionary = {}
+	match operation:
+		"union":
+			result = base_set.duplicate()
+			for p in op_set:
+				result[p] = true
+		"except":
+			for p in base_set:
+				if not (p in op_set):
+					result[p] = true
+		"intersect":
+			for p in base_set:
+				if p in op_set:
+					result[p] = true
+		"xor":
+			for p in base_set:
+				if not (p in op_set):
+					result[p] = true
+			for p in op_set:
+				if not (p in base_set):
+					result[p] = true
+
+	VoxelWorld.set_selection_cells(result, [])
+
+	var mn := Vector3i(1 << 30, 1 << 30, 1 << 30)
+	var mx := Vector3i(-(1 << 30), -(1 << 30), -(1 << 30))
+	for p: Vector3i in result:
+		mn = Vector3i(mini(mn.x, p.x), mini(mn.y, p.y), mini(mn.z, p.z))
+		mx = Vector3i(maxi(mx.x, p.x), maxi(mx.y, p.y), maxi(mx.z, p.z))
+
+	return {"cells": result.size(), "bounds": [mn, mx], "operation": operation}
