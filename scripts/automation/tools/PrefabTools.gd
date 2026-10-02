@@ -8,7 +8,7 @@ const _ViewTools := preload("res://scripts/automation/tools/ViewTools.gd")
 
 static func register(reg: McpRegistry) -> void:
 	reg.add("prefab_save",
-		"Save a region of the open project as a named prefab (cells keyed to the region's min corner; empty cells stay empty). palettes = its preferred stack for previews and for filling gaps when placed elsewhere (default: the project's palettes that define its semantics). exclude = semantics to leave out (whole blocks dropped, their parts removed from part cells), e.g. the floor under a pillar. trim:true shrinks the box to the cells kept (otherwise the region is the box, empty margins included — use them to keep a module on a grid). anchor = the handle cell that lands on `at` when placing and that turns pivot about: [x,y,z] relative to the saved box's min corner (after trim), \"min\" (default) or \"bottom-center\". replace:true overwrites a prefab of the same name.",
+		"Save a region of the open project as a named prefab (cells keyed to the region's min corner; empty cells stay empty). palettes = its preferred stack for previews and for filling gaps when placed elsewhere (default: the project's palettes that define its semantics). exclude = semantics to leave out (whole blocks dropped, their parts removed from part cells), e.g. the floor under a pillar. trim:true shrinks the box to the cells kept (otherwise the region is the box, empty margins included — use them to keep a module on a grid). anchor = the handle cell that lands on `at` when placing and that turns pivot about: [x,y,z] relative to the saved box's min corner (after trim), \"min\" (default) or \"bottom-center\". replace:true overwrites a prefab of the same name. The prefab remembers the project's `north` (see project_settings), so placing it into a project with a different north turns it to match.",
 		{"properties": {
 			"name": {"type": "string"},
 			"region": McpArgs.s_region(),
@@ -38,17 +38,17 @@ static func register(reg: McpRegistry) -> void:
 	place_props.merge({
 		"name": {"type": "string"},
 		"at": McpArgs.s_vec3("Where the prefab's anchor cell lands"),
-		"rotate": {"type": "integer", "description": "0-3 quarter turns clockwise (from above), about the anchor"},
+		"rotate": {"type": "integer", "description": "0-3 quarter turns clockwise (from above), about the anchor — on top of the turn that already brings the prefab's own north to this project's"},
 		"mirror": {"type": "string", "enum": ["x", "z"]},
 		"overwrite": {"type": "boolean", "description": "Replace occupied cells (default: keep them)"},
 		"add_palettes": {"type": "boolean", "description": "Add the prefab's preferred palettes that map semantics this project lacks to the bottom of its stack (default false)"},
 		"remap": {"type": "object", "description": "{prefab semantic: project semantic} renames on the way in"},
 	})
 	reg.add("prefab_place",
-		"Place a prefab into the open project with its anchor at `at`, optionally turned / mirrored, and with symmetry / repeat like any edit tool (stamp a row of pillars in one call). One undo step. The result lists missing_semantics (used by the prefab, unknown to the project's palettes — they render undecided) and palettes_available (its preferred palettes that define them); retry with add_palettes:true to add those to the bottom of the stack, or remap them.",
+		"Place a prefab into the open project with its anchor at `at`, optionally turned / mirrored, and with symmetry / repeat like any edit tool (stamp a row of pillars in one call). North is north: a prefab saved from a project with a different `north` is turned to this project's before `rotate` / `mirror` apply (a prefab of unknown north — saved before projects had one — is placed as it is; declare it with prefab_update north). One undo step. The result lists missing_semantics (used by the prefab, unknown to the project's palettes — they render undecided) and palettes_available (its preferred palettes that define them); retry with add_palettes:true to add those to the bottom of the stack, or remap them.",
 		{"properties": place_props, "required": ["name", "at"]}, _prefab_place, {"mutates": true})
 	reg.add("prefab_update",
-		"Change a prefab's name (rename), preferred palettes, anchor, tags or notes. Its cells change by editing it (prefab_open) or saving over it (prefab_save replace:true).",
+		"Change a prefab's name (rename), preferred palettes, anchor, tags, notes or north (which of the prefab's own directions points to the real north — declares the frame of an older prefab whose north is unknown; the cells are not turned). Its cells change by editing it (prefab_open) or saving over it (prefab_save replace:true).",
 		{"properties": {
 			"name": {"type": "string"},
 			"rename": {"type": "string"},
@@ -56,6 +56,7 @@ static func register(reg: McpRegistry) -> void:
 			"anchor": {"description": "[x,y,z] relative to the min corner, \"min\" or \"bottom-center\""},
 			"tags": {"type": "array", "items": {"type": "string"}},
 			"notes": {"type": "string"},
+			"north": {"type": "string", "enum": VoxelProject.NORTH_DIRS},
 		}, "required": ["name"]}, _prefab_update, {"mutates": true})
 	reg.add("prefab_open",
 		"Open a prefab in the user's editor as if it were a project, so every edit tool, capture and undo works on it (status shows the project as editing_prefab). Its box starts selected. Saves (project_save, or leaving the editor) write the cells and palette stack back into the prefab; building past its box grows the box.",
@@ -87,6 +88,8 @@ static func describe(p: Prefab, full := false) -> Dictionary:
 		"palettes": Array(p.palette_names)}
 	if not p.tags.is_empty():
 		d["tags"] = Array(p.tags)
+	if not p.north_dir.is_empty():
+		d["north"] = p.north_dir   # which of its own directions is the real north; absent = unknown (see Prefab.north_dir)
 	if full:
 		d["semantics"] = p.semantic_counts()
 		# The same contents as the actual blocks its own palettes resolve them to (merged).
@@ -239,7 +242,9 @@ static func _prefab_place(args: Dictionary) -> Variant:
 	if args.get("remap") is Dictionary:
 		for k in args["remap"]:
 			renames[str(k)] = str(args["remap"][k])
-	var basis := RegionOps.turn_basis(int(args.get("rotate", 0)), str(args.get("mirror", "")))
+	# The prefab's own north is brought to this project's first (VoxelProject.turns_between);
+	# `rotate` and `mirror` act from there.
+	var basis := RegionOps.turn_basis(int(args.get("rotate", 0)) + VoxelWorld.turns_into_project(p.north_dir), str(args.get("mirror", "")))
 	var placed := RegionOps.place_edits(p.data.cells, p.anchor, at, basis, renames)
 	# What the project lacks, judged after the renames (a remapped semantic is the project's own).
 	var check := p
@@ -290,10 +295,13 @@ static func _prefab_update(args: Dictionary) -> Dictionary:
 		ch["tags"] = args["tags"]
 	if args.has("notes"):
 		ch["notes"] = str(args["notes"])
+	if args.has("north"):
+		ch["north"] = str(args["north"])
 	var err := VoxelWorld.update_prefab(p, ch)
 	match err:
 		"name_taken": return McpRegistry.fail("name_taken", "a prefab named '%s' already exists" % ch["name"])
 		"empty_name": return McpRegistry.fail("bad_argument", "rename can't be empty")
+		"bad_north": return McpRegistry.fail("bad_argument", "north must be one of %s" % ", ".join(VoxelProject.NORTH_DIRS))
 	return describe(p, true)
 
 static func _prefab_delete(args: Dictionary) -> Dictionary:

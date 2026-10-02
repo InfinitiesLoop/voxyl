@@ -52,6 +52,7 @@ func _run() -> void:
 	await _test_restart_tool()
 	await _test_attachment_tools()
 	await _test_prefabs()
+	await _test_north_across_frames()
 	await _test_semantic_rename()
 	await _test_nei_roster_import_tool()
 	McpServer.stop()
@@ -712,6 +713,76 @@ func _test_prefabs() -> void:
 	_check("prefab_delete", not deleted["_is_error"] and VoxelWorld.workspace.get_prefab("Bench") == null
 		and not FileAccess.file_exists(PrefabStore.path_for("Bench")))
 	_check("placed copies stay", data.get_block(Vector3i(10, 1, 0)) == "Core")
+
+# North is north: a prefab or a copy remembers the north of the project it came from and is turned
+# to the destination project's on the way in; a Schematica export turns it to the game's. The
+# cells themselves are never rewritten.
+func _test_north_across_frames() -> void:
+	print("-- north is north across projects, prefabs and schematics")
+	var home := VoxelWorld.active_project
+	# Project A faces west: its -X is the world's north, so a row running +X points world-south.
+	await _tool("project_create", {"name": "North A", "scratch": true, "palettes": ["Pillar Test"]})
+	await _tool("project_settings", {"north": "west"})
+	await _tool("cells_set", {"cells": [{"pos": [0, 0, 0], "semantic": "Mass"}, {"pos": [1, 0, 0], "semantic": "Mass"},
+		{"pos": [2, 0, 0], "semantic": "Core"}]})
+	var saved := await _tool("prefab_save", {"name": "Pointer", "region": {"min": [0, 0, 0], "max": [2, 0, 0]}})
+	_check("prefab_save records the project's north", not saved["_is_error"] and saved.get("north") == "west")
+	var listed := await _tool("prefab_get", {"name": "Pointer"})
+	_check("prefab_get reports it", listed.get("north") == "west")
+	await _tool("region_copy", {"region": {"min": [0, 0, 0], "max": [2, 0, 0]}})
+
+	# Back into the same project: no turn, the Core end still points +X.
+	await _tool("prefab_place", {"name": "Pointer", "at": [10, 0, 0]})
+	var a := VoxelWorld.active_project.data
+	_check("into its own project the prefab lands as built", a.get_block(Vector3i(12, 0, 0)) == "Core" and a.get_block(Vector3i(10, 0, 0)) == "Mass")
+
+	# A project that faces north: world-south is +Z, so the Core end must point +Z.
+	await _tool("project_create", {"name": "North B", "scratch": true, "palettes": ["Pillar Test"]})
+	await _tool("prefab_place", {"name": "Pointer", "at": [0, 0, 0]})
+	var b := VoxelWorld.active_project.data
+	_check("into a north-facing project it's turned a quarter (its Core end points south)",
+		b.get_block(Vector3i(0, 0, 2)) == "Core" and b.get_block(Vector3i(0, 0, 0)) == "Mass" and b.get_block(Vector3i(0, 0, 1)) == "Mass"
+		and b.get_block(Vector3i(2, 0, 0)).is_empty())
+	await _tool("prefab_place", {"name": "Pointer", "at": [10, 0, 0], "rotate": 1})
+	_check("`rotate` acts on top of that turn (a further quarter: now pointing west)", b.get_block(Vector3i(8, 0, 0)) == "Core")
+	await _tool("clipboard_paste", {"at": [20, 0, 0]})
+	_check("a copy from the west-facing project is turned the same way when pasted",
+		b.get_block(Vector3i(20, 0, 2)) == "Core" and b.get_block(Vector3i(20, 0, 0)) == "Mass")
+
+	# A project that faces east: world-south is -X.
+	await _tool("project_create", {"name": "North C", "scratch": true, "palettes": ["Pillar Test"]})
+	await _tool("project_settings", {"north": "east"})
+	await _tool("prefab_place", {"name": "Pointer", "at": [0, 0, 0]})
+	var c := VoxelWorld.active_project.data
+	_check("into an east-facing project it's turned a half (its Core end points -X, still world-south)",
+		c.get_block(Vector3i(-2, 0, 0)) == "Core" and c.get_block(Vector3i(0, 0, 0)) == "Mass")
+
+	# A prefab of unknown north (saved before projects had one) is never turned, until declared.
+	VoxelWorld.workspace.get_prefab("Pointer").north_dir = ""
+	await _tool("prefab_place", {"name": "Pointer", "at": [10, 0, 10]})
+	_check("an unknown north places as it is", c.get_block(Vector3i(12, 0, 10)) == "Core")
+	var plain := await _tool("prefab_get", {"name": "Pointer"})
+	_check("…and prefab_get leaves `north` out", not plain.has("north"))
+	var declared := await _tool("prefab_update", {"name": "Pointer", "north": "west"})
+	_check("prefab_update north declares the frame, cells untouched",
+		not declared["_is_error"] and declared.get("north") == "west" and VoxelWorld.workspace.get_prefab("Pointer").data.get_block(Vector3i(2, 0, 0)) == "Core")
+	var bad := await _tool("prefab_update", {"name": "Pointer", "north": "up"})
+	_check("an unknown direction is refused", bad["_is_error"] and str(bad.get("code", "")) == "bad_argument")
+
+	# Schematica: a prefab turns by its own north, a project region by the project's.
+	var path := "user://__mcp_north_test.schematic"
+	var out_prefab := await _tool("schematic_export", {"prefab": "Pointer", "path": path})
+	_check("a prefab export is turned by its own north and says so",
+		not out_prefab["_is_error"] and out_prefab.get("turned_degrees") == 90 and out_prefab.get("source_north") == "west"
+		and _ints(out_prefab.get("size")) == [1, 1, 3])
+	var out_region := await _tool("schematic_export", {"path": path, "region": {"min": [-2, 0, 0], "max": [0, 0, 0]}})
+	_check("a region of the east-facing project is turned by that project's north",
+		not out_region["_is_error"] and out_region.get("turned_degrees") == 270 and out_region.get("source_north") == "east"
+		and _ints(out_region.get("size")) == [1, 1, 3])
+	DirAccess.remove_absolute(path)
+
+	await _tool("prefab_delete", {"name": "Pointer", "confirm": true})
+	VoxelWorld.open(home)
 
 # --- Semantic rename --------------------------------------------------------------------
 

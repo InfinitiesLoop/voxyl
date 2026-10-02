@@ -34,18 +34,20 @@ extends RefCounted
 # Export the box [mn, mx] (inclusive) of `data`, belonging to whichever project is currently
 # active/resolving. To export a project that isn't the open one, wrap the call in
 # VoxelWorld.begin_resolve_as/end_resolve_as first (the same pattern PrefabTools already uses
-# for background renders).
-static func export_region(data: VoxelData, mn: Vector3i, mx: Vector3i) -> Dictionary:
+# for background renders). `turns`: see export_cells — pass the owning project's export_turns()
+# so its north comes out facing the game's north.
+static func export_region(data: VoxelData, mn: Vector3i, mx: Vector3i, turns := 0) -> Dictionary:
 	var cells := {}
 	for p in RegionOps.cells_in(data, mn, mx):
 		cells[p - mn] = data.get_cell(p)
-	return export_cells(cells, mx - mn + Vector3i.ONE)
+	return export_cells(cells, mx - mn + Vector3i.ONE, turns)
 
 # Export a whole prefab, resolved through its own preferred palette stack (see
-# CaptureService.prefab_stage — the same stand-in project its thumbnail renders use).
+# CaptureService.prefab_stage — the same stand-in project its thumbnail renders use). Turned by
+# the prefab's own north like a project region (a prefab of unknown north is written as it is).
 static func export_prefab(prefab: Prefab) -> Dictionary:
 	VoxelWorld.begin_resolve_as(CaptureService.prefab_stage(prefab))
-	var out := export_cells(prefab.data.cells, prefab.size)
+	var out := export_cells(prefab.data.cells, prefab.size, VoxelProject.turns_between(prefab.north_dir, "north"))
 	VoxelWorld.end_resolve_as()
 	return out
 
@@ -58,8 +60,17 @@ const _BYTE_MAX := 255   # the Blocks byte; ids past this need AddBlocks (see cl
 # currently active for resolution (VoxelWorld._resolve_project) — a plain call resolves
 # against the live open project; wrap the call in VoxelWorld.begin_resolve_as/end_resolve_as
 # first to resolve against a prefab's own stack instead (see export_prefab above).
+# `turns`: quarter-turns clockwise (seen from above) to swing the whole box before writing it,
+# blocks' facings and parts' slots with it — a project passes its own export_turns() so that its
+# north (VoxelProject.north_dir) ends up on -Z, the north of the world the schematic is pasted
+# into. A turned export's report carries `size` as written and `turned_degrees`.
 # Returns {bytes: PackedByteArray, report: Dictionary}.
-static func export_cells(cells: Dictionary, size: Vector3i) -> Dictionary:
+static func export_cells(cells: Dictionary, size: Vector3i, turns := 0) -> Dictionary:
+	turns = posmod(turns, 4)
+	if turns != 0:
+		var turned := RegionOps.turned_box(cells, size, turns)
+		cells = turned["cells"]
+		size = turned["size"]
 	var volume := maxi(0, size.x) * maxi(0, size.y) * maxi(0, size.z)
 	var local_ids := PackedInt32Array()
 	local_ids.resize(volume)
@@ -109,6 +120,8 @@ static func export_cells(cells: Dictionary, size: Vector3i) -> Dictionary:
 	}
 	if not material_warnings.is_empty():
 		report["material_warnings"] = material_warnings
+	if turns != 0:
+		report["turned_degrees"] = turns * 90
 	return {"bytes": bytes, "report": report}
 
 # The local id for `registry`, assigning one on first use: this install's real numeric id when

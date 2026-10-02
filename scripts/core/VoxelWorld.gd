@@ -110,6 +110,7 @@ var cutaway_enabled: bool = true
 var _clipboard: Dictionary = {}
 var _clipboard_size: Vector3i = Vector3i.ONE
 var _has_clipboard: bool = false
+var _clipboard_north: String = ""   # the north of the project it was copied from (VoxelProject.turns_between)
 
 # Shared 9-slot hotbar: each entry is a semantic name ("" = empty slot). The
 # active slot's semantic is the selected_semantic used for placement.
@@ -644,6 +645,7 @@ func copy_region(mn: Vector3i, mx: Vector3i, filter := {}, positions: Variant = 
 		clip[p - mn] = kept[p]
 	_clipboard = clip
 	_clipboard_size = mx - mn + Vector3i.ONE
+	_clipboard_north = active_project.north_dir
 	_has_clipboard = true
 	return clip.size()
 
@@ -2034,6 +2036,17 @@ func clipboard_size() -> Vector3i:
 func clipboard_cells() -> Dictionary:
 	return _clipboard
 
+# The north of the project the clipboard was copied from: pasting turns it to the open project's
+# north (turns_between), so a copy keeps its bearing across projects with different norths.
+func clipboard_north() -> String:
+	return _clipboard_north
+
+# The quarter-turns clockwise that carry cells laid out in a frame with north `source_north` into
+# the open project's frame, so north stays north — fold it into a placement's own turn
+# (RegionOps.turn_basis(rotate + this, mirror)). 0 with no project.
+func turns_into_project(source_north: String) -> int:
+	return VoxelProject.turns_between(source_north, active_project.north_dir) if active_project != null else 0
+
 # The selection's mask as a plain Array for RegionOps' `positions` argument, or null in
 # plain-box mode (letting the callee box-scan filtered live, cheaper for a large box).
 func _selection_mask_positions() -> Variant:
@@ -2107,6 +2120,7 @@ func save_prefab_from_region(prefab_name: String, mn: Vector3i, mx: Vector3i, pa
 	for p: Vector3i in cells:
 		prefab.data.set_cell(p - lo, cells[p])
 	prefab.size = hi - lo + Vector3i.ONE
+	prefab.north_dir = active_project.north_dir   # cells stay as authored; the prefab remembers which way they face
 	if anchor is Vector3i:
 		prefab.anchor = anchor
 	elif str(anchor) == "bottom-center":
@@ -2140,10 +2154,14 @@ func prefab_default_palettes(semantics: Array) -> Array[String]:
 			names.append(pn)
 	return names
 
-# Change a prefab's name / preferred palettes / anchor / tags / notes. `changes` holds only
-# the keys to change: name (String), palettes (Array), anchor (Vector3i), tags (Array),
-# notes (String). Returns "" or an error code: empty_name, name_taken.
+# Change a prefab's name / preferred palettes / anchor / tags / notes / north. `changes` holds
+# only the keys to change: name (String), palettes (Array), anchor (Vector3i), tags (Array),
+# notes (String), north (a VoxelProject.NORTH_DIRS word: which of the prefab's own directions
+# is the world's north — declares the frame of a prefab saved before north existed; the cells
+# are not turned). Returns "" or an error code: empty_name, name_taken, bad_north.
 func update_prefab(prefab: Prefab, changes: Dictionary) -> String:
+	if changes.has("north") and not (str(changes["north"]) in VoxelProject.NORTH_DIRS):
+		return "bad_north"
 	if changes.has("name"):
 		var n := str(changes["name"]).strip_edges()
 		if n.is_empty():
@@ -2163,6 +2181,8 @@ func update_prefab(prefab: Prefab, changes: Dictionary) -> String:
 			func(t: String) -> bool: return not t.is_empty()))
 	if changes.has("notes"):
 		prefab.notes = str(changes["notes"])
+	if changes.has("north"):
+		prefab.north_dir = str(changes["north"])
 	prefab.modified_at = int(Time.get_unix_time_from_system())
 	PrefabStore.save_prefab(prefab)
 	prefabs_changed.emit()
@@ -2222,15 +2242,17 @@ func open_prefab_for_editing(prefab: Prefab) -> VoxelProject:
 	for rel: Vector3i in prefab.data.cells:
 		p.data.set_cell(rel, prefab.data.cells[rel].duplicate_cell())
 	p.palette_names.assign(prefab.palette_names)
+	p.north_dir = prefab.north_dir if prefab.north_dir in VoxelProject.NORTH_DIRS else "north"   # its frame, so the compass reads true
 	p.has_selection = true
 	p.selection_min = Vector3i.ZERO
 	p.selection_max = prefab.size - Vector3i.ONE
 	p.prefab_saved_sig = _prefab_edit_sig(p)
 	return p
 
-# What a save would change: the cells (via the undo history) and the palette stack.
+# What a save would change: the cells (via the undo history), the palette stack and the north
+# (setting it in the Project dialog while editing is how a prefab's frame is declared).
 func _prefab_edit_sig(p: VoxelProject) -> String:
-	return "%d|%s" % [p.history.to_data().hash() if p.history else 0, ",".join(p.palette_names)]
+	return "%d|%s|%s" % [p.history.to_data().hash() if p.history else 0, ",".join(p.palette_names), p.north_dir]
 
 # Write a prefab edit's cells and palette stack back into the prefab, when they changed. The
 # box grows to hold cells built past it (never shrinks: re-save from a selection for that);
@@ -2259,6 +2281,11 @@ func _write_back_prefab(project: VoxelProject) -> void:
 	prefab.anchor = anchor_at - lo
 	project.prefab_origin = lo
 	prefab.palette_names.assign(project.palette_names)
+	# The stand-in's north is the prefab's frame. A prefab of unknown frame (saved before north
+	# existed) stays unknown while the stand-in still shows the default; setting a north on it
+	# while editing is what declares the frame.
+	if not prefab.north_dir.is_empty() or project.north_dir != "north":
+		prefab.north_dir = project.north_dir
 	prefab.modified_at = int(Time.get_unix_time_from_system())
 	PrefabStore.save_prefab(prefab)
 	prefabs_changed.emit()

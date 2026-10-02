@@ -30,8 +30,12 @@ extends Resource
 # like layout/hotbar they belong to the build, never to a view, and are never voxel data):
 #   north_dir   — which of the project's own directions points toward the real world's north:
 #                 "north" (-Z, the default: the project is already aligned), "east" (+X),
-#                 "south" (+Z) or "west" (-X). It orients the compass and nothing else — every
-#                 direction word in the data and the tools keeps meaning the project's own axes.
+#                 "south" (+Z) or "west" (-X). It orients the compass, and it makes north
+#                 transparent wherever cells cross between frames (see turns_between): a
+#                 prefab saved here remembers it, one placed (or a copy pasted) here is turned
+#                 to it, and a Schematica export is turned so this side faces the game's
+#                 north. The data itself is never rotated: every direction word in the data
+#                 and the tools keeps meaning the project's own axes.
 #   grid_offset — where the heavy 16-cell grid lines fall: along the west / north edge of the
 #                 cells whose x / z is this value (mod 16), so the grid can be lined up with the
 #                 world's chunk borders when the project's origin isn't on one. Kept in 0..15.
@@ -47,6 +51,25 @@ func north_vector() -> Vector2:
 		"south": return Vector2(0, 1)
 		"west": return Vector2(-1, 0)
 	return Vector2(0, -1)
+
+# "North is north": a build laid out in a frame whose north is the direction `from_north` (a
+# NORTH_DIRS word), moved into a frame whose north is `to_north`, must be turned by this many
+# quarter-turns clockwise (seen from above, the sense of RegionOps.turn_basis) for its north to
+# stay the real north. Every frame has one: a project (north_dir), a prefab (Prefab.north_dir), the
+# clipboard (the project it was copied from), and a Schematica file or the game itself ("north":
+# -Z). Moving cells between any two of them is this turn, and nothing else. An unknown frame ("",
+# a prefab saved before north existed) turns nothing.
+static func turns_between(from_north: String, to_north: String) -> int:
+	var a := NORTH_DIRS.find(from_north)
+	var b := NORTH_DIRS.find(to_north)
+	if a < 0 or b < 0:
+		return 0
+	return posmod(b - a, 4)
+
+# The turn an export applies so this project's north lands on -Z, the north of the game a
+# Schematica file is pasted into: east (+X) needs 3, south 2, west 1, none for the default.
+func export_turns() -> int:
+	return turns_between(north_dir, "north")
 
 # Cuboid region selection (the Select tool), persisted as two opposite corners + a flag —
 # cheap, and enough to restore the exact box. Like layout/hotbar this is project-tied

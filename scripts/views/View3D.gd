@@ -3638,8 +3638,12 @@ func _paste_box_size() -> Vector3i:
 func _paste_handle() -> Vector3i:
 	return _paste_prefab.anchor if _paste_prefab != null else Vector3i.ZERO
 
+# The source's own north brought to this project's (north is north: see
+# VoxelProject.turns_between) is folded into the user's turn, so a prefab or copy from a project
+# with a different north starts out facing the right way and R / M act from there.
 func _paste_basis() -> Basis:
-	return RegionOps.turn_basis(_paste_rotation, "x" if _paste_mirror else "")
+	var source_north := _paste_prefab.north_dir if _paste_prefab != null else VoxelWorld.clipboard_north()
+	return RegionOps.turn_basis(_paste_rotation + VoxelWorld.turns_into_project(source_north), "x" if _paste_mirror else "")
 
 func _paste_xform() -> SpatialXform:
 	return SpatialXform.about(_paste_basis(), Vector3.ZERO)

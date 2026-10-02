@@ -26,6 +26,12 @@ extends Resource
 # a turn pivots about it. Default the min corner; bottom-center suits trees and pillars.
 @export var anchor: Vector3i = Vector3i.ZERO
 @export var palette_names: Array[String] = []
+# Which of the prefab's own directions points toward the real world's north (a
+# VoxelProject.NORTH_DIRS word) — the north of the project it was saved from. The cells stay as
+# authored; placing the prefab turns it to the destination project's north, and exporting it to
+# Schematica turns it to the game's, so north stays north (VoxelProject.turns_between). "" =
+# unknown (saved before projects had a north): placed and exported as it is, never turned.
+@export var north_dir: String = ""
 
 func _init() -> void:
 	data = VoxelData.new()

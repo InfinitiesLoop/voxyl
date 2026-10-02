@@ -5,6 +5,8 @@ extends Node
 # export (ForgeMultipart microblocks via FmpParts, ArchitectureCraft shapes via AcParts) end to
 # end. GT machine export isn't built yet.
 
+const _SchematicaTools := preload("res://scripts/automation/tools/SchematicaTools.gd")
+
 var _pass := 0
 var _fail := 0
 
@@ -18,6 +20,7 @@ func _ready() -> void:
 	_test_schematica_exporter_local_ids()
 	_test_schematica_local_id_overflow()
 	_test_schematica_exporter_prefab()
+	_test_export_applies_source_north()
 	_test_fmp_microblock_export()
 	_test_ac_shape_export()
 	print("\n%d passed, %d failed" % [_pass, _fail])
@@ -336,6 +339,158 @@ func _test_schematica_exporter_prefab() -> void:
 	ws.remove_prefab(prefab.name)
 	ws.remove_palette("__schem_export__")
 	ws.remove_library("__schem_export_prefab_lib__")
+
+# --- SchematicaExporter (the project's north) ---------------------------------
+
+# The project's north (VoxelProject.north_dir) is whichever of its own directions points at the
+# real world's north, so an export swings the build until that side faces -Z: the schematic then
+# lines up with the game's compass when it's pasted. Blocks' facings and parts' slots turn with it.
+func _test_export_applies_source_north() -> void:
+	print("-- SchematicaExporter (a project's north turns its export)")
+	var ws := VoxelWorld.workspace
+	var lib := ws.get_or_add_library("__schem_north_lib__")
+	McId.set_registry_id(lib.add_block_type("Stone"), "minecraft:stone", 0, "", true, "minecraft", "Stone")
+	McId.set_registry_id(lib.add_block_type("Stairs"), "minecraft:stone_stairs", 0, McId.ORIENT_STAIRS, true, "minecraft", "Stairs")
+	McId.set_registry_id(lib.add_block_type("Planks"), "minecraft:planks", 0, "", true, "minecraft", "Planks")
+	var palette := ws.add_palette("__schem_north__")
+	palette.library_names = ["__schem_north_lib__"]
+	for n in ["Stone", "Stairs", "Planks"]:
+		var e := PaletteEntry.new()
+		e.semantic_name = n
+		e.block_type_name = n
+		palette.entries.append(e)
+	var project: VoxelProject = ws.add_project("__schem_north_project__")
+	project.palette_names.append("__schem_north__")
+	VoxelWorld.open(project)
+
+	# 3 x 1 x 2, seen from above with the project's own north (-Z) at the top:
+	#       S . T      S = stone, T = stairs facing north, P = planks, . = air
+	#       . P .
+	project.data.set_block(Vector3i(0, 0, 0), "Stone")
+	project.data.set_block(Vector3i(2, 0, 0), "Stairs", Orientation.make(Orientation.Facing.NORTH))
+	project.data.set_block(Vector3i(1, 0, 1), "Planks")
+	var mn := Vector3i(0, 0, 0)
+	var mx := Vector3i(2, 0, 1)
+
+	_check("a project's export turns: 0 for north, 3 for east, 2 for south, 1 for west",
+		[0, 3, 2, 1] == ["north", "east", "south", "west"].map(func(d: String) -> int:
+			project.north_dir = d
+			return project.export_turns()))
+
+	# north_dir -> {dims, stone, planks, stairs (block index), stairs_meta}. Block index is
+	# (y * length + z) * width + x of the file; stairs meta is MC's (0 east, 1 west, 2 south,
+	# 3 north). The stone sits on the project's west edge, the stairs on its east edge, the planks
+	# on its south edge — whichever of those is the world's north must land at z = 0.
+	var expect := {
+		"north": {"dims": Vector3i(3, 1, 2), "stone": 0, "stairs": 2, "planks": 4, "meta": 3},
+		"east":  {"dims": Vector3i(2, 1, 3), "stone": 4, "stairs": 0, "planks": 3, "meta": 1},
+		"south": {"dims": Vector3i(3, 1, 2), "stone": 5, "stairs": 3, "planks": 1, "meta": 2},
+		"west":  {"dims": Vector3i(2, 1, 3), "stone": 1, "stairs": 5, "planks": 2, "meta": 0},
+	}
+	for dir: String in expect:
+		var want: Dictionary = expect[dir]
+		project.north_dir = dir
+		var result := SchematicaExporter.export_region(project.data, mn, mx, project.export_turns())
+		var bytes: PackedByteArray = result["bytes"]
+		var probed: Dictionary = SchematicaProbe.probe(bytes)
+		var mapping: Dictionary = probed["mapping"]
+		var fields: Dictionary = (NbtReader.read_file(bytes) as Dictionary)["value"]
+		var blocks: PackedByteArray = fields["Blocks"]["value"]
+		var metas: PackedByteArray = fields["Data"]["value"]
+		var dims: Vector3i = want["dims"]
+		_check("north=%s: the file is %s" % [dir, dims], probed["dimensions"] == dims and result["report"]["size"] == dims)
+		var placed_ok: bool = blocks.size() == dims.x * dims.y * dims.z
+		var count := 0
+		for i in blocks.size():
+			if blocks[i] != 0:
+				count += 1
+		_check("north=%s: three blocks, nothing lost or doubled" % dir, placed_ok and count == 3)
+		_check("north=%s: stone, planks and stairs land where the turn puts them" % dir,
+			blocks[want["stone"]] == mapping["minecraft:stone"] and blocks[want["planks"]] == mapping["minecraft:planks"]
+			and blocks[want["stairs"]] == mapping["minecraft:stone_stairs"])
+		_check("north=%s: the stairs' facing turned with the build (meta %d)" % [dir, want["meta"]],
+			int(metas[want["stairs"]]) == int(want["meta"]))
+		if dir == "north":
+			_check("north=north: nothing is turned, and the report doesn't claim it was",
+				not (result["report"] as Dictionary).has("turned_degrees"))
+		else:
+			_check("north=%s: the report says how far it turned" % dir,
+				int(result["report"]["turned_degrees"]) == project.export_turns() * 90)
+
+	# The same turn through the MCP tool (which reads the open project's north itself).
+	var path := "user://__schem_north_test.schematic"
+	project.north_dir = "east"
+	var tool_out: Dictionary = _SchematicaTools._schematic_export({"path": path, "region": {"all": true}})
+	_check("schematic_export succeeds", not tool_out.get("_is_error", false))
+	_check("schematic_export turns by the project's north and says so",
+		tool_out.get("turned_degrees", 0) == 270 and tool_out.get("source_north", "") == "east"
+		and tool_out.get("size", Vector3i.ZERO) == Vector3i(2, 1, 3))
+	project.north_dir = "north"
+	tool_out = _SchematicaTools._schematic_export({"path": path, "region": {"all": true}})
+	_check("…and leaves a north-facing project as it is",
+		not tool_out.has("turned_degrees") and not tool_out.has("source_north")
+		and tool_out.get("size", Vector3i.ZERO) == Vector3i(3, 1, 2))
+	DirAccess.remove_absolute(path)
+
+	# A prefab turns by the north it was saved with — never by whichever project is open — and one
+	# of unknown north (saved before projects had a north) is written as it is.
+	project.north_dir = "east"
+	var prefab: Prefab = ws.add_prefab("__schem_north_prefab__")
+	prefab.size = Vector3i(3, 1, 1)
+	prefab.palette_names = ["__schem_north__"]
+	prefab.data.set_block(Vector3i(0, 0, 0), "Stone")
+	prefab.data.set_block(Vector3i(2, 0, 0), "Stairs", Orientation.make(Orientation.Facing.NORTH))
+	var unknown := SchematicaExporter.export_prefab(prefab)
+	_check("a prefab of unknown north isn't turned, whatever project is open",
+		unknown["report"]["size"] == Vector3i(3, 1, 1) and not (unknown["report"] as Dictionary).has("turned_degrees"))
+	prefab.north_dir = "west"
+	var west_bytes: PackedByteArray = SchematicaExporter.export_prefab(prefab)["bytes"]
+	var west_fields: Dictionary = (NbtReader.read_file(west_bytes) as Dictionary)["value"]
+	var west_ids: PackedByteArray = west_fields["Blocks"]["value"]
+	var west_map: Dictionary = SchematicaProbe.probe(west_bytes)["mapping"]
+	# 1 x 1 x 3 after a quarter turn: the stone (west end) is the northmost, the stairs the southmost,
+	# and the stairs that faced the prefab's north now face east.
+	_check("a west-facing prefab turns a quarter: stone at the north end, stairs at the south end",
+		SchematicaProbe.probe(west_bytes)["dimensions"] == Vector3i(1, 1, 3)
+		and west_ids[0] == west_map["minecraft:stone"] and west_ids[2] == west_map["minecraft:stone_stairs"] and west_ids[1] == 0)
+	_check("…and its stairs' facing turned with it (north → east, meta 0)",
+		int((west_fields["Data"]["value"] as PackedByteArray)[2]) == 0)
+	prefab.north_dir = "north"
+	_check("a north-facing prefab isn't turned",
+		SchematicaExporter.export_prefab(prefab)["report"]["size"] == Vector3i(3, 1, 1))
+	ws.remove_prefab(prefab.name)
+
+	# A face part on a cell's north side: turned three quarters it lies on the west side
+	# (north -> east -> south -> west), written as an mcr_face with that side's slot.
+	var parts_project: VoxelProject = ws.add_project("__schem_north_parts__")
+	parts_project.palette_names.append("__schem_north__")
+	VoxelWorld.open(parts_project)
+	parts_project.data.add_part(Vector3i(1, 0, 0), BlockCell.make_part("Stone", "face1", ShapeCatalog.SIDE_NAMES.find("north")))
+	parts_project.north_dir = "east"
+	var parts_result := SchematicaExporter.export_region(parts_project.data, Vector3i(0, 0, 0), Vector3i(1, 0, 0), parts_project.export_turns())
+	var parts_bytes: PackedByteArray = parts_result["bytes"]
+	_check("a part cell turned with the box: 2 x 1 x 1 became 1 x 1 x 2", parts_result["report"]["size"] == Vector3i(1, 1, 2))
+	var tile := _tile_at(parts_bytes, Vector3i(0, 0, 0))
+	var tile_parts: Array = tile["parts"]["value"] if tile.has("parts") else []
+	_check("its tile entity moved to the turned position (the east cell is now the north one)",
+		tile_parts.size() == 1 and _tile_at(parts_bytes, Vector3i(0, 0, 1)).is_empty())
+	_check("the face's slot turned from north to west (shape byte 0x10 | slot)",
+		tile_parts.size() == 1 and int(tile_parts[0]["shape"]["value"]) == (0x10 | ShapeCatalog.SIDE_NAMES.find("west")))
+
+	# The box turn itself, apart from any export.
+	var box := {Vector3i(0, 0, 0): BlockCell.new("A"), Vector3i(2, 0, 1): BlockCell.new("B")}
+	var turned := RegionOps.turned_box(box, Vector3i(3, 1, 2), 1)
+	_check("turned_box: a quarter turn swaps x and z", turned["size"] == Vector3i(2, 1, 3))
+	_check("turned_box: cells are re-keyed from the turned box's own min corner",
+		(turned["cells"] as Dictionary).has(Vector3i(1, 0, 0)) and (turned["cells"] as Dictionary).has(Vector3i(0, 0, 2))
+		and (turned["cells"] as Dictionary).size() == 2)
+	_check("turned_box: four quarter turns are the identity",
+		RegionOps.turned_box(box, Vector3i(3, 1, 2), 4)["cells"] == box)
+
+	ws.remove_project(parts_project.name)
+	ws.remove_project(project.name)
+	ws.remove_palette("__schem_north__")
+	ws.remove_library("__schem_north_lib__")
 
 # --- SchematicaExporter (ForgeMultipart microblock parts) --------------------
 

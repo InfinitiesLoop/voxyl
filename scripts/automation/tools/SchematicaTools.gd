@@ -5,7 +5,7 @@ extends RefCounted
 
 static func register(reg: McpRegistry) -> void:
 	reg.add("schematic_export",
-		"Export a region to a real Schematica .schematic file: whole blocks, ForgeMultipart microblock parts (covers/panels/slabs, hollow covers, strips/posts/pillars, nooks/corners/notches), and ArchitectureCraft shapes (roofs, stairs, cylinders, capitals, arches, balustrades/banisters — GT machines aren't wired up yet). Give EITHER `region` (within the open project; omit for the whole build) OR `prefab` (a saved prefab name, resolved through its own preferred palette stack, independent of whatever project is open). A cell or part whose resolved block has no confirmed Minecraft identity (see block_set_mc_id, or reimport via nei_roster_import) is left out and counted in the report's `unmapped`, not guessed at; a part cell where nothing resolved is counted in `empty_part_cells`.",
+		"Export a region to a real Schematica .schematic file: whole blocks, ForgeMultipart microblock parts (covers/panels/slabs, hollow covers, strips/posts/pillars, nooks/corners/notches), and ArchitectureCraft shapes (roofs, stairs, cylinders, capitals, arches, balustrades/banisters — GT machines aren't wired up yet). Give EITHER `region` (within the open project; omit for the whole build) OR `prefab` (a saved prefab name, resolved through its own preferred palette stack, independent of whatever project is open; a prefab is turned by its own north, one of unknown north is written as saved). North is north: a project `region` is turned by the project's `north` setting (see project_settings), a prefab by the north it was saved with, so that north lands on the game's north (-Z) when the schematic is pasted. The report's `size` is the size as written, and `turned_degrees` (clockwise, seen from above) and `source_north` say how it was turned — absent when it already faced north. Facings and part slots turn with the blocks. A cell or part whose resolved block has no confirmed Minecraft identity (see block_set_mc_id, or reimport via nei_roster_import) is left out and counted in the report's `unmapped`, not guessed at; a part cell where nothing resolved is counted in `empty_part_cells`.",
 		{"properties": {
 			"region": McpArgs.s_region(),
 			"prefab": {"type": "string", "description": "Export this saved prefab instead of a project region"},
@@ -36,11 +36,13 @@ static func _schematic_export(args: Dictionary) -> Dictionary:
 		return McpRegistry.fail("bad_argument", "path is required")
 	var prefab_name := str(args.get("prefab", ""))
 	var result: Dictionary
+	var north := ""   # the north of what was exported (the project's or the prefab's), reported when it turned
 	if not prefab_name.is_empty():
 		var prefab := VoxelWorld.workspace.get_prefab(prefab_name)
 		if prefab == null:
 			return McpRegistry.fail("not_found", "no prefab named '%s'" % prefab_name)
 		result = SchematicaExporter.export_prefab(prefab)
+		north = prefab.north_dir
 	else:
 		var pv: Variant = McpArgs.project(args)
 		if McpRegistry.is_error(pv):
@@ -48,7 +50,9 @@ static func _schematic_export(args: Dictionary) -> Dictionary:
 		var r: Variant = McpArgs.region(args.get("region"), true)
 		if McpRegistry.is_error(r):
 			return r
-		result = SchematicaExporter.export_region((pv as VoxelProject).data, r["min"], r["max"])
+		var project: VoxelProject = pv
+		result = SchematicaExporter.export_region(project.data, r["min"], r["max"], project.export_turns())
+		north = project.north_dir
 	var bytes: PackedByteArray = result["bytes"]
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f == null:
@@ -58,6 +62,8 @@ static func _schematic_export(args: Dictionary) -> Dictionary:
 	var out: Dictionary = (result["report"] as Dictionary).duplicate()
 	out["path"] = path
 	out["bytes"] = bytes.size()
+	if out.has("turned_degrees"):
+		out["source_north"] = north
 	return out
 
 static func _schematic_probe(args: Dictionary) -> Dictionary:

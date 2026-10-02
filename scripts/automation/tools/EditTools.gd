@@ -67,7 +67,7 @@ static func register(reg: McpRegistry) -> void:
 		{"properties": {"region": McpArgs.s_region(), "project": {"type": "string"}}, "required": ["region"]},
 		_region_copy)
 	reg.add("clipboard_paste",
-		"Paste the clipboard with its min corner at `at`, optionally rotated (quarter turns clockwise seen from above) and/or mirrored. Keeps occupied cells unless overwrite:true.",
+		"Paste the clipboard with its min corner at `at`, optionally rotated (quarter turns clockwise seen from above) and/or mirrored. North is north: a copy taken in a project with a different `north` (see project_settings) is first turned to this project's, then `rotate` / `mirror` apply. Keeps occupied cells unless overwrite:true.",
 		_props({
 			"at": McpArgs.s_vec3(),
 			"rotate": {"type": "integer", "description": "0-3 quarter turns clockwise (from above)"},
@@ -327,10 +327,10 @@ static func _clipboard_paste(args: Dictionary) -> Dictionary:
 	var at: Variant = McpArgs.vec3i_or_fail(args.get("at"), "at")
 	if McpRegistry.is_error(at):
 		return at
-	var b := Basis(Vector3.UP, deg_to_rad(-90.0 * (int(args.get("rotate", 0)) % 4)))
-	match str(args.get("mirror", "")):
-		"x": b = Basis(Vector3(-1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, 1)) * b
-		"z": b = Basis(Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, -1)) * b
+	# The copy's own north is brought to this project's first, so it keeps its bearing across
+	# projects with different norths (VoxelProject.turns_between); `rotate` acts from there.
+	var b := RegionOps.turn_basis(int(args.get("rotate", 0)) + VoxelWorld.turns_into_project(VoxelWorld.clipboard_north()),
+		str(args.get("mirror", "")))
 	var r := RegionOps.paste_edits(VoxelWorld.clipboard_cells(), VoxelWorld.clipboard_size(), at, b)
 	var a := args.duplicate()
 	if not bool(args.get("overwrite", false)):

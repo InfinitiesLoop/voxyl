@@ -9,7 +9,9 @@ extends ConfirmationDialog
 #   - "Export to Schematica…" (the same overlay, or a saved prefab's own detail panel):
 #     write the kept cells out as a real .schematic file on disk, via SchematicaExporter.
 # The preview and the include/exclude/trim controls are identical either way; only the
-# prefab-only fields (name/handle/tags) and the final commit step differ by `_mode`.
+# prefab-only fields (name/handle/tags) and the final commit step differ by `_mode`. North is
+# north in both: a saved prefab remembers the project's north (its cells stay as built), and an
+# export turns the build so that north faces the game's (VoxelProject.turns_between).
 #
 # Saving over an existing prefab name asks first (the button turns into Replace).
 
@@ -112,6 +114,10 @@ func _start() -> void:
 	_info = Label.new()
 	_info.modulate = Color(1, 1, 1, 0.7)
 	box.add_child(_info)
+
+	if _export_turns() != 0:
+		box.add_child(_caption("Written turned %d° clockwise (seen from above) so %s north (%s) faces the game's north. The preview shows it as built." % [
+			_export_turns() * 90, "the prefab's" if _source_prefab != null else "this project's (set in the Project dialog)", _source_north()]))
 
 	if _mode == DialogMode.SAVE_PREFAB:
 		box.add_child(_caption("Name"))
@@ -226,6 +232,21 @@ func _unique_name(base: String) -> String:
 		n += 1
 	return "%s %d" % [base, n]
 
+# Which of the source's own directions is the world's north: the open project's for a live
+# selection, the prefab's own for a saved one ("" = a prefab of unknown north).
+func _source_north() -> String:
+	if _source_prefab != null:
+		return _source_prefab.north_dir
+	return VoxelWorld.active_project.north_dir if VoxelWorld.active_project != null else ""
+
+# Quarter-turns an export swings the build by so its north lands on the game's north (-Z):
+# north is north (VoxelProject.turns_between). Saving a prefab never turns anything — it
+# records the project's north instead.
+func _export_turns() -> int:
+	if _mode != DialogMode.EXPORT:
+		return 0
+	return VoxelProject.turns_between(_source_north(), "north")
+
 func _excluded() -> Array:
 	var out: Array = []
 	for sem in _checks:
@@ -261,7 +282,8 @@ func _check() -> void:
 	var lo: Vector3i = kept["lo"]
 	var dims: Vector3i = kept["dims"]
 	_update_preview(cells, lo, dims)
-	_info.text = "%d × %d × %d  ·  %d cells" % [dims.x, dims.y, dims.z, cells.size()]
+	var written := dims if _export_turns() % 2 == 0 else Vector3i(dims.z, dims.y, dims.x)   # an odd turn swaps x and z
+	_info.text = "%d × %d × %d  ·  %d cells" % [written.x, written.y, written.z, cells.size()]
 	if _mode == DialogMode.EXPORT:
 		get_ok_button().disabled = cells.is_empty()
 		_warn.text = "Nothing is left to export." if cells.is_empty() else ""
@@ -309,16 +331,17 @@ func _export() -> void:
 	for p: Vector3i in cells:
 		rel[p - lo] = cells[p]
 	var src_prefab := _source_prefab
+	var turns := _export_turns()
 	var suggested := src_prefab.name if src_prefab != null \
 		else (VoxelWorld.active_project.name if VoxelWorld.active_project != null else "export")
 	var root := get_tree().root
 	var export_cb := func() -> Dictionary:
 		if src_prefab != null:
 			VoxelWorld.begin_resolve_as(CaptureService.prefab_stage(src_prefab))
-			var result: Dictionary = SchematicaExporter.export_cells(rel, dims)
+			var result: Dictionary = SchematicaExporter.export_cells(rel, dims, turns)
 			VoxelWorld.end_resolve_as()
 			return result
-		return SchematicaExporter.export_cells(rel, dims)
+		return SchematicaExporter.export_cells(rel, dims, turns)
 	_close()
 	_pick_export_path(root, suggested, export_cb)
 
@@ -369,6 +392,8 @@ static func _show_export_report(root: Node, path: String, report: Dictionary) ->
 		dims.x, dims.y, dims.z, report["cells_written"], report["distinct_blocks"]]])
 	if int(report.get("tile_entities", 0)) > 0:
 		lines.append("%d shaped-part tile entities (ForgeMultipart / ArchitectureCraft)" % report["tile_entities"])
+	if int(report.get("turned_degrees", 0)) > 0:
+		lines.append("Turned %d° clockwise so the project's north faces the game's north" % report["turned_degrees"])
 
 	var unmapped: Dictionary = report.get("unmapped", {})
 	var empty_parts := int(report.get("empty_part_cells", 0))

@@ -117,6 +117,7 @@ static func prefab_stage(prefab: Prefab) -> VoxelProject:
 	p.scratch = true
 	p.data = prefab.data
 	p.palette_names.assign(prefab.palette_names)
+	p.north_dir = prefab.north_dir if prefab.north_dir in VoxelProject.NORTH_DIRS else "north"
 	return p
 
 func _ensure_prefab_view(prefab: Prefab) -> void:

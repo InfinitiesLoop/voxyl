@@ -473,6 +473,20 @@ static func turn_basis(rotate: int, mirror := "") -> Basis:
 		"z": b = Basis(Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, -1)) * b
 	return b
 
+# A box of cells (keyed relative to its min corner, box `size`) turned `steps` quarter-turns
+# clockwise seen from above — positions, plain blocks' facings and parts' slots all move together
+# (paste's own rotation, see paste_edits) — and keyed relative to the turned box's min corner.
+# Returns {cells, size}; an odd turn swaps the box's x and z extents.
+static func turned_box(cells: Dictionary, size: Vector3i, steps: int) -> Dictionary:
+	steps = posmod(steps, 4)
+	if steps == 0:
+		return {"cells": cells, "size": size}
+	var placed := paste_edits(cells, size, Vector3i.ZERO, turn_basis(steps))
+	var out := {}
+	for e: Dictionary in placed["edits"]:
+		out[e["pos"]] = e["cell"]
+	return {"cells": out, "size": Vector3i(size.z, size.y, size.x) if steps % 2 == 1 else size}
+
 # Counts inside the box (narrowed by `filter`/`positions`): whole blocks by semantic,
 # parts by "semantic|shape", and the bounds of what's there.
 static func stats(data: VoxelData, mn: Vector3i, mx: Vector3i, filter := {}, positions: Variant = null) -> Dictionary:

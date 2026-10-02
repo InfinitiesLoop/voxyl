@@ -895,6 +895,65 @@ func _test_prefabs() -> void:
 		VoxelWorld.workspace.get_project(ed.name) == null and not FileAccess.file_exists(ProjectStore.ROOT.path_join(ed.name + ".tres")))
 	VoxelWorld.open(home_project)
 
+	# North is north: every frame cells cross between (project, prefab, clipboard, Schematica) has
+	# a north, and moving between two of them is one turn — never a rewrite of the cells.
+	_check("turns_between: no turn for the same north, and for an unknown one either way",
+		VoxelProject.turns_between("west", "west") == 0 and VoxelProject.turns_between("", "east") == 0
+		and VoxelProject.turns_between("east", "") == 0 and VoxelProject.turns_between("sideways", "north") == 0)
+	_check("turns_between: east→north is 3, south→north 2, west→north 1, north→east 1, east→west 2",
+		VoxelProject.turns_between("east", "north") == 3 and VoxelProject.turns_between("south", "north") == 2
+		and VoxelProject.turns_between("west", "north") == 1 and VoxelProject.turns_between("north", "east") == 1
+		and VoxelProject.turns_between("east", "west") == 2)
+	_check("…and a turn there and back is none",
+		[["north", "east"], ["east", "south"], ["south", "west"], ["west", "north"], ["east", "west"], ["north", "south"]].all(
+			func(p: Array) -> bool: return (VoxelProject.turns_between(p[0], p[1]) + VoxelProject.turns_between(p[1], p[0])) % 4 == 0))
+	_check("a prefab saved from a default-north project says so", prefab.north_dir == "north")
+	home_project.north_dir = "west"
+	var west_res: Variant = VoxelWorld.save_prefab_from_region("West Arch", Vector3i(10, 0, 10), Vector3i(12, 1, 11))
+	var west_prefab: Prefab = west_res if west_res is Prefab else Prefab.new()
+	_check("a prefab remembers the north of the project it was saved from, and its cells stay as built",
+		west_prefab.north_dir == "west" and west_prefab.data.get_block(Vector3i.ZERO) == "Wall"
+		and west_prefab.data.get_orientation(Vector3i.ZERO) == Orientation.make(Orientation.Facing.EAST))
+	var ws_north := VoxelWorkspace.new()
+	PrefabStore.load_persisted(ws_north)
+	_check("…and the north survives a reload from disk",
+		ws_north.get_prefab("West Arch") != null and ws_north.get_prefab("West Arch").north_dir == "west")
+	home_project.north_dir = "north"
+	_check("placed into a north-facing project it takes one quarter turn (west→north)",
+		VoxelWorld.turns_into_project(west_prefab.north_dir) == 1 and VoxelWorld.turns_into_project(prefab.north_dir) == 0)
+	home_project.north_dir = "east"
+	VoxelWorld.copy_region(Vector3i(10, 0, 10), Vector3i(12, 1, 11))
+	_check("a copy remembers the north of the project it came from", VoxelWorld.clipboard_north() == "east")
+	home_project.north_dir = "south"
+	_check("pasted into a south-facing one it takes one quarter turn (east→south)",
+		VoxelWorld.turns_into_project(VoxelWorld.clipboard_north()) == 1)
+	home_project.north_dir = "north"
+
+	# A prefab edited as a project keeps its frame: the stand-in carries its north (so the
+	# compass reads true), and an unknown frame stays unknown until a north is set on it.
+	var ed_west := VoxelWorld.open_prefab_for_editing(west_prefab)
+	_check("a prefab opens as a stand-in facing its own north", ed_west.north_dir == "west")
+	var legacy := VoxelWorld.workspace.add_prefab("Legacy North")
+	legacy.data.set_block(Vector3i.ZERO, "Wall")
+	legacy.size = Vector3i.ONE
+	legacy.palette_names = ["Default"]
+	var ed_legacy := VoxelWorld.open_prefab_for_editing(legacy)
+	_check("a prefab of unknown north opens under the default one", legacy.north_dir.is_empty() and ed_legacy.north_dir == "north")
+	VoxelWorld.open(ed_legacy)
+	VoxelWorld.set_block(Vector3i(0, 1, 0), "Wall")
+	VoxelWorld.save_active_project()
+	_check("an edit that never touches north leaves it unknown", legacy.cell_count() == 2 and legacy.north_dir.is_empty())
+	VoxelWorld.set_project_settings("south", Vector2i.ZERO)
+	VoxelWorld.save_active_project()
+	_check("setting a north while editing declares the prefab's frame (cells not turned)",
+		legacy.north_dir == "south" and legacy.data.get_block(Vector3i.ZERO) == "Wall" and legacy.data.get_block(Vector3i(0, 1, 0)) == "Wall")
+	_check("update_prefab north declares it too, and refuses an unknown direction",
+		VoxelWorld.update_prefab(legacy, {"north": "west"}).is_empty() and legacy.north_dir == "west"
+		and VoxelWorld.update_prefab(legacy, {"north": "up"}) == "bad_north" and legacy.north_dir == "west")
+	VoxelWorld.open(home_project)
+	VoxelWorld.delete_prefab(legacy)
+	VoxelWorld.delete_prefab(west_prefab)
+
 	VoxelWorld.delete_prefab(prefab)
 	_check("delete removes it from memory and disk",
 		VoxelWorld.workspace.get_prefab("Arch 2") == null and not FileAccess.file_exists(PrefabStore.path_for("Arch 2")))
