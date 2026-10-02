@@ -877,6 +877,14 @@ func _test_nei_roster_import_tool() -> void:
 		"badmod:mystery,402,0,false,Mystery",
 	]))
 	panel_f.close()
+	var block_f := FileAccess.open(dumps + "/block.csv", FileAccess.WRITE)
+	block_f.store_string("\n".join([
+		"Name,ID,Has Item,Mod,Class,Display Name",
+		"testmod:widget,400,true,TestMod,some.Class,Widget",
+		"testmod:machine,401,true,TestMod,some.Class,Machine",
+		"badmod:mystery,402,true,BadMod,some.Class,Mystery",
+	]))
+	block_f.close()
 
 	var browse := await _tool("nei_roster_import",
 		{"dumps_path": dumps, "asset_paths": [src], "library": "mcpnei"})

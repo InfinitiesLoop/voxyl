@@ -165,8 +165,8 @@ func source_for(ns: String) -> MCAssetSource:
 
 # This install's live numeric block id for `registry`, or -1 if it's in neither dump. Checks
 # block.csv first (every registered block, item-backed or not — see load_block_csv), then
-# falls back to item.csv's own Has-Block rows (load_block_csv is optional; older dumps
-# folders won't have block.csv at all).
+# falls back to item.csv's own Has-Block rows for a registry block.csv doesn't list (or if
+# load_block_csv wasn't called — ImportService always does, and refuses a folder without it).
 func legacy_id_for(registry: String) -> int:
 	if _block_ids.has(registry):
 		return int(_block_ids[registry])

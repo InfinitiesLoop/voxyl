@@ -526,13 +526,14 @@ func _view_from_drag(data: Variant) -> Control:
 	var from_node := get_node_or_null(path)
 	if from_node == null:
 		return null
-	# from_path may point to the TabBar (parent is ViewPane) or the ViewPane itself.
+	# from_path may point to the TabBar or the ViewPane itself. The TabBar isn't a direct
+	# child of the pane (Godot 4.7 wraps it in an internal HBoxContainer), so walk up.
 	var src: ViewPane
-	if from_node is ViewPane:
-		src = from_node as ViewPane
-	elif from_node.get_parent() is ViewPane:
-		src = from_node.get_parent() as ViewPane
-	else:
+	var n: Node = from_node
+	while n and not src:
+		src = n as ViewPane
+		n = n.get_parent()
+	if not src:
 		return null
 	# Godot 4.6 uses "tab_index"; older API used "tab_element"/"tabc_element".
 	var idx: int = data.get("tab_index", data.get("tab_element", data.get("tabc_element", -1)))

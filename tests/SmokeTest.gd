@@ -2183,9 +2183,25 @@ func _test_import_service_nei() -> void:
 	]))
 
 	var sources := ImportService.detect_sources(src_root)
+
+	# block.csv is mandatory (it alone lists blocks with no item form, e.g. ForgeMultipart's
+	# placeholder world block), so a dumps folder without it is refused, naming the file.
+	var bare_svc := ImportService.new(sources, VoxelWorkspace.new().get_or_add_library("neisvc-nobc"), ImportService.Mode.NEI)
+	_check("a dumps folder without block.csv is refused, naming the missing file",
+		bare_svc.load_nei_dumps(dumps).contains("block.csv"))
+
+	_write_file(dumps + "/block.csv", "\n".join([
+		"Name,ID,Has Item,Mod,Class,Display Name",
+		"testmod:cobble,200,true,TestMod,some.Class,Cobble",
+		"testmod:machine,201,true,TestMod,some.Class,Machine",
+		"ForgeMultipart:block,202,false,ForgeMultipart,some.Class,",
+	]))
 	var ws := VoxelWorkspace.new()
-	var svc := ImportService.new(sources, ws.get_or_add_library("neisvc"), ImportService.Mode.NEI)
+	var lib := ws.get_or_add_library("neisvc")
+	var svc := ImportService.new(sources, lib, ImportService.Mode.NEI)
 	_check("load_nei_dumps succeeds", svc.load_nei_dumps(dumps) == "")
+	_check("block.csv's placeholder world block id is kept on the library for the exporter",
+		int(lib.mc_legacy_ids.get("ForgeMultipart:block", -1)) == 202)
 	var avail := svc.available_blocks()
 	_check("NEI browse lists the confirmed roster", avail.size() == 2)
 	var n := svc.import_selected(avail)
