@@ -162,6 +162,116 @@ static func cells_in(data: VoxelData, mn: Vector3i, mx: Vector3i, filter := {}, 
 			out.append(p)
 	return out
 
+# --- Set algebra over cells -------------------------------------------------------------
+# A "cell set" is a Dictionary of Vector3i → true (what a sparse selection holds). These
+# work on sets and filters alone, so any view or tool can compose selections the same way.
+
+const SET_OPS := ["union", "except", "intersect", "xor"]
+
+# `a` combined with `b`: union (in either), except (in `a` but not `b`), intersect (in both),
+# xor (in exactly one). Neither input is changed; an unknown `op` gives an empty set.
+static func combine_cells(a: Dictionary, b: Dictionary, op: String) -> Dictionary:
+	var out := {}
+	match op:
+		"union":
+			out = a.duplicate()
+			out.merge(b)
+		"except":
+			for p: Vector3i in a:
+				if not b.has(p):
+					out[p] = true
+		"intersect":
+			var a_small := a.size() <= b.size()
+			var small: Dictionary = a if a_small else b
+			var big: Dictionary = b if a_small else a
+			for p: Vector3i in small:
+				if big.has(p):
+					out[p] = true
+		"xor":
+			for p: Vector3i in a:
+				if not b.has(p):
+					out[p] = true
+			for p: Vector3i in b:
+				if not a.has(p):
+					out[p] = true
+	return out
+
+# The content filter for `combine_cells(a, b, op)`, given each side's own. except/intersect
+# only ever keep cells from `a`, so they keep `a`'s filter (`b` just decides which cells go).
+# union/xor draw cells from both, so the filter has to let through whatever either side's does:
+# a selection re-checks every cell against its filter whenever it's read, which would
+# otherwise drop the other side's cells.
+static func combine_filters(a: Dictionary, b: Dictionary, op: String) -> Dictionary:
+	if op == "except" or op == "intersect":
+		return a.duplicate(true)
+	return union_filters(a, b)
+
+# One filter ({whitelist?, blacklist?}) that lets through what `a` or `b` does. Either may be
+# empty (no filter = everything). A filter is a finite list (a whitelist minus its blacklist)
+# or "everything but" its blacklist, and the union of those two kinds is always one of them.
+static func union_filters(a: Dictionary, b: Dictionary) -> Dictionary:
+	if a.is_empty() or b.is_empty():
+		return {}
+	var fa := _filter_names(a)
+	var fb := _filter_names(b)
+	var names := {}
+	if fa["finite"] and fb["finite"]:
+		names.merge(fa["names"])
+		names.merge(fb["names"])
+		return {"whitelist": _sorted_names(names), "blacklist": []}
+	if fa["finite"] or fb["finite"]:
+		# A finite list plus "everything but X": only X's names the list doesn't cover stay out.
+		var listed: Dictionary = fa["names"] if fa["finite"] else fb["names"]
+		var excluded: Dictionary = fb["names"] if fa["finite"] else fa["names"]
+		for s in excluded:
+			if not listed.has(s):
+				names[s] = true
+	else:
+		# "Everything but X" plus "everything but Y": only what both leave out stays out.
+		for s in fa["names"]:
+			if fb["names"].has(s):
+				names[s] = true
+	if names.is_empty():
+		return {}
+	return {"whitelist": [], "blacklist": _sorted_names(names)}
+
+# {finite, names}: finite = `names` are the only semantics let through; else they're the
+# only ones kept out.
+static func _filter_names(filter: Dictionary) -> Dictionary:
+	var wl: Array = filter.get("whitelist", [])
+	var bl: Array = filter.get("blacklist", [])
+	var names := {}
+	if wl.is_empty():
+		for s in bl:
+			names[str(s)] = true
+		return {"finite": false, "names": names}
+	for s in wl:
+		if not (s in bl):
+			names[str(s)] = true
+	return {"finite": true, "names": names}
+
+static func _sorted_names(names: Dictionary) -> Array:
+	var out: Array = names.keys()
+	out.sort()
+	return out
+
+# The inclusive [min, max] box around a cell set, or [] if it's empty.
+static func cell_bounds(cells: Dictionary) -> Array:
+	if cells.is_empty():
+		return []
+	var lo: Vector3i
+	var hi: Vector3i
+	var first := true
+	for p: Vector3i in cells:
+		if first:
+			lo = p
+			hi = p
+			first = false
+		else:
+			lo = Vector3i(mini(lo.x, p.x), mini(lo.y, p.y), mini(lo.z, p.z))
+			hi = Vector3i(maxi(hi.x, p.x), maxi(hi.y, p.y), maxi(hi.z, p.z))
+	return [lo, hi]
+
 # --- Connected structures ---------------------------------------------------------------
 
 # Whether `cell` holds at least one of the `allowed` semantics (a set: name → true) — a whole

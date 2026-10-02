@@ -23,6 +23,8 @@ func _ready() -> void:
 	_test_reorient()
 	_test_undo_redo()
 	_test_selection()
+	_test_selection_set_ops()
+	_test_selection_resize()
 	_test_clipboard()
 	_test_paste_rotation_parity()
 	_test_prefabs()
@@ -658,6 +660,130 @@ func _test_selection() -> void:
 	VoxelWorld.active_project = null
 	_rm_rf(ProjectStore.ROOT)
 	ProjectStore.ROOT = saved_root
+
+# RegionOps' set algebra, which selection_combine (and anything else composing selections)
+# is built on: the four operations over cell sets, and the content filter a combined
+# selection carries. Pure functions over sets and filters, so no project is needed.
+func _test_selection_set_ops() -> void:
+	print("-- selection set operations (RegionOps)")
+	var a := _cell_set([[0, 0, 0], [1, 0, 0], [2, 0, 0]])
+	var b := _cell_set([[2, 0, 0], [3, 0, 0]])
+	_check("union: cells in either", _has_cells(RegionOps.combine_cells(a, b, "union"), [[0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]]))
+	_check("except: in a but not b", _has_cells(RegionOps.combine_cells(a, b, "except"), [[0, 0, 0], [1, 0, 0]]))
+	_check("except isn't symmetric: b minus a", _has_cells(RegionOps.combine_cells(b, a, "except"), [[3, 0, 0]]))
+	_check("intersect: in both", _has_cells(RegionOps.combine_cells(a, b, "intersect"), [[2, 0, 0]]))
+	_check("intersect is symmetric whichever side is smaller", _has_cells(RegionOps.combine_cells(b, a, "intersect"), [[2, 0, 0]]))
+	_check("xor: in exactly one", _has_cells(RegionOps.combine_cells(a, b, "xor"), [[0, 0, 0], [1, 0, 0], [3, 0, 0]]))
+	_check("neither input is changed", a.size() == 3 and b.size() == 2)
+	var empty := {}
+	_check("union with nothing is the set itself", _has_cells(RegionOps.combine_cells(a, empty, "union"), [[0, 0, 0], [1, 0, 0], [2, 0, 0]]))
+	_check("except nothing keeps everything", RegionOps.combine_cells(a, empty, "except").size() == 3)
+	_check("intersect with nothing is nothing", RegionOps.combine_cells(a, empty, "intersect").is_empty())
+	_check("a set xor itself is nothing", RegionOps.combine_cells(a, a, "xor").is_empty())
+	_check("disjoint sets don't intersect", RegionOps.combine_cells(a, _cell_set([[9, 9, 9]]), "intersect").is_empty())
+	_check("an unknown operation gives nothing rather than a guess", RegionOps.combine_cells(a, b, "merge").is_empty())
+
+	var box := RegionOps.cell_bounds(_cell_set([[3, -2, 7], [-1, 4, 7], [0, 0, 0]]))
+	_check("cell_bounds is the box around a set", box == [Vector3i(-1, -2, 0), Vector3i(3, 4, 7)])
+	_check("…and [] for an empty set", RegionOps.cell_bounds({}).is_empty())
+
+	# Filters. except/intersect only keep cells from `a`, so they keep a's filter; union/xor
+	# must let through whatever either side does (a selection re-checks every cell against it).
+	var mass := {"whitelist": ["Mass"], "blacklist": []}
+	var core := {"whitelist": ["Core"], "blacklist": []}
+	_check("except keeps the base's filter", RegionOps.combine_filters(mass, core, "except") == mass)
+	_check("intersect keeps the base's filter", RegionOps.combine_filters(mass, {}, "intersect") == mass)
+	var kept := RegionOps.combine_filters(mass, core, "except")
+	kept["whitelist"].append("Glow")
+	_check("…as a copy, not the caller's own dictionary", mass["whitelist"] == ["Mass"])
+	_check("union of two whitelists is both, sorted", RegionOps.combine_filters(mass, core, "union") == {"whitelist": ["Core", "Mass"], "blacklist": []})
+	_check("xor widens the same way", RegionOps.combine_filters(core, mass, "xor") == {"whitelist": ["Core", "Mass"], "blacklist": []})
+	_check("an unfiltered side lets everything through", RegionOps.combine_filters(mass, {}, "union").is_empty()
+		and RegionOps.combine_filters({}, mass, "union").is_empty())
+	_check("a whitelist minus its own blacklist is what it lets through",
+		RegionOps.union_filters({"whitelist": ["Mass", "Core"], "blacklist": ["Core"]}, {"whitelist": ["Glow"]})
+		== {"whitelist": ["Glow", "Mass"], "blacklist": []})
+	var not_core := {"whitelist": [], "blacklist": ["Core"]}
+	_check("a whitelist plus 'everything but X' still excludes X", RegionOps.union_filters(mass, not_core) == not_core)
+	_check("…unless the whitelist brings X back, then nothing is excluded", RegionOps.union_filters(core, not_core).is_empty())
+	_check("two blacklists keep out only what both do",
+		RegionOps.union_filters({"blacklist": ["A", "B"]}, {"blacklist": ["B", "C"]}) == {"whitelist": [], "blacklist": ["B"]})
+	_check("…and nothing when they share nothing", RegionOps.union_filters({"blacklist": ["A"]}, {"blacklist": ["C"]}).is_empty())
+
+# VoxelWorld.resize_selection: the box's faces moved all at once (what selection_resize drives).
+# Unlike the UI's per-face nudge it's all-or-nothing, never leaves a lopsided box, and refuses
+# a sparse selection instead of silently flattening it.
+func _test_selection_resize() -> void:
+	print("-- selection resize (move the box's faces)")
+	var saved_root := ProjectStore.ROOT
+	ProjectStore.ROOT = "user://__voxyl_selresize__"
+	_rm_rf(ProjectStore.ROOT)
+	var project := VoxelWorld.workspace.add_project("Resize Test")
+	project.palette_names.append("Default")
+	VoxelWorld.open(project)
+	var changes := [0]
+	var on_change := func(): changes[0] += 1
+	VoxelWorld.region_selection_changed.connect(on_change)
+
+	_check("nothing selected: refused", VoxelWorld.resize_selection(Vector3i.ONE, Vector3i.ONE).get("error") == "no_selection")
+	VoxelWorld.set_selection_box(Vector3i(0, 0, 0), Vector3i(4, 2, 4))
+	changes[0] = 0
+	_check("growing moves min faces down and max faces up",
+		VoxelWorld.resize_selection(Vector3i.ONE, Vector3i.ONE).is_empty()
+		and VoxelWorld.selection_min == Vector3i(-1, -1, -1) and VoxelWorld.selection_max == Vector3i(5, 3, 5))
+	_check("…and tells the views once", changes[0] == 1)
+	_check("negative amounts shrink back in", VoxelWorld.resize_selection(-Vector3i.ONE, -Vector3i.ONE).is_empty()
+		and VoxelWorld.selection_min == Vector3i.ZERO and VoxelWorld.selection_max == Vector3i(4, 2, 4))
+	VoxelWorld.resize_selection(Vector3i.ZERO, Vector3i(0, 3, 0))
+	_check("one face on its own", VoxelWorld.selection_min == Vector3i.ZERO and VoxelWorld.selection_max == Vector3i(4, 5, 4))
+	VoxelWorld.set_selection_box(Vector3i(0, 0, 0), Vector3i(4, 2, 4))
+
+	changes[0] = 0
+	_check("faces may meet: 3 thick shrunk by 1 each side is 1 thick",
+		VoxelWorld.resize_selection(Vector3i(0, -1, 0), Vector3i(0, -1, 0)).is_empty()
+		and VoxelWorld.selection_min.y == 1 and VoxelWorld.selection_max.y == 1)
+	VoxelWorld.set_selection_box(Vector3i(0, 0, 0), Vector3i(4, 2, 4))
+	changes[0] = 0
+	var crossed := VoxelWorld.resize_selection(Vector3i(-1, -2, 0), Vector3i(-1, -2, 0))
+	_check("…but never pass: refused as too_small", crossed.get("error") == "too_small")
+	_check("…and all-or-nothing: the x change that was fine didn't happen either",
+		VoxelWorld.selection_min == Vector3i.ZERO and VoxelWorld.selection_max == Vector3i(4, 2, 4))
+	var huge := VoxelWorld.resize_selection(Vector3i(1000, 1000, 1000), Vector3i(1000, 1000, 1000))
+	_check("a box over 4,000,000 cells is refused as too_large, selection untouched",
+		huge.get("error") == "too_large" and VoxelWorld.selection_max == Vector3i(4, 2, 4))
+	_check("refusals don't signal the views", changes[0] == 0)
+
+	VoxelWorld.set_selection_filter(["Mass"], ["Core"])
+	VoxelWorld.resize_selection(Vector3i.ONE, Vector3i.ONE)
+	_check("the filter survives a resize", VoxelWorld.selection_filter.get("whitelist", []) == ["Mass"]
+		and VoxelWorld.selection_filter.get("blacklist", []) == ["Core"])
+
+	VoxelWorld.set_selection_cells({Vector3i(2, 2, 2): true, Vector3i(9, 2, 2): true})
+	var sparse := VoxelWorld.resize_selection(Vector3i.ONE, Vector3i.ONE)
+	_check("a sparse selection has no faces to move: refused as masked", sparse.get("error") == "masked")
+	_check("…and is left exactly as it was", VoxelWorld.selection_mask != null and VoxelWorld.selection_mask.size() == 2
+		and VoxelWorld.selection_min == Vector3i(2, 2, 2) and VoxelWorld.selection_max == Vector3i(9, 2, 2))
+
+	VoxelWorld.region_selection_changed.disconnect(on_change)
+	VoxelWorld.clear_selection()
+	VoxelWorld.workspace.remove_project("Resize Test")
+	VoxelWorld.active_project = null
+	_rm_rf(ProjectStore.ROOT)
+	ProjectStore.ROOT = saved_root
+
+func _cell_set(positions: Array) -> Dictionary:
+	var out := {}
+	for p in positions:
+		out[Vector3i(p[0], p[1], p[2])] = true
+	return out
+
+func _has_cells(cells: Dictionary, positions: Array) -> bool:
+	if cells.size() != positions.size():
+		return false
+	for p in positions:
+		if not cells.has(Vector3i(p[0], p[1], p[2])):
+			return false
+	return true
 
 # Clipboard (copy/cut/paste support): deep-cloning a selection, tags isolation, cut as one
 # undo step, set_cell's tag-preserving verbatim write, and cross-project persistence (the

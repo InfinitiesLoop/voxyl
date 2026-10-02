@@ -1783,6 +1783,32 @@ func nudge_selection_face(axis: int, max_side: bool, delta: int) -> void:
 	region_selection_changed.emit()
 	mark_dirty()
 
+# Move the selection box's faces all at once: `grow_min` / `grow_max` are how far the three
+# min faces / three max faces move OUTWARD (negative = inward), as [x, y, z] vectors. Unlike
+# nudge_selection_face (the UI's per-click nudge, which clamps each face on its own) this is
+# all-or-nothing, so shrinking never lands on a lopsided box: it fails instead, leaving the
+# selection as it was. Keeps the filter. A sparse selection (a mask) isn't a box, so it's
+# refused rather than silently flattened. Returns {} on success, else {"error": ...}:
+# no_selection | masked | too_small (a face would pass its opposite) | too_large.
+func resize_selection(grow_min: Vector3i, grow_max: Vector3i) -> Dictionary:
+	if not has_selection:
+		return {"error": "no_selection"}
+	if selection_mask != null:
+		return {"error": "masked"}
+	var lo := selection_min - grow_min
+	var hi := selection_max + grow_max
+	if lo.x > hi.x or lo.y > hi.y or lo.z > hi.z:
+		return {"error": "too_small"}
+	var size := hi - lo + Vector3i.ONE
+	# Same 4,000,000-cell cap McpArgs.region() puts on any region (floats: no int overflow).
+	if float(size.x) * float(size.y) * float(size.z) > 4_000_000.0:
+		return {"error": "too_large"}
+	selection_min = lo
+	selection_max = hi
+	region_selection_changed.emit()
+	mark_dirty()
+	return {}
+
 # Drop the current selection (and any pending anchor). No-op — and no signal — when
 # there's nothing to clear, so idle repaints stay cheap.
 func clear_selection() -> void:
@@ -1904,13 +1930,15 @@ func grow_selection(range_steps := 1, semantic := "", diagonal := false) -> Dict
 	return {"cells": mask.size()}
 
 # Select exactly these cells (a sparse, possibly disjoint set: the empty space inside their
-# bounding box is NOT selected). Their semantics become the selection's whitelist so a later
-# copy/cut/delete only touches that material where a cell is mixed. Replaces any selection.
-func set_selection_cells(cells: Dictionary, whitelist: Array = []) -> void:
+# bounding box is NOT selected). The whitelist/blacklist become the selection's filter, so a
+# later copy/cut/delete only touches that material where a cell is mixed. Replaces any
+# selection; an empty set is ignored (a selection always has at least one cell).
+func set_selection_cells(cells: Dictionary, whitelist: Array = [], blacklist: Array = []) -> void:
 	if cells.is_empty():
 		return
 	selection_mask = cells
-	selection_filter = {"whitelist": whitelist.duplicate(), "blacklist": []} if not whitelist.is_empty() else {}
+	selection_filter = {"whitelist": whitelist.duplicate(), "blacklist": blacklist.duplicate()} \
+		if not (whitelist.is_empty() and blacklist.is_empty()) else {}
 	_selection_anchor = null
 	has_selection = true
 	_recompute_selection_bounds()

@@ -48,6 +48,8 @@ func _run() -> void:
 	await _test_http()
 	await _test_build()
 	await _test_structure_find()
+	await _test_selection_combine()
+	await _test_selection_resize()
 	await _test_project_settings_tool()
 	await _test_restart_tool()
 	await _test_attachment_tools()
@@ -524,6 +526,199 @@ func _test_structure_find() -> void:
 		and VoxelWorld.selection_mask == null and VoxelWorld.selection_max == Vector3i(1, 1, 1))
 	_check("the materials list comes with it", (quiet["materials"] as Array).size() == 1
 		and str(quiet["materials"][0]["block"]) == "base")
+	await _tool("selection_clear", {})
+	await _tool("cells_clear", {"region": {"all": true}})
+	_check("(fixture cleared)", data.cells.is_empty())
+
+# --- selection_combine: set operations on selections ----------------------------------------
+
+const _ROOM_OUTER := {"min": [700, 0, 700], "max": [706, 4, 706]}
+const _ROOM_INNER := {"min": [701, 1, 701], "max": [705, 3, 705]}
+
+# A hollow 7x5x7 room of Mass (245 cells outside, 75 inside → a 170-cell shell) with one Core
+# "table" standing in the middle of it.
+func _build_room() -> void:
+	await _tool("cells_clear", {"region": {"all": true}})
+	await _tool("region_fill", {"region": _ROOM_OUTER, "semantic": "Mass"})
+	await _tool("cells_clear", {"region": _ROOM_INNER})
+	await _tool("cells_set", {"cells": [{"pos": [703, 1, 703], "semantic": "Core"}]})
+	await _tool("selection_clear", {})
+
+func _test_selection_combine() -> void:
+	print("-- selection_combine")
+	await _build_room()
+	var data := VoxelWorld.active_project.data
+	var table := Vector3i(703, 1, 703)
+
+	var walls := await _tool("selection_combine", {"operation": "except", "base": _ROOM_OUTER, "with": _ROOM_INNER})
+	_check("a room except its inner box is just the shell", not walls["_is_error"] and int(walls["cells"]) == 170)
+	_check("…the table inside is out, and it says what each side held", not VoxelWorld.selection_mask.has(table)
+		and _ints(walls["inputs"]) == [171, 1])
+	_check("…it's selected as an exact set, not the box", bool(walls["selected"]) and VoxelWorld.selection_mask.size() == 170
+		and bool(walls["sparse"]) and _ints(walls["size"]) == [7, 5, 7])
+	_check("…and reports what's in it", (walls["semantics"] as Dictionary).size() == 1
+		and int((walls["semantics"] as Dictionary).get("Mass", 0)) == 170)
+	var emptied := await _tool("cells_clear", {"region": {"selection": true}})
+	_check("acting on {selection:true} touches only the walls: the table is left standing",
+		not emptied["_is_error"] and data.cells.size() == 1 and data.cells.has(table))
+
+	# The current selection stands in for `base` when it's left out.
+	await _build_room()
+	await _tool("selection_set", {"region": _ROOM_OUTER})
+	var from_sel := await _tool("selection_combine", {"operation": "except", "with": _ROOM_INNER})
+	_check("with no base, the current selection is the first set", int(from_sel["cells"]) == 170
+		and VoxelWorld.selection_mask.size() == 170 and not VoxelWorld.selection_mask.has(table))
+	var as_second := await _tool("selection_combine", {"operation": "except", "base": _ROOM_OUTER, "with": {"selection": true}})
+	_check("…and it can be the second set just as well (the room minus the walls = the table)",
+		int(as_second["cells"]) == 1 and VoxelWorld.selection_mask.has(table))
+
+	# `with` can be a list, folded in order.
+	var west_face := {"min": [700, 0, 700], "max": [700, 4, 706]}
+	var folded := await _tool("selection_combine", {"operation": "except", "base": _ROOM_OUTER, "with": [_ROOM_INNER, west_face]})
+	_check("a list in `with` is folded in order (inner box, then the west wall: 170 - 35)",
+		int(folded["cells"]) == 135 and _ints(folded["inputs"]) == [171, 1, 35])
+
+	# The other operations.
+	var floor_a := {"min": [700, 0, 700], "max": [702, 0, 702]}
+	var floor_b := {"min": [702, 0, 702], "max": [704, 0, 704]}
+	var uni := await _tool("selection_combine", {"operation": "union", "base": floor_a, "with": floor_b})
+	var both := await _tool("selection_combine", {"operation": "intersect", "base": floor_a, "with": floor_b})
+	var diff := await _tool("selection_combine", {"operation": "xor", "base": floor_a, "with": floor_b})
+	_check("two overlapping 3x3 floors: union 17, intersect 1, xor 16",
+		int(uni["cells"]) == 17 and int(both["cells"]) == 1 and int(diff["cells"]) == 16)
+	await _tool("selection_set", {"region": _ROOM_OUTER})
+	await _tool("selection_combine", {"operation": "except", "with": _ROOM_INNER})
+	var top := await _tool("selection_combine", {"operation": "intersect", "with": {"min": [700, 3, 700], "max": [706, 4, 706]}})
+	_check("intersecting the walls with the top two layers keeps the ceiling and the upper ring (49 + 24)",
+		int(top["cells"]) == 73)
+
+	# Filters: what a result carries has to keep every one of its cells selectable.
+	var mass_only := {"min": _ROOM_OUTER["min"], "max": _ROOM_OUTER["max"], "filter": {"whitelist": ["Mass"]}}
+	var core_only := {"min": _ROOM_OUTER["min"], "max": _ROOM_OUTER["max"], "filter": {"whitelist": ["Core"]}}
+	var kept := await _tool("selection_combine", {"operation": "except", "base": mass_only, "with": _ROOM_INNER})
+	_check("except keeps the base's filter, so a later edit still only touches that material",
+		int(kept["cells"]) == 170 and VoxelWorld.selection_filter.get("whitelist", []) == ["Mass"])
+	var either := await _tool("selection_combine", {"operation": "union", "base": mass_only, "with": core_only})
+	_check("union widens the filter to both sides…", int(either["cells"]) == 171
+		and VoxelWorld.selection_filter.get("whitelist", []) == ["Core", "Mass"])
+	_check("…so the table is still selectable once the selection is read back", VoxelWorld.selection_positions().size() == 171)
+	var anything := await _tool("selection_combine", {"operation": "union", "base": mass_only, "with": _ROOM_INNER})
+	_check("an unfiltered side means no filter at all", int(anything["cells"]) == 171 and VoxelWorld.selection_filter.is_empty())
+	var by_material := await _tool("selection_combine", {"operation": "except", "base": {"all": true}, "with": {"all": true, "filter": {"whitelist": ["Core"]}}})
+	_check("{all:true} with a whitelist picks cells by material (everything except the table)",
+		int(by_material["cells"]) == 170)
+
+	# Nothing is left, or the call can't run: the selection is left alone and the reason is plain.
+	await _tool("selection_set", {"region": floor_a})
+	var nothing := await _tool("selection_combine", {"operation": "except", "base": floor_a, "with": floor_a})
+	_check("an empty result is refused, naming the counts", nothing["_is_error"] and str(nothing.get("code", "")) == "empty_region"
+		and str(nothing.get("message", "")).contains("[9, 9]"))
+	_check("…and the selection stays as it was", VoxelWorld.has_selection and VoxelWorld.selection_max == Vector3i(702, 0, 702))
+	var preview := await _tool("selection_combine", {"operation": "union", "base": floor_a, "with": floor_b, "select": false})
+	_check("select:false reports without touching the selection", int(preview["cells"]) == 17 and not bool(preview["selected"])
+		and VoxelWorld.selection_max == Vector3i(702, 0, 702))
+	await _tool("selection_clear", {})
+	var no_base := await _tool("selection_combine", {"operation": "except", "with": _ROOM_INNER})
+	_check("no base and no selection is refused", no_base["_is_error"] and str(no_base.get("code", "")) == "no_selection")
+	var bad_op := await _tool("selection_combine", {"operation": "merge", "base": floor_a, "with": floor_b})
+	_check("an unknown operation is refused", bad_op["_is_error"] and str(bad_op.get("code", "")) == "bad_argument")
+	var no_with := await _tool("selection_combine", {"operation": "union", "base": floor_a})
+	var empty_with := await _tool("selection_combine", {"operation": "union", "base": floor_a, "with": []})
+	_check("`with` is required, and not empty", no_with["_is_error"] and empty_with["_is_error"]
+		and str(no_with.get("code", "")) == "bad_argument" and str(empty_with.get("code", "")) == "bad_argument")
+	var bad_region := await _tool("selection_combine", {"operation": "union", "base": floor_a, "with": [floor_b, {"nonsense": 1}]})
+	_check("a bad region says which argument it was", bad_region["_is_error"] and str(bad_region.get("message", "")).contains("with[1]"))
+	_check("none of that touched the build", data.cells.size() == 171)
+
+	await _tool("selection_clear", {})
+	await _tool("cells_clear", {"region": {"all": true}})
+	_check("(fixture cleared)", data.cells.is_empty())
+
+# --- selection_resize: moving a box selection's faces ------------------------------------------
+
+func _test_selection_resize() -> void:
+	print("-- selection_resize")
+	await _build_room()
+	var data := VoxelWorld.active_project.data
+
+	var none := await _tool("selection_resize", {"by": 1})
+	_check("nothing selected: refused", none["_is_error"] and str(none.get("code", "")) == "no_selection")
+
+	await _tool("selection_set", {"region": _ROOM_OUTER})
+	var inward := await _tool("selection_resize", {"by": -1})
+	_check("by:-1 pulls every face in one cell: the room's box becomes its interior",
+		not inward["_is_error"] and _ints(inward["min"]) == [701, 1, 701] and _ints(inward["max"]) == [705, 3, 705]
+		and _ints(inward["size"]) == [5, 3, 5])
+	_check("…which holds just the table", int(inward["cells"]) == 1)
+	await _tool("selection_set", {"region": _ROOM_OUTER})
+	var eroded := await _tool("selection_shrink", {"range": 1})
+	_check("(selection_shrink is a different thing: it erodes built cells, and a one-thick shell has no core)",
+		int(eroded["cells"]) == 0)
+
+	await _tool("selection_set", {"region": _ROOM_OUTER})
+	await _tool("selection_resize", {"by": -1})
+	var back := await _tool("selection_resize", {"by": 1})
+	_check("by:1 grows it back out, all six faces", _ints(back["min"]) == [700, 0, 700] and _ints(back["max"]) == [706, 4, 706]
+		and int(back["cells"]) == 171)
+
+	var wide := await _tool("selection_resize", {"by": 2, "y": 0})
+	_check("an axis overrides by (by:2, y:0 = wider but not taller)",
+		_ints(wide["min"]) == [698, 0, 698] and _ints(wide["max"]) == [708, 4, 708])
+	await _tool("selection_set", {"region": _ROOM_OUTER})
+	var faces := await _tool("selection_resize", {"up": 3, "down": -1})
+	_check("single faces: up:3 raises the top, down:-1 lifts the bottom (positive = outward)",
+		_ints(faces["min"]) == [700, 1, 700] and _ints(faces["max"]) == [706, 7, 706])
+	await _tool("selection_set", {"region": _ROOM_OUTER})
+	var mixed := await _tool("selection_resize", {"by": 1, "y": 0, "up": 2})
+	_check("a face beats its axis, which beats by",
+		_ints(mixed["min"]) == [699, 0, 699] and _ints(mixed["max"]) == [707, 6, 707])
+	await _tool("selection_set", {"region": _ROOM_OUTER})
+	var compass := await _tool("selection_resize", {"north": 1, "south": 2, "west": 3, "east": 4})
+	_check("compass words follow the axes (north = -z, west = -x)",
+		_ints(compass["min"]) == [697, 0, 699] and _ints(compass["max"]) == [710, 4, 708])
+
+	# Refusals leave the selection exactly as it was.
+	await _tool("selection_set", {"region": _ROOM_OUTER})
+	var too_small := await _tool("selection_resize", {"by": -3})
+	_check("a shrink that would pass a face's opposite is refused (the box is only 5 thick)",
+		too_small["_is_error"] and str(too_small.get("code", "")) == "too_small")
+	var too_big := await _tool("selection_resize", {"by": 5000})
+	_check("a box over 4,000,000 cells is refused", too_big["_is_error"] and str(too_big.get("code", "")) == "too_large")
+	var still := await _tool("selection_get", {})
+	_check("…and the selection is untouched by every refusal",
+		_ints(still["min"]) == [700, 0, 700] and _ints(still["max"]) == [706, 4, 706])
+	var one_axis := await _tool("selection_resize", {"x": -3})
+	_check("but a face may meet its opposite: x:-3 on a 7-wide box leaves one column",
+		not one_axis["_is_error"] and _ints(one_axis["min"]) == [703, 0, 700] and _ints(one_axis["max"]) == [703, 4, 706])
+
+	# The filter rides along.
+	await _tool("selection_set", {"region": _ROOM_OUTER})
+	await _tool("selection_filter", {"whitelist": ["Mass"]})
+	var filtered := await _tool("selection_resize", {"by": -1})
+	_check("the filter survives a resize, and counts follow it (the table is Core, so 0)",
+		(filtered["filter"] as Dictionary).get("whitelist", []) == ["Mass"] and int(filtered["cells"]) == 0)
+
+	# A sparse selection has no faces: it's refused, and says what to do instead.
+	await _tool("selection_combine", {"operation": "except", "base": _ROOM_OUTER, "with": _ROOM_INNER})
+	var sparse := await _tool("selection_resize", {"by": 1})
+	_check("a sparse selection is refused, pointing at selection_grow/shrink",
+		sparse["_is_error"] and str(sparse.get("code", "")) == "masked_selection"
+		and str(sparse.get("message", "")).contains("selection_grow"))
+	_check("…and keeps its cells", VoxelWorld.selection_mask != null and VoxelWorld.selection_mask.size() == 170)
+
+	# Bad input.
+	await _tool("selection_set", {"region": _ROOM_OUTER})
+	var nothing := await _tool("selection_resize", {})
+	var word := await _tool("selection_resize", {"by": "two"})
+	var fraction := await _tool("selection_resize", {"by": 1.5})
+	var absurd := await _tool("selection_resize", {"by": 1000000})
+	_check("no amount, a word, a fraction and an absurd distance are all bad_argument",
+		str(nothing.get("code", "")) == "bad_argument" and str(word.get("code", "")) == "bad_argument"
+		and str(fraction.get("code", "")) == "bad_argument" and str(absurd.get("code", "")) == "bad_argument")
+	var whole_float := await _tool("selection_resize", {"by": 2.0})
+	_check("a whole number written as 2.0 is fine", not whole_float["_is_error"] and _ints(whole_float["size"]) == [11, 9, 11])
+	_check("none of it touched the build", data.cells.size() == 171)
+
 	await _tool("selection_clear", {})
 	await _tool("cells_clear", {"region": {"all": true}})
 	_check("(fixture cleared)", data.cells.is_empty())
