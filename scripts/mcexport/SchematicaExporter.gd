@@ -36,10 +36,12 @@ extends RefCounted
 # VoxelWorld.begin_resolve_as/end_resolve_as first (the same pattern PrefabTools already uses
 # for background renders). `turns`: see export_cells — pass the owning project's export_turns()
 # so its north comes out facing the game's north.
-static func export_region(data: VoxelData, mn: Vector3i, mx: Vector3i, turns := 0) -> Dictionary:
+static func export_region(data: VoxelData, mn: Vector3i, mx: Vector3i, turns := 0,
+		filter := {}, positions: Variant = null) -> Dictionary:
+	var kept := RegionOps.cells_without(data, mn, mx, [], filter, positions)
 	var cells := {}
-	for p in RegionOps.cells_in(data, mn, mx):
-		cells[p - mn] = data.get_cell(p)
+	for p: Vector3i in kept:
+		cells[p - mn] = kept[p]
 	return export_cells(cells, mx - mn + Vector3i.ONE, turns)
 
 # Export a whole prefab, resolved through its own preferred palette stack (see

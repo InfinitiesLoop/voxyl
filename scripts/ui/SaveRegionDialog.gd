@@ -21,6 +21,8 @@ var _mode: DialogMode = DialogMode.SAVE_PREFAB
 var _data: VoxelData
 var _mn: Vector3i
 var _mx: Vector3i
+var _filter := {}           # the selection's whitelist/blacklist, so a narrowed selection saves as itself
+var _positions: Variant = null  # its exact cells when it is sparse (grow/shrink/combine), else null (the whole box)
 # Set only when exporting an already-saved prefab (as opposed to a live selection): its own
 # preferred palette stack previews and resolves the export, not the open project's.
 var _source_prefab: Prefab
@@ -46,6 +48,8 @@ static func open(host: Node) -> void:
 	d._data = VoxelWorld.active_project.data
 	d._mn = VoxelWorld.selection_min
 	d._mx = VoxelWorld.selection_max
+	d._filter = VoxelWorld.selection_filter.duplicate(true)
+	d._positions = VoxelWorld.selection_positions() if VoxelWorld.selection_mask != null else null
 	host.get_tree().root.add_child(d)
 	d._start()
 
@@ -58,6 +62,8 @@ static func open_export_region(host: Node) -> void:
 	d._data = VoxelWorld.active_project.data
 	d._mn = VoxelWorld.selection_min
 	d._mx = VoxelWorld.selection_max
+	d._filter = VoxelWorld.selection_filter.duplicate(true)
+	d._positions = VoxelWorld.selection_positions() if VoxelWorld.selection_mask != null else null
 	host.get_tree().root.add_child(d)
 	d._start()
 
@@ -165,7 +171,7 @@ func _start() -> void:
 	list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(list)
 	box.add_child(scroll)
-	var counts := RegionOps.semantic_counts(_data, _mn, _mx)
+	var counts := RegionOps.semantic_counts(_data, _mn, _mx, _filter, _positions)
 	var names := counts.keys()
 	names.sort_custom(func(a, b): return counts[a] > counts[b] if counts[a] != counts[b] else str(a) < str(b))
 	for sem in names:
@@ -264,7 +270,7 @@ func _on_include_changed() -> void:
 # (for the live size/preview readout) and _save()/_export() (for the actual commit) need
 # exactly the same computation, so it lives in one place.
 func _kept() -> Dictionary:
-	var cells := RegionOps.cells_without(_data, _mn, _mx, _excluded())
+	var cells := RegionOps.cells_without(_data, _mn, _mx, _excluded(), _filter, _positions)
 	var lo := _mn
 	var hi := _mx
 	if _trim_check.button_pressed and not cells.is_empty():
@@ -307,7 +313,7 @@ func _save() -> void:
 	if _anchor_pick.get_selected_id() == 1:
 		anchor = "bottom-center"
 	var res: Variant = VoxelWorld.save_prefab_from_region(n, _mn, _mx, [], anchor, true,
-		_excluded(), _trim_check.button_pressed)
+		_excluded(), _trim_check.button_pressed, _filter, _positions)
 	if res is Prefab:
 		var tags := _tags_edit.text.split(",", false)
 		if not tags.is_empty():

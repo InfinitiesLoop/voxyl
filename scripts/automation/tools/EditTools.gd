@@ -86,6 +86,10 @@ static func register(reg: McpRegistry) -> void:
 		"Set the region selection every view shows (the Select tool's box). Drops any filter or grow/shrink mask from before — always starts a fresh box.",
 		{"properties": {"region": McpArgs.s_region()}, "required": ["region"]}, _selection_set, {"mutates": true})
 	reg.add("selection_clear", "Clear the region selection.", {}, _selection_clear, {"mutates": true})
+	reg.add("selection_isolate",
+		"Show only the selection in the user's 3D views — every cell outside it is hidden (and clicks pass through), the same switch as \"Show only the selection\" on the selection panel. Use it to let the user check exactly which cells are selected, especially a sparse selection. Needs a selection; clearing the selection switches it off. No arguments reads the state.",
+		{"properties": {"enabled": {"type": "boolean", "description": "true to show only the selection, false to show everything again"}}},
+		_selection_isolate, {"mutates": true})
 	reg.add("selection_resize",
 		"Resize the selection box by moving its faces — what the +/- buttons on the selection panel do, but by any amount and several faces at once. `by` moves all six faces outward by that many cells, negative = inward: by:2 grows the box 2 cells on every side, by:-1 shrinks it 1 cell on every side. x / y / z do the same for just that axis's two faces (by:2, y:0 grows it horizontally only). up / down / north / south / east / west move a single face, positive = outward, negative = inward (up:-2 lowers the top by 2). A face word beats its axis, which beats `by`. The filter is kept. Refused, leaving the selection as it was: a shrink that would push a face past its opposite (a face may meet it, leaving a 1-cell-thick box) or a box over 4,000,000 cells. Moves the box itself, so it can take in air and cells of any semantic — unlike selection_grow/selection_shrink, which work on built cells. Only for a box: a sparse selection (from structure_find, selection_grow/shrink or selection_combine) is a set of cells, not a box — resize those with selection_grow/selection_shrink, or flatten one to its bounding box first with selection_set {region:{selection:true}}.",
 		{"properties": {
@@ -701,3 +705,11 @@ static func _region_cell_set(data: VoxelData, spec: Variant, label: String) -> D
 	for p in RegionOps.cells_in(data, r["min"], r["max"], r["filter"], r.get("positions")):
 		cells[p] = true
 	return {"cells": cells, "filter": r["filter"]}
+
+static func _selection_isolate(args: Dictionary) -> Dictionary:
+	if args.has("enabled"):
+		var on := bool(args["enabled"])
+		if on and not VoxelWorld.has_selection:
+			return McpRegistry.fail("no_selection", "there's no selection to isolate; make one first")
+		VoxelWorld.set_isolate_selection(on)
+	return {"isolated": VoxelWorld.isolate_selection}

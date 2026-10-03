@@ -129,7 +129,7 @@ static func _prefab_save(args: Dictionary) -> Variant:
 	var exclude: Array = (args.get("exclude", []) as Array).map(func(x: Variant) -> String: return str(x)) \
 		if args.get("exclude") is Array else []
 	var res: Variant = VoxelWorld.save_prefab_from_region(str(args.get("name", "")), r["min"], r["max"], palettes,
-		anchor, bool(args.get("replace", false)), exclude, bool(args.get("trim", false)))
+		anchor, bool(args.get("replace", false)), exclude, bool(args.get("trim", false)), r["filter"], r.get("positions"))
 	if res is String:
 		match res:
 			"name_taken": return McpRegistry.fail("name_taken", "a prefab named '%s' exists; pass replace:true to overwrite it" % args.get("name"))

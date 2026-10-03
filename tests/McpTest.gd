@@ -50,6 +50,8 @@ func _run() -> void:
 	await _test_structure_find()
 	await _test_selection_combine()
 	await _test_selection_resize()
+	await _test_tool_and_isolation()
+	await _test_sparse_selection_export()
 	await _test_project_settings_tool()
 	await _test_restart_tool()
 	await _test_attachment_tools()
@@ -1139,3 +1141,61 @@ func _rm_rf(path: String) -> void:
 # JSON numbers come back as floats; compare vectors as ints.
 func _ints(v: Variant) -> Array:
 	return (v as Array).map(func(x: Variant) -> int: return int(x)) if v is Array else []
+
+func _test_tool_and_isolation() -> void:
+	print("-- tool_set + selection_isolate")
+	await _build_room()
+	var real_tool := VoxelWorld.active_tool
+
+	var read := await _tool("tool_set", {})
+	_check("no arguments reads the active tool", not read["_is_error"] and read["tool"] == "pencil")
+	var set_select := await _tool("tool_set", {"tool": "select"})
+	_check("tool_set switches to the Select tool", set_select["tool"] == "select" and VoxelWorld.active_tool == VoxelWorld.Tool.SELECT)
+	var bad := await _tool("tool_set", {"tool": "chisel"})
+	_check("an unknown tool is refused", bad["_is_error"] and str(bad.get("code", "")) == "bad_tool")
+	var st := await _tool("status", {})
+	_check("status reports the tool", st["tool"] == "select")
+	VoxelWorld.set_active_tool(real_tool)
+
+	VoxelWorld.clear_selection()
+	var none := await _tool("selection_isolate", {"enabled": true})
+	_check("nothing selected: isolating is refused", none["_is_error"] and str(none.get("code", "")) == "no_selection")
+
+	# The room's shell, then its table (a sparse selection): contains() agrees with the cells.
+	await _tool("selection_set", {"region": _ROOM_OUTER})
+	await _tool("selection_resize", {"by": -1})
+	_check("a box selection contains the cells in its box", VoxelWorld.selection_contains(Vector3i(703, 1, 703)))
+	_check("...and not the room's wall", not VoxelWorld.selection_contains(Vector3i(700, 0, 700)))
+	var on := await _tool("selection_isolate", {"enabled": true})
+	_check("isolating switches on", not on["_is_error"] and on["isolated"] and VoxelWorld.isolate_selection)
+	var st2 := await _tool("status", {})
+	_check("status shows it on the selection", st2["selection"]["isolated"])
+	VoxelWorld.clear_selection()
+	_check("clearing the selection switches isolation off", not VoxelWorld.isolate_selection)
+	var off := await _tool("selection_isolate", {})
+	_check("no arguments reads the state", not off["isolated"])
+
+# A sparse selection (a room's shell) must save and export as itself, not as its whole box.
+func _test_sparse_selection_export() -> void:
+	print("-- prefab_save / schematic_export honour a sparse selection")
+	await _build_room()
+	await _tool("selection_combine", {"operation": "except", "base": _ROOM_OUTER, "with": _ROOM_INNER})
+	var saved := await _tool("prefab_save", {"name": "ShellOnly", "region": {"selection": true}})
+	_check("prefab_save of the shell keeps its 170 cells, not the table inside",
+		not saved["_is_error"] and int(saved["cells"]) == 170)
+	var path := "user://__mcp_shell.schematic"
+	var out := await _tool("schematic_export", {"path": path, "region": {"selection": true}})
+	var boxed := await _tool("schematic_export", {"path": path, "region": _ROOM_OUTER})
+	var shell_cells := _exported_cells(out)
+	var box_cells := _exported_cells(boxed)
+	_check("schematic_export of the shell covers just its 170 cells, one fewer than the same box with the table",
+		not out["_is_error"] and not boxed["_is_error"] and shell_cells == 170 and box_cells == 171)
+	DirAccess.remove_absolute(path)
+	await _tool("prefab_delete", {"name": "ShellOnly"})
+
+# Cells an export looked at: the ones written plus any with no Minecraft identity to write.
+func _exported_cells(report: Dictionary) -> int:
+	var n := int(report.get("cells_written", 0))
+	for k in (report.get("unmapped", {}) as Dictionary):
+		n += int(report["unmapped"][k])
+	return n

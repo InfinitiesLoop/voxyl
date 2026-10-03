@@ -26,6 +26,9 @@ signal region_selection_changed()
 # Fired when the cutaway box is set, moved, toggled or cleared (and on project open). Every
 # 3D view hides the cells inside cutaway_box(); carries no payload.
 signal cutaway_changed()
+# Fired when "show only the selection" is switched on or off (or dropped because the selection
+# went away). Views hide every cell outside selection_contains() while isolating; no payload.
+signal isolation_changed()
 signal tool_changed(tool: Tool)
 # Brush size (edge length of a tool's footprint, in cells). Only tools that opt in
 # via tool_uses_brush() honor it; the rest place a single cell. View/UI reflect this.
@@ -87,6 +90,9 @@ var _selection_anchor: Variant = null  # Vector3i first corner, or null between 
 # or the selection is cleared. Transient like _selection_anchor: not saved with the project.
 var selection_filter: Dictionary = {}
 var selection_mask = null  # Dictionary[Vector3i, true], or null for a plain box
+# Show only the selection in the 3D views (everything else hidden). A view setting rather than
+# project data: transient, and dropped with the selection. See set_isolate_selection.
+var isolate_selection: bool = false
 const _FACE_NEIGHBORS: Array[Vector3i] = [
 	Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
 	Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1),
@@ -292,6 +298,7 @@ func open(project: VoxelProject) -> void:
 	_selection_anchor = null
 	selection_filter = {}
 	selection_mask = null
+	set_isolate_selection(false)
 	has_cutaway = project.has_cutaway
 	cutaway_min = project.cutaway_min
 	cutaway_max = project.cutaway_max
@@ -1818,6 +1825,7 @@ func clear_selection() -> void:
 	_selection_anchor = null
 	selection_filter = {}
 	selection_mask = null
+	set_isolate_selection(false)
 	region_selection_changed.emit()
 	mark_dirty()
 
@@ -2117,13 +2125,16 @@ func cut_selection() -> void:
 # takes the open project's palettes that define any semantic the kept cells use (same order,
 # so they resolve exactly as they do here). `exclude` leaves semantics out: whole blocks of
 # them are dropped and their parts removed from part cells (e.g. the floor under a pillar).
+# `filter` / `positions` narrow the region the way a selection does (a whitelist/blacklist and an
+# exact cell set, e.g. a sparse selection) — only those cells are saved, the box stays the frame.
 # `trim` shrinks the box to the cells that are left; otherwise it's the region as given,
 # empty margins included. `anchor` is the handle: a Vector3i relative to the saved box's min
 # corner, "bottom-center", or null / "min" for the min corner. `replace` overwrites a prefab
 # of the same name. Returns the prefab, or an error code: empty_name, name_taken,
 # empty_region, no_project.
 func save_prefab_from_region(prefab_name: String, mn: Vector3i, mx: Vector3i, palettes: Array = [],
-		anchor: Variant = null, replace := false, exclude: Array = [], trim := false) -> Variant:
+		anchor: Variant = null, replace := false, exclude: Array = [], trim := false,
+		filter := {}, positions: Variant = null) -> Variant:
 	var n := prefab_name.strip_edges()
 	if n.is_empty():
 		return "empty_name"
@@ -2132,7 +2143,7 @@ func save_prefab_from_region(prefab_name: String, mn: Vector3i, mx: Vector3i, pa
 	var existing := workspace.get_prefab(n)
 	if existing != null and not replace:
 		return "name_taken"
-	var cells := RegionOps.cells_without(active_project.data, mn, mx, exclude)
+	var cells := RegionOps.cells_without(active_project.data, mn, mx, exclude, filter, positions)
 	if cells.is_empty():
 		return "empty_region"
 	var lo := mn
@@ -2439,3 +2450,33 @@ func _add_default_palette() -> void:
 		e.semantic_name = s[0]
 		e.block_type_name = s[1]
 		p.entries.append(e)
+
+# ---------------------------------------------------------------------------
+# Isolating the selection — see only what's selected, to check it's what you meant.
+# ---------------------------------------------------------------------------
+
+# Switch "show only the selection" on or off. Needs a selection to isolate: asking for it
+# without one does nothing, and clearing the selection switches it off again.
+func set_isolate_selection(on: bool) -> void:
+	on = on and has_selection
+	if isolate_selection == on:
+		return
+	isolate_selection = on
+	isolation_changed.emit()
+
+# Whether the cell at `pos` is part of the selection exactly as selection_positions() counts
+# it (the mask or the box, narrowed by the filter), but for one cell and without building the
+# list — views ask this for every cell they hold.
+func selection_contains(pos: Vector3i) -> bool:
+	if not has_selection or not active_project:
+		return false
+	if selection_mask != null:
+		if not selection_mask.has(pos):
+			return false
+	elif pos.x < selection_min.x or pos.y < selection_min.y or pos.z < selection_min.z \
+			or pos.x > selection_max.x or pos.y > selection_max.y or pos.z > selection_max.z:
+		return false
+	if selection_filter.is_empty():
+		return true
+	var cell: BlockCell = active_project.data.cells.get(pos)
+	return cell != null and RegionOps.matches_filter(cell, selection_filter)

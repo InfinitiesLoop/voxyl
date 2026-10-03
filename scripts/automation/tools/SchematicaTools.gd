@@ -51,7 +51,7 @@ static func _schematic_export(args: Dictionary) -> Dictionary:
 		if McpRegistry.is_error(r):
 			return r
 		var project: VoxelProject = pv
-		result = SchematicaExporter.export_region(project.data, r["min"], r["max"], project.export_turns())
+		result = SchematicaExporter.export_region(project.data, r["min"], r["max"], project.export_turns(), r["filter"], r.get("positions"))
 		north = project.north_dir
 	var bytes: PackedByteArray = result["bytes"]
 	var f := FileAccess.open(path, FileAccess.WRITE)

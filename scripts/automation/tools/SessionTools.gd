@@ -8,7 +8,7 @@ const EditorBridge := preload("res://scripts/automation/EditorBridge.gd")
 
 static func register(reg: McpRegistry) -> void:
 	reg.add("status",
-		"What Voxyl is showing right now: the open project (name, scratch?, size, palette stack), the user's views, the region selection, the cutaway, the hotbar, undo/redo depth and whether the user paused agent edits. Call this first.",
+		"What Voxyl is showing right now: the open project (name, scratch?, size, palette stack), the user's views, the active tool, the region selection, the cutaway, the hotbar, undo/redo depth and whether the user paused agent edits. Call this first.",
 		{}, _status)
 	reg.add("logs",
 		"Recent Voxyl log lines (errors and warnings by default), plus this server's recent tool calls. Use when something looks wrong.",
@@ -23,6 +23,11 @@ static func register(reg: McpRegistry) -> void:
 			"count": {"type": "integer", "description": "Steps to undo/redo (default 1)"},
 			"project": {"type": "string"},
 		}}, _history, {"mutates": true})
+	reg.add("tool_set",
+		"Switch the user's active tool (the strip at the bottom-left of the editor). Needed, for one, to make the selection show: the Select tool draws it, and the selection is hidden under the other tools. No arguments reads the current one.",
+		{"properties": {
+			"tool": {"type": "string", "enum": _TOOL_NAMES.keys(), "description": "pencil (place/clear blocks), build_to_me, wand, exchange or select"},
+		}}, _tool_set, {"mutates": true})
 	reg.add("hotbar_set",
 		"Put semantics on the user's hotbar (the 12 slots at the bottom of the editor) so they can build with them straight away.",
 		{"properties": {
@@ -60,8 +65,10 @@ static func _status(_args: Dictionary) -> Dictionary:
 		out["selection"] = null
 		if VoxelWorld.has_selection:
 			out["selection"] = {"min": VoxelWorld.selection_min, "max": VoxelWorld.selection_max,
+				"isolated": VoxelWorld.isolate_selection,
 				"filter": VoxelWorld.selection_filter, "masked": VoxelWorld.selection_mask != null}
 		out["cutaway"] = ViewTools.cutaway_json()
+		out["tool"] = _tool_name(VoxelWorld.active_tool)
 		var h := VoxelWorld.history_entries()
 		out["history"] = {"steps": (h["entries"] as Array).size(), "current": h["current"],
 			"can_undo": VoxelWorld.can_undo(), "can_redo": VoxelWorld.can_redo()}
@@ -160,3 +167,27 @@ static func _bounds(aabb: Array) -> Variant:
 	if aabb.is_empty():
 		return null
 	return {"min": aabb[0], "max": aabb[1]}
+
+# The tools on the user's tool strip, by the name an agent passes; "pencil" is what the strip
+# calls the paint tool.
+const _TOOL_NAMES := {
+	"pencil": VoxelWorld.Tool.PAINT,
+	"build_to_me": VoxelWorld.Tool.BUILD_TO_ME,
+	"wand": VoxelWorld.Tool.WAND,
+	"exchange": VoxelWorld.Tool.EXCHANGE,
+	"select": VoxelWorld.Tool.SELECT,
+}
+
+static func _tool_name(tool: VoxelWorld.Tool) -> String:
+	for n: String in _TOOL_NAMES:
+		if _TOOL_NAMES[n] == tool:
+			return n
+	return str(VoxelWorld.Tool.keys()[tool]).to_lower()
+
+static func _tool_set(args: Dictionary) -> Dictionary:
+	if args.has("tool"):
+		var name := str(args["tool"])
+		if not _TOOL_NAMES.has(name):
+			return McpRegistry.fail("bad_tool", "unknown tool '%s'; use one of: %s" % [name, ", ".join(_TOOL_NAMES.keys())])
+		VoxelWorld.set_active_tool(_TOOL_NAMES[name])
+	return {"tool": _tool_name(VoxelWorld.active_tool)}

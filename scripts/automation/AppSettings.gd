@@ -41,8 +41,9 @@ static func set_value(section: String, key: String, value: Variant) -> void:
 	_config().set_value(section, key, value)
 	_config().save(path)
 
-# Drop the cached file (tests repoint `path`).
-static func reload() -> void:
+# Drop the cached file (tests repoint `path`). Not called reload(): Script already has a
+# reload() that resets every static var, and calling it from outside would hit that instead.
+static func drop_cache() -> void:
 	_cfg = null
 
 # --- Agent connections -------------------------------------------------------------

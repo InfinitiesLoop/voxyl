@@ -62,6 +62,7 @@ func _ready() -> void:
 	_test_project_folder_path()
 	_test_agent_setup()
 	_test_attachment()
+	_test_selection_outline()
 	print("\n%d passed, %d failed" % [_pass, _fail])
 	get_tree().quit(1 if _fail > 0 else 0)
 
@@ -3293,11 +3294,11 @@ func _test_remembered_folders() -> void:
 	var exports := tmp.path_join("exports")
 	DirAccess.make_dir_recursive_absolute(exports)
 	AppSettings.path = tmp.path_join("settings.cfg")   # never touch the real settings
-	AppSettings.reload()
+	AppSettings.drop_cache()
 	_check("nothing remembered yet -> the fallback", AppSettings.last_dir("pick", "FALLBACK") == "FALLBACK")
 	AppSettings.remember_dir("pick", exports)
 	_check("a remembered folder comes back", AppSettings.last_dir("pick", "FALLBACK") == exports)
-	AppSettings.reload()
+	AppSettings.drop_cache()
 	_check("...from disk, not just memory", AppSettings.last_dir("pick", "FALLBACK") == exports)
 	_check("each picker has its own folder", AppSettings.last_dir("other", "FALLBACK") == "FALLBACK")
 	AppSettings.remember_dir("pick", "")
@@ -3307,7 +3308,7 @@ func _test_remembered_folders() -> void:
 	DirAccess.remove_absolute(AppSettings.path)
 	DirAccess.remove_absolute(tmp)
 	AppSettings.path = real_path
-	AppSettings.reload()
+	AppSettings.drop_cache()
 
 # --- Projects folder: the Home screen's "Open folder" button ------------------------------------------
 
@@ -3333,7 +3334,7 @@ func _test_agent_setup() -> void:
 	var tmp := OS.get_temp_dir().path_join("voxyl_agents_%d" % Time.get_ticks_usec()).replace("\\", "/")
 	DirAccess.make_dir_recursive_absolute(tmp)
 	AppSettings.path = tmp.path_join("settings.cfg")   # never touch the real settings
-	AppSettings.reload()
+	AppSettings.drop_cache()
 	AppSettings.set_value(AppSettings.SECTION_AGENT, "port", 47999)
 	AppSettings.set_value(AppSettings.SECTION_AGENT, "token", "tok123")
 	AppSettings.set_value(AppSettings.SECTION_AGENT, "require_token", true)
@@ -3365,7 +3366,7 @@ func _test_agent_setup() -> void:
 	DirAccess.remove_absolute(AppSettings.path)
 	DirAccess.remove_absolute(tmp)
 	AppSettings.path = real_path
-	AppSettings.reload()
+	AppSettings.drop_cache()
 
 # --- Attachment: torches and the kinds of block that hold on to a neighbour -----------------------
 
@@ -3483,3 +3484,33 @@ func _test_attachment() -> void:
 		VoxelWorld.clear_block(Vector3i(x, 0, 900))
 	project.palette_names.erase("attach_diag_pal")
 	VoxelWorld.open(project)
+
+func _test_selection_outline() -> void:
+	print("\n--- selection outline ---")
+	var cube: Array = [Vector3i.ZERO]
+	_check("a single cell outlines as its 12 edges", SelectionOutline.segments(cube).size() == 24)
+
+	# A 3x3x3 block: flat faces must not grow grid lines, only the 12 cube edges remain.
+	var big: Array = []
+	for x in 3:
+		for y in 3:
+			for z in 3:
+				big.append(Vector3i(x, y, z))
+	_check("a solid box outlines as 12 merged edges", SelectionOutline.segments(big).size() == 24)
+
+	# A hollow shell (box minus its inner cells) adds the inner box's 12 edges.
+	var shell: Array = []
+	for x in 5:
+		for y in 5:
+			for z in 5:
+				if x in [0, 4] or y in [0, 4] or z in [0, 4]:
+					shell.append(Vector3i(x, y, z))
+	_check("a closed shell outlines as outer + inner box", SelectionOutline.segments(shell).size() == 48)
+
+	# An L of three cells: 2 wide on the bottom, 1 on top. Two L-shaped loops (8 each) joined by 6 corner edges = 22 units.
+	var ell: Array = [Vector3i(0, 0, 0), Vector3i(1, 0, 0), Vector3i(0, 1, 0)]
+	var segs: PackedVector3Array = SelectionOutline.segments(ell)
+	var total := 0.0
+	for i in range(0, segs.size(), 2):
+		total += segs[i].distance_to(segs[i + 1])
+	_check("an L-tromino outlines with 22 units of edge", is_equal_approx(total, 22.0))

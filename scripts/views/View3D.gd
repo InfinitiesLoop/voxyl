@@ -219,7 +219,7 @@ var _guide: Dictionary = {}
 # _setup_viewport for the two-pass show-through material and _update_selection_box).
 var _sel_box: MeshInstance3D
 var _sel_box_mat: StandardMaterial3D
-var _sel_cells: MeshInstance3D   # shell over the exact cells of a narrowed selection
+var _sel_outline: MeshInstance3D # silhouette lines around the exact cells of a narrowed selection
 
 # --- Paste mode -------------------------------------------------------------
 # Interactive drop of the clipboard (Ctrl+V): a live ghost preview follows the crosshair
@@ -283,6 +283,7 @@ var _selection_overlay: ToolOverlayPanel   # kept typed so its refresh can rebui
 # given its own through set_cutaway_override, so an agent's renders never depend on (or
 # disturb) what the user has cut away.
 var _cut_box: Array = []              # [min, max] Vector3i, or [] = nothing cut
+var _isolating := false               # showing only the selection (VoxelWorld.isolate_selection)
 var _cut_override: Variant = null     # null = follow VoxelWorld; else the box to use ([] = none)
 var _cutaway_panel_open := false      # the cutaway bounds panel is showing (cursor free)
 var _cut_frame: MeshInstance3D        # outline of the cut box, shown while its panel is open
@@ -362,6 +363,8 @@ func _ready() -> void:
 	# Keep a visible selection overlay's dimensions/counts current as the region changes.
 	VoxelWorld.region_selection_changed.connect(_update_tool_overlay_visibility)
 	VoxelWorld.cutaway_changed.connect(_refresh_cutaway)
+	VoxelWorld.isolation_changed.connect(_refresh_isolation)
+	VoxelWorld.region_selection_changed.connect(_refresh_isolation)
 	VoxelWorld.prefab_paste_requested.connect(_on_prefab_paste_requested)
 	visibility_changed.connect(_on_visibility_changed)
 	if not offscreen:
@@ -603,26 +606,12 @@ func _setup_viewport() -> void:
 	_sel_box.visible = false
 	_viewport.add_child(_sel_box)
 
-	# The cells of a narrowed selection (filter, grow/shrink, structure_find): the same
-	# dim-behind / bright-in-front pair, as translucent faces instead of lines.
-	var cells_behind := StandardMaterial3D.new()
-	cells_behind.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	cells_behind.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	cells_behind.cull_mode = BaseMaterial3D.CULL_DISABLED
-	cells_behind.no_depth_test = true
-	cells_behind.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-	cells_behind.albedo_color = Color(0.3, 0.85, 1.0, 0.10)
-	var cells_front := StandardMaterial3D.new()
-	cells_front.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	cells_front.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	cells_front.cull_mode = BaseMaterial3D.CULL_DISABLED
-	cells_front.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
-	cells_front.albedo_color = Color(0.35, 0.9, 1.0, 0.42)
-	cells_behind.next_pass = cells_front
-	_sel_cells = MeshInstance3D.new()
-	_sel_cells.material_override = cells_behind
-	_sel_cells.visible = false
-	_viewport.add_child(_sel_cells)
+	# The silhouette of a narrowed selection's exact cells (filter, grow/shrink, structure_find):
+	# lines in the selection box's own show-through material.
+	_sel_outline = MeshInstance3D.new()
+	_sel_outline.material_override = _sel_box_mat
+	_sel_outline.visible = false
+	_viewport.add_child(_sel_outline)
 
 	# Cutaway frame: the same show-through recipe in red, so the cut's edges read even where
 	# the build around them hides them.
@@ -1924,7 +1913,8 @@ func _rebuild() -> void:
 	var target := _project()
 	var data := target.data
 	_cut_box = _wanted_cut_box()
-	var cut_on := not _cut_box.is_empty()
+	_isolating = _wants_isolation()
+	var cut_on := not _cut_box.is_empty() or _isolating
 	var positions := data.cells.keys()
 	var batching := not offscreen and positions.size() >= _PROGRESS_THRESHOLD
 	if batching:
@@ -3476,6 +3466,10 @@ func _update_selection_box() -> void:
 	if VoxelWorld.active_tool != VoxelWorld.Tool.SELECT:
 		_sel_box.visible = false
 		return
+	# A narrowed selection is drawn by its own outline; the bounding box would only add noise.
+	if _sel_outline.visible:
+		_sel_box.visible = false
+		return
 	var box := VoxelWorld.selection_box()
 	if box.is_empty():
 		_sel_box.visible = false
@@ -3498,22 +3492,15 @@ func _update_selection_box() -> void:
 
 # Past this many cells a narrowed selection shows only its box (the shell would get heavy).
 const _SEL_CELLS_MAX := 60000
-const _SEL_FACES := [
-	[Vector3i(1, 0, 0), [Vector3(1, 0, 0), Vector3(1, 1, 0), Vector3(1, 1, 1), Vector3(1, 0, 1)]],
-	[Vector3i(-1, 0, 0), [Vector3(0, 0, 0), Vector3(0, 0, 1), Vector3(0, 1, 1), Vector3(0, 1, 0)]],
-	[Vector3i(0, 1, 0), [Vector3(0, 1, 0), Vector3(0, 1, 1), Vector3(1, 1, 1), Vector3(1, 1, 0)]],
-	[Vector3i(0, -1, 0), [Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(1, 0, 1), Vector3(0, 0, 1)]],
-	[Vector3i(0, 0, 1), [Vector3(0, 0, 1), Vector3(1, 0, 1), Vector3(1, 1, 1), Vector3(0, 1, 1)]],
-	[Vector3i(0, 0, -1), [Vector3(0, 0, 0), Vector3(0, 1, 0), Vector3(1, 1, 0), Vector3(1, 0, 0)]],
-]
 
 # A plain box says everything with its outline, but once a filter, grow/shrink or
 # structure_find narrows the selection the box alone hides which cells were picked — so draw
-# the exact cells, as a translucent shell (faces between two selected cells are skipped).
+# the silhouette of the exact cells instead (SelectionOutline): lines only, no fill, so what
+# is selected never gets confused with what merely sits behind it.
 func _update_selection_cells() -> void:
-	if _sel_cells == null:
+	if _sel_outline == null:
 		return
-	_sel_cells.visible = false
+	_sel_outline.visible = false
 	if VoxelWorld.active_tool != VoxelWorld.Tool.SELECT or not VoxelWorld.has_selection:
 		return
 	if VoxelWorld.selection_mask == null and VoxelWorld.selection_filter.is_empty():
@@ -3521,32 +3508,16 @@ func _update_selection_cells() -> void:
 	var cells := VoxelWorld.selection_positions()
 	if cells.is_empty() or cells.size() > _SEL_CELLS_MAX:
 		return
-	var picked := {}
-	for p in cells:
-		picked[p] = true
-	var verts := PackedVector3Array()
-	var indices := PackedInt32Array()
-	const grow := 0.012   # a hair outside the blocks, so the shell never z-fights them
-	for p in cells:
-		var origin := Vector3(p)
-		for face in _SEL_FACES:
-			if picked.has(p + (face[0] as Vector3i)):
-				continue
-			var base := verts.size()
-			for corner in face[1]:
-				verts.append(origin + (corner as Vector3) * (1.0 + 2.0 * grow) - Vector3.ONE * grow)
-			indices.append_array([base, base + 1, base + 2, base, base + 2, base + 3])
-	if verts.is_empty():
+	var lines: PackedVector3Array = SelectionOutline.segments(cells)
+	if lines.is_empty():
 		return
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_INDEX] = indices
+	arrays[Mesh.ARRAY_VERTEX] = lines
 	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	_sel_cells.mesh = mesh
-	_sel_cells.visible = true
-
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_LINES, arrays)
+	_sel_outline.mesh = mesh
+	_sel_outline.visible = true
 # ---------------------------------------------------------------------------
 # Paste mode (Ctrl+V) — drop the clipboard via the ghost-preview overlay
 #
@@ -4156,6 +4127,12 @@ func _refresh_selection_overlay() -> void:
 			_position_tool_overlay(_selection_overlay))
 	content.add_child(legend)
 	content.add_child(HSeparator.new())
+	var isolate_btn := _overlay_button("Show everything" if VoxelWorld.isolate_selection else "Show only the selection")
+	isolate_btn.tooltip_text = "Hide every cell outside the selection in the 3D views, to check exactly what is selected"
+	isolate_btn.pressed.connect(func():
+		VoxelWorld.set_isolate_selection(not VoxelWorld.isolate_selection)
+		isolate_btn.text = "Show everything" if VoxelWorld.isolate_selection else "Show only the selection")
+	content.add_child(isolate_btn)
 	var cut_btn := _overlay_button("Cut away this region")
 	cut_btn.tooltip_text = "Hide these cells in the 3D views so you can see and build inside"
 	cut_btn.pressed.connect(func():
@@ -4259,12 +4236,36 @@ func _wanted_cut_box() -> Array:
 	return VoxelWorld.cutaway_box()
 
 func _in_cut(pos: Vector3i) -> bool:
+	# Isolating the selection hides everything outside it, the same way a cutaway hides
+	# what's inside its box: invisible, and clicks and rays pass through.
+	if _isolating and not VoxelWorld.selection_contains(pos):
+		return true
 	if _cut_box.is_empty():
 		return false
 	var lo: Vector3i = _cut_box[0]
 	var hi: Vector3i = _cut_box[1]
 	return pos.x >= lo.x and pos.x <= hi.x and pos.y >= lo.y and pos.y <= hi.y \
 		and pos.z >= lo.z and pos.z <= hi.z
+
+# Whether this view should be showing only the selection right now. Capture views name their
+# own cutaway, so they never follow the user's isolation.
+func _wants_isolation() -> bool:
+	return _cut_override == null and VoxelWorld.isolate_selection and VoxelWorld.has_selection
+
+# Re-apply "show only the selection" after it was switched or the selection moved: every node
+# is revisited, since which cells are in or out can change anywhere.
+func _refresh_isolation() -> void:
+	var want := _wants_isolation()
+	if not want and not _isolating:
+		return
+	_isolating = want
+	for pos: Vector3i in _cell_nodes:
+		(_cell_nodes[pos] as Node3D).visible = not _in_cut(pos)
+	_rebuild_wire_lines()
+	if _target_hit or _fly_mode:
+		_update_crosshair_target()
+	if _overlay:
+		_overlay.queue_redraw()
 
 # Re-apply the cutaway after it changed: only nodes whose inside/outside state can have
 # flipped are touched — those in the old or new box, walked by volume when that's smaller
@@ -4836,6 +4837,9 @@ func _draw_overlay() -> void:
 	if not _cut_box.is_empty():
 		_overlay.draw_string(font, Vector2(_overlay.size.x - 14.0, 30.0), "Cutaway on  ·  H/End to show all",
 			HORIZONTAL_ALIGNMENT_RIGHT, -1, 14, Color(1.0, 0.6, 0.5, 0.9))
+	if _isolating:
+		_overlay.draw_string(font, Vector2(_overlay.size.x - 14.0, 50.0), "Showing only the selection",
+			HORIZONTAL_ALIGNMENT_RIGHT, -1, 14, Color(0.5, 0.85, 1.0, 0.9))
 	var hint := "WASD move  ·  Space/RCtrl up · Shift// down  ·  LCtrl/\\ sprint  ·  LMB erase · RMB place · MMB pick  ·  R rotate (look at face)  ·  Tab slice · 1–0 slot · E inventory · Esc"
 	_overlay.draw_string(font, Vector2(10.0, _overlay.size.y - 10.0),
 		hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1,1,1,0.45))
