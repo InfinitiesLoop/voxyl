@@ -1,4 +1,5 @@
 import { EMPTY_ID, raycast } from "@voxyl/core";
+import { QUAD_BYTES } from "@voxyl/mesher";
 import * as THREE from "three/webgpu";
 import type { Palette } from "../palettes.ts";
 import type { BuiltWorld } from "../worlds.ts";
@@ -28,7 +29,7 @@ export interface EngineStats {
   readonly cells: number;
   readonly chunkCount: number;
   readonly chunkSize: number;
-  /** Dense chunk arrays held by the World. */
+  /** Chunk cell storage held by the World. */
   readonly storageMb: number;
   /** Packed quads handed to the GPU. */
   readonly quadMb: number;
@@ -65,6 +66,8 @@ export class Engine {
   #chunks: ChunkRenderer | null = null;
   #palette: Palette | null = null;
   #placeId = EMPTY_ID;
+  #lighting = false;
+  #daylight = 1;
 
   readonly #frameMs = new Float64Array(FRAME_WINDOW);
   readonly #cpuMs = new Float64Array(FRAME_WINDOW);
@@ -119,6 +122,8 @@ export class Engine {
     this.#palette = palette;
     const workers = Math.min(8, Math.max(2, (navigator.hardwareConcurrency || 4) - 2));
     this.#chunks = new ChunkRenderer(built.world, palette, workers);
+    this.#chunks.setDaylight(this.#daylight);
+    this.#chunks.setLighting(this.#lighting);
     this.scene.add(this.#chunks.group);
     this.#placeId = built.world.states.intern({ semantic: PLACE_SEMANTIC });
     this.#initialMeshMs = null;
@@ -156,6 +161,18 @@ export class Engine {
 
   get palette(): Palette | null {
     return this.#palette;
+  }
+
+  /** Minecraft-style light on or off; kept across world loads. */
+  setLighting(on: boolean): void {
+    this.#lighting = on;
+    this.#chunks?.setLighting(on);
+  }
+
+  /** Sky brightness, 0 (night) to 1 (day). */
+  setDaylight(daylight: number): void {
+    this.#daylight = daylight;
+    this.#chunks?.setDaylight(daylight);
   }
 
   /** Flies the camera along a scripted path until cleared with null. */
@@ -210,8 +227,8 @@ export class Engine {
       cells: built?.world.cellCount ?? 0,
       chunkCount: built?.world.chunkCount ?? 0,
       chunkSize: size,
-      storageMb: ((built?.world.chunkCount ?? 0) * size ** 3 * 2) / 2 ** 20,
-      quadMb: ((chunks?.quads ?? 0) * 8) / 2 ** 20,
+      storageMb: (built?.world.memoryBytes ?? 0) / 2 ** 20,
+      quadMb: ((chunks?.quads ?? 0) * QUAD_BYTES) / 2 ** 20,
       heapMb: memory ? memory.usedJSHeapSize / 2 ** 20 : null,
       initialMeshMs: this.#initialMeshMs,
       lastEditMs: this.#lastEditMs,

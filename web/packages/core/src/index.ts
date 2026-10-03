@@ -19,4 +19,4 @@ export {
   MIN_CHUNK_COORD,
 } from "./coords.ts";
 export { type RayHit, raycast } from "./raycast.ts";
-export { World, type WorldOptions } from "./world.ts";
+export { type ChangedBox, World, type WorldOptions } from "./world.ts";

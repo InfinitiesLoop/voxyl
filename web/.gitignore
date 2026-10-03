@@ -3,3 +3,4 @@ dist/
 coverage/
 .vite/
 *.tsbuildinfo
+shots/

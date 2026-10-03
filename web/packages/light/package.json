@@ -1,0 +1,20 @@
+{
+  "name": "@voxyl/light",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p . && tsc --noEmit -p bench"
+  },
+  "dependencies": {
+    "@voxyl/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.1",
+    "@voxyl/fixtures": "workspace:*",
+    "@voxyl/mesher": "workspace:*",
+    "typescript": "^7.0.2"
+  }
+}

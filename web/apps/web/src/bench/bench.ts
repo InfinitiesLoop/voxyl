@@ -1,4 +1,4 @@
-import { EMPTY_ID, raycast } from "@voxyl/core";
+import { EMPTY_ID, raycast, type World } from "@voxyl/core";
 import { mulberry32 } from "@voxyl/fixtures";
 import * as THREE from "three/webgpu";
 import { type Engine, percentile } from "../scene/Engine.ts";
@@ -25,6 +25,10 @@ export interface BenchResult {
   readonly userAgent: string;
   readonly viewport: string;
   readonly world: string;
+  readonly lighting: boolean;
+  /** Time to light the whole world, with lighting on. */
+  readonly lightAllMs: number | null;
+  readonly lightMb: number;
   readonly cells: number;
   readonly chunkSize: number;
   readonly chunks: number;
@@ -51,7 +55,7 @@ const SINGLE_EDITS = 100;
  */
 export async function runBench(
   engine: Engine,
-  meta: { backend: string; world: string },
+  meta: { backend: string; world: string; lighting: boolean },
   progress: (step: string) => void,
 ): Promise<BenchResult> {
   const built = engine.built;
@@ -132,8 +136,32 @@ export async function runBench(
     latencies.push(performance.now() - start);
   }
 
-  // 3. Bulk fills and clears floating above the city.
   const bulk: BulkEdit[] = [];
+  const timeEdit = async (label: string, edit: () => number) => {
+    progress(label);
+    await engine.nextFrame();
+    const start = performance.now();
+    const cells = edit();
+    const writeMs = performance.now() - start;
+    engine.afterEdit();
+    await chunks.whenIdle();
+    bulk.push({ label, cells, writeMs, visibleMs: performance.now() - start });
+  };
+
+  // 3. A roof hole: open a 5x5 patch of a roof near the centre (sky light floods into the
+  //    building, with lighting on) and close it again.
+  const roof = findRoof(world, cx, cz, built.top);
+  if (roof) {
+    const [rx, ry, rz, id] = roof;
+    await timeEdit("Roof hole open", () =>
+      world.fillBox(rx - 2, ry, rz - 2, rx + 2, ry, rz + 2, EMPTY_ID),
+    );
+    await timeEdit("Roof hole close", () =>
+      world.fillBox(rx - 2, ry, rz - 2, rx + 2, ry, rz + 2, id),
+    );
+  }
+
+  // 4. Bulk fills and clears floating above the city.
   const y0 = built.top + 20;
   for (const [label, w, h, d] of [
     ["100k fill", 50, 40, 50],
@@ -142,27 +170,9 @@ export async function runBench(
     const x0 = Math.round(cx - w / 2);
     const z0 = Math.round(cz - d / 2);
     for (const clear of [false, true]) {
-      progress(clear ? `${label}: clearing` : label);
-      await engine.nextFrame();
-      const start = performance.now();
-      const cells = world.fillBox(
-        x0,
-        y0,
-        z0,
-        x0 + w - 1,
-        y0 + h - 1,
-        z0 + d - 1,
-        clear ? EMPTY_ID : glow,
+      await timeEdit(clear ? label.replace("fill", "clear") : label, () =>
+        world.fillBox(x0, y0, z0, x0 + w - 1, y0 + h - 1, z0 + d - 1, clear ? EMPTY_ID : glow),
       );
-      const writeMs = performance.now() - start;
-      engine.afterEdit();
-      await chunks.whenIdle();
-      bulk.push({
-        label: clear ? `${label.replace("fill", "clear")}` : label,
-        cells,
-        writeMs,
-        visibleMs: performance.now() - start,
-      });
     }
   }
 
@@ -176,6 +186,9 @@ export async function runBench(
     userAgent: navigator.userAgent,
     viewport: `${engine.renderer.domElement.width}x${engine.renderer.domElement.height}`,
     world: meta.world,
+    lighting: meta.lighting,
+    lightAllMs: stats.chunks?.lightAllMs ?? null,
+    lightMb: stats.chunks?.lightMb ?? 0,
     cells: world.cellCount,
     chunkSize: world.layout.size,
     chunks: world.chunkCount,
@@ -191,6 +204,31 @@ export async function runBench(
     singleEdits: { ...distribution(latencies), misses },
     bulk,
   };
+}
+
+/** The highest Roof cell near the centre, found by looking straight down: [x, y, z, id]. */
+function findRoof(
+  world: World,
+  cx: number,
+  cz: number,
+  top: number,
+): [number, number, number, number] | null {
+  for (let r = 0; r <= 64; r += 4) {
+    for (const [dx, dz] of [
+      [r, 0],
+      [-r, 0],
+      [0, r],
+      [0, -r],
+    ] as const) {
+      const x = Math.round(cx + dx);
+      const z = Math.round(cz + dz);
+      const hit = raycast(world, [x + 0.5, top + 5, z + 0.5], [0, -1, 0], top + 10);
+      if (hit && world.states.get(hit.id)?.semantic === "Roof") {
+        return [hit.cell[0], hit.cell[1], hit.cell[2], hit.id];
+      }
+    }
+  }
+  return null;
 }
 
 function distribution(values: number[]): Distribution {

@@ -9,6 +9,9 @@ export interface Settings {
   world: WorldKind;
   chunk: number;
   palette: number;
+  lighting: boolean;
+  /** Sky brightness, 0 (night) to 100 (day). */
+  daylight: number;
 }
 
 function readSettings(): Settings {
@@ -16,10 +19,13 @@ function readSettings(): Settings {
   const world = WORLD_KINDS.find((w) => w.kind === params.get("world"))?.kind ?? "city-1m";
   const chunk = Number(params.get("chunk"));
   const palette = PALETTES.findIndex((p) => p.name.toLowerCase() === params.get("palette"));
+  const daylight = Number(params.get("daylight") ?? 100);
   return {
     world,
     chunk: (CHUNK_SIZES as readonly number[]).includes(chunk) ? chunk : 64,
     palette: Math.max(0, palette),
+    lighting: params.get("lighting") === "on",
+    daylight: Number.isFinite(daylight) ? Math.min(100, Math.max(0, daylight)) : 100,
   };
 }
 
@@ -28,6 +34,8 @@ function writeSettings(s: Settings): void {
     world: s.world,
     chunk: String(s.chunk),
     palette: PALETTES[s.palette]?.name.toLowerCase() ?? "concrete",
+    lighting: s.lighting ? "on" : "off",
+    daylight: String(s.daylight),
   });
   history.replaceState(null, "", `?${params}`);
 }
@@ -92,7 +100,24 @@ export function App() {
   useEffect(() => {
     writeSettings(settings);
     engine?.setPalette(paletteAt(settings.palette));
+    engine?.setDaylight(settings.daylight / 100);
   }, [engine, settings]);
+
+  // Turning lighting on lights the whole world at once, so show the banner while it runs.
+  const { lighting } = settings;
+  useEffect(() => {
+    if (!engine) return;
+    if (!lighting) {
+      engine.setLighting(false); // only drops data and remeshes in the background
+      return;
+    }
+    setLoading("Lighting the world");
+    const timer = setTimeout(() => {
+      engine.setLighting(lighting);
+      setLoading(null);
+    }, 30);
+    return () => clearTimeout(timer);
+  }, [engine, lighting]);
 
   useEffect(() => {
     if (!engine) return;
@@ -105,14 +130,18 @@ export function App() {
     setBench(null);
     const world = WORLD_KINDS.find((w) => w.kind === settings.world)?.label ?? settings.world;
     try {
-      const result = await runBench(engine, { backend, world }, setBenchStep);
+      const result = await runBench(
+        engine,
+        { backend, world, lighting: settings.lighting },
+        setBenchStep,
+      );
       setBench(result);
       (window as { __voxylBench?: BenchResult }).__voxylBench = result;
       console.log("voxyl bench", JSON.stringify(result));
     } finally {
       setBenchStep(null);
     }
-  }, [engine, backend, settings.world]);
+  }, [engine, backend, settings.world, settings.lighting]);
 
   return (
     <div className="app">

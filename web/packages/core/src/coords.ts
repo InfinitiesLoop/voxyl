@@ -46,6 +46,12 @@ export class ChunkLayout {
   readonly strideY: number;
   readonly minWorld: number;
   readonly maxWorld: number;
+  /** Chunks store cells in cubic bricks of this many bits per edge (16 cells, or the chunk). */
+  readonly brickBits: number;
+  readonly brickSize: number;
+  readonly brickVolume: number;
+  /** Bricks along each edge of a chunk. */
+  readonly bricksPerAxis: number;
 
   constructor(bits = DEFAULT_CHUNK_BITS) {
     if (!Number.isInteger(bits) || bits < MIN_CHUNK_BITS || bits > MAX_CHUNK_BITS) {
@@ -61,6 +67,10 @@ export class ChunkLayout {
     this.strideY = this.size * this.size;
     this.minWorld = MIN_CHUNK_COORD * this.size;
     this.maxWorld = (MAX_CHUNK_COORD + 1) * this.size - 1;
+    this.brickBits = Math.min(4, bits);
+    this.brickSize = 1 << this.brickBits;
+    this.brickVolume = this.brickSize ** 3;
+    this.bricksPerAxis = this.size / this.brickSize;
   }
 
   /** The chunk coordinate holding world coordinate `v` (floor division, so -1 is in chunk -1). */

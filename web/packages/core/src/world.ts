@@ -2,6 +2,16 @@ import { type CellState, type CellStateInput, CellStateTable, EMPTY_ID } from ".
 import { Chunk } from "./chunk.ts";
 import { ChunkLayout, chunkKey, chunkKeyToCoords } from "./coords.ts";
 
+/** A box of cells, corners inclusive, with x0 <= x1, y0 <= y1, z0 <= z1. */
+export interface ChangedBox {
+  readonly x0: number;
+  readonly y0: number;
+  readonly z0: number;
+  readonly x1: number;
+  readonly y1: number;
+  readonly z1: number;
+}
+
 export interface WorldOptions {
   /** Chunk edge length as a power of two (5 = 32 cells). */
   readonly chunkBits?: number;
@@ -16,6 +26,7 @@ export class World {
   readonly states = new CellStateTable();
   readonly #chunks = new Map<number, Chunk>();
   readonly #dirty = new Set<number>();
+  #journal: ChangedBox[] | null = null;
   #cellCount = 0;
 
   constructor(options: WorldOptions = {}) {
@@ -57,7 +68,7 @@ export class World {
       if (id === EMPTY_ID) {
         return false;
       }
-      chunk = new Chunk(L.volume);
+      chunk = new Chunk(L);
       this.#chunks.set(key, chunk);
     }
     const lx = L.toLocal(x);
@@ -72,6 +83,7 @@ export class World {
       this.#chunks.delete(key);
     }
     this.#markDirty(cx, cy, cz, lx, lx, ly, ly, lz, lz);
+    this.#journal?.push({ x0: x, y0: y, z0: z, x1: x, y1: y, z1: z });
     return true;
   }
 
@@ -117,24 +129,14 @@ export class World {
             if (id === EMPTY_ID) {
               continue;
             }
-            chunk = new Chunk(L.volume);
+            chunk = new Chunk(L);
             this.#chunks.set(key, chunk);
           }
-          let chunkChanged = 0;
-          for (let ly = ly0; ly <= ly1; ly++) {
-            for (let lz = lz0; lz <= lz1; lz++) {
-              let index = L.localIndex(lx0, ly, lz);
-              for (let lx = lx0; lx <= lx1; lx++, index++) {
-                const previous = chunk.set(index, id);
-                if (previous !== id) {
-                  chunkChanged++;
-                  this.#countChange(previous, id);
-                }
-              }
-            }
-          }
+          const before = chunk.count;
+          const chunkChanged = chunk.fill(lx0, lx1, ly0, ly1, lz0, lz1, id);
           if (chunkChanged > 0) {
             changed += chunkChanged;
+            this.#cellCount += chunk.count - before;
             if (chunk.count === 0) {
               this.#chunks.delete(key);
             }
@@ -143,12 +145,68 @@ export class World {
         }
       }
     }
+    if (changed > 0) this.#journal?.push({ x0, y0, z0, x1, y1, z1 });
     return changed;
   }
 
-  /** The chunk at chunk coordinates, if it holds any cells. Meshers read `cells` directly. */
+  /** The chunk at chunk coordinates, if it holds any cells. */
   chunk(cx: number, cy: number, cz: number): Chunk | undefined {
     return this.#chunks.get(chunkKey(cx, cy, cz));
+  }
+
+  /**
+   * Writes chunk [cx, cy, cz] plus a one-cell border from its 26 neighbours into `out`, a
+   * (size + 2)³ array indexed (x + 1) + (z + 1) * P + (y + 1) * P * P with P = size + 2.
+   * Empty space reads EMPTY_ID. This is what the mesher reads: faces, corners and ambient
+   * occlusion all depend on cells just across the chunk's edges.
+   */
+  copyPadded(cx: number, cy: number, cz: number, out: Uint16Array): Uint16Array {
+    const L = this.layout;
+    const S = L.size;
+    const P = S + 2;
+    out.fill(EMPTY_ID);
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const chunk = this.#chunks.get(chunkKey(cx + dx, cy + dy, cz + dz));
+          if (!chunk) continue;
+          if (dx === 0 && dy === 0 && dz === 0) {
+            const dense = chunk.copyTo(this.#scratch(L.volume));
+            for (let y = 0; y < S; y++) {
+              for (let z = 0; z < S; z++) {
+                const from = L.localIndex(0, y, z);
+                out.set(dense.subarray(from, from + S), 1 + (z + 1) * P + (y + 1) * P * P);
+              }
+            }
+            continue;
+          }
+          // Only the neighbour's cells touching this chunk: one layer on each offset axis.
+          const [x0, x1] = dx < 0 ? [S - 1, S - 1] : dx > 0 ? [0, 0] : [0, S - 1];
+          const [y0, y1] = dy < 0 ? [S - 1, S - 1] : dy > 0 ? [0, 0] : [0, S - 1];
+          const [z0, z1] = dz < 0 ? [S - 1, S - 1] : dz > 0 ? [0, 0] : [0, S - 1];
+          for (let y = y0; y <= y1; y++) {
+            const py = dy < 0 ? 0 : dy > 0 ? S + 1 : y + 1;
+            for (let z = z0; z <= z1; z++) {
+              const pz = dz < 0 ? 0 : dz > 0 ? S + 1 : z + 1;
+              for (let x = x0; x <= x1; x++) {
+                const px = dx < 0 ? 0 : dx > 0 ? S + 1 : x + 1;
+                out[px + pz * P + py * P * P] = chunk.get(L.localIndex(x, y, z));
+              }
+            }
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  #scratchCells: Uint16Array | null = null;
+
+  #scratch(length: number): Uint16Array {
+    if (!this.#scratchCells || this.#scratchCells.length !== length) {
+      this.#scratchCells = new Uint16Array(length);
+    }
+    return this.#scratchCells;
   }
 
   chunkKeys(): IterableIterator<number> {
@@ -162,19 +220,25 @@ export class World {
     const yShift = 2 * L.bits;
     for (const [key, chunk] of this.#chunks) {
       const [cx, cy, cz] = chunkKeyToCoords(key);
-      const cells = chunk.cells;
-      for (let i = 0; i < cells.length; i++) {
-        const id = cells[i] ?? EMPTY_ID;
-        if (id !== EMPTY_ID) {
-          visit(
-            cx * L.size + (i & L.mask),
-            cy * L.size + (i >> yShift),
-            cz * L.size + ((i >> zShift) & L.mask),
-            id,
-          );
-        }
-      }
+      const ox = cx * L.size;
+      const oy = cy * L.size;
+      const oz = cz * L.size;
+      chunk.forEachOccupied((i, id) => {
+        visit(ox + (i & L.mask), oy + (i >> yShift), oz + ((i >> zShift) & L.mask), id);
+      });
     }
+  }
+
+  /** Bytes held by chunk cell storage. */
+  get memoryBytes(): number {
+    let bytes = 0;
+    for (const chunk of this.#chunks.values()) bytes += chunk.memoryBytes;
+    return bytes;
+  }
+
+  /** How many chunks are dirty and waiting for takeDirtyChunks(). */
+  get dirtyCount(): number {
+    return this.#dirty.size;
   }
 
   /**
@@ -183,15 +247,25 @@ export class World {
    * faces depend on it). Keys of chunks that are now empty are included. The renderer
    * drains this once per frame.
    */
-  /** How many chunks are dirty and waiting for takeDirtyChunks(). */
-  get dirtyCount(): number {
-    return this.#dirty.size;
-  }
-
   takeDirtyChunks(): number[] {
     const keys = [...this.#dirty];
     this.#dirty.clear();
     return keys;
+  }
+
+  /**
+   * Starts or stops recording the boxes that edits change, for takeChanges(). Derived data
+   * that needs exact positions (lighting) turns this on; it costs nothing while off.
+   */
+  recordChanges(on: boolean): void {
+    this.#journal = on ? [] : null;
+  }
+
+  /** Boxes changed since the last call (inclusive corners), oldest first. */
+  takeChanges(): ChangedBox[] {
+    const changes = this.#journal ?? [];
+    if (this.#journal) this.#journal = [];
+    return changes;
   }
 
   #assertState(id: number): void {

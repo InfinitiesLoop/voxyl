@@ -71,6 +71,30 @@ export function Hud({ backend, stats, settings, onSettings, busy, onBench, onHom
           </select>
         </label>
       </div>
+      <div className="controls">
+        <label>
+          Lighting
+          <select
+            value={settings.lighting ? "on" : "off"}
+            disabled={busy}
+            onChange={(e) => onSettings({ ...settings, lighting: e.target.value === "on" })}
+          >
+            <option value="off">Off</option>
+            <option value="on">Smooth</option>
+          </select>
+        </label>
+        <label className="wide">
+          Daylight {settings.daylight}%
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={settings.daylight}
+            disabled={!settings.lighting}
+            onChange={(e) => onSettings({ ...settings, daylight: Number(e.target.value) })}
+          />
+        </label>
+      </div>
       <dl>
         <dt>Frame</dt>
         <dd>
@@ -102,6 +126,8 @@ export function Hud({ backend, stats, settings, onSettings, busy, onBench, onHom
               }`
             : "–"}
         </dd>
+        <dt>Light</dt>
+        <dd>{c?.lighting ? `all ${ms(c.lightAllMs, 0)} · ${c.lightMb.toFixed(0)} MB` : "off"}</dd>
         <dt>Timing</dt>
         <dd>
           initial mesh {ms(stats?.initialMeshMs, 0)} · last edit {ms(stats?.lastEditMs)}
@@ -145,6 +171,14 @@ export function BenchPanel({ result, onClose }: { result: BenchResult; onClose: 
             <td>
               {ms(result.initialMeshMs, 0)} ({count(result.chunks)} chunks, {count(result.quads)}{" "}
               quads, {result.workers} workers)
+            </td>
+          </tr>
+          <tr>
+            <th>Light whole world</th>
+            <td>
+              {result.lighting
+                ? `${ms(result.lightAllMs, 0)} · ${result.lightMb.toFixed(0)} MB`
+                : "lighting off"}
             </td>
           </tr>
           <tr>

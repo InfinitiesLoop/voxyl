@@ -11,6 +11,7 @@
   "dependencies": {
     "@voxyl/core": "workspace:*",
     "@voxyl/fixtures": "workspace:*",
+    "@voxyl/light": "workspace:*",
     "@voxyl/mesher": "workspace:*",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",

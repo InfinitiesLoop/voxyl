@@ -1,9 +1,10 @@
 import { chunkKeyToCoords, type World } from "@voxyl/core";
-import { extractSlab, FACES, QUAD_BYTES } from "@voxyl/mesher";
+import { LightEngine, type LightMaterials } from "@voxyl/light";
+import { paddedVolume, QUAD_BYTES } from "@voxyl/mesher";
 import * as THREE from "three/webgpu";
-import { type Palette, UNDECIDED_COLOR } from "../palettes.ts";
+import { lightMaterials, type Palette, sameMaterials, UNDECIDED_COLOR } from "../palettes.ts";
 import type { MeshJob, MeshResult } from "./mesh-protocol.ts";
-import { createQuadMaterial, PALETTE_SIZE } from "./quad-material.ts";
+import { createQuadMaterial, PALETTE_SIZE, type QuadUniforms } from "./quad-material.ts";
 
 /** Jobs each worker may hold at once, so one slow chunk doesn't stall the queue. */
 const JOBS_PER_WORKER = 2;
@@ -18,23 +19,31 @@ export interface ChunkRendererStats {
   /** Worker meshing time per chunk over recent jobs. */
   readonly meshMsAvg: number;
   readonly workers: number;
+  readonly lighting: boolean;
+  /** Time the last full relight took, if lighting is on. */
+  readonly lightAllMs: number | null;
+  readonly lightMb: number;
 }
 
 /**
  * Keeps one mesh per chunk in step with the World. Each frame it collects the chunks the
- * World reports dirty, sends snapshots of them (plus neighbouring layers) to a worker pool,
- * nearest the camera first, and swaps finished meshes in. A chunk edited while its mesh is
- * being built is queued again, so the newest state always wins.
+ * World (and, with lighting on, the light engine) reports dirty, sends padded snapshots of
+ * them to a worker pool, nearest the camera first, and swaps finished meshes in. A chunk
+ * edited while its mesh is being built is queued again, so the newest state always wins.
  */
 export class ChunkRenderer {
   readonly group = new THREE.Group();
   readonly #world: World;
   readonly #size: number;
   readonly #material: THREE.MeshBasicNodeMaterial;
+  readonly #uniforms: QuadUniforms;
   readonly #paletteData: Uint8Array;
   readonly #paletteTexture: THREE.DataTexture;
   #palette: Palette;
   #paletteStates = -1;
+  #light: LightEngine | null = null;
+  #lightMaterials: LightMaterials | null = null;
+  #lightAllMs: number | null = null;
 
   readonly #meshes = new Map<number, THREE.Mesh>();
   readonly #queue = new Set<number>();
@@ -62,7 +71,9 @@ export class ChunkRenderer {
     this.#paletteTexture.magFilter = THREE.NearestFilter;
     this.#paletteTexture.minFilter = THREE.NearestFilter;
     this.#paletteTexture.generateMipmaps = false;
-    this.#material = createQuadMaterial(this.#paletteTexture);
+    const { material, uniforms } = createQuadMaterial(this.#paletteTexture);
+    this.#material = material;
+    this.#uniforms = uniforms;
     this.#workers = Array.from({ length: workerCount }, () => {
       const worker = new Worker(new URL("./mesh-worker.ts", import.meta.url), { type: "module" });
       worker.addEventListener("message", (event: MessageEvent<MeshResult>) => {
@@ -74,22 +85,65 @@ export class ChunkRenderer {
     this.group.name = "chunks";
   }
 
+  get lighting(): boolean {
+    return this.#light !== null;
+  }
+
+  /**
+   * Turns lighting on or off. On, the whole world is lit now (on this thread, for the
+   * moment) and every chunk is remeshed with light; off, light data is dropped entirely.
+   */
+  setLighting(on: boolean): void {
+    if (on === this.lighting) return;
+    if (on) {
+      this.#lightMaterials = lightMaterials(this.#palette, this.#world);
+      this.#light = new LightEngine(this.#world, this.#lightMaterials);
+      this.#world.recordChanges(true);
+      this.#relightAll();
+    } else {
+      this.#light = null;
+      this.#lightMaterials = null;
+      this.#lightAllMs = null;
+      this.#world.recordChanges(false);
+    }
+    this.#uniforms.lighting.value = on ? 1 : 0;
+    this.#remeshAll();
+  }
+
+  /** Sky brightness, 0 (night) to 1 (day). Costs nothing: it's one shader value. */
+  setDaylight(daylight: number): void {
+    this.#uniforms.daylight.value = daylight;
+  }
+
   setPalette(palette: Palette): void {
     this.#palette = palette;
     this.#paletteStates = -1;
+    // Colours only touch the palette texture; materials that change light relight everything.
+    if (this.#light && this.#lightMaterials) {
+      const next = lightMaterials(palette, this.#world);
+      if (!sameMaterials(next, this.#lightMaterials)) {
+        this.#lightMaterials = next;
+        this.#light.setMaterials(next);
+        this.#relightAll();
+        this.#remeshAll();
+      }
+    }
   }
 
   /** Call once per frame before rendering. */
   update(camera: THREE.Camera): void {
     this.#syncPalette();
-    for (const key of this.#world.takeDirtyChunks()) {
-      if (this.#inFlightKeys.has(key)) {
-        this.#again.add(key);
-      } else if (!this.#queue.has(key)) {
-        this.#queue.add(key);
-        this.#orderStale = true;
+    const light = this.#light;
+    if (light) {
+      // New cell states (a semantic used for the first time) need entries in the tables.
+      if ((this.#lightMaterials?.opaque.length ?? 0) !== this.#world.states.size + 1) {
+        this.#lightMaterials = lightMaterials(this.#palette, this.#world);
+        light.setMaterials(this.#lightMaterials);
       }
+      light.update(this.#world.takeChanges());
+      for (const key of light.takeDirtyChunks()) this.#enqueue(key);
     }
+    for (const key of this.#world.takeDirtyChunks()) this.#enqueue(key);
     this.#cameraPosition.copy(camera.position);
     this.#applyResults();
     this.#dispatch();
@@ -129,6 +183,9 @@ export class ChunkRenderer {
       inFlight: this.#inFlight.size,
       meshMsAvg: times.length > 0 ? times.reduce((s, t) => s + t, 0) / times.length : 0,
       workers: this.#workers.length,
+      lighting: this.lighting,
+      lightAllMs: this.#lightAllMs,
+      lightMb: (this.#light?.memoryBytes ?? 0) / 2 ** 20,
     };
   }
 
@@ -139,6 +196,29 @@ export class ChunkRenderer {
     this.group.clear();
     this.#material.dispose();
     this.#paletteTexture.dispose();
+    this.#world.recordChanges(false);
+  }
+
+  #relightAll(): void {
+    if (!this.#light) return;
+    this.#world.takeChanges(); // already reflected in a full relight
+    const start = performance.now();
+    this.#light.computeAll();
+    this.#lightAllMs = performance.now() - start;
+    this.#light.takeDirtyChunks();
+  }
+
+  #remeshAll(): void {
+    for (const key of this.#world.chunkKeys()) this.#enqueue(key);
+  }
+
+  #enqueue(key: number): void {
+    if (this.#inFlightKeys.has(key)) {
+      this.#again.add(key);
+    } else if (!this.#queue.has(key)) {
+      this.#queue.add(key);
+      this.#orderStale = true;
+    }
   }
 
   #syncPalette(): void {
@@ -147,7 +227,7 @@ export class ChunkRenderer {
     const data = this.#paletteData;
     for (let id = 1; id <= states.size; id++) {
       const semantic = states.get(id)?.semantic ?? "";
-      const hex = this.#palette.colors[semantic] ?? UNDECIDED_COLOR;
+      const hex = this.#palette.materials[semantic]?.color ?? UNDECIDED_COLOR;
       const rgb = Number.parseInt(hex.slice(1), 16);
       data[id * 4] = (rgb >> 16) & 0xff;
       data[id * 4 + 1] = (rgb >> 8) & 0xff;
@@ -223,22 +303,19 @@ export class ChunkRenderer {
 
   #send(key: number, worker: number): void {
     const [cx, cy, cz] = chunkKeyToCoords(key);
-    const chunk = this.#world.chunk(cx, cy, cz);
-    if (!chunk) {
+    if (!this.#world.chunk(cx, cy, cz)) {
       this.#removeMesh(key);
       return;
     }
     const bits = this.#world.layout.bits;
-    const neighbors = FACES.map((face, f) => {
-      const c = [cx, cy, cz];
-      c[face.axis] = (c[face.axis] ?? 0) + face.sign;
-      const neighbor = this.#world.chunk(c[0] ?? 0, c[1] ?? 0, c[2] ?? 0);
-      return neighbor ? extractSlab(neighbor.cells, bits, f) : null;
-    });
-    const cells = chunk.cells.slice();
-    const job: MeshJob = { jobId: this.#nextJob++, key, bits, cells, neighbors };
+    const volume = paddedVolume(bits);
+    const cells = this.#world.copyPadded(cx, cy, cz, new Uint16Array(volume));
+    const light = this.#light ? this.#light.copyPadded(cx, cy, cz, new Uint16Array(volume)) : null;
+    const opaque = this.#lightMaterials ? this.#lightMaterials.opaque.slice() : null;
+    const job: MeshJob = { jobId: this.#nextJob++, key, bits, cells, light, opaque };
     const transfer: Transferable[] = [cells.buffer];
-    for (const slab of neighbors) if (slab) transfer.push(slab.buffer);
+    if (light) transfer.push(light.buffer);
+    if (opaque) transfer.push(opaque.buffer);
     this.#workers[worker]?.postMessage(job, transfer);
     this.#workerLoad[worker] = (this.#workerLoad[worker] ?? 0) + 1;
     this.#inFlight.set(job.jobId, worker);
@@ -255,8 +332,14 @@ export class ChunkRenderer {
       new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0], 3),
     );
     const packed = new THREE.InstancedInterleavedBuffer(quads, QUAD_BYTES);
-    geometry.setAttribute("quadA", new THREE.InterleavedBufferAttribute(packed, 4, 0, true));
-    geometry.setAttribute("quadB", new THREE.InterleavedBufferAttribute(packed, 4, 4, true));
+    const unorm4 = (offset: number) =>
+      new THREE.InterleavedBufferAttribute(packed, 4, offset, true);
+    geometry.setAttribute("quadA", unorm4(0));
+    geometry.setAttribute("quadB", unorm4(4));
+    geometry.setAttribute("corner0", unorm4(8));
+    geometry.setAttribute("corner1", unorm4(12));
+    geometry.setAttribute("corner2", unorm4(16));
+    geometry.setAttribute("corner3", unorm4(20));
     geometry.instanceCount = quadCount;
     // Bounds can't come from the base quad: they are the chunk's cube.
     geometry.boundingBox = new THREE.Box3(

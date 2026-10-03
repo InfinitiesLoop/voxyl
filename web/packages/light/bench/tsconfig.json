@@ -1,0 +1,9 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    // Benchmarks run in Node, unlike the mesher itself.
+    "lib": ["ES2023"],
+    "types": ["node"]
+  },
+  "include": ["."]
+}

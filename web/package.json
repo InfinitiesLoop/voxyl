@@ -11,15 +11,19 @@
     "build": "pnpm -r build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "pnpm -r typecheck",
+    "typecheck": "pnpm -r typecheck && tsc --noEmit -p tools",
     "lint": "biome check .",
     "format": "biome check --write .",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
-    "bench:mesh": "node packages/mesher/bench/city.ts"
+    "bench:mesh": "node packages/mesher/bench/city.ts",
+    "bench:light": "node packages/light/bench/city.ts",
+    "shot": "node tools/shot.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",
+    "@types/node": "^24.19.1",
     "fast-check": "^4.10.2",
+    "playwright-core": "^1.63.0",
     "typescript": "^7.0.2",
     "vitest": "^5.0.3"
   }

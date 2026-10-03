@@ -1,14 +1,14 @@
 // CPU-side meshing benchmark: generates city fixtures and meshes every chunk on one thread.
-// Run from web/: pnpm bench:mesh [cells ...] [--bits=4,5,6]
+// Run from web/: pnpm bench:mesh [cells ...] [--bits=5,6,7]
 // GPU and frame-time numbers come from the in-app bench; this isolates the mesher.
 
 import { chunkKeyToCoords, World } from "@voxyl/core";
 import { generateCity } from "@voxyl/fixtures";
-import { extractSlab, FACES, meshChunk } from "../src/index.ts";
+import { meshChunk, paddedVolume } from "../src/index.ts";
 
 const args = process.argv.slice(2);
 const bitsArg = args.find((a) => a.startsWith("--bits="));
-const bitsList = bitsArg ? bitsArg.slice(7).split(",").map(Number) : [4, 5, 6];
+const bitsList = bitsArg ? bitsArg.slice(7).split(",").map(Number) : [5, 6, 7];
 const sizes = args.filter((a) => !a.startsWith("--")).map(Number);
 const targets = sizes.length > 0 ? sizes : [1_000_000, 5_000_000];
 
@@ -23,34 +23,32 @@ for (const target of targets) {
     generateCity(world, { targetCells: target, seed: 1 });
     const genMs = performance.now() - t;
 
-    const times: number[] = [];
+    const copyTimes: number[] = [];
+    const meshTimes: number[] = [];
+    const cells = new Uint16Array(paddedVolume(bits));
     let quads = 0;
     t = performance.now();
     for (const key of world.chunkKeys()) {
       const [cx, cy, cz] = chunkKeyToCoords(key);
-      const chunk = world.chunk(cx, cy, cz);
-      if (!chunk) continue;
-      const start = performance.now();
-      const neighbors = FACES.map((face, f) => {
-        const c = [cx, cy, cz];
-        c[face.axis] = (c[face.axis] ?? 0) + face.sign;
-        const n = world.chunk(c[0] ?? 0, c[1] ?? 0, c[2] ?? 0);
-        return n ? extractSlab(n.cells, bits, f) : null;
-      });
-      quads += meshChunk({ bits, cells: chunk.cells, neighbors }).quadCount;
-      times.push(performance.now() - start);
+      let start = performance.now();
+      world.copyPadded(cx, cy, cz, cells);
+      copyTimes.push(performance.now() - start);
+      start = performance.now();
+      quads += meshChunk({ bits, cells, light: null, opaque: null }).quadCount;
+      meshTimes.push(performance.now() - start);
     }
     const meshMs = performance.now() - t;
-    times.sort((a, b) => a - b);
+    copyTimes.sort((a, b) => a - b);
+    meshTimes.sort((a, b) => a - b);
     const size = 1 << bits;
-    const storageMb = (world.chunkCount * size ** 3 * 2) / 2 ** 20;
+    const denseMb = (world.chunkCount * size ** 3 * 2) / 2 ** 20;
     console.log(
       [
         `${(world.cellCount / 1e6).toFixed(2)}M cells, ${size}^3 chunks:`,
         `generate ${ms(genMs)}`,
-        `mesh all ${ms(meshMs)} (${world.chunkCount} chunks, per chunk p50 ${pct(times, 0.5).toFixed(2)} ms, p95 ${pct(times, 0.95).toFixed(2)} ms)`,
-        `${(quads / 1e6).toFixed(2)}M quads (${((quads * 8) / 2 ** 20).toFixed(0)} MB)`,
-        `chunk storage ${storageMb.toFixed(0)} MB`,
+        `mesh all ${ms(meshMs)} (${world.chunkCount} chunks; per chunk copy p50 ${pct(copyTimes, 0.5).toFixed(2)} ms, mesh p50 ${pct(meshTimes, 0.5).toFixed(2)} ms, p95 ${pct(meshTimes, 0.95).toFixed(2)} ms)`,
+        `${(quads / 1e6).toFixed(2)}M quads`,
+        `storage ${(world.memoryBytes / 2 ** 20).toFixed(0)} MB (dense would be ${denseMb.toFixed(0)} MB)`,
       ].join(" | "),
     );
   }

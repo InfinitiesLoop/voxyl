@@ -59,7 +59,10 @@ folder (a pnpm workspace with its own `README.md`). The principles above apply u
 - Needs Node 24+ and pnpm. From `web/`: `pnpm install`, `pnpm dev`.
 - **Before committing a web change, run `pnpm check`** (Biome lint, `tsc` typecheck per package,
   Vitest) from `web/`. The Godot validate/test scripts are only needed when GDScript changes.
-- `packages/core` must stay free of DOM and Node APIs; its tsconfig enforces this.
+- `packages/core`, `mesher` and `light` must stay free of DOM and Node APIs; their tsconfigs
+  enforce this.
+- Check UI changes against the dev server, not just the build: `pnpm shot "<query>"` drives the
+  user's running `pnpm dev` headless and reports console problems, the HUD and a screenshot.
 - `web/.gdignore` stops Godot scanning `node_modules`; never remove it.
 
 ---

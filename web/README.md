@@ -1,7 +1,8 @@
 # Voxyl web
 
 The TypeScript web version of Voxyl, built in phases alongside the Godot app. The plan, phases
-and gates are in [`../.plans/web-migration.md`](../.plans/web-migration.md).
+and gates are in [`../.plans/web-migration.md`](../.plans/web-migration.md); lighting has its own
+plan in [`../.plans/web-lighting.md`](../.plans/web-lighting.md).
 
 ## Setup
 
@@ -10,9 +11,13 @@ Needs Node 24+ and pnpm (`npm install -g pnpm`).
 ```bash
 cd web
 pnpm install
-pnpm dev        # app at http://localhost:5173
+pnpm dev        # app at http://localhost:5173, reloads itself as files change
 pnpm check      # lint + typecheck + tests; run before every commit
 ```
+
+To stop the dev server, press `q` then Enter (Vite's own quit). Ctrl+C also works; on Windows
+pnpm then prints an `ELIFECYCLE` error because the server was interrupted, which is harmless.
+`r` then Enter restarts the server in place, and `h` then Enter lists the other shortcuts.
 
 Other scripts: `pnpm test:watch`, `pnpm format` (Biome, fixes formatting and import order),
 `pnpm build`.
@@ -20,29 +25,47 @@ Other scripts: `pnpm test:watch`, `pnpm format` (Biome, fixes formatting and imp
 ## Layout
 
 ```
-packages/core/      world, chunks, cell states, raycast: no DOM, no Node, runs anywhere
-packages/mesher/    greedy chunk mesher (runs in workers); bench/ has the CPU benchmark
+packages/core/      world, chunks (stored by content), cell states, raycast: no DOM, no Node
+packages/mesher/    greedy chunk mesher with smooth light and ambient occlusion (runs in workers)
+packages/light/     Minecraft-style sky and colored block light, incremental on edits
 packages/fixtures/  seeded test worlds (the benchmark city)
 apps/web/           the React + Three.js app (Vite), with the in-app benchmark
+tools/              dev tools (shot)
 ```
 
 Later phases add `formats`, `tools`, `raster`, `render`, `mc-import` and `apps/server`, as
 listed in the plan.
 
+## Checking the running app
+
+`pnpm shot` opens the app headless in the installed Edge or Chrome, against the dev server by
+default, waits for the world to mesh, and prints console problems, the HUD and the canvas
+count, plus a screenshot in `shots/`. Add a query and `--bench` to run the benchmark too:
+
+```bash
+pnpm shot "world=city-5m&chunk=64&lighting=on" --bench
+```
+
+This is how changes get checked against exactly what `pnpm dev` serves, React's development
+double mount included.
+
 ## Benchmarks
 
-- `pnpm bench:mesh [cells ...] [--bits=4,5,6]`: meshing cost on one CPU thread, per chunk size.
-- In the app, pick a world and chunk size (also settable in the URL, e.g.
-  `?world=city-5m&chunk=32`) and press **Run benchmark**: a scripted flight, 100 single-cell
-  edits and 100k/1M box fills, measured to the frame they appear. The result can be copied as
-  JSON and is also on `window.__voxylBench`.
+- `pnpm bench:mesh [cells ...] [--bits=5,6,7]`: meshing and storage cost on one CPU thread.
+- `pnpm bench:light [cells ...]`: full relight, light memory, lit quad counts, and
+  incremental relights for single edits, a roof hole and big fills.
+- In the app, pick a world, chunk size and lighting (also in the URL, e.g.
+  `?world=city-5m&chunk=64&lighting=on&daylight=40`) and press **Run benchmark**: a scripted
+  flight, 100 single-cell edits, a roof hole and 100k/1M box fills, measured to the frame they
+  appear. The result can be copied as JSON and is also on `window.__voxylBench`.
 
 ## Rules of the road
 
-- `core` compiles with no DOM or Node types, so anything that touches `document`, `window` or
-  `process` fails its typecheck. Keep it that way: the same core runs in the tab, in workers
-  and on the server.
-- Cells store semantics, never materials. Palettes live outside `World`.
+- `core`, `mesher` and `light` compile with no DOM or Node types, so anything that touches
+  `document`, `window` or `process` fails their typecheck. Keep it that way: the same code runs
+  in the tab, in workers and on the server.
+- Cells store semantics, never materials. Palettes (colours, transparency, emission) live
+  outside `World`, and light is derived from both, never saved.
 - React draws UI chrome only. The world is rendered by Three.js from chunk data, never as React
   components.
 - `web/.gdignore` keeps Godot from scanning this folder, `node_modules` included. Don't remove

@@ -1,8 +1,10 @@
 # Voxyl Web — Migration Plan
 
-Status: **Plan accepted** (2026-10-03). **Phase 0 in progress**: chunked World, greedy mesher
-in a worker pool, packed-quad GPU format, city fixtures and the in-app benchmark are built;
-first numbers are under "Phase 0 findings". Next: batch draws independently of chunk size.
+Status: **Plan accepted** (2026-10-03). **Phase 0 in progress**: chunked World with storage
+by content, greedy mesher in a worker pool, packed-quad GPU format, city fixtures, the in-app
+benchmark, and a first Minecraft-style lighting engine (see
+[`web-lighting.md`](web-lighting.md)) are built. Numbers are under "Phase 0 findings" and in
+the lighting plan. Default chunk size is 64³; draw batching is deferred.
 Reviewed as a Claude Doc
 (https://claude.ai/code/artifact/98f31d14-989b-4c28-a24c-a3d7b8630a21); this file is now the
 working copy, so update it here as phases land.
