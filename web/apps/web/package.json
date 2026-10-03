@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@voxyl/core": "workspace:*",
+    "@voxyl/fixtures": "workspace:*",
+    "@voxyl/mesher": "workspace:*",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "three": "^0.186.1"

@@ -14,7 +14,8 @@
     "typecheck": "pnpm -r typecheck",
     "lint": "biome check .",
     "format": "biome check --write .",
-    "check": "pnpm lint && pnpm typecheck && pnpm test"
+    "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "bench:mesh": "node packages/mesher/bench/city.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",

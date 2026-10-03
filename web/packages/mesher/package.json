@@ -1,0 +1,17 @@
+{
+  "name": "@voxyl/mesher",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p . && tsc --noEmit -p bench"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.1",
+    "@voxyl/core": "workspace:*",
+    "@voxyl/fixtures": "workspace:*",
+    "typescript": "^7.0.2"
+  }
+}

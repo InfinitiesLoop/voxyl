@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { chunkKey, chunkKeyToCoords, EMPTY_ID, MAX_WORLD_COORD, World } from "../src/index.ts";
+import { chunkKey, chunkKeyToCoords, EMPTY_ID, MAX_CHUNK_BITS, World } from "../src/index.ts";
 
 describe("World", () => {
   it("stores cells on both sides of chunk boundaries, including negative coordinates", () => {
@@ -34,15 +34,21 @@ describe("World", () => {
     expect(world.cellCount).toBe(0);
   });
 
-  it("reports each changed chunk once, then starts clean", () => {
-    const world = new World();
-    world.set(0, 0, 0, { semantic: "Mass" });
-    world.set(1, 0, 0, { semantic: "Mass" });
-    world.set(-1, 0, 0, { semantic: "Mass" });
-    expect(world.takeDirtyChunks().sort()).toEqual([chunkKey(-1, 0, 0), chunkKey(0, 0, 0)].sort());
+  it("marks only the changed chunk dirty for an interior edit", () => {
+    const world = new World({ chunkBits: 4 });
+    world.set(5, 5, 5, { semantic: "Mass" });
+    expect(world.takeDirtyChunks()).toEqual([chunkKey(0, 0, 0)]);
     expect(world.takeDirtyChunks()).toEqual([]);
-    world.set(-1, 0, 0, null);
-    expect(world.takeDirtyChunks()).toEqual([chunkKey(-1, 0, 0)]);
+  });
+
+  it("also marks the face neighbours an edit on a chunk boundary can expose", () => {
+    const world = new World({ chunkBits: 4 });
+    world.set(0, 15, 7, { semantic: "Mass" });
+    expect(world.takeDirtyChunks().sort()).toEqual(
+      [chunkKey(0, 0, 0), chunkKey(-1, 0, 0), chunkKey(0, 1, 0)].sort(),
+    );
+    world.set(0, 15, 7, null);
+    expect(world.takeDirtyChunks().length).toBe(3);
   });
 
   it("visits every cell at its world position", () => {
@@ -66,31 +72,88 @@ describe("World", () => {
 
   it("rejects positions outside the world and unknown state ids", () => {
     const world = new World();
-    expect(() => world.set(MAX_WORLD_COORD + 1, 0, 0, { semantic: "Mass" })).toThrow(RangeError);
+    expect(() => world.set(world.layout.maxWorld + 1, 0, 0, { semantic: "Mass" })).toThrow(
+      RangeError,
+    );
     expect(() => world.setId(0, 0, 0, 42)).toThrow(RangeError);
+    expect(() => world.fillBox(0, 0, 0, 1, 1, 1, 42)).toThrow(RangeError);
+  });
+});
+
+describe("World.fillBox", () => {
+  it("fills across chunks with corners in any order, then clears", () => {
+    const world = new World({ chunkBits: 3 });
+    const mass = world.states.intern({ semantic: "Mass" });
+    expect(world.fillBox(5, 2, -3, -4, -1, 9, mass)).toBe(10 * 4 * 13);
+    expect(world.cellCount).toBe(520);
+    expect(world.getId(-4, -1, -3)).toBe(mass);
+    expect(world.getId(5, 2, 9)).toBe(mass);
+    expect(world.getId(6, 2, 9)).toBe(EMPTY_ID);
+    expect(world.fillBox(-4, -1, -3, 5, 2, 9, mass)).toBe(0);
+    expect(world.fillBox(-4, -1, -3, 5, 2, 9, EMPTY_ID)).toBe(520);
+    expect(world.cellCount).toBe(0);
+    expect(world.chunkCount).toBe(0);
   });
 
-  it("matches a plain map model under random edits", () => {
-    const coord = fc.integer({ min: -70, max: 70 });
+  it("marks neighbours only where the box reaches a chunk boundary", () => {
+    const world = new World({ chunkBits: 4 });
+    const mass = world.states.intern({ semantic: "Mass" });
+    world.fillBox(2, 2, 2, 13, 13, 13, mass);
+    expect(world.takeDirtyChunks()).toEqual([chunkKey(0, 0, 0)]);
+    world.fillBox(2, 2, 2, 15, 3, 3, mass);
+    expect(world.takeDirtyChunks().sort()).toEqual([chunkKey(0, 0, 0), chunkKey(1, 0, 0)].sort());
+  });
+});
+
+describe.each([3, 4, 5, MAX_CHUNK_BITS])("World with %i-bit chunks", (chunkBits) => {
+  it("matches a plain map model under random sets and box fills", () => {
+    const coord = fc.integer({ min: -40, max: 40 });
     const semantic = fc.constantFrom("Mass", "Trim", "Glow", null);
-    const edit = fc.tuple(coord, coord, coord, semantic);
+    const set = fc.record({
+      kind: fc.constant("set" as const),
+      x: coord,
+      y: coord,
+      z: coord,
+      s: semantic,
+    });
+    const box = fc.record({
+      kind: fc.constant("box" as const),
+      a: fc.tuple(coord, coord, coord),
+      size: fc.tuple(
+        fc.integer({ min: 0, max: 9 }),
+        fc.integer({ min: 0, max: 9 }),
+        fc.integer({ min: 0, max: 9 }),
+      ),
+      s: semantic,
+    });
     fc.assert(
-      fc.property(fc.array(edit, { maxLength: 300 }), (edits) => {
-        const world = new World();
+      fc.property(fc.array(fc.oneof(set, box), { maxLength: 60 }), (edits) => {
+        const world = new World({ chunkBits });
         const model = new Map<string, string>();
-        for (const [x, y, z, s] of edits) {
-          world.set(x, y, z, s === null ? null : { semantic: s });
-          if (s === null) {
-            model.delete(`${x},${y},${z}`);
+        const apply = (x: number, y: number, z: number, s: string | null) => {
+          if (s === null) model.delete(`${x},${y},${z}`);
+          else model.set(`${x},${y},${z}`, s);
+        };
+        for (const edit of edits) {
+          if (edit.kind === "set") {
+            world.set(edit.x, edit.y, edit.z, edit.s === null ? null : { semantic: edit.s });
+            apply(edit.x, edit.y, edit.z, edit.s);
           } else {
-            model.set(`${x},${y},${z}`, s);
+            const [x0, y0, z0] = edit.a;
+            const [w, h, d] = edit.size;
+            const id = edit.s === null ? EMPTY_ID : world.states.intern({ semantic: edit.s });
+            world.fillBox(x0, y0, z0, x0 + w, y0 + h, z0 + d, id);
+            for (let x = x0; x <= x0 + w; x++)
+              for (let y = y0; y <= y0 + h; y++)
+                for (let z = z0; z <= z0 + d; z++) apply(x, y, z, edit.s);
           }
         }
         expect(world.cellCount).toBe(model.size);
-        for (const [x, y, z] of edits) {
-          const expected = model.get(`${x},${y},${z}`) ?? null;
-          expect(world.get(x, y, z)?.semantic ?? null).toBe(expected);
-        }
+        const seen = new Map<string, string>();
+        world.forEachCell((x, y, z, id) => {
+          seen.set(`${x},${y},${z}`, world.states.get(id)?.semantic ?? "");
+        });
+        expect(seen).toEqual(model);
         // Every stored chunk holds cells, and their counts add up to the world's.
         let chunkCells = 0;
         for (const key of world.chunkKeys()) {
@@ -99,8 +162,8 @@ describe("World", () => {
           chunkCells += count;
         }
         expect(chunkCells).toBe(world.cellCount);
-        expect(world.getId(1000, 1000, 1000)).toBe(EMPTY_ID);
       }),
+      { numRuns: 60 },
     );
   });
 });

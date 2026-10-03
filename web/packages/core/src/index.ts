@@ -9,20 +9,14 @@ export {
 } from "./cell-state.ts";
 export { Chunk } from "./chunk.ts";
 export {
-  assertWorldPos,
-  CHUNK_BITS,
-  CHUNK_MASK,
-  CHUNK_SIZE,
-  CHUNK_VOLUME,
+  ChunkLayout,
   chunkKey,
   chunkKeyToCoords,
-  isWorldCoord,
-  localIndex,
+  DEFAULT_CHUNK_BITS,
+  MAX_CHUNK_BITS,
   MAX_CHUNK_COORD,
-  MAX_WORLD_COORD,
+  MIN_CHUNK_BITS,
   MIN_CHUNK_COORD,
-  MIN_WORLD_COORD,
-  toChunk,
-  toLocal,
 } from "./coords.ts";
-export { World } from "./world.ts";
+export { type RayHit, raycast } from "./raycast.ts";
+export { World, type WorldOptions } from "./world.ts";

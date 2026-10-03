@@ -1,6 +1,7 @@
 :root {
   --bg: #15171b;
-  --panel: rgb(30 33 38 / 0.85);
+  --panel: rgb(26 29 34 / 0.88);
+  --line: #2e333a;
   --text: #e6e8eb;
   --text-quiet: #9aa0a8;
   --accent: #22d3ee;
@@ -38,22 +39,146 @@ body,
   height: 100%;
 }
 
-.hud {
+.hud,
+.bench,
+.banner,
+.hint {
   position: absolute;
-  top: 12px;
-  left: 12px;
-  display: flex;
-  gap: 16px;
-  align-items: baseline;
-  padding: 8px 14px;
   border-radius: 8px;
   background: var(--panel);
-  font-size: 13px;
+  font-size: 12.5px;
   color: var(--text-quiet);
 }
 
-.hud strong {
+.hud {
+  top: 12px;
+  left: 12px;
+  width: 340px;
+  padding: 10px 14px 12px;
+}
+
+.hud header,
+.bench header {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+
+.hud strong,
+.bench strong {
   color: var(--accent);
   font-size: 15px;
   letter-spacing: 0.02em;
+}
+
+.controls {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+select,
+button {
+  font: inherit;
+  color: var(--text);
+  background: #23272d;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 6px;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled,
+select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 3px 10px;
+  margin: 0;
+}
+
+dt {
+  color: var(--text-quiet);
+}
+
+dd {
+  margin: 0;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.bench {
+  top: 12px;
+  right: 12px;
+  width: min(520px, calc(100% - 380px));
+  padding: 10px 14px 12px;
+}
+
+.bench table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.bench th {
+  text-align: left;
+  font-weight: normal;
+  padding: 3px 10px 3px 0;
+  white-space: nowrap;
+}
+
+.bench td {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.banner {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 10px 16px;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.hint {
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  white-space: nowrap;
+}
+
+.crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--text), var(--text)) center / 2px 14px no-repeat,
+    linear-gradient(var(--text), var(--text)) center / 14px 2px no-repeat;
+  mix-blend-mode: difference;
 }

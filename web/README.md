@@ -20,12 +20,22 @@ Other scripts: `pnpm test:watch`, `pnpm format` (Biome, fixes formatting and imp
 ## Layout
 
 ```
-packages/core/   world, chunks, cell states: no DOM, no Node, runs anywhere
-apps/web/        the React + Three.js app (Vite)
+packages/core/      world, chunks, cell states, raycast: no DOM, no Node, runs anywhere
+packages/mesher/    greedy chunk mesher (runs in workers); bench/ has the CPU benchmark
+packages/fixtures/  seeded test worlds (the benchmark city)
+apps/web/           the React + Three.js app (Vite), with the in-app benchmark
 ```
 
-Later phases add `formats`, `tools`, `raster`, `mesher`, `render`, `mc-import` and
-`apps/server`, as listed in the plan.
+Later phases add `formats`, `tools`, `raster`, `render`, `mc-import` and `apps/server`, as
+listed in the plan.
+
+## Benchmarks
+
+- `pnpm bench:mesh [cells ...] [--bits=4,5,6]`: meshing cost on one CPU thread, per chunk size.
+- In the app, pick a world and chunk size (also settable in the URL, e.g.
+  `?world=city-5m&chunk=32`) and press **Run benchmark**: a scripted flight, 100 single-cell
+  edits and 100k/1M box fills, measured to the frame they appear. The result can be copied as
+  JSON and is also on `window.__voxylBench`.
 
 ## Rules of the road
 

@@ -1,7 +1,9 @@
 # Voxyl Web — Migration Plan
 
-Status: **Plan accepted** (2026-10-03). **Phase 0 starting**: the `web/` shell is up; nothing
-else is ported yet. Reviewed as a Claude Doc
+Status: **Plan accepted** (2026-10-03). **Phase 0 in progress**: chunked World, greedy mesher
+in a worker pool, packed-quad GPU format, city fixtures and the in-app benchmark are built;
+first numbers are under "Phase 0 findings". Next: batch draws independently of chunk size.
+Reviewed as a Claude Doc
 (https://claude.ai/code/artifact/98f31d14-989b-4c28-a24c-a3d7b8630a21); this file is now the
 working copy, so update it here as phases land.
 
@@ -255,6 +257,31 @@ gate means fixing or rethinking that phase, not starting the next one.
 
 **While the port runs.** Godot gets fixes and keeps being used for builds, but no large new
 features from Phase 1 until the Phase 4 gate. Otherwise the parity target keeps moving.
+
+### Phase 0 findings
+
+First run 2026-10-03, headless Edge on an Intel Arc B580, 1600x900, 8 mesh workers. Headless
+frame pacing is rougher than a real browser window, so treat frame p95 as pessimistic.
+
+| World | Chunk | Draws | Initial mesh | Frame p50 / p95 | Main thread p50 | Edit to visible p50 | 1M fill visible |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 5M city | 16³ | 7.9k | 2.7 s | 33 / 183 ms | 17 ms | 173 ms | 235 ms |
+| 5M city | 32³ | 1.3k | 0.46 s | 16.7 / 33 ms | 8.8 ms | 31 ms | 73 ms |
+| 5M city | 64³ | 300 | 0.32 s | 16.7 / 16.9 ms | 2.5 ms | 16.6 ms | 36 ms |
+| 20M city | 32³ | 5.4k | 1.95 s | 33 / 117 ms | 14.8 ms | 117 ms | 153 ms |
+| 20M city | 64³ | 1.3k | 1.37 s | 16.7 / 33 ms | 7.9 ms | 27 ms | 63 ms |
+
+- **Draw calls are the bottleneck, not meshing.** Main-thread time is about 6 to 7 µs per chunk
+  mesh drawn, whatever the cell count. Remeshing is cheap: a 32³ chunk takes about 0.5 ms in a
+  worker, a 64³ chunk about 4 ms, and edits stay at one or two frames once the frame itself
+  is fast.
+- **Packed quads are tiny.** 5M cells make 0.68M quads, 5 MB on the GPU at 8 bytes a quad.
+  Dense chunk storage (89 MB at 5M cells, 32³) is the bigger memory cost; palette-compressed
+  or uniform chunks can cut it later.
+- **Next: render batches.** Keep mesh chunks small for cheap edits (32³), and draw groups of
+  chunks (for example a 128-cell cube) from one buffer, so draw count tracks visible regions,
+  not chunks. Quad coordinates still fit in a byte at 128 cells. Then repeat these runs in a
+  real browser window and on the M4.
 
 ## Testing and verification
 

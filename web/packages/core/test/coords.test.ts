@@ -1,55 +1,72 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
-  assertWorldPos,
-  CHUNK_SIZE,
+  ChunkLayout,
   chunkKey,
   chunkKeyToCoords,
-  localIndex,
+  MAX_CHUNK_BITS,
   MAX_CHUNK_COORD,
-  MAX_WORLD_COORD,
+  MIN_CHUNK_BITS,
   MIN_CHUNK_COORD,
-  MIN_WORLD_COORD,
-  toChunk,
-  toLocal,
 } from "../src/index.ts";
 
-const worldCoord = fc.integer({ min: MIN_WORLD_COORD, max: MAX_WORLD_COORD });
-const chunkCoord = fc.integer({ min: MIN_CHUNK_COORD, max: MAX_CHUNK_COORD });
+const allBits = Array.from(
+  { length: MAX_CHUNK_BITS - MIN_CHUNK_BITS + 1 },
+  (_, i) => MIN_CHUNK_BITS + i,
+);
 
-describe("chunk and local coordinates", () => {
+describe.each(allBits)("ChunkLayout with %i-bit chunks", (bits) => {
+  const L = new ChunkLayout(bits);
+  const worldCoord = fc.integer({ min: L.minWorld, max: L.maxWorld });
+
   it("floors negative coordinates into the chunk below", () => {
-    expect([toChunk(0), toLocal(0)]).toEqual([0, 0]);
-    expect([toChunk(31), toLocal(31)]).toEqual([0, 31]);
-    expect([toChunk(32), toLocal(32)]).toEqual([1, 0]);
-    expect([toChunk(-1), toLocal(-1)]).toEqual([-1, 31]);
-    expect([toChunk(-32), toLocal(-32)]).toEqual([-1, 0]);
-    expect([toChunk(-33), toLocal(-33)]).toEqual([-2, 31]);
+    expect([L.toChunk(0), L.toLocal(0)]).toEqual([0, 0]);
+    expect([L.toChunk(L.size - 1), L.toLocal(L.size - 1)]).toEqual([0, L.size - 1]);
+    expect([L.toChunk(L.size), L.toLocal(L.size)]).toEqual([1, 0]);
+    expect([L.toChunk(-1), L.toLocal(-1)]).toEqual([-1, L.size - 1]);
+    expect([L.toChunk(-L.size), L.toLocal(-L.size)]).toEqual([-1, 0]);
+    expect([L.toChunk(-L.size - 1), L.toLocal(-L.size - 1)]).toEqual([-2, L.size - 1]);
   });
 
   it("splits every world coordinate losslessly", () => {
     fc.assert(
       fc.property(worldCoord, (v) => {
-        expect(toChunk(v) * CHUNK_SIZE + toLocal(v)).toBe(v);
+        expect(L.toChunk(v) * L.size + L.toLocal(v)).toBe(v);
       }),
     );
   });
 
   it("gives each local position its own index", () => {
-    const seen = new Set<number>();
-    for (let y = 0; y < CHUNK_SIZE; y++) {
-      for (let z = 0; z < CHUNK_SIZE; z++) {
-        for (let x = 0; x < CHUNK_SIZE; x++) {
-          seen.add(localIndex(x, y, z));
+    const seen = new Uint8Array(L.volume);
+    for (let y = 0; y < L.size; y++) {
+      for (let z = 0; z < L.size; z++) {
+        for (let x = 0; x < L.size; x++) {
+          seen[L.localIndex(x, y, z)] = (seen[L.localIndex(x, y, z)] ?? 0) + 1;
         }
       }
     }
-    expect(seen.size).toBe(CHUNK_SIZE ** 3);
-    expect(Math.max(...seen)).toBe(CHUNK_SIZE ** 3 - 1);
+    expect(seen.every((n) => n === 1)).toBe(true);
+  });
+
+  it("accepts the edges of the world and rejects anything past them or fractional", () => {
+    expect(() => L.assertWorldPos(L.minWorld, 0, L.maxWorld)).not.toThrow();
+    expect(() => L.assertWorldPos(L.maxWorld + 1, 0, 0)).toThrow(RangeError);
+    expect(() => L.assertWorldPos(0, L.minWorld - 1, 0)).toThrow(RangeError);
+    expect(() => L.assertWorldPos(0, 0, 0.5)).toThrow(RangeError);
+  });
+});
+
+describe("ChunkLayout", () => {
+  it("rejects chunk sizes outside the supported range", () => {
+    expect(() => new ChunkLayout(MIN_CHUNK_BITS - 1)).toThrow(RangeError);
+    expect(() => new ChunkLayout(MAX_CHUNK_BITS + 1)).toThrow(RangeError);
+    expect(() => new ChunkLayout(4.5)).toThrow(RangeError);
   });
 });
 
 describe("chunk keys", () => {
+  const chunkCoord = fc.integer({ min: MIN_CHUNK_COORD, max: MAX_CHUNK_COORD });
+
   it("round-trip every chunk coordinate", () => {
     fc.assert(
       fc.property(chunkCoord, chunkCoord, chunkCoord, (cx, cy, cz) => {
@@ -58,14 +75,5 @@ describe("chunk keys", () => {
         expect(chunkKeyToCoords(key)).toEqual([cx, cy, cz]);
       }),
     );
-  });
-});
-
-describe("world bounds", () => {
-  it("accepts the edges and rejects anything past them or fractional", () => {
-    expect(() => assertWorldPos(MIN_WORLD_COORD, 0, MAX_WORLD_COORD)).not.toThrow();
-    expect(() => assertWorldPos(MAX_WORLD_COORD + 1, 0, 0)).toThrow(RangeError);
-    expect(() => assertWorldPos(0, MIN_WORLD_COORD - 1, 0)).toThrow(RangeError);
-    expect(() => assertWorldPos(0, 0, 0.5)).toThrow(RangeError);
   });
 });

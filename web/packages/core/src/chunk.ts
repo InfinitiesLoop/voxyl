@@ -1,10 +1,13 @@
 import { EMPTY_ID } from "./cell-state.ts";
-import { CHUNK_VOLUME } from "./coords.ts";
 
-/** A dense 32x32x32 block of cell-state ids. Index with localIndex(). */
+/** A dense cubic block of cell-state ids. Index with ChunkLayout.localIndex(). */
 export class Chunk {
-  readonly cells = new Uint16Array(CHUNK_VOLUME);
+  readonly cells: Uint16Array;
   #count = 0;
+
+  constructor(volume: number) {
+    this.cells = new Uint16Array(volume);
+  }
 
   /** Number of occupied cells. */
   get count(): number {
