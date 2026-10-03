@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // No DOM and no Node types: core must run unchanged in the browser, a worker and the server.
+    "lib": ["ES2023"],
+    "types": []
+  },
+  "include": ["src", "test"]
+}

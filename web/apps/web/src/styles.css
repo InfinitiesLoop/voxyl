@@ -1,0 +1,59 @@
+:root {
+  --bg: #15171b;
+  --panel: rgb(30 33 38 / 0.85);
+  --text: #e6e8eb;
+  --text-quiet: #9aa0a8;
+  --accent: #22d3ee;
+  color-scheme: dark;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+}
+
+.viewport {
+  position: absolute;
+  inset: 0;
+}
+
+.viewport canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.hud {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  gap: 16px;
+  align-items: baseline;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 13px;
+  color: var(--text-quiet);
+}
+
+.hud strong {
+  color: var(--accent);
+  font-size: 15px;
+  letter-spacing: 0.02em;
+}

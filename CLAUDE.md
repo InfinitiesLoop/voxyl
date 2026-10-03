@@ -50,6 +50,20 @@ tools/              — validate-scripts.sh
 
 ---
 
+## Web version (`web/`)
+
+Voxyl is being ported to a TypeScript web app in gated phases; the plan, phase status and
+decisions live in `.plans/web-migration.md`. All web code stays inside the top-level `web/`
+folder (a pnpm workspace with its own `README.md`). The principles above apply unchanged.
+
+- Needs Node 24+ and pnpm. From `web/`: `pnpm install`, `pnpm dev`.
+- **Before committing a web change, run `pnpm check`** (Biome lint, `tsc` typecheck per package,
+  Vitest) from `web/`. The Godot validate/test scripts are only needed when GDScript changes.
+- `packages/core` must stay free of DOM and Node APIs; its tsconfig enforces this.
+- `web/.gdignore` stops Godot scanning `node_modules`; never remove it.
+
+---
+
 ## Claude's Role
 
 Challenge direction when it risks compromising the principles above. This isn't about second-guessing every task — routine work (bug fixes, commits, refactors) doesn't need interrogation. But when a proposed feature, shortcut, or architectural decision would undermine the separation of concerns, the view-agnostic model, or the voxel-agnostic identity of the project, push back before implementing.
