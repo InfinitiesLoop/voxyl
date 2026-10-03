@@ -10,7 +10,7 @@ export const WORLD_KINDS: readonly { kind: WorldKind; label: string }[] = [
   { kind: "city-20m", label: "City, 20M cells" },
 ];
 
-export const CHUNK_SIZES = [16, 32, 64] as const;
+export const CHUNK_SIZES = [16, 32, 64, 128] as const;
 
 export interface BuiltWorld {
   readonly world: World;

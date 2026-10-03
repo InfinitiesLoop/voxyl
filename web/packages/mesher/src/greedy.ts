@@ -19,7 +19,7 @@ export interface ChunkMesh {
   /**
    * QUAD_BYTES per quad: x, y, z (the chunk-local cell the quad starts at), face, w (cells
    * along the face's U axis), h (cells along V), then the cell-state id as two bytes, low
-   * first. Positions and sizes fit in a byte because chunks are at most 64 cells.
+   * first. Positions and sizes fit in a byte because chunks are at most 128 cells.
    */
   readonly quads: Uint8Array;
   readonly quadCount: number;

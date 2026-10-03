@@ -4,8 +4,11 @@
 
 export const DEFAULT_CHUNK_BITS = 5;
 export const MIN_CHUNK_BITS = 3;
-/** 64-cell chunks at most: the mesher packs chunk-local coordinates and quad sizes into bytes. */
-export const MAX_CHUNK_BITS = 6;
+/**
+ * 128-cell chunks at most: the mesher packs chunk-local coordinates (0..127) and quad sizes
+ * (1..128) into bytes, so 256 would not fit.
+ */
+export const MAX_CHUNK_BITS = 7;
 
 // Chunk keys pack three 17-bit chunk coordinates into one safe integer (51 bits), so the chunk
 // map is keyed by numbers, not strings. Keys don't depend on chunk size.

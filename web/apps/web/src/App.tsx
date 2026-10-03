@@ -18,7 +18,7 @@ function readSettings(): Settings {
   const palette = PALETTES.findIndex((p) => p.name.toLowerCase() === params.get("palette"));
   return {
     world,
-    chunk: (CHUNK_SIZES as readonly number[]).includes(chunk) ? chunk : 32,
+    chunk: (CHUNK_SIZES as readonly number[]).includes(chunk) ? chunk : 64,
     palette: Math.max(0, palette),
   };
 }

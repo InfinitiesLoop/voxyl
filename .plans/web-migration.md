@@ -278,10 +278,22 @@ frame pacing is rougher than a real browser window, so treat frame p95 as pessim
 - **Packed quads are tiny.** 5M cells make 0.68M quads, 5 MB on the GPU at 8 bytes a quad.
   Dense chunk storage (89 MB at 5M cells, 32³) is the bigger memory cost; palette-compressed
   or uniform chunks can cut it later.
-- **Next: render batches.** Keep mesh chunks small for cheap edits (32³), and draw groups of
-  chunks (for example a 128-cell cube) from one buffer, so draw count tracks visible regions,
-  not chunks. Quad coordinates still fit in a byte at 128 cells. Then repeat these runs in a
-  real browser window and on the M4.
+- **Real Chrome agrees** (user's run, 3840x1906, 60 Hz display, B580): at 64³ the flight holds
+  16.7 ms p50 and p95 with 2.6 ms main thread, single edits land in one frame (16.6 ms p50),
+  and a 1M-cell fill is visible in 35 ms. 32³ drops frames (9.7 ms main thread, p95 33 ms).
+  16³ is unusable (81 ms main thread; some frames stalled for seconds while three set up
+  thousands of meshes).
+- **128³ is past the sweet spot** (headless, 5M city): draws fall to 90 and main thread to
+  1.1 ms, but frame rate was already capped at 60, while edits slow to 50 ms (3 frames) and
+  fills to 84 ms. Meshing scans the whole chunk volume, empty air included, so a 128³ chunk
+  takes about 38 ms to remesh, and dense storage grows to 364 MB at 5M cells and 1.6 GB at 20M.
+  128 is also the largest size the byte-packed quad format can address.
+- **Two knobs, not one.** Chunk size trades edit cost and memory against draw count only
+  because each chunk is its own draw. The app now defaults to 64³, the best single setting.
+- **Next: render batches.** Keep mesh chunks at 32³ or 64³ for cheap edits, and draw groups of
+  chunks (for example a 128- or 256-cell region) from one buffer, so draw count tracks
+  regions, not chunks. Separately, make chunk storage sparse-friendly (empty and uniform
+  chunks, palette-packed cells) so memory tracks content, not volume. Then repeat on the M4.
 
 ## Testing and verification
 
