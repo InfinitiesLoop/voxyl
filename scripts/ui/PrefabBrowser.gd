@@ -135,7 +135,7 @@ func _rebuild_detail() -> void:
 	_detail.add_child(edit)
 
 	var export_btn := Button.new()
-	export_btn.text = "Export to Schematica…"
+	export_btn.text = "Export to schematic…"
 	export_btn.tooltip_text = "Write this prefab out as a real .schematic file (blocks/parts with a confirmed Minecraft identity only)"
 	export_btn.pressed.connect(func(): SaveRegionDialog.open_export_prefab(self, p))
 	_detail.add_child(export_btn)

@@ -4143,7 +4143,7 @@ func _refresh_selection_overlay() -> void:
 	prefab_btn.tooltip_text = "Keep this region as a named prefab you can place again in any project"
 	prefab_btn.pressed.connect(func(): SaveRegionDialog.open(self))
 	content.add_child(prefab_btn)
-	var export_btn := _overlay_button("Export to Schematica…")
+	var export_btn := _overlay_button("Export to schematic…")
 	export_btn.tooltip_text = "Write this region out as a real .schematic file (blocks/parts with a confirmed Minecraft identity only)"
 	export_btn.pressed.connect(func(): SaveRegionDialog.open_export_region(self))
 	content.add_child(export_btn)

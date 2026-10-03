@@ -71,12 +71,52 @@ static func turns_between(from_north: String, to_north: String) -> int:
 func export_turns() -> int:
 	return turns_between(north_dir, "north")
 
-# Cuboid region selection (the Select tool), persisted as two opposite corners + a flag —
-# cheap, and enough to restore the exact box. Like layout/hotbar this is project-tied
+# Region selection (the Select tool), persisted as two opposite corners + a flag —
+# enough to restore a plain box (a narrowed one adds the fields below). Like layout/hotbar this
+# is project-tied
 # editor state, not voxel data: it names positions, never a material.
 @export var has_selection: bool = false
 @export var selection_min: Vector3i = Vector3i.ZERO
 @export var selection_max: Vector3i = Vector3i.ZERO
+
+# The rest of a narrowed selection, so it survives a restart as exactly what it was: a
+# whitelist/blacklist, and for a sparse one (grow/shrink/combine/structure_find) its cells.
+# The corners above are then just the cells' bounding box. The cells are packed as x,y,z
+# int32 triples and zstd-compressed (a selection can hold millions); empty = a plain box.
+@export var selection_filter: Dictionary = {}
+@export var selection_cells_packed: PackedByteArray = PackedByteArray()
+@export var selection_cells_bytes: int = 0   # size before compression, needed to unpack
+
+# Remember a sparse selection's cells (Dictionary[Vector3i, true]), or null for a plain box.
+func store_selection_cells(mask: Variant) -> void:
+	selection_cells_packed = PackedByteArray()
+	selection_cells_bytes = 0
+	if mask == null or (mask as Dictionary).is_empty():
+		return
+	var flat := PackedInt32Array()
+	flat.resize((mask as Dictionary).size() * 3)
+	var i := 0
+	for p: Vector3i in mask:
+		flat[i] = p.x
+		flat[i + 1] = p.y
+		flat[i + 2] = p.z
+		i += 3
+	var raw := flat.to_byte_array()
+	selection_cells_bytes = raw.size()
+	selection_cells_packed = raw.compress(FileAccess.COMPRESSION_ZSTD)
+
+# The remembered sparse selection as Dictionary[Vector3i, true], or null when there is none.
+func load_selection_cells() -> Variant:
+	if selection_cells_packed.is_empty() or selection_cells_bytes <= 0:
+		return null
+	var raw := selection_cells_packed.decompress(selection_cells_bytes, FileAccess.COMPRESSION_ZSTD)
+	if raw.size() != selection_cells_bytes:
+		return null
+	var flat := raw.to_int32_array()
+	var mask := {}
+	for i in range(0, flat.size() - 2, 3):
+		mask[Vector3i(flat[i], flat[i + 1], flat[i + 2])] = true
+	return mask
 
 # The cutaway box (see VoxelWorld.set_cutaway): cells inside it are hidden from the 3D views
 # so you can see and build inside. Editor state like the selection, never voxel data.

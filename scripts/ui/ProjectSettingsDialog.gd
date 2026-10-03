@@ -46,7 +46,7 @@ func _ready() -> void:
 	north_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	north_col.add_theme_constant_override("separation", 6)
 	north_row.add_child(north_col)
-	north_col.add_child(_caption("Which of the project's directions points toward the world's north. The compass in each 3D view follows it, and north stays north wherever a build leaves or enters: prefabs and copies remember it and are turned to the destination project's, and Export to Schematica turns the build so this side faces the game's north. The tools' own direction words (north = −Z, …) keep meaning the project's axes."))
+	north_col.add_child(_caption("Which of the project's directions points toward the world's north. The compass in each 3D view follows it, and north stays north wherever a build leaves or enters: prefabs and copies remember it and are turned to the destination project's, and Export to schematic turns the build so this side faces the game's north. The tools' own direction words (north = −Z, …) keep meaning the project's axes."))
 	_north = OptionButton.new()
 	for pair in _NORTHS:
 		_north.add_item(pair[1])

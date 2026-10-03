@@ -93,6 +93,10 @@ var selection_mask = null  # Dictionary[Vector3i, true], or null for a plain box
 # Show only the selection in the 3D views (everything else hidden). A view setting rather than
 # project data: transient, and dropped with the selection. See set_isolate_selection.
 var isolate_selection: bool = false
+# The mask last packed into the project (see _flush_save), so an unchanged one is not re-packed
+# on every autosave; and which project that was packed into.
+var _packed_selection_mask: Variant = null
+var _packed_selection_for: VoxelProject = null
 const _FACE_NEIGHBORS: Array[Vector3i] = [
 	Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
 	Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1),
@@ -193,6 +197,11 @@ func _flush_save() -> void:
 	active_project.has_selection = has_selection
 	active_project.selection_min = selection_min
 	active_project.selection_max = selection_max
+	active_project.selection_filter = selection_filter.duplicate(true)
+	if not is_same(selection_mask, _packed_selection_mask) or _packed_selection_for != active_project:
+		active_project.store_selection_cells(selection_mask)   # packing a big set is slow: only when it changed
+		_packed_selection_mask = selection_mask
+		_packed_selection_for = active_project
 	active_project.has_cutaway = has_cutaway
 	active_project.cutaway_min = cutaway_min
 	active_project.cutaway_max = cutaway_max
@@ -291,13 +300,16 @@ func open(project: VoxelProject) -> void:
 		project.data.ensure_loaded()
 	_semantic_appearance_baseline_project = null  # force a fresh baseline under the new stack
 	_load_hotbar_from_project()
-	# Restore the saved region selection (transient anchor/filter/mask always start clear).
+	# Restore the saved region selection, filter and (if it was sparse) its exact cells; only the
+	# half-made first corner starts clear.
 	has_selection = project.has_selection
 	selection_min = project.selection_min
 	selection_max = project.selection_max
 	_selection_anchor = null
-	selection_filter = {}
-	selection_mask = null
+	selection_filter = project.selection_filter.duplicate(true)
+	selection_mask = project.load_selection_cells() if project.has_selection else null
+	_packed_selection_mask = selection_mask
+	_packed_selection_for = project
 	set_isolate_selection(false)
 	has_cutaway = project.has_cutaway
 	cutaway_min = project.cutaway_min

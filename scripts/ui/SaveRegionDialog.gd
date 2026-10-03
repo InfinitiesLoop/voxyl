@@ -6,7 +6,7 @@ extends ConfirmationDialog
 # somewhere":
 #   - "Save selection as prefab…" (Ctrl+P, or the Select tool's overlay): name the selected
 #     region, pick its handle, tag it, save it into the workspace.
-#   - "Export to Schematica…" (the same overlay, or a saved prefab's own detail panel):
+#   - "Export to schematic…" (the same overlay, or a saved prefab's own detail panel):
 #     write the kept cells out as a real .schematic file on disk, via SchematicaExporter.
 # The preview and the include/exclude/trim controls are identical either way; only the
 # prefab-only fields (name/handle/tags) and the final commit step differ by `_mode`. North is
@@ -92,9 +92,9 @@ static func _require_selection(host: Node) -> bool:
 	return false
 
 func _start() -> void:
-	title = "Export to Schematica" if _mode == DialogMode.EXPORT else "Save selection as prefab"
+	title = "Export to schematic" if _mode == DialogMode.EXPORT else "Save selection as prefab"
 	if _source_prefab != null:
-		title = "Export \"%s\" to Schematica" % _source_prefab.name
+		title = "Export \"%s\" to schematic" % _source_prefab.name
 	ok_button_text = "Export…" if _mode == DialogMode.EXPORT else "Save"
 	var layout := HBoxContainer.new()
 	layout.add_theme_constant_override("separation", 16)
@@ -360,7 +360,7 @@ static func _pick_export_path(root: Node, suggested_name: String, export_cb: Cal
 	dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
 	dialog.use_native_dialog = true
 	dialog.size = Vector2i(700, 500)
-	dialog.filters = PackedStringArray(["*.schematic ; Schematica files"])
+	dialog.filters = PackedStringArray(["*.schematic ; Schematic files"])
 	dialog.current_file = _safe_filename(suggested_name) + ".schematic"
 	# Open where the last export went; the first time, in Documents.
 	var start := AppSettings.last_dir(_EXPORT_DIR_KEY, OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS))
@@ -412,7 +412,7 @@ static func _show_export_report(root: Node, path: String, report: Dictionary) ->
 			warn_lines.append("  %s  ×%d" % [sem, unmapped[sem]])
 		if empty_parts > 0:
 			warn_lines.append("  %d part-cell(s) where nothing in them resolved to a real block" % empty_parts)
-	_show_message(root, "Exported to Schematica", lines, warn_lines)
+	_show_message(root, "Exported to schematic", lines, warn_lines)
 
 # A fixed-width AcceptDialog: every wrapping Label gets an explicit width (see _caption
 # above) — without one, a Label measures its height at zero width before layout ever runs,

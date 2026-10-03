@@ -657,6 +657,25 @@ func _test_selection() -> void:
 	_check("every change signals the views", cut_signals[0] == 6)
 	VoxelWorld.cutaway_changed.disconnect(on_cut)
 
+	# A sparse selection (and its filter) is saved with the project and comes back as itself.
+	var sparse := {Vector3i(0, 0, 0): true, Vector3i(5, 2, 1): true, Vector3i(-3, 4, 9): true}
+	VoxelWorld.set_selection_cells(sparse, ["Base"], [])
+	VoxelWorld.save_active_project()
+	VoxelWorld.clear_selection()
+	_check("(cleared before reopening)", not VoxelWorld.has_selection)
+	VoxelWorld.open(project)
+	_check("reopening restores a sparse selection's exact cells",
+		VoxelWorld.has_selection and VoxelWorld.selection_mask != null and VoxelWorld.selection_mask.size() == 3
+		and VoxelWorld.selection_mask.has(Vector3i(-3, 4, 9)) and VoxelWorld.selection_mask.has(Vector3i(5, 2, 1)))
+	_check("...with its bounding box and filter",
+		VoxelWorld.selection_min == Vector3i(-3, 0, 0) and VoxelWorld.selection_max == Vector3i(5, 4, 9)
+		and VoxelWorld.selection_filter.get("whitelist", []) == ["Base"])
+	VoxelWorld.set_selection_box(Vector3i(1, 1, 1), Vector3i(2, 2, 2))
+	VoxelWorld.save_active_project()
+	VoxelWorld.open(project)
+	_check("a plain box comes back as a plain box, no stale cells",
+		VoxelWorld.has_selection and VoxelWorld.selection_mask == null and VoxelWorld.selection_filter.is_empty())
+
 	VoxelWorld.workspace.remove_project("Sel Test")
 	VoxelWorld.active_project = null
 	_rm_rf(ProjectStore.ROOT)
