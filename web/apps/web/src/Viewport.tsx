@@ -31,7 +31,7 @@ export function Viewport({ world, palette, onReady }: ViewportProps) {
     camera.position.set(22, 18, 26);
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.target.set(0, 7, 0);
-    controls.enableDamping = true;
+    // No damping: the camera stops the moment input stops.
 
     scene.add(new THREE.HemisphereLight("#dfe7ff", "#2a2d33", 1.4));
     const sun = new THREE.DirectionalLight("#ffffff", 2.2);
