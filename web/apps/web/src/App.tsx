@@ -49,11 +49,17 @@ export function App() {
     if (!host) return;
     const created = new Engine(host);
     let disposed = false;
-    created.init().then((b) => {
-      if (disposed) return;
-      setBackend(b);
-      setEngine(created);
-    });
+    created.init().then(
+      (b) => {
+        if (disposed || b === null) return;
+        setBackend(b);
+        setEngine(created);
+      },
+      (error: unknown) => {
+        // Disposing mid-start can make the renderer's init reject; only a live engine matters.
+        if (!disposed) throw error;
+      },
+    );
     const onLock = () => setLocked(document.pointerLockElement === created.renderer.domElement);
     document.addEventListener("pointerlockchange", onLock);
     return () => {

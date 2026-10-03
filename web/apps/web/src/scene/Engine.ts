@@ -76,6 +76,7 @@ export class Engine {
   #loadStart = 0;
   #initialMeshMs: number | null = null;
   #lastEditMs: number | null = null;
+  #disposed = false;
 
   constructor(host: HTMLElement) {
     this.#host = host;
@@ -88,8 +89,12 @@ export class Engine {
     canvas.addEventListener("contextmenu", (e) => e.preventDefault(), { signal });
   }
 
-  async init(): Promise<Backend> {
+  /** Starts the renderer. Resolves to null if the engine was disposed while it started. */
+  async init(): Promise<Backend | null> {
     await this.renderer.init();
+    // React's development mode mounts, disposes and remounts: an engine disposed during this
+    // await must not attach its canvas, or that dead canvas covers the live one.
+    if (this.#disposed) return null;
     this.#host.appendChild(this.renderer.domElement);
     this.#observer.observe(this.#host);
     this.#resize();
@@ -215,6 +220,7 @@ export class Engine {
   }
 
   dispose(): void {
+    this.#disposed = true;
     this.renderer.setAnimationLoop(null);
     this.#abort.abort();
     this.#observer.disconnect();
