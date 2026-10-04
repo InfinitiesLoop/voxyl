@@ -4,8 +4,8 @@ Status: **Plan accepted** (2026-10-03). **Phase 0 in progress**: chunked World w
 by content, greedy mesher in a worker pool, packed-quad GPU format, city fixtures, the in-app
 benchmark, and Minecraft-style lighting with two renderers, baked into quads or read from a
 light volume (see [`web-lighting.md`](web-lighting.md)), are built. Numbers are under
-"Phase 0 findings" and in the lighting plan. Default chunk size is 64³; draw batching is
-deferred.
+"Phase 0 findings" and in the lighting plan; what is left and what comes next is under
+"Phase 0 status". Default chunk size is 64³; draw batching is deferred.
 Reviewed as a Claude Doc
 (https://claude.ai/code/artifact/98f31d14-989b-4c28-a24c-a3d7b8630a21); this file is now the
 working copy, so update it here as phases land.
@@ -293,10 +293,41 @@ frame pacing is rougher than a real browser window, so treat frame p95 as pessim
   128 is also the largest size the byte-packed quad format can address.
 - **Two knobs, not one.** Chunk size trades edit cost and memory against draw count only
   because each chunk is its own draw. The app now defaults to 64³, the best single setting.
-- **Next: render batches.** Keep mesh chunks at 32³ or 64³ for cheap edits, and draw groups of
-  chunks (for example a 128- or 256-cell region) from one buffer, so draw count tracks
-  regions, not chunks. Separately, make chunk storage sparse-friendly (empty and uniform
-  chunks, palette-packed cells) so memory tracks content, not volume. Then repeat on the M4.
+- **Render batches are deferred.** At 64³ the draw count is fine. If it isn't on weaker
+  hardware, keep mesh chunks at 64³ and draw groups of chunks (a 128- or 256-cell region) from
+  one buffer, so draw count tracks regions, not chunks.
+- **Storage follows content** (done): bricks that are empty, uniform or palette-packed cut
+  chunk storage from 162 MB to 34 MB at 5M cells.
+- **Minecraft-style lighting works** and is a setting. Light read from a light volume in the
+  shader won over light baked into quads (7.4x fewer quads, one-frame edits, and the shader
+  is free at 4K on the B580). Details, numbers and its next steps are in
+  [`web-lighting.md`](web-lighting.md).
+
+### Phase 0 status (2026-10-04)
+
+Done and proven, all on the B580 (headless Edge plus the user's Chrome at 3840x1906):
+
+- [x] Chunked core with storage by content, raycast, cell-state interning (`packages/core`).
+- [x] Greedy mesher in a worker pool, 8-byte packed quads, palette lookup texture.
+- [x] Seeded city fixtures (1M, 5M, 20M cells) and the in-app benchmark (`Run benchmark`).
+- [x] 5M cells at 60 fps, p95 16.8 ms, with lighting on or off; one-frame edits.
+- [x] Minecraft-style light engine, Minecraft's lightmap, and the light volume renderer.
+- [x] `pnpm shot` to check the running dev server headless.
+
+Still open for the Phase 0 gate:
+
+- [ ] Run the benchmark on the MacBook M4 (the reference laptop for the gate).
+- [ ] ChatGPT widget WebSocket test: can a widget hold a socket to our relay?
+- [ ] Tier 1 CPU rasterizer prototype (agent screenshots).
+- [ ] Godot exporter for Conduit Factory, and a dense shaped-parts fixture.
+
+**Next steps, in order** (the user agreed on the first two on 2026-10-04):
+
+1. **World and light engine in a worker.** Full relights stop freezing the page, and light
+   slot copies (1.2 ms per chunk on the main thread today) move off it. See
+   [`web-lighting.md`](web-lighting.md), "Next steps", for the design questions.
+2. **Sparse light** on the CPU and GPU, then drop baked lighting.
+3. The open Phase 0 items above, M4 run first.
 
 ## Testing and verification
 

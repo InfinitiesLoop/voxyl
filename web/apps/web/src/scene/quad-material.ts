@@ -111,6 +111,16 @@ function minecraftLight(
   return clamp(mix(mix(clamped, lifted, uniforms.brightness), grey, 0.04), 0, 1);
 }
 
+/**
+ * Minecraft multiplies colours by shade, occlusion and light in sRGB, never linearising;
+ * three multiplies in linear light and encodes to sRGB afterwards, which lifts darks a lot
+ * (a 0.1 factor shows as about 0.35). Raising the combined factor to 2.2 makes the linear
+ * product display as Minecraft's: in its darkness you can barely see.
+ */
+function minecraftFactor(light: THREE.Node<"vec3">, shade: THREE.Node<"float">) {
+  return pow(light.mul(shade), vec3(2.2, 2.2, 2.2));
+}
+
 /** Lighting off: palette colour and a fixed shade per face. */
 export function createFlatMaterial(palette: THREE.Texture): THREE.MeshBasicNodeMaterial {
   const { face, position, color } = quadBasics(palette);
@@ -147,7 +157,7 @@ export function createVertexLitMaterial(
     vec3(1, 1, 1),
     minecraftLight(light.x, light.yzw, uniforms),
   );
-  material.colorNode = color.rgb.mul(shade).mul(occlusion).mul(lit);
+  material.colorNode = color.rgb.mul(minecraftFactor(lit, shade.mul(occlusion)));
   return material;
 }
 
@@ -220,6 +230,6 @@ export function createVolumeLitMaterial(
     vec3(1, 1, 1),
     minecraftLight(light.x, light.yzw, uniforms),
   );
-  material.colorNode = color.rgb.mul(shade).mul(occlusion).mul(lit);
+  material.colorNode = color.rgb.mul(minecraftFactor(lit, shade.mul(occlusion)));
   return material;
 }

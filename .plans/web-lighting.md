@@ -1,8 +1,10 @@
 # Voxyl Web — Storage by Content and Lighting
 
-Status: **Two lighting renderers built and measured** (2026-10-03). Storage by content, the
-light engine, Minecraft's lightmap, and both ways of drawing light (baked into quads, or read
-from a light volume) work end to end; numbers and next steps are under "Findings". Part of
+Status: **Light volume chosen** (2026-10-04). Storage by content, the light engine,
+Minecraft's lightmap, and both ways of drawing light (baked into quads, or read from a light
+volume) work end to end. The user approved the light volume as the renderer to keep, and the
+next two steps: the World and light engine in a worker, then sparse light. Numbers are under
+"Findings"; the next steps, with their open design questions, are at the end. Part of
 Phase 0 in [`web-migration.md`](web-migration.md).
 
 Lighting is a setting: `Off`, `Baked in meshes` (`vertex`) or `Light volume` (`volume`).
@@ -58,6 +60,12 @@ reads the way it does in a dark Minecraft world:
 - **Ambient occlusion** counts a blocking neighbour as 0.2 in a four-sample average (corner
   factors 1, 0.8, 0.6, 0.4) and multiplies the colour, separate from light.
 - **Face shade**: top 1, east/west 0.6, north/south 0.8, bottom 0.5.
+- **All of these multiply in sRGB, as in Minecraft.** Minecraft never linearises: it
+  multiplies texture colour by shade, occlusion and lightmap and shows the result. three
+  multiplies in linear light, which lifts darks a lot (Minecraft's darkness factor of 0.1
+  showed as about 0.35). The shader raises the combined factor to 2.2 before multiplying,
+  so the linear product displays as Minecraft's. This made darkness read as dark (the
+  user's second complaint: "in MC when it is fully dark you can barely see").
 - Emitting materials draw at full brightness (flagged in the palette texture's alpha).
 - Not copied: Minecraft's warm torch tint and flicker. An emitter's colour comes from its
   palette entry instead (principle 3), so a warm palette makes warm light.
@@ -102,6 +110,10 @@ at 1600x900 (frame time is capped by vsync, so GPU cost doesn't show yet).
 | 100k-cell fill | 33 ms | 452 ms | 421 ms |
 | 1M-cell fill / clear | 63 / 32 ms | 1.9 / 2.8 s | 2.0 / 3.1 s |
 
+- **Real Chrome at 4K agrees** (user's run, 3840x1906, B580, volume mode): flight 16.7 /
+  16.8 ms p50 / p95 with 3.7 ms main thread, so the 9-texel fragment shader costs nothing
+  visible at 4K; single edits 16.5 / 17.7 ms (one frame); roof hole 17 ms; initial mesh
+  1.7 s; 100k fill 388 ms; 1M fill / clear 1.9 / 2.5 s; GPU light 192 MB.
 - **The light volume does what it promised.** Quads stay at the unlit count (7.4x fewer,
   26x less quad memory than baked), meshing costs what it does unlit, and everyday edits
   show up in one frame instead of two.
@@ -118,22 +130,46 @@ at 1600x900 (frame time is capped by vsync, so GPU cost doesn't show yet).
 - Storage by content: 64³ chunk storage fell from 162 MB to 34 MB at 5M cells and from
   730 MB to 132 MB at 20M.
 
-**Recommendation:** make the light volume the lit renderer and drop baked light once the
-volume's memory is fixed. Baked light can't get its quad count back; the volume's costs
-are all fixable without changing what it draws.
+**Decision (user, 2026-10-04):** the light volume is the lit renderer. Baked light goes once
+the volume's memory is fixed (step 2). Baked light can't get its quad count back; the
+volume's costs are all fixable without changing what it draws. (When baked goes, the WebGL2
+fallback loses lighting, which currently falls back to baked; decide then whether to keep
+baked for WebGL2 or show WebGL2 unlit.)
 
-**Next, in order of payoff:**
+## Next steps
 
-1. Run the World and light engine in a worker. Full relights stop freezing the page, and
-   slot uploads become a GPU write.
-2. Sparse light: store light in bricks (8³ or 16³) on both sides, CPU and GPU, keeping only
-   bricks next to visible faces on the GPU, with a brick table instead of per-chunk slots.
-   This fixes the GPU memory and replaces the per-object uniform.
-3. Tighten the flood-fill inner loop (index arithmetic within a chunk). Sky light is 1.7 of
-   the 2.3 s full relight.
-4. Relight big fills as volumes: clear the box's light directly and seed only its surface.
-5. Maybe: intensity-plus-colour block light, so colored lamps keep their hue as they fade.
-6. Measure GPU time (timestamp queries) at 4K, and on the M4.
+In order. Steps 1 and 2 are agreed; the rest are ranked by payoff.
+
+1. **World and light engine in a worker.** Today `World`, `LightEngine`, full relights
+   (2.3-2.8 s, freezing the page) and slot copies (1.2 ms per chunk) all run on the main
+   thread. Move them to one "world worker"; the main thread keeps rendering, input and the
+   HUD. Design questions to settle first:
+   - How the main thread raycasts for mouse edits: ask the worker (one round trip, a frame of
+     latency) or keep a read-only mirror. Asking is simpler and is what agent tools will do.
+   - Who sends mesh jobs: the world worker can post padded snapshots straight to the mesh
+     workers over MessageChannels, so cell data never crosses the main thread.
+   - Light slots: the world worker copies padded light into transferable buffers; the main
+     thread only calls `writeTexture` (0.3 ms per chunk). WebGPU stays on the main thread.
+   - The edit API becomes messages (set cell, fill box, palette change), which is also the
+     shape the agent tools need (Phase 4), so design it as the core's command layer.
+   - SharedArrayBuffer (needs COOP/COEP headers in Vite and hosting) would allow zero-copy
+     reads; not needed for a first version.
+2. **Sparse light, CPU and GPU.** Light memory is 249 MB on the CPU and 178-192 MB on the GPU
+   at 5M cells, most of it never read: only cells in front of visible faces matter.
+   - CPU: store light in bricks like cells (8³ or 16³), with no brick where light equals its
+     default (open sky above the heightmap, or darkness).
+   - GPU: a pool of light bricks with a one-cell apron (so a fragment's 3 x 3 reads stay in
+     one brick), uploading only bricks that hold a cell in front of a visible face. The mesh
+     workers know which those are. A brick table (world brick coordinates to pool slot)
+     replaces per-chunk slots, pages and the per-object uniform.
+   - Then remove baked lighting (`vertex` mode, `LIT_QUAD_BYTES`, light in mesh jobs).
+3. **Faster flood fill.** Within a chunk, step to neighbours by index arithmetic instead of a
+   chunk lookup per neighbour. Sky light is 1.7 of the 2.3 s full relight.
+4. **Relight big fills as volumes.** Clear the box's light directly and seed only its
+   surface; 1M-cell fills take 2-3 s today, all of it in the light engine.
+5. **Measure on the M4**, and GPU time with timestamp queries.
+6. Maybe: intensity-plus-colour block light, so coloured lamps keep their hue as they fade
+   (a cyan lamp's pool has a blue rim today).
 
 ## Sources
 

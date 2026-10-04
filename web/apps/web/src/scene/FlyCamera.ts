@@ -14,7 +14,7 @@ const SPRINT = "Backslash";
 const HANDLED = new Set([...FORWARD, ...BACK, ...LEFT, ...RIGHT, ...UP, ...DOWN, SPRINT]);
 
 /** Up and down move this many times faster than flying level. */
-const VERTICAL_SPEED = 2;
+const VERTICAL_SPEED = 1.2;
 const LOOK_RADIANS_PER_PIXEL = 0.0022;
 const MAX_PITCH = Math.PI / 2 - 0.01;
 
@@ -25,7 +25,7 @@ export class FlyCamera {
   yaw = 0;
   pitch = 0;
   /** Base speed in cells per second. */
-  speed = 24;
+  speed = 30;
   #sprint = 0;
   readonly #keys = new Set<string>();
   readonly #element: HTMLElement;
