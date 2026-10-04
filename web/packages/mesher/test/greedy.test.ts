@@ -1,7 +1,7 @@
 import { chunkKeyToCoords, World } from "@voxyl/core";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { FACES, meshChunk, paddedVolume, QUAD_BYTES } from "../src/index.ts";
+import { FACES, LIT_QUAD_BYTES, meshChunk, paddedVolume, QUAD_BYTES } from "../src/index.ts";
 
 const SKY = 0xf000;
 
@@ -13,13 +13,17 @@ interface Quad {
   w: number;
   h: number;
   id: number;
-  /** [sky, r, g, b] per corner. */
+  /** [sky, r, g, b] per corner; empty for unlit quads. */
   corners: number[][];
+  /** Ambient occlusion factor per corner, 0..255; empty for unlit quads. */
+  ao: number[];
 }
 
-function quadsOf(quads: Uint8Array, quadCount: number): Quad[] {
+function quadsOf(mesh: { quads: Uint8Array; quadCount: number; quadBytes: number }): Quad[] {
+  const { quads, quadCount, quadBytes } = mesh;
+  const lit = quadBytes === LIT_QUAD_BYTES;
   return Array.from({ length: quadCount }, (_, q) => {
-    const at = (i: number) => quads[q * QUAD_BYTES + i] ?? 0;
+    const at = (i: number) => quads[q * quadBytes + i] ?? 0;
     return {
       x: at(0),
       y: at(1),
@@ -28,12 +32,10 @@ function quadsOf(quads: Uint8Array, quadCount: number): Quad[] {
       w: at(4),
       h: at(5),
       id: at(6) | (at(7) << 8),
-      corners: [0, 1, 2, 3].map((k) => [
-        at(8 + k * 4),
-        at(9 + k * 4),
-        at(10 + k * 4),
-        at(11 + k * 4),
-      ]),
+      corners: lit
+        ? [0, 1, 2, 3].map((k) => [at(8 + k * 4), at(9 + k * 4), at(10 + k * 4), at(11 + k * 4)])
+        : [],
+      ao: lit ? [0, 1, 2, 3].map((k) => at(24 + k)) : [],
     };
   });
 }
@@ -53,8 +55,7 @@ function meshOrigin(world: World, light: ((x: number, y: number, z: number) => n
   }
   const opaque = new Uint8Array(world.states.size + 1).fill(1);
   opaque[0] = 0;
-  const { quads, quadCount } = meshChunk({ bits: L.bits, cells, light: lightArray, opaque });
-  return quadsOf(quads, quadCount);
+  return quadsOf(meshChunk({ bits: L.bits, cells, light: lightArray, opaque }));
 }
 
 describe("meshChunk", () => {
@@ -88,12 +89,15 @@ describe("meshChunk", () => {
     expect(meshOrigin(world, null)[0]?.id).toBe(0x1234);
   });
 
-  it("gives every corner full light when lighting is off", () => {
+  it("packs quads into QUAD_BYTES without light and LIT_QUAD_BYTES with it", () => {
     const world = new World({ chunkBits: 3 });
     world.set(2, 2, 2, { semantic: "Mass" });
-    for (const q of meshOrigin(world, null)) {
-      for (const c of q.corners) expect(c).toEqual([255, 255, 255, 255]);
-    }
+    const cells = world.copyPadded(0, 0, 0, new Uint16Array(paddedVolume(3)));
+    const plain = meshChunk({ bits: 3, cells, light: null, opaque: null });
+    expect([plain.quadBytes, plain.quads.length]).toEqual([QUAD_BYTES, 6 * QUAD_BYTES]);
+    const light = new Uint16Array(cells.length).fill(SKY);
+    const lit = meshChunk({ bits: 3, cells, light, opaque: new Uint8Array([0, 1]) });
+    expect([lit.quadBytes, lit.quads.length]).toEqual([LIT_QUAD_BYTES, 6 * LIT_QUAD_BYTES]);
   });
 
   it("averages the light of the cells around each corner", () => {
@@ -116,10 +120,11 @@ describe("meshChunk", () => {
     // The floor's top faces next to the block have darkened corners and can't all merge.
     const floorTop = quads.filter((q) => q.face === 2 && q.y === 0);
     expect(floorTop.length).toBeGreaterThan(1);
-    const darkest = Math.min(...floorTop.flatMap((q) => q.corners.map((c) => c[0] ?? 0)));
-    expect(darkest).toBeLessThan(255);
-    // Far from the block the floor stays fully lit.
-    expect(floorTop.some((q) => q.corners.every((c) => c[0] === 255))).toBe(true);
+    // One blocking neighbour takes 0.2 off, as in Minecraft; the light itself is untouched.
+    expect(Math.min(...floorTop.flatMap((q) => q.ao))).toBe(Math.round(0.8 * 255));
+    for (const q of floorTop) for (const c of q.corners) expect(c[0]).toBe(255);
+    // Far from the block the floor is unoccluded.
+    expect(floorTop.some((q) => q.ao.every((a) => a === 255))).toBe(true);
   });
 
   it("colours block light per channel", () => {
@@ -157,8 +162,7 @@ function meshedFaces(world: World, lit: boolean): Map<string, number> {
     world.copyPadded(cx, cy, cz, cells);
     // Arbitrary light that varies from cell to cell, to exercise merging around gradients.
     const light = lit ? cells.map((_, i) => ((i * 2654435761) >>> 0) & 0xf0f0) : null;
-    const { quads, quadCount } = meshChunk({ bits: L.bits, cells, light, opaque });
-    for (const q of quadsOf(quads, quadCount)) {
+    for (const q of quadsOf(meshChunk({ bits: L.bits, cells, light, opaque }))) {
       const face = FACES[q.face];
       if (!face) throw new Error(`bad face ${q.face}`);
       for (let du = 0; du < q.w; du++) {

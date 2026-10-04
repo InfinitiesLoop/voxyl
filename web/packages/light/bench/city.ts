@@ -52,14 +52,19 @@ for (const target of targets) {
     let unlitQuads = 0;
     let litQuads = 0;
     let litMeshMs = 0;
+    let gpuCopyMs = 0;
     for (const key of world.chunkKeys()) {
       const [kx, ky, kz] = chunkKeyToCoords(key);
       world.copyPadded(kx, ky, kz, cells);
       unlitQuads += meshChunk({ bits, cells, light: null, opaque: null }).quadCount;
       engine.copyPadded(kx, ky, kz, lightCells);
-      const start = performance.now();
+      let start = performance.now();
       litQuads += meshChunk({ bits, cells, light: lightCells, opaque: opaqueTable }).quadCount;
       litMeshMs += performance.now() - start;
+      // What the light volume uploads per chunk: light with light-blocking cells marked.
+      start = performance.now();
+      engine.copyPadded(kx, ky, kz, lightCells, true);
+      gpuCopyMs += performance.now() - start;
     }
 
     world.recordChanges(true);
@@ -146,6 +151,7 @@ for (const target of targets) {
         `light all ${ms(fullMs)} (scan ${ms(engine.lastTimings.scanMs)}, sky ${ms(engine.lastTimings.skyMs)}, block ${ms(engine.lastTimings.blockMs)})`,
         `memory ${memoryMb.toFixed(0)} MB (${lightChunks} of ${world.chunkCount} chunks hold light arrays)`,
         `quads ${(unlitQuads / 1e6).toFixed(2)}M unlit, ${(litQuads / 1e6).toFixed(2)}M lit (lit meshing ${ms(litMeshMs / world.chunkCount)} per chunk)`,
+        `light volume copy ${ms(gpuCopyMs / world.chunkCount)} per chunk`,
         `single edit p50 ${ms(pct(single, 0.5))} p95 ${ms(pct(single, 0.95))} max ${ms(Math.max(...single))}, remesh p50 ${pct(dirtyCounts, 0.5)} chunks`,
         `roof hole: ${roof.join(", ") || "no roof found"}`,
         `bulk: ${bulk.join(", ")}`,

@@ -1,6 +1,7 @@
 import { EMPTY_ID, raycast, type World } from "@voxyl/core";
 import { mulberry32 } from "@voxyl/fixtures";
 import * as THREE from "three/webgpu";
+import type { LightingMode } from "../scene/ChunkRenderer.ts";
 import { type Engine, percentile } from "../scene/Engine.ts";
 
 export interface Distribution {
@@ -25,14 +26,18 @@ export interface BenchResult {
   readonly userAgent: string;
   readonly viewport: string;
   readonly world: string;
-  readonly lighting: boolean;
+  readonly lighting: LightingMode;
   /** Time to light the whole world, with lighting on. */
   readonly lightAllMs: number | null;
+  /** Light engine memory (CPU). */
   readonly lightMb: number;
+  /** Light volume memory (GPU), with volume lighting. */
+  readonly lightGpuMb: number;
   readonly cells: number;
   readonly chunkSize: number;
   readonly chunks: number;
   readonly quads: number;
+  readonly quadMb: number;
   readonly workers: number;
   readonly generateMs: number;
   readonly initialMeshMs: number | null;
@@ -55,7 +60,7 @@ const SINGLE_EDITS = 100;
  */
 export async function runBench(
   engine: Engine,
-  meta: { backend: string; world: string; lighting: boolean },
+  meta: { backend: string; world: string; lighting: LightingMode },
   progress: (step: string) => void,
 ): Promise<BenchResult> {
   const built = engine.built;
@@ -189,10 +194,12 @@ export async function runBench(
     lighting: meta.lighting,
     lightAllMs: stats.chunks?.lightAllMs ?? null,
     lightMb: stats.chunks?.lightMb ?? 0,
+    lightGpuMb: stats.chunks?.lightGpuMb ?? 0,
     cells: world.cellCount,
     chunkSize: world.layout.size,
     chunks: world.chunkCount,
     quads: stats.chunks?.quads ?? 0,
+    quadMb: stats.quadMb,
     workers: stats.chunks?.workers ?? 0,
     generateMs: built.generateMs,
     initialMeshMs: stats.initialMeshMs,

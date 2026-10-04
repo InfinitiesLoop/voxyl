@@ -13,6 +13,8 @@ const DOWN = ["ShiftLeft", "ShiftRight", "Slash"];
 const SPRINT = "Backslash";
 const HANDLED = new Set([...FORWARD, ...BACK, ...LEFT, ...RIGHT, ...UP, ...DOWN, SPRINT]);
 
+/** Up and down move this many times faster than flying level. */
+const VERTICAL_SPEED = 2;
 const LOOK_RADIANS_PER_PIXEL = 0.0022;
 const MAX_PITCH = Math.PI / 2 - 0.01;
 
@@ -79,12 +81,14 @@ export class FlyCamera {
     if (held(BACK)) move.sub(forward);
     if (held(RIGHT)) move.add(right);
     if (held(LEFT)) move.sub(right);
-    if (held(UP)) move.y += 1;
-    if (held(DOWN)) move.y -= 1;
-    if (move.lengthSq() === 0) {
+    const rise = (held(UP) ? 1 : 0) - (held(DOWN) ? 1 : 0);
+    if (move.lengthSq() === 0 && rise === 0) {
       this.#sprint = 0;
     } else {
-      move.normalize().multiplyScalar(this.speed * 2 ** this.#sprint * dt);
+      // Climbing is its own axis, so it keeps full speed while moving sideways too.
+      const step = this.speed * 2 ** this.#sprint * dt;
+      if (move.lengthSq() > 0) move.normalize().multiplyScalar(step);
+      move.y = rise * step * VERTICAL_SPEED;
       this.position.add(move);
     }
     this.#apply();

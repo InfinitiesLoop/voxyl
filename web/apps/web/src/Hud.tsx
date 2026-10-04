@@ -9,17 +9,43 @@ const ms = (v: number | null | undefined, digits = 1) =>
 const count = (v: number) =>
   v >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : String(v);
 
+/** Daylight as a time of day: 0 is midnight, 100 noon. */
+function daylightLabel(daylight: number): string {
+  if (daylight === 0) return "midnight";
+  if (daylight === 100) return "noon";
+  return `${daylight}%`;
+}
+
+/** Minecraft's names for the ends and middle of its Brightness slider. */
+function brightnessLabel(brightness: number): string {
+  if (brightness === 0) return "Moody";
+  if (brightness === 50) return "default";
+  if (brightness === 100) return "Bright";
+  return `${brightness}%`;
+}
+
 interface HudProps {
   backend: Backend | null;
   stats: EngineStats | null;
   settings: Settings;
   onSettings: (s: Settings) => void;
   busy: boolean;
+  /** False when the renderer fell back to WebGL, which has no light volumes. */
+  volumeLighting: boolean;
   onBench: () => void;
   onHome: () => void;
 }
 
-export function Hud({ backend, stats, settings, onSettings, busy, onBench, onHome }: HudProps) {
+export function Hud({
+  backend,
+  stats,
+  settings,
+  onSettings,
+  busy,
+  volumeLighting,
+  onBench,
+  onHome,
+}: HudProps) {
   const f = stats?.frame;
   const c = stats?.chunks;
   return (
@@ -75,23 +101,39 @@ export function Hud({ backend, stats, settings, onSettings, busy, onBench, onHom
         <label>
           Lighting
           <select
-            value={settings.lighting ? "on" : "off"}
+            value={settings.lighting}
             disabled={busy}
-            onChange={(e) => onSettings({ ...settings, lighting: e.target.value === "on" })}
+            onChange={(e) =>
+              onSettings({ ...settings, lighting: e.target.value as Settings["lighting"] })
+            }
           >
             <option value="off">Off</option>
-            <option value="on">Smooth</option>
+            <option value="vertex">Baked in meshes</option>
+            <option value="volume" disabled={!volumeLighting}>
+              Light volume
+            </option>
           </select>
         </label>
         <label className="wide">
-          Daylight {settings.daylight}%
+          Time of day {daylightLabel(settings.daylight)}
           <input
             type="range"
             min={0}
             max={100}
             value={settings.daylight}
-            disabled={!settings.lighting}
+            disabled={settings.lighting === "off"}
             onChange={(e) => onSettings({ ...settings, daylight: Number(e.target.value) })}
+          />
+        </label>
+        <label className="wide">
+          Brightness {brightnessLabel(settings.brightness)}
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={settings.brightness}
+            disabled={settings.lighting === "off"}
+            onChange={(e) => onSettings({ ...settings, brightness: Number(e.target.value) })}
           />
         </label>
       </div>
@@ -127,7 +169,15 @@ export function Hud({ backend, stats, settings, onSettings, busy, onBench, onHom
             : "–"}
         </dd>
         <dt>Light</dt>
-        <dd>{c?.lighting ? `all ${ms(c.lightAllMs, 0)} · ${c.lightMb.toFixed(0)} MB` : "off"}</dd>
+        <dd>
+          {c && c.lighting !== "off"
+            ? `all ${ms(c.lightAllMs, 0)} · ${c.lightMb.toFixed(0)} MB${
+                c.lighting === "volume"
+                  ? ` · GPU ${c.lightGpuMb.toFixed(0)} MB · upload ${ms(c.lightUploadMs[0], 2)} + ${ms(c.lightUploadMs[1], 2)}/chunk`
+                  : ""
+              }`
+            : "off"}
+        </dd>
         <dt>Timing</dt>
         <dd>
           initial mesh {ms(stats?.initialMeshMs, 0)} · last edit {ms(stats?.lastEditMs)}
@@ -170,14 +220,16 @@ export function BenchPanel({ result, onClose }: { result: BenchResult; onClose: 
             <th>Initial mesh, all chunks</th>
             <td>
               {ms(result.initialMeshMs, 0)} ({count(result.chunks)} chunks, {count(result.quads)}{" "}
-              quads, {result.workers} workers)
+              quads in {result.quadMb.toFixed(0)} MB, {result.workers} workers)
             </td>
           </tr>
           <tr>
             <th>Light whole world</th>
             <td>
-              {result.lighting
-                ? `${ms(result.lightAllMs, 0)} · ${result.lightMb.toFixed(0)} MB`
+              {result.lighting !== "off"
+                ? `${ms(result.lightAllMs, 0)} · ${result.lightMb.toFixed(0)} MB${
+                    result.lighting === "volume" ? ` · GPU ${result.lightGpuMb.toFixed(0)} MB` : ""
+                  } (${result.lighting})`
                 : "lighting off"}
             </td>
           </tr>

@@ -2,9 +2,10 @@
 
 Status: **Plan accepted** (2026-10-03). **Phase 0 in progress**: chunked World with storage
 by content, greedy mesher in a worker pool, packed-quad GPU format, city fixtures, the in-app
-benchmark, and a first Minecraft-style lighting engine (see
-[`web-lighting.md`](web-lighting.md)) are built. Numbers are under "Phase 0 findings" and in
-the lighting plan. Default chunk size is 64³; draw batching is deferred.
+benchmark, and Minecraft-style lighting with two renderers, baked into quads or read from a
+light volume (see [`web-lighting.md`](web-lighting.md)), are built. Numbers are under
+"Phase 0 findings" and in the lighting plan. Default chunk size is 64³; draw batching is
+deferred.
 Reviewed as a Claude Doc
 (https://claude.ai/code/artifact/98f31d14-989b-4c28-a24c-a3d7b8630a21); this file is now the
 working copy, so update it here as phases land.
@@ -137,11 +138,11 @@ Vitest, Playwright and pnpm workspaces.
 built-in `CompressionStream`, so there are no codec dependencies. Library block types and models
 are JSON. Textures go into GPU texture arrays.
 
-**Lighting.** Phase 3 ships basic lighting: a directional sun plus baked ambient occlusion. The
-format is built for Minecraft-style light from day one. Each chunk reserves a light array
-(4-bit sky and 4-bit block light per cell), block types carry emission and opacity, and the
-mesher already reads light as a vertex attribute. Adding MC-style light later means a
-flood-fill pass in the mesher workers, with no format change.
+**Lighting.** Phase 0 already built Minecraft-style light (sky plus colored block light,
+flood-filled, incremental on edits) and Minecraft's lightmap, as a setting that can be
+switched off. Light is derived from cells and the palette and never saved, so the format
+carries no light. The lit renderer is likely to be a light volume read in the shader rather
+than light baked into quads; [`web-lighting.md`](web-lighting.md) has the comparison.
 
 **Accounts.** There is no native sign-up. A user starts as an anonymous record, keyed by a
 device token, the first time they save to the server. Signing in links a Google or Apple
@@ -341,7 +342,8 @@ host tool execution. Both are checked in Phase 0, before any port work.
   (Phase 0)
 - [ ] Which openly licensed texture set, or an original one, becomes the hosted default?
 - [ ] Should Codex and Claude Code connect to the hosted relay, a local relay, or both?
-- [x] Lighting at launch: basic lighting ships in Phase 3. The format reserves light channels,
-  so Minecraft-style light can follow without a migration.
+- [x] Lighting at launch: basic lighting ships in Phase 3, architected for Minecraft-style
+  light. (Phase 0 then built Minecraft-style light as a setting; light is derived and never
+  saved, so the format needs no light channels.)
 - [x] Accounts: anonymous projects come first. Linking-only accounts (Google, Apple, then Sign in
   with ChatGPT) upgrade them in place.

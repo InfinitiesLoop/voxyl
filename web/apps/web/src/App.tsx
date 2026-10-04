@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { type BenchResult, runBench } from "./bench/bench.ts";
 import { BenchPanel, Hud } from "./Hud.tsx";
 import { PALETTES, paletteAt } from "./palettes.ts";
+import type { LightingMode } from "./scene/ChunkRenderer.ts";
 import { type Backend, Engine, type EngineStats } from "./scene/Engine.ts";
 import { buildWorld, CHUNK_SIZES, WORLD_KINDS, type WorldKind } from "./worlds.ts";
 
@@ -9,9 +10,18 @@ export interface Settings {
   world: WorldKind;
   chunk: number;
   palette: number;
-  lighting: boolean;
-  /** Sky brightness, 0 (night) to 100 (day). */
+  lighting: LightingMode;
+  /** Time of day, 0 (midnight) to 100 (noon). */
   daylight: number;
+  /** Minecraft's Brightness, 0 (Moody) to 100 (Bright); 50 is its default. */
+  brightness: number;
+}
+
+const LIGHTING_MODES: readonly LightingMode[] = ["off", "vertex", "volume"];
+
+function percent(value: string | null, fallback: number): number {
+  const n = Number(value ?? fallback);
+  return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : fallback;
 }
 
 function readSettings(): Settings {
@@ -19,13 +29,15 @@ function readSettings(): Settings {
   const world = WORLD_KINDS.find((w) => w.kind === params.get("world"))?.kind ?? "city-1m";
   const chunk = Number(params.get("chunk"));
   const palette = PALETTES.findIndex((p) => p.name.toLowerCase() === params.get("palette"));
-  const daylight = Number(params.get("daylight") ?? 100);
+  const lighting = params.get("lighting");
   return {
     world,
     chunk: (CHUNK_SIZES as readonly number[]).includes(chunk) ? chunk : 64,
     palette: Math.max(0, palette),
-    lighting: params.get("lighting") === "on",
-    daylight: Number.isFinite(daylight) ? Math.min(100, Math.max(0, daylight)) : 100,
+    // "on" is from before there were two kinds of lighting.
+    lighting: lighting === "on" ? "volume" : (LIGHTING_MODES.find((m) => m === lighting) ?? "off"),
+    daylight: percent(params.get("daylight"), 100),
+    brightness: percent(params.get("brightness"), 50),
   };
 }
 
@@ -34,8 +46,9 @@ function writeSettings(s: Settings): void {
     world: s.world,
     chunk: String(s.chunk),
     palette: PALETTES[s.palette]?.name.toLowerCase() ?? "concrete",
-    lighting: s.lighting ? "on" : "off",
+    lighting: s.lighting,
     daylight: String(s.daylight),
+    brightness: String(s.brightness),
   });
   history.replaceState(null, "", `?${params}`);
 }
@@ -62,6 +75,8 @@ export function App() {
         if (disposed || b === null) return;
         setBackend(b);
         setEngine(created);
+        // Development only: lets dev tools (pnpm shot, scratch scripts) drive the scene.
+        if (import.meta.env.DEV) (window as { __voxylEngine?: Engine }).__voxylEngine = created;
       },
       (error: unknown) => {
         // Disposing mid-start can make the renderer's init reject; only a live engine matters.
@@ -101,14 +116,15 @@ export function App() {
     writeSettings(settings);
     engine?.setPalette(paletteAt(settings.palette));
     engine?.setDaylight(settings.daylight / 100);
+    engine?.setBrightness(settings.brightness / 100);
   }, [engine, settings]);
 
   // Turning lighting on lights the whole world at once, so show the banner while it runs.
   const { lighting } = settings;
   useEffect(() => {
     if (!engine) return;
-    if (!lighting) {
-      engine.setLighting(false); // only drops data and remeshes in the background
+    if (lighting === "off" || engine.chunks?.lighting !== "off") {
+      engine.setLighting(lighting); // no full relight: drops data or swaps how light is drawn
       return;
     }
     setLoading("Lighting the world");
@@ -153,6 +169,7 @@ export function App() {
         settings={settings}
         onSettings={setSettings}
         busy={loading !== null || benchStep !== null}
+        volumeLighting={engine?.volumeLighting ?? true}
         onBench={startBench}
         onHome={() => engine?.home()}
       />

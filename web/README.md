@@ -43,7 +43,7 @@ default, waits for the world to mesh, and prints console problems, the HUD and t
 count, plus a screenshot in `shots/`. Add a query and `--bench` to run the benchmark too:
 
 ```bash
-pnpm shot "world=city-5m&chunk=64&lighting=on" --bench
+pnpm shot "world=city-5m&chunk=64&lighting=volume" --bench
 ```
 
 This is how changes get checked against exactly what `pnpm dev` serves, React's development
@@ -52,12 +52,20 @@ double mount included.
 ## Benchmarks
 
 - `pnpm bench:mesh [cells ...] [--bits=5,6,7]`: meshing and storage cost on one CPU thread.
-- `pnpm bench:light [cells ...]`: full relight, light memory, lit quad counts, and
-  incremental relights for single edits, a roof hole and big fills.
+- `pnpm bench:light [cells ...]`: full relight, light memory, lit quad counts, the light
+  volume copy per chunk, and incremental relights for single edits, a roof hole and big fills.
 - In the app, pick a world, chunk size and lighting (also in the URL, e.g.
-  `?world=city-5m&chunk=64&lighting=on&daylight=40`) and press **Run benchmark**: a scripted
-  flight, 100 single-cell edits, a roof hole and 100k/1M box fills, measured to the frame they
-  appear. The result can be copied as JSON and is also on `window.__voxylBench`.
+  `?world=city-5m&chunk=64&lighting=volume&daylight=0&brightness=50`) and press **Run
+  benchmark**: a scripted flight, 100 single-cell edits, a roof hole and 100k/1M box fills,
+  measured to the frame they appear. The result can be copied as JSON and is also on
+  `window.__voxylBench`.
+
+Lighting (`lighting=` in the URL) is `off`, `vertex` (light baked into the quads, so a light
+change remeshes) or `volume` (plain quads; the shader reads light from a 3D texture per chunk,
+so a light change rewrites the texture). Both lit modes compute the same Minecraft-style light;
+`volume` needs WebGPU. Time of day (`daylight`, 0 midnight to 100 noon) and Brightness
+(`brightness`, Minecraft's slider: 0 Moody, 50 default, 100 Bright) are shader values and cost
+nothing to change.
 
 ## Rules of the road
 

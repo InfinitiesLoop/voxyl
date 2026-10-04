@@ -7,9 +7,9 @@ export interface MeshJob {
   readonly bits: number;
   /** World.copyPadded() output. */
   readonly cells: Uint16Array;
-  /** LightEngine.copyPadded() output, or null with lighting off. */
+  /** LightEngine.copyPadded() output to bake into the quads, or null for plain quads. */
   readonly light: Uint16Array | null;
-  /** Per cell-state id, nonzero if it blocks light; null with lighting off. */
+  /** Per cell-state id, nonzero if it blocks light; null for plain quads. */
   readonly opaque: Uint8Array | null;
 }
 
@@ -18,6 +18,8 @@ export interface MeshResult {
   readonly key: number;
   readonly quads: Uint8Array;
   readonly quadCount: number;
+  /** QUAD_BYTES, or LIT_QUAD_BYTES with baked light. */
+  readonly quadBytes: number;
   /** Time spent meshing in the worker. */
   readonly ms: number;
 }

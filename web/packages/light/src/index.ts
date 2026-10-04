@@ -1,4 +1,10 @@
-export { FULL_SKY, LightEngine, type LightMaterials, SKY_SHIFT } from "./engine.ts";
+export {
+  FULL_SKY,
+  LightEngine,
+  type LightMaterials,
+  OPAQUE_LIGHT,
+  SKY_SHIFT,
+} from "./engine.ts";
 
 /** Packs an emission colour ("#rrggbb") and level (0..15) into the engine's r << 8 | g << 4 | b. */
 export function packEmission(color: string, level: number): number {

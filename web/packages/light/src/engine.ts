@@ -5,6 +5,12 @@ import { Queue } from "./queue.ts";
 // Light per cell is 16 bits: sky << 12 | red << 8 | green << 4 | blue, each 0..15.
 export const SKY_SHIFT = 12;
 export const FULL_SKY = 15 << SKY_SHIFT;
+/**
+ * What copyPadded() writes for light-blocking cells when asked to mark them. Real light only
+ * reaches this value inside a see-through emitter of full white light under open sky, which
+ * then reads as opaque: harmless, since faces are always lit from empty cells.
+ */
+export const OPAQUE_LIGHT = 0xffff;
 const BLOCK_SHIFTS = [8, 4, 0] as const;
 const NO_TOP = -0x80000000;
 
@@ -368,41 +374,96 @@ export class LightEngine {
 
   /**
    * Writes the light of chunk [cx, cy, cz] plus a one-cell border into `out`, in the padded
-   * layout World.copyPadded() uses, for the mesher.
+   * layout World.copyPadded() uses. With `markOpaque`, light-blocking cells read OPAQUE_LIGHT
+   * instead of their light, so one array carries both light and occlusion (for the GPU).
    */
-  copyPadded(cx: number, cy: number, cz: number, out: Uint16Array): Uint16Array {
+  copyPadded(
+    cx: number,
+    cy: number,
+    cz: number,
+    out: Uint16Array,
+    markOpaque = false,
+  ): Uint16Array {
     const S = this.#size;
-    const P = S + 2;
-    const ox = cx * S;
-    const oy = cy * S;
-    const oz = cz * S;
-    for (let py = 0; py < P; py++) {
-      for (let pz = 0; pz < P; pz++) {
-        let o = pz * P + py * P * P;
-        const y = oy + py - 1;
-        const z = oz + pz - 1;
-        const inside = py > 0 && py <= S && pz > 0 && pz <= S;
-        if (inside) {
-          out[o] = this.#lightAt(ox - 1, y, z);
-          this.#select(ox, y, z);
-          const light = this.#cLight;
-          if (light) {
-            const from = (z & this.#mask) * S + (y & this.#mask) * S * S;
-            out.set(light.subarray(from, from + S), o + 1);
-          } else {
-            const tops = this.#cTop;
-            for (let lx = 0; lx < S; lx++) {
-              const top = tops ? (tops[lx + (z & this.#mask) * S] ?? NO_TOP) : NO_TOP;
-              out[o + 1 + lx] = y > top && y >= this.#floor ? FULL_SKY : 0;
-            }
-          }
-          out[o + S + 1] = this.#lightAt(ox + S, y, z);
-          continue;
+    // The padded box is 27 regions, each inside one chunk: the chunk itself, 6 faces, 12 edges
+    // and 8 corners from its neighbours. Copying region by region looks each chunk up once.
+    const from = (d: number) => (d < 0 ? 0 : d > 0 ? S + 1 : 1);
+    const to = (d: number) => (d < 0 ? 0 : d > 0 ? S + 1 : S);
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          this.#copyRegion(
+            out,
+            [cx * S - 1, cy * S - 1, cz * S - 1],
+            [from(dx), from(dy), from(dz)],
+            [to(dx), to(dy), to(dz)],
+            markOpaque,
+          );
         }
-        for (let px = 0; px < P; px++, o++) out[o] = this.#lightAt(ox + px - 1, y, z);
       }
     }
     return out;
+  }
+
+  /**
+   * Copies padded cells p0..p1 (inclusive, all inside one chunk) of a box whose padded cell
+   * [0, 0, 0] is at world `origin`.
+   */
+  #copyRegion(
+    out: Uint16Array,
+    origin: readonly [number, number, number],
+    p0: readonly [number, number, number],
+    p1: readonly [number, number, number],
+    markOpaque: boolean,
+  ): void {
+    const S = this.#size;
+    const P = S + 2;
+    const b = this.#bits;
+    const m = this.#mask;
+    const [ox, oy, oz] = origin;
+    const [px0, py0, pz0] = p0;
+    const [px1, py1, pz1] = p1;
+    const n = px1 - px0 + 1;
+    this.#select(ox + px0, oy + py0, oz + pz0);
+    const light = this.#cLight;
+    const tops = this.#cTop;
+    const opaque = markOpaque ? this.#cOpaque : undefined;
+    const lx0 = (ox + px0) & m;
+    for (let py = py0; py <= py1; py++) {
+      const y = oy + py;
+      for (let pz = pz0; pz <= pz1; pz++) {
+        const z = oz + pz;
+        const o = px0 + pz * P + py * P * P;
+        if (y < this.#floor) {
+          out.fill(0, o, o + n); // nothing lives or is lit below the floor
+          continue;
+        }
+        const i0 = lx0 + ((z & m) << b) + ((y & m) << (2 * b));
+        if (light) {
+          out.set(light.subarray(i0, i0 + n), o);
+        } else {
+          const column = lx0 + ((z & m) << b);
+          for (let k = 0; k < n; k++) {
+            out[o + k] = y > (tops ? (tops[column + k] ?? NO_TOP) : NO_TOP) ? FULL_SKY : 0;
+          }
+        }
+        // Opacity, 32 cells per word: skip empty words and fill solid ones whole.
+        for (let k = 0; opaque && k < n; ) {
+          const i = i0 + k;
+          const word = opaque[i >> 5] ?? 0;
+          const bit = i & 31;
+          if (word === 0) {
+            k += 32 - bit;
+          } else if (word === 0xffffffff && bit === 0 && k + 32 <= n) {
+            out.fill(OPAQUE_LIGHT, o + k, o + k + 32);
+            k += 32;
+          } else {
+            if ((word & (1 << bit)) !== 0) out[o + k] = OPAQUE_LIGHT;
+            k++;
+          }
+        }
+      }
+    }
   }
 
   // --- Propagation ---------------------------------------------------------------------

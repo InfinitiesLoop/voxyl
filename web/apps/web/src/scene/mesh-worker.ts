@@ -12,12 +12,13 @@ const scope = self as unknown as WorkerScope;
 scope.addEventListener("message", (event) => {
   const job = event.data;
   const start = performance.now();
-  const { quads, quadCount } = meshChunk(job);
+  const { quads, quadCount, quadBytes } = meshChunk(job);
   const result: MeshResult = {
     jobId: job.jobId,
     key: job.key,
     quads,
     quadCount,
+    quadBytes,
     ms: performance.now() - start,
   };
   scope.postMessage(result, [quads.buffer]);

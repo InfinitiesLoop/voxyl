@@ -1,7 +1,13 @@
 import { World } from "@voxyl/core";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { FULL_SKY, LightEngine, type LightMaterials, packEmission } from "../src/index.ts";
+import {
+  FULL_SKY,
+  LightEngine,
+  type LightMaterials,
+  OPAQUE_LIGHT,
+  packEmission,
+} from "../src/index.ts";
 
 const SEMANTICS = ["Stone", "Glass", "Lamp", "Crystal"] as const;
 
@@ -200,6 +206,55 @@ describe("LightEngine", () => {
           expectLight(engine, oracle(world, materials, bounds), bounds);
         }),
         { numRuns: 40 },
+      );
+    },
+    60_000,
+  );
+
+  it.each([3, 4])(
+    "copies a chunk's padded light, optionally marking light-blocking cells (%i-bit chunks)",
+    (chunkBits) => {
+      fc.assert(
+        fc.property(fc.array(boxArb, { minLength: 1, maxLength: 10 }), (boxes) => {
+          const { world, ids, materials } = setup(chunkBits);
+          for (const box of boxes) applyBox(world, ids, box);
+          const engine = new LightEngine(world, materials);
+          engine.computeAll();
+          const S = world.layout.size;
+          const P = S + 2;
+          const plain = new Uint16Array(P ** 3);
+          const marked = new Uint16Array(P ** 3);
+          for (const [cx, cy, cz] of [
+            [0, 0, 0],
+            [-1, 0, 0],
+            [0, -1, 1],
+          ] as const) {
+            engine.copyPadded(cx, cy, cz, plain);
+            engine.copyPadded(cx, cy, cz, marked, true);
+            for (let py = 0; py < P; py++) {
+              for (let pz = 0; pz < P; pz++) {
+                for (let px = 0; px < P; px++) {
+                  const x = cx * S + px - 1;
+                  const y = cy * S + py - 1;
+                  const z = cz * S + pz - 1;
+                  const i = px + pz * P + py * P * P;
+                  const light = engine.get(x, y, z);
+                  const want = (materials.opaque[world.getId(x, y, z)] ?? 0) ? OPAQUE_LIGHT : light;
+                  if (plain[i] !== light || marked[i] !== want) {
+                    expect({ x, y, z, plain: plain[i], marked: marked[i] }).toEqual({
+                      x,
+                      y,
+                      z,
+                      plain: light,
+                      marked: want,
+                    });
+                  }
+                }
+              }
+            }
+          }
+        }),
+        { numRuns: 30 },
       );
     },
     60_000,

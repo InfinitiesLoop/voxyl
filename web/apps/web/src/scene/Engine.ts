@@ -1,10 +1,10 @@
 import { EMPTY_ID, raycast } from "@voxyl/core";
-import { QUAD_BYTES } from "@voxyl/mesher";
 import * as THREE from "three/webgpu";
 import type { Palette } from "../palettes.ts";
 import type { BuiltWorld } from "../worlds.ts";
-import { ChunkRenderer, type ChunkRendererStats } from "./ChunkRenderer.ts";
+import { ChunkRenderer, type ChunkRendererStats, type LightingMode } from "./ChunkRenderer.ts";
 import { FlyCamera } from "./FlyCamera.ts";
+import { LightVolume } from "./light-volume.ts";
 
 export type Backend = "WebGPU" | "WebGL2";
 
@@ -66,8 +66,9 @@ export class Engine {
   #chunks: ChunkRenderer | null = null;
   #palette: Palette | null = null;
   #placeId = EMPTY_ID;
-  #lighting = false;
+  #lighting: LightingMode = "off";
   #daylight = 1;
+  #brightness = 0.5;
 
   readonly #frameMs = new Float64Array(FRAME_WINDOW);
   readonly #cpuMs = new Float64Array(FRAME_WINDOW);
@@ -121,8 +122,9 @@ export class Engine {
     this.#built = built;
     this.#palette = palette;
     const workers = Math.min(8, Math.max(2, (navigator.hardwareConcurrency || 4) - 2));
-    this.#chunks = new ChunkRenderer(built.world, palette, workers);
+    this.#chunks = new ChunkRenderer(built.world, palette, workers, this.renderer);
     this.#chunks.setDaylight(this.#daylight);
+    this.#chunks.setBrightness(this.#brightness);
     this.#chunks.setLighting(this.#lighting);
     this.scene.add(this.#chunks.group);
     this.#placeId = built.world.states.intern({ semantic: PLACE_SEMANTIC });
@@ -163,16 +165,27 @@ export class Engine {
     return this.#palette;
   }
 
-  /** Minecraft-style light on or off; kept across world loads. */
-  setLighting(on: boolean): void {
-    this.#lighting = on;
-    this.#chunks?.setLighting(on);
+  /** Minecraft-style light: off, baked into meshes, or from a light volume. Kept across loads. */
+  setLighting(mode: LightingMode): void {
+    this.#lighting = mode;
+    this.#chunks?.setLighting(mode);
   }
 
-  /** Sky brightness, 0 (night) to 1 (day). */
+  /** Time of day, 0 (midnight) to 1 (noon). */
   setDaylight(daylight: number): void {
     this.#daylight = daylight;
     this.#chunks?.setDaylight(daylight);
+  }
+
+  /** Minecraft's Brightness setting, 0 (Moody) to 1 (Bright); 0.5 is its default. */
+  setBrightness(brightness: number): void {
+    this.#brightness = brightness;
+    this.#chunks?.setBrightness(brightness);
+  }
+
+  /** True if this renderer can draw volume lighting (WebGPU). */
+  get volumeLighting(): boolean {
+    return LightVolume.supported(this.renderer);
   }
 
   /** Flies the camera along a scripted path until cleared with null. */
@@ -228,7 +241,7 @@ export class Engine {
       chunkCount: built?.world.chunkCount ?? 0,
       chunkSize: size,
       storageMb: (built?.world.memoryBytes ?? 0) / 2 ** 20,
-      quadMb: ((chunks?.quads ?? 0) * QUAD_BYTES) / 2 ** 20,
+      quadMb: (chunks?.quadBytes ?? 0) / 2 ** 20,
       heapMb: memory ? memory.usedJSHeapSize / 2 ** 20 : null,
       initialMeshMs: this.#initialMeshMs,
       lastEditMs: this.#lastEditMs,
