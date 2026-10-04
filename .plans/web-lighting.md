@@ -1,9 +1,9 @@
 # Voxyl Web — Storage by Content and Lighting
 
-Status (2026-10-04): **World and light engine run in a worker** (done, step 1 below).
-**Sparse light measured**: CPU light storage is next (a clear 6x win); the GPU layout needs a
-decision from the user, because the measurements favour per-face light over the sparse light
-volume that was planned (see "Sparse light: measurements"). Storage by content, the light
+Status (2026-10-04): **World and light engine run in a worker** (done). **CPU light is
+stored sparsely** in 8³ bricks (done: 249 MB to 54 MB at 5M cells, 901 MB to 198 MB at 20M).
+**The GPU layout needs a decision from the user**: the measurements favour per-face light over
+the sparse light volume that was planned (see "Sparse light: measurements"). Storage by content, the light
 engine, Minecraft's lightmap, and both ways of drawing light (baked into quads, or read from a
 light volume) work end to end. Part of Phase 0 in [`web-migration.md`](web-migration.md).
 
@@ -198,8 +198,12 @@ material on first use (the hitches). Sparse light replaces exactly that traffic.
 
 ## Next steps
 
-1. **CPU light in 8³ bricks** (in progress): the light engine stores a brick only where light
-   differs from its default. 239 MB to about 38 MB at 5M cells.
+1. ~~CPU light in 8³ bricks~~ (done, 2026-10-04). The engine stores a brick only once a
+   cell in it differs from its default; whole-world light is 54 MB at 5M cells (38,706 bricks
+   plus 10 MB of opacity bits) and 198 MB at 20M (was 249 MB and 901 MB). Full relight time is
+   unchanged; bulk fills got about 15% slower from the brick lookup (1M fill 2.6 s in Node),
+   which step 3 should more than recover. Bricks are never freed until the next full relight;
+   compact them if long editing sessions grow memory.
 2. **GPU light layout: decide, then build.** Recommendation: per-face light (42 MB, simplest
    shader, one material, small uploads), keeping the volume renderer's code path in mind for
    non-voxel things later. The alternative is default-aware 8³ bricks (88 MB, three dependent

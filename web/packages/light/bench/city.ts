@@ -42,7 +42,7 @@ for (const target of targets) {
     engine.computeAll();
     const fullMs = performance.now() - t;
     const memoryMb = engine.memoryBytes / 2 ** 20;
-    const lightChunks = engine.lightChunkCount;
+    const lightBricks = engine.lightBrickCount;
     engine.takeDirtyChunks();
 
     // Mesh every chunk with and without light: lighting splits faces with gradients.
@@ -149,7 +149,7 @@ for (const target of targets) {
       [
         `${(world.cellCount / 1e6).toFixed(2)}M cells, ${1 << bits}^3 chunks:`,
         `light all ${ms(fullMs)} (scan ${ms(engine.lastTimings.scanMs)}, sky ${ms(engine.lastTimings.skyMs)}, block ${ms(engine.lastTimings.blockMs)})`,
-        `memory ${memoryMb.toFixed(0)} MB (${lightChunks} of ${world.chunkCount} chunks hold light arrays)`,
+        `memory ${memoryMb.toFixed(0)} MB (${lightBricks} light bricks stored)`,
         `quads ${(unlitQuads / 1e6).toFixed(2)}M unlit, ${(litQuads / 1e6).toFixed(2)}M lit (lit meshing ${ms(litMeshMs / world.chunkCount)} per chunk)`,
         `light volume copy ${ms(gpuCopyMs / world.chunkCount)} per chunk`,
         `single edit p50 ${ms(pct(single, 0.5))} p95 ${ms(pct(single, 0.95))} max ${ms(Math.max(...single))}, remesh p50 ${pct(dirtyCounts, 0.5)} chunks`,

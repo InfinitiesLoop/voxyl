@@ -328,10 +328,10 @@ Still open for the Phase 0 gate:
 **Next steps, in order** (the user agreed on the worker and sparse light on 2026-10-04):
 
 1. ~~World and light engine in a worker~~ (done).
-2. **Sparse light**: CPU light in 8³ bricks (239 MB to about 38 MB), then the GPU layout,
-   which needs the user's decision between per-face light and default-aware bricks (see
-   [`web-lighting.md`](web-lighting.md), "Sparse light: measurements"). Then drop baked
-   lighting.
+2. **Sparse light**: CPU light in 8³ bricks is done (249 MB to 54 MB at 5M cells). Next is
+   the GPU layout, which needs the user's decision between per-face light (recommended, 42 MB)
+   and default-aware bricks (88 MB); see [`web-lighting.md`](web-lighting.md), "Sparse light:
+   measurements". Then drop baked lighting.
 3. The open Phase 0 items above, M4 run first.
 
 ## Testing and verification

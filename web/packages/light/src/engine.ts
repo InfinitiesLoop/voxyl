@@ -13,6 +13,8 @@ export const FULL_SKY = 15 << SKY_SHIFT;
 export const OPAQUE_LIGHT = 0xffff;
 const BLOCK_SHIFTS = [8, 4, 0] as const;
 const NO_TOP = -0x80000000;
+/** Light is stored in bricks of 2^BRICK_BITS cells a side (or whole chunks, if smaller). */
+const BRICK_BITS = 3;
 
 const DX = [1, -1, 0, 0, 0, 0] as const;
 const DY = [0, 0, 1, -1, 0, 0] as const;
@@ -36,8 +38,9 @@ const withChannel = (value: number, shift: number, level: number) =>
  * it is computed from the cells and the materials, never saved.
  *
  * Storage follows content. Each column keeps the height of its highest light-blocking cell;
- * cells above it are full sky light without being stored. A chunk gets a light array only
- * once some cell in it differs from that default. Edits relight incrementally with the
+ * cells above it are full sky light and cells below it dark, without being stored. Light is
+ * stored in 8³ bricks, and a brick exists only once some cell in it differs from that
+ * default (about a sixth of the bricks in a city). Edits relight incrementally with the
  * two-queue method (remove what the changed cells used to light, then refill), so cost
  * follows the size of the change, not the world.
  */
@@ -48,7 +51,11 @@ export class LightEngine {
   readonly #size: number;
   readonly #mask: number;
   readonly #volume: number;
-  readonly #light = new Map<number, Uint16Array>();
+  readonly #brickBits: number;
+  readonly #brickMask: number;
+  /** Per chunk, its light bricks; a missing brick (or chunk) holds the default light. */
+  readonly #light = new Map<number, (Uint16Array | undefined)[]>();
+  #brickCount = 0;
   readonly #opaque = new Map<number, Uint32Array>();
   readonly #tops = new Map<number, Int32Array>();
   readonly #dirty = new Set<number>();
@@ -65,7 +72,7 @@ export class LightEngine {
   #cx = Number.NaN;
   #cy = Number.NaN;
   #cz = Number.NaN;
-  #cLight: Uint16Array | undefined;
+  #cLight: (Uint16Array | undefined)[] | undefined;
   #cOpaque: Uint32Array | undefined;
   #cTop: Int32Array | undefined;
 
@@ -77,6 +84,8 @@ export class LightEngine {
     this.#size = L.size;
     this.#mask = L.mask;
     this.#volume = L.volume;
+    this.#brickBits = Math.min(BRICK_BITS, L.bits);
+    this.#brickMask = (1 << this.#brickBits) - 1;
   }
 
   /** Replaces the materials. Call computeAll() afterwards. */
@@ -84,18 +93,21 @@ export class LightEngine {
     this.#materials = materials;
   }
 
-  /** Bytes held by light arrays, opacity bits and heightmaps. */
+  /** Bytes held by light bricks (and their tables), opacity bits and heightmaps. */
   get memoryBytes(): number {
     let bytes = 0;
-    for (const a of this.#light.values()) bytes += a.byteLength;
+    for (const bricks of this.#light.values()) {
+      bytes += bricks.length * 8;
+      for (const brick of bricks) bytes += brick?.byteLength ?? 0;
+    }
     for (const a of this.#opaque.values()) bytes += a.byteLength;
     for (const a of this.#tops.values()) bytes += a.byteLength;
     return bytes;
   }
 
-  /** Chunks holding a light array (the rest are at their default). */
-  get lightChunkCount(): number {
-    return this.#light.size;
+  /** Light bricks stored (the rest hold their default light). */
+  get lightBrickCount(): number {
+    return this.#brickCount;
   }
 
   /** Packed light at a cell. */
@@ -106,6 +118,7 @@ export class LightEngine {
   /** Lights the whole world from scratch. */
   computeAll(): void {
     this.#light.clear();
+    this.#brickCount = 0;
     this.#opaque.clear();
     this.#tops.clear();
     this.#invalidate();
@@ -265,11 +278,11 @@ export class LightEngine {
         for (let y = Math.max(floor, newTop + 1); y <= oldTop; y++) uncovered.push(x, y, z);
       }
     }
-    // Pin the old light of every chunk whose defaults are about to change, by giving it an array.
+    // Pin the old light of every cell whose default is about to change, by giving it a brick.
     for (let i = 0; i < covered.length; i += 4)
-      this.#ensureArray(covered[i] ?? 0, covered[i + 1] ?? 0, covered[i + 2] ?? 0);
+      this.#ensureBrick(covered[i] ?? 0, covered[i + 1] ?? 0, covered[i + 2] ?? 0);
     for (let i = 0; i < uncovered.length; i += 3)
-      this.#ensureArray(uncovered[i] ?? 0, uncovered[i + 1] ?? 0, uncovered[i + 2] ?? 0);
+      this.#ensureBrick(uncovered[i] ?? 0, uncovered[i + 1] ?? 0, uncovered[i + 2] ?? 0);
 
     // 2. Apply the new opacity and heights.
     for (let i = 0; i < cells.length; i += 5) {
@@ -425,9 +438,12 @@ export class LightEngine {
     const [px1, py1, pz1] = p1;
     const n = px1 - px0 + 1;
     this.#select(ox + px0, oy + py0, oz + pz0);
-    const light = this.#cLight;
+    const bricks = this.#cLight;
     const tops = this.#cTop;
     const opaque = markOpaque ? this.#cOpaque : undefined;
+    const bb = this.#brickBits;
+    const bm = this.#brickMask;
+    const nb = b - bb;
     const lx0 = (ox + px0) & m;
     for (let py = py0; py <= py1; py++) {
       const y = oy + py;
@@ -439,13 +455,23 @@ export class LightEngine {
           continue;
         }
         const i0 = lx0 + ((z & m) << b) + ((y & m) << (2 * b));
-        if (light) {
-          out.set(light.subarray(i0, i0 + n), o);
-        } else {
-          const column = lx0 + ((z & m) << b);
-          for (let k = 0; k < n; k++) {
-            out[o + k] = y > (tops ? (tops[column + k] ?? NO_TOP) : NO_TOP) ? FULL_SKY : 0;
+        // Light, one brick-wide run at a time: stored bricks are copied, the rest are default.
+        const rowBrick = (((z & m) >> bb) << nb) + (((y & m) >> bb) << (2 * nb));
+        const inRow = ((z & bm) << bb) + ((y & bm) << (2 * bb));
+        for (let k = 0; k < n; ) {
+          const lx = lx0 + k;
+          const run = Math.min(n - k, (1 << bb) - (lx & bm));
+          const brick = bricks?.[(lx >> bb) + rowBrick];
+          if (brick) {
+            const i = (lx & bm) + inRow;
+            out.set(brick.subarray(i, i + run), o + k);
+          } else {
+            const column = lx + ((z & m) << b);
+            for (let j = 0; j < run; j++) {
+              out[o + k + j] = y > (tops ? (tops[column + j] ?? NO_TOP) : NO_TOP) ? FULL_SKY : 0;
+            }
           }
+          k += run;
         }
         // Opacity, 32 cells per word: skip empty words and fill solid ones whole.
         for (let k = 0; opaque && k < n; ) {
@@ -584,11 +610,26 @@ export class LightEngine {
     return (x & m) + ((z & m) << b) + ((y & m) << (2 * b));
   }
 
-  #lightAt(x: number, y: number, z: number): number {
-    if (y < this.#floor) return 0;
-    const i = this.#select(x, y, z);
-    const light = this.#cLight;
-    if (light) return light[i] ?? 0;
+  /** Index of the brick holding [x, y, z] within its chunk. */
+  #brickOf(x: number, y: number, z: number): number {
+    const m = this.#mask;
+    const bb = this.#brickBits;
+    const nb = this.#bits - bb;
+    return ((x & m) >> bb) + (((z & m) >> bb) << nb) + (((y & m) >> bb) << (2 * nb));
+  }
+
+  /** Index of [x, y, z] within its brick. */
+  #inBrick(x: number, y: number, z: number): number {
+    const bm = this.#brickMask;
+    const bb = this.#brickBits;
+    return (x & bm) + ((z & bm) << bb) + ((y & bm) << (2 * bb));
+  }
+
+  /**
+   * Light where no brick is stored: open sky above the column's highest light-blocking cell,
+   * dark below. Needs #select() on the cell first, and y at or above the floor.
+   */
+  #defaultAt(x: number, y: number, z: number): number {
     const tops = this.#cTop;
     const top = tops
       ? (tops[(x & this.#mask) + ((z & this.#mask) << this.#bits)] ?? NO_TOP)
@@ -596,39 +637,64 @@ export class LightEngine {
     return y > top ? FULL_SKY : 0;
   }
 
+  #lightAt(x: number, y: number, z: number): number {
+    if (y < this.#floor) return 0;
+    this.#select(x, y, z);
+    const brick = this.#cLight?.[this.#brickOf(x, y, z)];
+    return brick ? (brick[this.#inBrick(x, y, z)] ?? 0) : this.#defaultAt(x, y, z);
+  }
+
   #setLight(x: number, y: number, z: number, value: number): void {
     if (y < this.#floor) return;
-    const i = this.#select(x, y, z);
-    let light = this.#cLight;
-    if (!light) light = this.#allocate();
-    if (light[i] === value) return;
-    light[i] = value;
+    this.#select(x, y, z);
+    const b = this.#brickOf(x, y, z);
+    let brick = this.#cLight?.[b];
+    if (!brick) {
+      if (value === this.#defaultAt(x, y, z)) return; // still the default: nothing to store
+      brick = this.#allocateBrick(b);
+    }
+    const i = this.#inBrick(x, y, z);
+    if (brick[i] === value) return;
+    brick[i] = value;
     this.#markDirty(x, y, z);
   }
 
-  /** Gives the selected chunk a light array filled with its default (sky above the heights). */
-  #allocate(): Uint16Array {
+  /** Gives brick `b` of the selected chunk an array filled with its default light. */
+  #allocateBrick(b: number): Uint16Array {
     const S = this.#size;
-    const light = new Uint16Array(this.#volume);
+    const bb = this.#brickBits;
+    const B = 1 << bb;
+    const nb = this.#bits - bb;
+    const per = (1 << nb) - 1;
+    const bx = (b & per) << bb;
+    const bz = ((b >> nb) & per) << bb;
+    const oy = this.#cy * S + ((b >> (2 * nb)) << bb);
+    const brick = new Uint16Array(B * B * B);
     const tops = this.#cTop;
-    const oy = this.#cy * S;
-    for (let lz = 0; lz < S; lz++) {
-      for (let lx = 0; lx < S; lx++) {
-        const top = tops ? (tops[lx + lz * S] ?? NO_TOP) : NO_TOP;
-        for (let ly = 0; ly < S; ly++) {
-          const y = oy + ly;
-          if (y > top && y >= this.#floor) light[lx + lz * S + ly * S * S] = FULL_SKY;
+    for (let z = 0; z < B; z++) {
+      for (let x = 0; x < B; x++) {
+        const top = tops ? (tops[bx + x + (bz + z) * S] ?? NO_TOP) : NO_TOP;
+        for (let y = 0; y < B; y++) {
+          const wy = oy + y;
+          if (wy > top && wy >= this.#floor) brick[x + (z << bb) + (y << (2 * bb))] = FULL_SKY;
         }
       }
     }
-    this.#light.set(chunkKey(this.#cx, this.#cy, this.#cz), light);
-    this.#cLight = light;
-    return light;
+    let bricks = this.#cLight;
+    if (!bricks) {
+      bricks = new Array<Uint16Array | undefined>(1 << (3 * nb));
+      this.#light.set(chunkKey(this.#cx, this.#cy, this.#cz), bricks);
+      this.#cLight = bricks;
+    }
+    bricks[b] = brick;
+    this.#brickCount++;
+    return brick;
   }
 
-  #ensureArray(x: number, y: number, z: number): void {
+  #ensureBrick(x: number, y: number, z: number): void {
     this.#select(x, y, z);
-    if (!this.#cLight) this.#allocate();
+    const b = this.#brickOf(x, y, z);
+    if (!this.#cLight?.[b]) this.#allocateBrick(b);
   }
 
   #isOpaque(x: number, y: number, z: number): boolean {
