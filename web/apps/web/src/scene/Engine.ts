@@ -1,8 +1,10 @@
-import { EMPTY_ID, raycast } from "@voxyl/core";
+import type { LightingMode } from "@voxyl/session";
 import * as THREE from "three/webgpu";
 import type { Palette } from "../palettes.ts";
-import type { BuiltWorld } from "../worlds.ts";
-import { ChunkRenderer, type ChunkRendererStats, type LightingMode } from "./ChunkRenderer.ts";
+import type { Vec3, WorldStats } from "../world/protocol.ts";
+import { WorldClient, type WorldOutput } from "../world/WorldClient.ts";
+import type { WorldInfo, WorldKind } from "../worlds.ts";
+import { ChunkRenderer, type ChunkRendererStats } from "./ChunkRenderer.ts";
 import { FlyCamera } from "./FlyCamera.ts";
 import { LightVolume } from "./light-volume.ts";
 
@@ -12,6 +14,8 @@ const BACKGROUND = "#15171b";
 const FRAME_WINDOW = 240;
 const REACH = 400;
 const PLACE_SEMANTIC = "Glow";
+/** How far the camera moves before the world worker is told (it orders meshing by distance). */
+const CAMERA_STEP = 4;
 
 export interface FrameStats {
   readonly fps: number;
@@ -26,14 +30,13 @@ export interface FrameStats {
 export interface EngineStats {
   readonly frame: FrameStats;
   readonly chunks: ChunkRendererStats | null;
-  readonly cells: number;
-  readonly chunkCount: number;
+  /** The world worker's report, about four times a second. */
+  readonly world: WorldStats | null;
   readonly chunkSize: number;
-  /** Chunk cell storage held by the World. */
-  readonly storageMb: number;
+  readonly meshWorkers: number;
   /** Packed quads handed to the GPU. */
   readonly quadMb: number;
-  /** JS heap, where the browser reports it (Chromium). */
+  /** JS heap of the main thread, where the browser reports it (Chromium). */
   readonly heapMb: number | null;
   readonly initialMeshMs: number | null;
   readonly lastEditMs: number | null;
@@ -51,33 +54,38 @@ export type Autopilot = (seconds: number) => {
 };
 
 /**
- * Owns the renderer, scene, camera and frame loop, and connects them to one World through a
- * ChunkRenderer. React draws the HUD around it but never touches the scene.
+ * Owns the renderer, scene, camera and frame loop. The world itself lives in the world
+ * worker (see WorldClient); a ChunkRenderer draws what it sends. React draws the HUD around
+ * this but never touches the scene.
  */
 export class Engine {
   readonly renderer = new THREE.WebGPURenderer({ antialias: true });
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(60, 1, 0.1, 6000);
   readonly fly: FlyCamera;
+  /** The world worker: send commands through this. */
+  readonly world: WorldClient;
   readonly #host: HTMLElement;
   readonly #observer: ResizeObserver;
   readonly #abort = new AbortController();
-  #built: BuiltWorld | null = null;
+  #worldId = 0;
+  #info: WorldInfo | null = null;
   #chunks: ChunkRenderer | null = null;
-  #palette: Palette | null = null;
-  #placeId = EMPTY_ID;
+  #worldStats: WorldStats | null = null;
+  #placeId = 0;
   #lighting: LightingMode = "off";
   #daylight = 1;
   #brightness = 0.5;
+  readonly #sentCamera = new THREE.Vector3(Number.POSITIVE_INFINITY, 0, 0);
 
   readonly #frameMs = new Float64Array(FRAME_WINDOW);
   readonly #cpuMs = new Float64Array(FRAME_WINDOW);
   #frames = 0;
   #lastTime = -1;
   #frameWaiters: (() => void)[] = [];
+  #idleWaiters: (() => void)[] = [];
   #recording: FrameRecording | null = null;
   #autopilot: { pilot: Autopilot; start: number } | null = null;
-  #loadStart = 0;
   #initialMeshMs: number | null = null;
   #lastEditMs: number | null = null;
   #disposed = false;
@@ -91,6 +99,9 @@ export class Engine {
     const signal = this.#abort.signal;
     canvas.addEventListener("mousedown", (e) => this.#onMouseDown(e), { signal });
     canvas.addEventListener("contextmenu", (e) => e.preventDefault(), { signal });
+    // One core for this thread, one for the world worker, the rest mesh.
+    const meshWorkers = Math.min(8, Math.max(2, (navigator.hardwareConcurrency || 4) - 2));
+    this.world = new WorldClient(meshWorkers, (message) => this.#onWorld(message));
   }
 
   /** Starts the renderer. Resolves to null if the engine was disposed while it started. */
@@ -107,45 +118,57 @@ export class Engine {
     return webgpu ? "WebGPU" : "WebGL2";
   }
 
-  get built(): BuiltWorld | null {
-    return this.#built;
+  /** The world on screen, once loaded. */
+  get info(): WorldInfo | null {
+    return this.#info;
   }
 
-  get chunks(): ChunkRenderer | null {
-    return this.#chunks;
-  }
-
-  /** Shows a new world, replacing the current one. Meshing starts on the next frame. */
-  load(built: BuiltWorld, palette: Palette): void {
-    this.#chunks?.dispose();
-    if (this.#chunks) this.scene.remove(this.#chunks.group);
-    this.#built = built;
-    this.#palette = palette;
-    const workers = Math.min(8, Math.max(2, (navigator.hardwareConcurrency || 4) - 2));
-    this.#chunks = new ChunkRenderer(built.world, palette, workers, this.renderer);
-    this.#chunks.setDaylight(this.#daylight);
-    this.#chunks.setBrightness(this.#brightness);
-    this.#chunks.setLighting(this.#lighting);
-    this.scene.add(this.#chunks.group);
-    this.#placeId = built.world.states.intern({ semantic: PLACE_SEMANTIC });
+  /**
+   * Builds a world in the world worker and shows it, replacing the current one. Resolves to
+   * its info, or null if another load replaced it first.
+   */
+  async load(kind: WorldKind, chunkSize: number, palette: Palette): Promise<WorldInfo | null> {
+    const id = ++this.#worldId;
+    if (this.#chunks) {
+      this.scene.remove(this.#chunks.group);
+      this.#chunks.dispose();
+    }
+    this.#chunks = null;
+    this.#info = null;
+    this.#worldStats = null;
+    void this.world.request({ type: "palette", palette });
+    const info = await this.world.request({ type: "load", world: id, kind, chunkSize });
+    if (id !== this.#worldId || this.#disposed) return null;
+    // The worker sends nothing about this world before its reply, so nothing was missed.
+    const chunks = new ChunkRenderer(this.renderer, chunkSize, palette);
+    chunks.setDaylight(this.#daylight);
+    chunks.setBrightness(this.#brightness);
+    chunks.setLighting(this.#lighting);
+    this.#chunks = chunks;
+    this.#info = info;
+    this.scene.add(chunks.group);
+    const fogFar = Math.max(500, info.extent * 1.4);
+    this.scene.fog = new THREE.Fog(BACKGROUND, fogFar * 0.35, fogFar);
     this.#initialMeshMs = null;
     this.#lastEditMs = null;
-    this.#loadStart = performance.now();
-    const loading = this.#chunks;
-    loading.whenIdle().then(() => {
-      if (this.#chunks === loading) this.#initialMeshMs = performance.now() - this.#loadStart;
-    });
-    const fogFar = Math.max(500, built.extent * 1.4);
-    this.scene.fog = new THREE.Fog(BACKGROUND, fogFar * 0.35, fogFar);
     this.home();
+    const start = performance.now();
+    void this.whenIdle().then(() => {
+      if (this.#worldId === id) this.#initialMeshMs = performance.now() - start;
+    });
+    this.#placeId = await this.world.request({
+      type: "intern",
+      state: { semantic: PLACE_SEMANTIC },
+    });
+    return info;
   }
 
   /** Moves the camera to the world's overview position. */
   home(): void {
-    const built = this.#built;
-    if (!built) return;
-    const [cx, , cz] = built.center;
-    const e = built.extent;
+    const info = this.#info;
+    if (!info) return;
+    const [cx, , cz] = info.center;
+    const e = info.extent;
     if (e <= 32) {
       this.fly.place({ x: cx + 22, y: 18, z: cz + 26 }, { x: cx, y: 7, z: cz });
     } else {
@@ -156,19 +179,25 @@ export class Engine {
     }
   }
 
-  setPalette(palette: Palette): void {
-    this.#palette = palette;
+  /** New colours now; if the palette changes light, the world worker relights. */
+  async setPalette(palette: Palette): Promise<void> {
     this.#chunks?.setPalette(palette);
+    await this.world.request({ type: "palette", palette });
   }
 
-  get palette(): Palette | null {
-    return this.#palette;
-  }
-
-  /** Minecraft-style light: off, baked into meshes, or from a light volume. Kept across loads. */
-  setLighting(mode: LightingMode): void {
+  /**
+   * Minecraft-style light: off, baked into meshes, or from a light volume. Kept across loads.
+   * Resolves once the world worker has lit the world; drawing carries on meanwhile.
+   */
+  async setLighting(requested: LightingMode): Promise<void> {
+    const mode = requested === "volume" && !this.volumeLighting ? "vertex" : requested;
     this.#lighting = mode;
     this.#chunks?.setLighting(mode);
+    await this.world.request({ type: "lighting", mode });
+  }
+
+  get lighting(): LightingMode {
+    return this.#lighting;
   }
 
   /** Time of day, 0 (midnight) to 1 (noon). */
@@ -194,12 +223,9 @@ export class Engine {
     if (pilot) this.fly.unlock();
   }
 
-  /**
-   * Call right after writing to the World: sends the dirty chunks to the workers now instead
-   * of on the next frame, so the new mesh can be on screen one frame later.
-   */
-  afterEdit(): void {
-    this.#chunks?.update(this.camera);
+  /** Resolves after the first rendered frame in which every command so far is visible. */
+  whenIdle(): Promise<void> {
+    return new Promise((resolve) => this.#idleWaiters.push(resolve));
   }
 
   startRecording(): void {
@@ -217,7 +243,6 @@ export class Engine {
   }
 
   stats(): EngineStats {
-    const built = this.#built;
     const chunks = this.#chunks?.stats() ?? null;
     const n = Math.min(this.#frames, FRAME_WINDOW);
     const frame = sortedWindow(this.#frameMs, n);
@@ -225,7 +250,6 @@ export class Engine {
     const mean = frame.length > 0 ? frame.reduce((s, t) => s + t, 0) / frame.length : 0;
     const info = this.renderer.info.render;
     const memory = (performance as { memory?: { usedJSHeapSize: number } }).memory;
-    const size = built?.world.layout.size ?? 0;
     return {
       frame: {
         fps: mean > 0 ? 1000 / mean : 0,
@@ -237,10 +261,9 @@ export class Engine {
         triangles: info.triangles,
       },
       chunks,
-      cells: built?.world.cellCount ?? 0,
-      chunkCount: built?.world.chunkCount ?? 0,
-      chunkSize: size,
-      storageMb: (built?.world.memoryBytes ?? 0) / 2 ** 20,
+      world: this.#worldStats,
+      chunkSize: this.#info?.chunkSize ?? 0,
+      meshWorkers: this.world.meshWorkers,
       quadMb: (chunks?.quadBytes ?? 0) / 2 ** 20,
       heapMb: memory ? memory.usedJSHeapSize / 2 ** 20 : null,
       initialMeshMs: this.#initialMeshMs,
@@ -256,8 +279,27 @@ export class Engine {
     this.#observer.disconnect();
     this.fly.dispose();
     this.#chunks?.dispose();
+    this.world.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
+  }
+
+  #onWorld(message: WorldOutput): void {
+    if (message.world !== this.#worldId) return; // about a world since replaced
+    if (message.type === "stats") {
+      this.#worldStats = message.stats;
+      return;
+    }
+    const chunks = this.#chunks;
+    if (!chunks) return;
+    if (message.type === "states") chunks.setStates(message.semantics);
+    else chunks.receive(message);
+  }
+
+  /** Every command sent so far has been worked through and applied. */
+  get #settled(): boolean {
+    const chunks = this.#chunks;
+    return !!chunks && chunks.caughtUp && chunks.appliedSeq >= this.world.sentSeq;
   }
 
   #frame(time: number): void {
@@ -273,9 +315,18 @@ export class Engine {
     } else {
       this.fly.update(Math.min(dt, 0.1));
     }
-    this.#chunks?.update(this.camera);
+    const p = this.camera.position;
+    if (p.distanceTo(this.#sentCamera) > CAMERA_STEP) {
+      this.#sentCamera.copy(p);
+      this.world.camera([p.x, p.y, p.z]);
+    }
+    this.#chunks?.update();
     this.renderer.render(this.scene, this.camera);
-    this.#chunks?.afterRender();
+    if (this.#idleWaiters.length > 0 && this.#settled) {
+      const waiters = this.#idleWaiters;
+      this.#idleWaiters = [];
+      for (const resolve of waiters) resolve();
+    }
 
     // Frame time is the gap between frames (what the user feels); CPU time is this callback's
     // main-thread work. The first frame has no gap, so it isn't recorded.
@@ -309,35 +360,27 @@ export class Engine {
       return;
     }
     event.preventDefault();
-    const world = this.#built?.world;
-    const chunks = this.#chunks;
-    if (!world || !chunks) return;
-    const dir = this.fly.forward();
-    const hit = raycast(
-      world,
-      [this.camera.position.x, this.camera.position.y, this.camera.position.z],
-      [dir.x, dir.y, dir.z],
-      REACH,
-    );
-    if (!hit) return;
-    const [x, y, z] = hit.cell;
-    const start = performance.now();
-    let changed = false;
-    if (event.button === 0) {
-      changed = world.setId(x, y, z, EMPTY_ID);
-    } else if (event.button === 2) {
-      const [nx, ny, nz] = hit.normal;
-      if (nx !== 0 || ny !== 0 || nz !== 0)
-        changed = world.setId(x + nx, y + ny, z + nz, this.#placeId);
-    } else if (event.button === 1) {
-      this.#placeId = hit.id;
+    if (!this.#info) return;
+    const p = this.camera.position;
+    const d = this.fly.forward();
+    const origin: Vec3 = [p.x, p.y, p.z];
+    const dir: Vec3 = [d.x, d.y, d.z];
+    if (event.button === 1) {
+      void this.world.request({ type: "raycast", origin, dir, reach: REACH }).then((hit) => {
+        if (hit) this.#placeId = hit.id;
+      });
+      return;
     }
-    if (changed) {
-      this.afterEdit();
-      chunks.whenIdle().then(() => {
+    const action = event.button === 0 ? "erase" : event.button === 2 ? "place" : null;
+    if (!action) return;
+    const start = performance.now();
+    void this.world
+      .request({ type: "rayEdit", origin, dir, reach: REACH, action, id: this.#placeId })
+      .then(async (changed) => {
+        if (!changed) return;
+        await this.whenIdle();
         this.#lastEditMs = performance.now() - start;
       });
-    }
   }
 }
 

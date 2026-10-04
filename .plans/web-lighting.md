@@ -1,11 +1,11 @@
 # Voxyl Web — Storage by Content and Lighting
 
-Status: **Light volume chosen** (2026-10-04). Storage by content, the light engine,
-Minecraft's lightmap, and both ways of drawing light (baked into quads, or read from a light
-volume) work end to end. The user approved the light volume as the renderer to keep, and the
-next two steps: the World and light engine in a worker, then sparse light. Numbers are under
-"Findings"; the next steps, with their open design questions, are at the end. Part of
-Phase 0 in [`web-migration.md`](web-migration.md).
+Status (2026-10-04): **World and light engine run in a worker** (done, step 1 below).
+**Sparse light measured**: CPU light storage is next (a clear 6x win); the GPU layout needs a
+decision from the user, because the measurements favour per-face light over the sparse light
+volume that was planned (see "Sparse light: measurements"). Storage by content, the light
+engine, Minecraft's lightmap, and both ways of drawing light (baked into quads, or read from a
+light volume) work end to end. Part of Phase 0 in [`web-migration.md`](web-migration.md).
 
 Lighting is a setting: `Off`, `Baked in meshes` (`vertex`) or `Light volume` (`volume`).
 With it off, no light is computed or stored and the mesher behaves exactly as before, so if
@@ -136,33 +136,76 @@ volume's costs are all fixable without changing what it draws. (When baked goes,
 fallback loses lighting, which currently falls back to baked; decide then whether to keep
 baked for WebGL2 or show WebGL2 unlit.)
 
+## World worker (done, 2026-10-04)
+
+The World, the light engine and mesh scheduling moved off the main thread:
+
+- `packages/session` holds `WorldSession`: a World, its light, and which chunks to mesh
+  (nearest the camera first, one job per chunk in flight) and whose light to send. It is a
+  plain state machine with no DOM, workers or timers, property-tested in Node: after any
+  edits, lighting switches and palette changes, the meshes and light it has handed out equal
+  a fresh build.
+- `apps/web/src/world/world-worker.ts` wraps it: commands in (load, lighting, palette,
+  intern, setId, fillBox, raycast, rayEdit), replies out. Mesh workers get jobs from it over
+  MessagePorts; it forwards their results and the light to the main thread in one ordered
+  stream, tagged with a world id, plus an "idle" marker per command once its work is sent.
+- The main thread (`Engine`, `ChunkRenderer`) only draws, takes input and applies that stream
+  within a per-frame budget. Mouse edits and the benchmark go through `rayEdit`/`fillBox`, so
+  edit-to-visible timings include the round trip.
+
+Measured on the 5M city, headless Edge, B580, volume lighting:
+
+| Measure | Main thread (before) | World worker |
+| --- | --- | --- |
+| Turning lighting on | page frozen 2.8 s | page keeps drawing (frame p50 16.7 ms); lit in 2.8 s, on screen at 4.9 s; hitches up to 164 ms while light uploads |
+| Unlit initial mesh | 0.71 s | 0.54 s |
+| Lit initial mesh | 3.0 s | 5.2 s |
+| Single edit to visible p50 / p95 | 17 / 33 ms | 17 / 26 ms |
+| 1M-cell fill / clear | 2.0 / 3.1 s | 2.7 / 3.5 s |
+| Flight main thread p50 | 4.1 ms | 3.9 ms |
+
+The lit initial mesh and bulk fills got slower: every chunk's light now crosses to the main
+thread as a fresh 575 KB buffer (186 MB of garbage for the city), the worker yields between
+light batches through a clamped timer, and each of the seven light pages compiles its own
+material on first use (the hitches). Sparse light replaces exactly that traffic.
+
+## Sparse light: measurements
+
+`pnpm bench:sparse` on the 5M city (64³ chunks, 8.9M visible faces):
+
+| Layout | Memory |
+| --- | --- |
+| CPU light today (dense per chunk) | 239 MB |
+| **CPU light in 8³ bricks, only where it differs from the default** | **38 MB** (16³: 65 MB) |
+| GPU dense padded slots (today) | 177 MB |
+| GPU bricks holding a face's front cell, one-cell apron (4³ / 8³ / 16³) | 143 / 131 / 150 MB |
+| GPU bricks as above, and only where light differs from a heightmap default | 88 MB (8³) |
+| **GPU per-face light**: each quad carries its (w + 2) x (h + 2) light grid | **42 MB** |
+
+- **CPU bricks are a clear win** under any GPU choice. The default is open sky above each
+  column's highest light-blocking cell and darkness below; no brick in the city was uniform
+  but non-default, so uniform bricks need no special case.
+- **GPU bricks barely pay.** A face reads the 3 x 3 cells around its front cell, so a brick
+  needs a one-cell apron, which nearly doubles an 8³ brick and eats most of the saving.
+- **Per-face light is 4x smaller than today and scales with surface area, not volume.** Each
+  quad would carry an offset into one storage buffer holding the light (with opaque marks) of
+  the front-cell plane around it; the fragment reads its 9 values directly, with no table
+  lookups. A light change rewrites the affected chunks' grids (computed from the chunk's
+  quads and padded light, in a worker), never remeshes. The cost: light exists only on voxel
+  faces. A volume can also light things that are not voxel faces (entities, particles, fog,
+  sub-cell parts at arbitrary positions), which per-face light cannot without a second
+  mechanism.
+
 ## Next steps
 
-In order. Steps 1 and 2 are agreed; the rest are ranked by payoff.
-
-1. **World and light engine in a worker.** Today `World`, `LightEngine`, full relights
-   (2.3-2.8 s, freezing the page) and slot copies (1.2 ms per chunk) all run on the main
-   thread. Move them to one "world worker"; the main thread keeps rendering, input and the
-   HUD. Design questions to settle first:
-   - How the main thread raycasts for mouse edits: ask the worker (one round trip, a frame of
-     latency) or keep a read-only mirror. Asking is simpler and is what agent tools will do.
-   - Who sends mesh jobs: the world worker can post padded snapshots straight to the mesh
-     workers over MessageChannels, so cell data never crosses the main thread.
-   - Light slots: the world worker copies padded light into transferable buffers; the main
-     thread only calls `writeTexture` (0.3 ms per chunk). WebGPU stays on the main thread.
-   - The edit API becomes messages (set cell, fill box, palette change), which is also the
-     shape the agent tools need (Phase 4), so design it as the core's command layer.
-   - SharedArrayBuffer (needs COOP/COEP headers in Vite and hosting) would allow zero-copy
-     reads; not needed for a first version.
-2. **Sparse light, CPU and GPU.** Light memory is 249 MB on the CPU and 178-192 MB on the GPU
-   at 5M cells, most of it never read: only cells in front of visible faces matter.
-   - CPU: store light in bricks like cells (8³ or 16³), with no brick where light equals its
-     default (open sky above the heightmap, or darkness).
-   - GPU: a pool of light bricks with a one-cell apron (so a fragment's 3 x 3 reads stay in
-     one brick), uploading only bricks that hold a cell in front of a visible face. The mesh
-     workers know which those are. A brick table (world brick coordinates to pool slot)
-     replaces per-chunk slots, pages and the per-object uniform.
-   - Then remove baked lighting (`vertex` mode, `LIT_QUAD_BYTES`, light in mesh jobs).
+1. **CPU light in 8³ bricks** (in progress): the light engine stores a brick only where light
+   differs from its default. 239 MB to about 38 MB at 5M cells.
+2. **GPU light layout: decide, then build.** Recommendation: per-face light (42 MB, simplest
+   shader, one material, small uploads), keeping the volume renderer's code path in mind for
+   non-voxel things later. The alternative is default-aware 8³ bricks (88 MB, three dependent
+   lookups per fragment). Either way, one storage buffer or pool replaces the seven pages and
+   the per-object uniform, which also fixes the upload hitches. Then remove baked lighting
+   (`vertex` mode, `LIT_QUAD_BYTES`, light in mesh jobs); WebGL2 then draws unlit.
 3. **Faster flood fill.** Within a chunk, step to neighbours by index arithmetic instead of a
    chunk lookup per neighbour. Sky light is 1.7 of the 2.3 s full relight.
 4. **Relight big fills as volumes.** Clear the box's light directly and seed only its

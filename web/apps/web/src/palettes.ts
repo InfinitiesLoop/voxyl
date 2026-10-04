@@ -1,4 +1,4 @@
-import type { World } from "@voxyl/core";
+import type { CellStateTable } from "@voxyl/core";
 import { type LightMaterials, packEmission } from "@voxyl/light";
 
 // Palettes map semantics to looks: a colour, and for lighting whether the material lets light
@@ -57,22 +57,14 @@ export function paletteAt(index: number): Palette {
 }
 
 /** Per cell-state opacity and emission for the light engine, from the palette. */
-export function lightMaterials(palette: Palette, world: World): LightMaterials {
-  const size = world.states.size + 1;
+export function lightMaterials(palette: Palette, states: CellStateTable): LightMaterials {
+  const size = states.size + 1;
   const opaque = new Uint8Array(size);
   const emission = new Uint16Array(size);
   for (let id = 1; id < size; id++) {
-    const material = palette.materials[world.states.get(id)?.semantic ?? ""];
+    const material = palette.materials[states.get(id)?.semantic ?? ""];
     opaque[id] = material?.transparent ? 0 : 1;
     if (material?.emits) emission[id] = packEmission(material.emits.color, material.emits.level);
   }
   return { opaque, emission };
-}
-
-export function sameMaterials(a: LightMaterials, b: LightMaterials): boolean {
-  if (a.opaque.length !== b.opaque.length) return false;
-  for (let i = 0; i < a.opaque.length; i++) {
-    if (a.opaque[i] !== b.opaque[i] || a.emission[i] !== b.emission[i]) return false;
-  }
-  return true;
 }

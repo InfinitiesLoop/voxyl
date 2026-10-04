@@ -28,10 +28,17 @@ Other scripts: `pnpm test:watch`, `pnpm format` (Biome, fixes formatting and imp
 packages/core/      world, chunks (stored by content), cell states, raycast: no DOM, no Node
 packages/mesher/    greedy chunk mesher with smooth light and ambient occlusion (runs in workers)
 packages/light/     Minecraft-style sky and colored block light, incremental on edits
+packages/session/   WorldSession: a World, its light and the mesh/light scheduling, headless
 packages/fixtures/  seeded test worlds (the benchmark city)
 apps/web/           the React + Three.js app (Vite), with the in-app benchmark
 tools/              dev tools (shot)
 ```
+
+Threads: the page runs a **world worker** (`apps/web/src/world/`) that owns the World, the
+light engine and a `WorldSession`, and several **mesh workers** it feeds over MessagePorts.
+The main thread only draws, takes input and sends commands (`Engine.world.request(...)`); it
+applies the meshes and light the world worker sends in arrival order. Generating and lighting
+a world never block drawing.
 
 Later phases add `formats`, `tools`, `raster`, `render`, `mc-import` and `apps/server`, as
 listed in the plan.
@@ -52,6 +59,8 @@ double mount included.
 ## Benchmarks
 
 - `pnpm bench:mesh [cells ...] [--bits=5,6,7]`: meshing and storage cost on one CPU thread.
+- `pnpm bench:sparse [cells]`: how much light memory sparse layouts would need (CPU bricks,
+  GPU bricks, per-face light) on the city.
 - `pnpm bench:light [cells ...]`: full relight, light memory, lit quad counts, the light
   volume copy per chunk, and incremental relights for single edits, a roof hole and big fills.
 - In the app, pick a world, chunk size and lighting (also in the URL, e.g.

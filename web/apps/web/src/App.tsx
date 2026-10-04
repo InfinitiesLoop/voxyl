@@ -1,10 +1,10 @@
+import type { LightingMode } from "@voxyl/session";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type BenchResult, runBench } from "./bench/bench.ts";
 import { BenchPanel, Hud } from "./Hud.tsx";
 import { PALETTES, paletteAt } from "./palettes.ts";
-import type { LightingMode } from "./scene/ChunkRenderer.ts";
 import { type Backend, Engine, type EngineStats } from "./scene/Engine.ts";
-import { buildWorld, CHUNK_SIZES, WORLD_KINDS, type WorldKind } from "./worlds.ts";
+import { CHUNK_SIZES, WORLD_KINDS, type WorldKind } from "./worlds.ts";
 
 export interface Settings {
   world: WorldKind;
@@ -58,11 +58,22 @@ export function App() {
   const [engine, setEngine] = useState<Engine | null>(null);
   const [backend, setBackend] = useState<Backend | null>(null);
   const [settings, setSettings] = useState(readSettings);
-  const [loading, setLoading] = useState<string | null>("Starting renderer");
+  /** Work in progress, shown in the banner (latest last); the controls wait for it. */
+  const [tasks, setTasks] = useState<string[]>(["Starting renderer"]);
   const [stats, setStats] = useState<EngineStats | null>(null);
   const [locked, setLocked] = useState(false);
   const [benchStep, setBenchStep] = useState<string | null>(null);
   const [bench, setBench] = useState<BenchResult | null>(null);
+
+  const track = useCallback((label: string, work: Promise<unknown>) => {
+    setTasks((t) => [...t, label]);
+    const done = () =>
+      setTasks((t) => {
+        const i = t.indexOf(label);
+        return i < 0 ? t : [...t.slice(0, i), ...t.slice(i + 1)];
+      });
+    work.then(done, done);
+  }, []);
 
   // One Engine per mount. React's dev-mode double mount disposes the first cleanly.
   useEffect(() => {
@@ -75,6 +86,7 @@ export function App() {
         if (disposed || b === null) return;
         setBackend(b);
         setEngine(created);
+        setTasks((t) => t.filter((label) => label !== "Starting renderer"));
         // Development only: lets dev tools (pnpm shot, scratch scripts) drive the scene.
         if (import.meta.env.DEV) (window as { __voxylEngine?: Engine }).__voxylEngine = created;
       },
@@ -92,48 +104,40 @@ export function App() {
     };
   }, []);
 
+  useEffect(() => writeSettings(settings), [settings]);
+
   // The palette is read through a ref when a world loads, so switching palettes never
   // regenerates the world: it only goes to setPalette below.
   const paletteRef = useRef(settings.palette);
   paletteRef.current = settings.palette;
-  const { world: worldKind, chunk: chunkSize } = settings;
+  const { world: worldKind, chunk: chunkSize, palette, lighting, daylight, brightness } = settings;
 
-  // Rebuild the world when its kind or chunk size changes.
+  // Rebuild the world when its kind or chunk size changes. It is generated (and, with
+  // lighting on, lit) in the world worker, so the page stays responsive meanwhile.
   useEffect(() => {
     if (!engine) return;
     const label = WORLD_KINDS.find((w) => w.kind === worldKind)?.label ?? worldKind;
-    setLoading(`Generating ${label}`);
     setBench(null);
-    // Let the overlay paint before generation blocks the main thread.
-    const timer = setTimeout(() => {
-      engine.load(buildWorld(worldKind, chunkSize), paletteAt(paletteRef.current));
-      setLoading(null);
-    }, 30);
-    return () => clearTimeout(timer);
-  }, [engine, worldKind, chunkSize]);
+    track(`Generating ${label}`, engine.load(worldKind, chunkSize, paletteAt(paletteRef.current)));
+  }, [engine, worldKind, chunkSize, track]);
 
   useEffect(() => {
-    writeSettings(settings);
-    engine?.setPalette(paletteAt(settings.palette));
-    engine?.setDaylight(settings.daylight / 100);
-    engine?.setBrightness(settings.brightness / 100);
-  }, [engine, settings]);
+    if (engine) void engine.setPalette(paletteAt(palette));
+  }, [engine, palette]);
 
-  // Turning lighting on lights the whole world at once, so show the banner while it runs.
-  const { lighting } = settings;
+  useEffect(() => {
+    engine?.setDaylight(daylight / 100);
+    engine?.setBrightness(brightness / 100);
+  }, [engine, daylight, brightness]);
+
+  // Turning lighting on lights the whole world in the worker: the world stays on screen,
+  // unlit, until each chunk's light arrives.
   useEffect(() => {
     if (!engine) return;
-    if (lighting === "off" || engine.chunks?.lighting !== "off") {
-      engine.setLighting(lighting); // no full relight: drops data or swaps how light is drawn
-      return;
-    }
-    setLoading("Lighting the world");
-    const timer = setTimeout(() => {
-      engine.setLighting(lighting);
-      setLoading(null);
-    }, 30);
-    return () => clearTimeout(timer);
-  }, [engine, lighting]);
+    const turningOn = lighting !== "off" && engine.lighting === "off";
+    const work = engine.setLighting(lighting);
+    if (turningOn) track("Lighting the world", work);
+  }, [engine, lighting, track]);
 
   useEffect(() => {
     if (!engine) return;
@@ -148,7 +152,7 @@ export function App() {
     try {
       const result = await runBench(
         engine,
-        { backend, world, lighting: settings.lighting },
+        { backend, world, lighting: engine.lighting },
         setBenchStep,
       );
       setBench(result);
@@ -157,8 +161,9 @@ export function App() {
     } finally {
       setBenchStep(null);
     }
-  }, [engine, backend, settings.world, settings.lighting]);
+  }, [engine, backend, settings.world]);
 
+  const loading = tasks.at(-1) ?? null;
   return (
     <div className="app">
       <div ref={hostRef} className="viewport" />

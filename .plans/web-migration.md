@@ -8,7 +8,9 @@ light volume (see [`web-lighting.md`](web-lighting.md)), are built. Numbers are 
 "Phase 0 status". Default chunk size is 64³; draw batching is deferred.
 Reviewed as a Claude Doc
 (https://claude.ai/code/artifact/98f31d14-989b-4c28-a24c-a3d7b8630a21); this file is now the
-working copy, so update it here as phases land.
+working copy. **Keep it (and `web-lighting.md`) up to date as we go**, in the same commit as
+the work: what is done, what is proven with numbers, the user's decisions, and next steps, so
+work can resume from the plans alone.
 
 Voxyl moves to a TypeScript web app in seven gated phases (0 to 6). The Godot app stays the
 daily driver until the web editor and agent tools both pass their gates, and every phase must
@@ -313,6 +315,8 @@ Done and proven, all on the B580 (headless Edge plus the user's Chrome at 3840x1
 - [x] 5M cells at 60 fps, p95 16.8 ms, with lighting on or off; one-frame edits.
 - [x] Minecraft-style light engine, Minecraft's lightmap, and the light volume renderer.
 - [x] `pnpm shot` to check the running dev server headless.
+- [x] World, light engine and mesh scheduling in a world worker (`packages/session`,
+  `apps/web/src/world/`): generating and lighting never block drawing (2026-10-04).
 
 Still open for the Phase 0 gate:
 
@@ -321,12 +325,13 @@ Still open for the Phase 0 gate:
 - [ ] Tier 1 CPU rasterizer prototype (agent screenshots).
 - [ ] Godot exporter for Conduit Factory, and a dense shaped-parts fixture.
 
-**Next steps, in order** (the user agreed on the first two on 2026-10-04):
+**Next steps, in order** (the user agreed on the worker and sparse light on 2026-10-04):
 
-1. **World and light engine in a worker.** Full relights stop freezing the page, and light
-   slot copies (1.2 ms per chunk on the main thread today) move off it. See
-   [`web-lighting.md`](web-lighting.md), "Next steps", for the design questions.
-2. **Sparse light** on the CPU and GPU, then drop baked lighting.
+1. ~~World and light engine in a worker~~ (done).
+2. **Sparse light**: CPU light in 8³ bricks (239 MB to about 38 MB), then the GPU layout,
+   which needs the user's decision between per-face light and default-aware bricks (see
+   [`web-lighting.md`](web-lighting.md), "Sparse light: measurements"). Then drop baked
+   lighting.
 3. The open Phase 0 items above, M4 run first.
 
 ## Testing and verification

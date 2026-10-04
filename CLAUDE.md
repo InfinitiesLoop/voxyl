@@ -53,14 +53,20 @@ tools/              — validate-scripts.sh
 ## Web version (`web/`)
 
 Voxyl is being ported to a TypeScript web app in gated phases; the plan, phase status and
-decisions live in `.plans/web-migration.md`. All web code stays inside the top-level `web/`
-folder (a pnpm workspace with its own `README.md`). The principles above apply unchanged.
+decisions live in `.plans/web-migration.md` (lighting in `.plans/web-lighting.md`). All web
+code stays inside the top-level `web/` folder (a pnpm workspace with its own `README.md`). The
+principles above apply unchanged.
+
+**Keep the plans current as work lands**, in the same commit: what is done, what is proven
+(with numbers), decisions the user made, and the next steps. Anyone should be able to pick
+the work up from the plans alone.
 
 - Needs Node 24+ and pnpm. From `web/`: `pnpm install`, `pnpm dev`.
 - **Before committing a web change, run `pnpm check`** (Biome lint, `tsc` typecheck per package,
   Vitest) from `web/`. The Godot validate/test scripts are only needed when GDScript changes.
-- `packages/core`, `mesher` and `light` must stay free of DOM and Node APIs; their tsconfigs
-  enforce this.
+- `packages/core`, `mesher`, `light` and `session` must stay free of DOM and Node APIs; their
+  tsconfigs enforce this. The World and light engine run in a worker (`apps/web/src/world/`),
+  never on the main thread.
 - Check UI changes against the dev server, not just the build: `pnpm shot "<query>"` drives the
   user's running `pnpm dev` headless and reports console problems, the HUD and a screenshot.
 - `web/.gdignore` stops Godot scanning `node_modules`; never remove it.

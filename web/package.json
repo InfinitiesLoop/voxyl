@@ -17,6 +17,7 @@
     "check": "pnpm lint && pnpm typecheck && pnpm test",
     "bench:mesh": "node packages/mesher/bench/city.ts",
     "bench:light": "node packages/light/bench/city.ts",
+    "bench:sparse": "node packages/light/bench/sparse.ts",
     "shot": "node tools/shot.ts"
   },
   "devDependencies": {

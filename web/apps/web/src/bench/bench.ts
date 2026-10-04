@@ -1,7 +1,7 @@
-import { EMPTY_ID, raycast, type World } from "@voxyl/core";
+import { EMPTY_ID } from "@voxyl/core";
 import { mulberry32 } from "@voxyl/fixtures";
+import type { LightingMode } from "@voxyl/session";
 import * as THREE from "three/webgpu";
-import type { LightingMode } from "../scene/ChunkRenderer.ts";
 import { type Engine, percentile } from "../scene/Engine.ts";
 
 export interface Distribution {
@@ -14,9 +14,9 @@ export interface Distribution {
 export interface BulkEdit {
   readonly label: string;
   readonly cells: number;
-  /** Time to write the cells into the World. */
+  /** Time until the world worker reports the cells written. */
   readonly writeMs: number;
-  /** Time from the start of the write until every affected chunk is remeshed and on screen. */
+  /** Time from sending the edit until every affected chunk is remeshed, lit and on screen. */
   readonly visibleMs: number;
 }
 
@@ -27,9 +27,9 @@ export interface BenchResult {
   readonly viewport: string;
   readonly world: string;
   readonly lighting: LightingMode;
-  /** Time to light the whole world, with lighting on. */
+  /** Time to light the whole world, with lighting on (in the world worker). */
   readonly lightAllMs: number | null;
-  /** Light engine memory (CPU). */
+  /** Light engine memory (world worker). */
   readonly lightMb: number;
   /** Light volume memory (GPU), with volume lighting. */
   readonly lightGpuMb: number;
@@ -56,22 +56,22 @@ const SINGLE_EDITS = 100;
 /**
  * Scripted benchmark on the loaded world: a fixed flight (frame times), 100 single-cell
  * edits around the camera (edit-to-visible latency), then large box fills and clears above
- * the city (bulk remesh). Everything waits on real rendered frames.
+ * the city (bulk remesh and relight). Edits go through the world worker as the user's do,
+ * and everything waits on real rendered frames.
  */
 export async function runBench(
   engine: Engine,
   meta: { backend: string; world: string; lighting: LightingMode },
   progress: (step: string) => void,
 ): Promise<BenchResult> {
-  const built = engine.built;
-  const chunks = engine.chunks;
-  if (!built || !chunks) throw new Error("No world loaded");
-  const world = built.world;
-  const [cx, , cz] = built.center;
-  const e = Math.max(built.extent, 24);
+  const info = engine.info;
+  if (!info) throw new Error("No world loaded");
+  const world = engine.world;
+  const [cx, , cz] = info.center;
+  const e = Math.max(info.extent, 24);
 
   progress("Waiting for initial meshing");
-  await chunks.whenIdle();
+  await engine.whenIdle();
 
   // 1. Flight: an orbit, then a low pass through the streets.
   progress("Flying");
@@ -110,64 +110,68 @@ export async function runBench(
   };
   engine.setAutopilot(() => home);
   await engine.nextFrame();
-  await chunks.whenIdle();
+  await engine.whenIdle();
   const rand = mulberry32(42);
-  const glow = world.states.intern({ semantic: "Glow" });
+  const glow = await world.request({ type: "intern", state: { semantic: "Glow" } });
   const latencies: number[] = [];
   let misses = 0;
   const forward = engine.fly.forward();
+  const p = engine.camera.position;
   for (let i = 0; i < SINGLE_EDITS; i++) {
     const dir = forward
       .clone()
       .applyAxisAngle(new THREE.Vector3(0, 1, 0), (rand() - 0.5) * 0.9)
       .applyAxisAngle(new THREE.Vector3(1, 0, 0), (rand() - 0.5) * 0.5);
-    const p = engine.camera.position;
-    const hit = raycast(world, [p.x, p.y, p.z], [dir.x, dir.y, dir.z], 2000);
-    if (!hit) {
-      misses++;
-      continue;
-    }
-    const [x, y, z] = hit.cell;
-    const [nx, ny, nz] = hit.normal;
     const start = performance.now();
-    const changed =
-      i % 2 === 0 ? world.setId(x, y, z, EMPTY_ID) : world.setId(x + nx, y + ny, z + nz, glow);
+    const changed = await world.request({
+      type: "rayEdit",
+      origin: [p.x, p.y, p.z],
+      dir: [dir.x, dir.y, dir.z],
+      reach: 2000,
+      action: i % 2 === 0 ? "erase" : "place",
+      id: glow,
+    });
     if (!changed) {
       misses++;
       continue;
     }
-    engine.afterEdit();
-    await chunks.whenIdle();
+    await engine.whenIdle();
     latencies.push(performance.now() - start);
   }
 
   const bulk: BulkEdit[] = [];
-  const timeEdit = async (label: string, edit: () => number) => {
+  const timeEdit = async (label: string, edit: () => Promise<number>) => {
     progress(label);
     await engine.nextFrame();
     const start = performance.now();
-    const cells = edit();
+    const cells = await edit();
     const writeMs = performance.now() - start;
-    engine.afterEdit();
-    await chunks.whenIdle();
+    await engine.whenIdle();
     bulk.push({ label, cells, writeMs, visibleMs: performance.now() - start });
   };
 
   // 3. A roof hole: open a 5x5 patch of a roof near the centre (sky light floods into the
   //    building, with lighting on) and close it again.
-  const roof = findRoof(world, cx, cz, built.top);
+  const roof = await findRoof(engine, cx, cz, info.top);
   if (roof) {
     const [rx, ry, rz, id] = roof;
-    await timeEdit("Roof hole open", () =>
-      world.fillBox(rx - 2, ry, rz - 2, rx + 2, ry, rz + 2, EMPTY_ID),
-    );
-    await timeEdit("Roof hole close", () =>
-      world.fillBox(rx - 2, ry, rz - 2, rx + 2, ry, rz + 2, id),
-    );
+    for (const [label, fill] of [
+      ["Roof hole open", EMPTY_ID],
+      ["Roof hole close", id],
+    ] as const) {
+      await timeEdit(label, () =>
+        world.request({
+          type: "fillBox",
+          from: [rx - 2, ry, rz - 2],
+          to: [rx + 2, ry, rz + 2],
+          id: fill,
+        }),
+      );
+    }
   }
 
   // 4. Bulk fills and clears floating above the city.
-  const y0 = built.top + 20;
+  const y0 = info.top + 20;
   for (const [label, w, h, d] of [
     ["100k fill", 50, 40, 50],
     ["1M fill", 100, 100, 100],
@@ -176,7 +180,12 @@ export async function runBench(
     const z0 = Math.round(cz - d / 2);
     for (const clear of [false, true]) {
       await timeEdit(clear ? label.replace("fill", "clear") : label, () =>
-        world.fillBox(x0, y0, z0, x0 + w - 1, y0 + h - 1, z0 + d - 1, clear ? EMPTY_ID : glow),
+        world.request({
+          type: "fillBox",
+          from: [x0, y0, z0],
+          to: [x0 + w - 1, y0 + h - 1, z0 + d - 1],
+          id: clear ? EMPTY_ID : glow,
+        }),
       );
     }
   }
@@ -192,16 +201,16 @@ export async function runBench(
     viewport: `${engine.renderer.domElement.width}x${engine.renderer.domElement.height}`,
     world: meta.world,
     lighting: meta.lighting,
-    lightAllMs: stats.chunks?.lightAllMs ?? null,
-    lightMb: stats.chunks?.lightMb ?? 0,
+    lightAllMs: stats.world?.lightAllMs ?? null,
+    lightMb: stats.world?.lightMb ?? 0,
     lightGpuMb: stats.chunks?.lightGpuMb ?? 0,
-    cells: world.cellCount,
-    chunkSize: world.layout.size,
-    chunks: world.chunkCount,
+    cells: stats.world?.cells ?? 0,
+    chunkSize: info.chunkSize,
+    chunks: stats.world?.chunkCount ?? 0,
     quads: stats.chunks?.quads ?? 0,
     quadMb: stats.quadMb,
-    workers: stats.chunks?.workers ?? 0,
-    generateMs: built.generateMs,
+    workers: stats.meshWorkers,
+    generateMs: info.generateMs,
     initialMeshMs: stats.initialMeshMs,
     flight: {
       seconds: FLIGHT_SECONDS,
@@ -214,12 +223,12 @@ export async function runBench(
 }
 
 /** The highest Roof cell near the centre, found by looking straight down: [x, y, z, id]. */
-function findRoof(
-  world: World,
+async function findRoof(
+  engine: Engine,
   cx: number,
   cz: number,
   top: number,
-): [number, number, number, number] | null {
+): Promise<[number, number, number, number] | null> {
   for (let r = 0; r <= 64; r += 4) {
     for (const [dx, dz] of [
       [r, 0],
@@ -229,10 +238,13 @@ function findRoof(
     ] as const) {
       const x = Math.round(cx + dx);
       const z = Math.round(cz + dz);
-      const hit = raycast(world, [x + 0.5, top + 5, z + 0.5], [0, -1, 0], top + 10);
-      if (hit && world.states.get(hit.id)?.semantic === "Roof") {
-        return [hit.cell[0], hit.cell[1], hit.cell[2], hit.id];
-      }
+      const hit = await engine.world.request({
+        type: "raycast",
+        origin: [x + 0.5, top + 5, z + 0.5],
+        dir: [0, -1, 0],
+        reach: top + 10,
+      });
+      if (hit?.semantic === "Roof") return [hit.cell[0], hit.cell[1], hit.cell[2], hit.id];
     }
   }
   return null;

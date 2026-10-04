@@ -12,13 +12,20 @@ export const WORLD_KINDS: readonly { kind: WorldKind; label: string }[] = [
 
 export const CHUNK_SIZES = [16, 32, 64, 128] as const;
 
-export interface BuiltWorld {
-  readonly world: World;
+/** What the main thread knows about a world built in the world worker. */
+export interface WorldInfo {
+  readonly kind: WorldKind;
+  readonly chunkSize: number;
   /** Horizontal centre and size, for framing the camera and the bench's flight path. */
   readonly center: readonly [number, number, number];
   readonly extent: number;
   readonly top: number;
   readonly generateMs: number;
+}
+
+export interface BuiltWorld {
+  readonly world: World;
+  readonly info: WorldInfo;
 }
 
 const CITY_TARGETS: Record<Exclude<WorldKind, "pillar">, number> = {
@@ -32,7 +39,9 @@ export function buildWorld(kind: WorldKind, chunkSize: number): BuiltWorld {
   const start = performance.now();
   if (kind === "pillar") {
     buildPillar(world);
-    return { world, center: [0, 8, 0], extent: 16, top: 17, generateMs: performance.now() - start };
+    const generateMs = performance.now() - start;
+    const info = { kind, chunkSize, center: [0, 8, 0], extent: 16, top: 17, generateMs } as const;
+    return { world, info };
   }
   const stats = generateCity(world, { targetCells: CITY_TARGETS[kind], seed: 1 });
   const generateMs = performance.now() - start;
@@ -41,7 +50,8 @@ export function buildWorld(kind: WorldKind, chunkSize: number): BuiltWorld {
     0,
     (stats.min[2] + stats.max[2] + 1) / 2,
   ] as const;
-  return { world, center, extent: stats.max[0] - stats.min[0] + 1, top: stats.max[1], generateMs };
+  const extent = stats.max[0] - stats.min[0] + 1;
+  return { world, info: { kind, chunkSize, center, extent, top: stats.max[1], generateMs } };
 }
 
 /** A small pillar: a hollow dark shaft with light bands every fourth layer and glowing corners. */

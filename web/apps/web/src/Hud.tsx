@@ -48,6 +48,7 @@ export function Hud({
 }: HudProps) {
   const f = stats?.frame;
   const c = stats?.chunks;
+  const w = stats?.world;
   return (
     <aside className="hud">
       <header>
@@ -148,32 +149,36 @@ export function Hud({
         <dd>{f ? `${count(f.drawCalls)} calls · ${count(f.triangles)} triangles` : "–"}</dd>
         <dt>World</dt>
         <dd>
-          {stats
-            ? `${count(stats.cells)} cells · ${count(stats.chunkCount)} chunks of ${stats.chunkSize}³`
+          {w && stats
+            ? `${count(w.cells)} cells · ${count(w.chunkCount)} chunks of ${stats.chunkSize}³`
             : "–"}
         </dd>
         <dt>Meshes</dt>
         <dd>
-          {c
-            ? `${count(c.meshes)} · ${count(c.quads)} quads · ${ms(c.meshMsAvg, 2)}/chunk · ${c.workers} workers`
+          {c && w && stats
+            ? `${count(c.meshes)} · ${count(c.quads)} quads · ${ms(w.meshMsAvg, 2)}/chunk · ${stats.meshWorkers} workers`
             : "–"}
         </dd>
         <dt>Queue</dt>
-        <dd>{c ? `${c.queued} waiting · ${c.inFlight} meshing` : "–"}</dd>
+        <dd>
+          {w && c
+            ? `${w.queued} waiting · ${w.inFlight} meshing · ${w.lightQueued + c.pending} to apply`
+            : "–"}
+        </dd>
         <dt>Memory</dt>
         <dd>
-          {stats
-            ? `chunks ${stats.storageMb.toFixed(0)} MB · quads ${stats.quadMb.toFixed(1)} MB${
-                stats.heapMb === null ? "" : ` · heap ${stats.heapMb.toFixed(0)} MB`
+          {stats && w
+            ? `chunks ${w.storageMb.toFixed(0)} MB · quads ${stats.quadMb.toFixed(1)} MB${
+                stats.heapMb === null ? "" : ` · page heap ${stats.heapMb.toFixed(0)} MB`
               }`
             : "–"}
         </dd>
         <dt>Light</dt>
         <dd>
-          {c && c.lighting !== "off"
-            ? `all ${ms(c.lightAllMs, 0)} · ${c.lightMb.toFixed(0)} MB${
+          {c && w && c.lighting !== "off"
+            ? `all ${ms(w.lightAllMs, 0)} · ${w.lightMb.toFixed(0)} MB${
                 c.lighting === "volume"
-                  ? ` · GPU ${c.lightGpuMb.toFixed(0)} MB · upload ${ms(c.lightUploadMs[0], 2)} + ${ms(c.lightUploadMs[1], 2)}/chunk`
+                  ? ` · GPU ${c.lightGpuMb.toFixed(0)} MB · copy ${ms(w.lightCopyMs, 2)} + write ${ms(c.lightWriteMs, 2)}/chunk`
                   : ""
               }`
             : "off"}
