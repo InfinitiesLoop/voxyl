@@ -4,7 +4,6 @@
 // main thread, together with light, in the order it produced them.
 
 import { type CellStateTable, EMPTY_ID, raycast } from "@voxyl/core";
-import { QUAD_BYTES } from "@voxyl/mesher";
 import { type LightingMode, WorldSession } from "@voxyl/session";
 import { lightMaterials, type Palette, paletteAt } from "../palettes.ts";
 import { buildWorld } from "../worlds.ts";
@@ -30,6 +29,8 @@ const scope = self as unknown as WorkerScope;
 const JOBS_PER_WORKER = 2;
 /** Longest stretch spent copying light before letting other messages in. */
 const LIGHT_SLICE_MS = 8;
+/** Bricks of light per message: 4096 is 512 KB. */
+const LIGHT_BATCH = 4096;
 const STATS_INTERVAL_MS = 250;
 
 interface MeshPort {
@@ -120,25 +121,22 @@ function pump(): void {
     const job = s.takeJob();
     if (!job) break;
     free.load++;
-    const transfer: Transferable[] = [job.cells.buffer];
-    if (job.light) transfer.push(job.light.buffer);
-    if (job.opaque) transfer.push(job.opaque.buffer);
     const request: MeshRequest = { world: worldId, job };
-    free.port.postMessage(request, transfer);
+    free.port.postMessage(request, [job.cells.buffer]);
   }
   for (const key of s.takeRemoved()) {
-    post({
-      type: "mesh",
-      world: worldId,
-      key,
-      quads: new Uint8Array(0),
-      quadCount: 0,
-      quadBytes: QUAD_BYTES,
-    });
+    post({ type: "mesh", world: worldId, key, quads: new Uint8Array(0), quadCount: 0 });
   }
   const start = performance.now();
-  for (let slot = s.takeLight(); slot; slot = s.takeLight()) {
-    post({ type: "light", world: worldId, key: slot.key, light: slot.light }, [slot.light.buffer]);
+  for (let u = s.takeLightUpdate(LIGHT_BATCH); u; u = s.takeLightUpdate(LIGHT_BATCH)) {
+    const transfer: Transferable[] = [
+      u.slots.buffer,
+      u.bricks.buffer,
+      u.tables.buffer,
+      u.tableData.buffer,
+    ];
+    if (u.grid) transfer.push(u.grid.data.buffer);
+    post({ type: "light", world: worldId, update: u }, transfer);
     if (performance.now() - start > LIGHT_SLICE_MS) {
       schedulePump(); // more may be waiting: let mesh results and commands in first
       return;
@@ -150,10 +148,14 @@ function pump(): void {
   }
 }
 
+// Yields through a MessageChannel rather than setTimeout, which browsers clamp to 4 ms.
+const yieldChannel = new MessageChannel();
+yieldChannel.port1.onmessage = () => pump();
+
 function schedulePump(): void {
   if (pumpScheduled) return;
   pumpScheduled = true;
-  setTimeout(pump, 0);
+  yieldChannel.port2.postMessage(null);
 }
 
 /** Sends the semantic of every state id when new states have appeared (for the palette). */
@@ -170,11 +172,11 @@ function onMeshReply(port: MeshPort, reply: MeshReply): void {
   port.load--;
   const s = session;
   if (s && reply.world === worldId) {
-    const { key, jobId, quads, quadCount, quadBytes, ms } = reply.result;
+    const { key, jobId, quads, quadCount, lightBricks, ms } = reply.result;
     meshTimes.push(ms);
     if (meshTimes.length > 256) meshTimes.shift();
-    post({ type: "mesh", world: worldId, key, quads, quadCount, quadBytes }, [quads.buffer]);
-    s.finishJob(key, jobId, quadCount);
+    post({ type: "mesh", world: worldId, key, quads, quadCount }, [quads.buffer]);
+    s.finishJob(key, jobId, lightBricks);
   }
   pump();
 }
@@ -217,11 +219,12 @@ setInterval(() => {
       storageMb: s.world.memoryBytes / 2 ** 20,
       queued: stats.queued,
       inFlight: stats.inFlight,
-      lightQueued: stats.lightQueued,
+      lightBricks: stats.lightBricks,
+      lightTables: stats.lightTables,
       meshMsAvg: meshTimes.length > 0 ? meshTimes.reduce((a, b) => a + b, 0) / meshTimes.length : 0,
       lightAllMs: stats.lightAllMs,
       lightMb: stats.lightMb,
-      lightCopyMs: stats.lightCopyMs,
+      lightCopyUs: stats.lightCopyUs,
     },
   });
 }, STATS_INTERVAL_MS);

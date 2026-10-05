@@ -1,6 +1,11 @@
 export {
+  type CopyLight,
+  LightLayout,
+  type LightLayoutOptions,
+  type LightLayoutUpdate,
+} from "./light-layout.ts";
+export {
   type LightingMode,
-  type LightSlot,
   type MaterialsFor,
   type MeshJob,
   type SessionStats,

@@ -9,7 +9,7 @@
 // been replaced are dropped.
 
 import type { CellStateInput } from "@voxyl/core";
-import type { LightingMode, MeshJob } from "@voxyl/session";
+import type { LightingMode, LightLayoutUpdate, MeshJob } from "@voxyl/session";
 import type { Palette } from "../palettes.ts";
 import type { WorldInfo, WorldKind } from "../worlds.ts";
 
@@ -57,7 +57,6 @@ export type ToWorld =
   | { type: "camera"; at: Vec3 }
   /** One port per mesh worker, sent once at startup. */
   | { type: "meshPorts"; ports: MessagePort[] };
-
 export interface WorldStats {
   readonly cells: number;
   readonly chunkCount: number;
@@ -65,26 +64,24 @@ export interface WorldStats {
   readonly storageMb: number;
   readonly queued: number;
   readonly inFlight: number;
-  readonly lightQueued: number;
   /** Worker meshing time per chunk over recent jobs. */
   readonly meshMsAvg: number;
   readonly lightAllMs: number | null;
+  /** Light engine memory. */
   readonly lightMb: number;
-  readonly lightCopyMs: number;
+  /** Light bricks kept for the GPU, and chunk tables pointing at them. */
+  readonly lightBricks: number;
+  readonly lightTables: number;
+  /** Time to copy one brick of light for sending, in microseconds. */
+  readonly lightCopyUs: number;
 }
 
 export type FromWorld =
   | { type: "reply"; seq: number; value: unknown }
   | { type: "error"; seq: number; message: string }
-  | {
-      type: "mesh";
-      world: number;
-      key: number;
-      quads: Uint8Array;
-      quadCount: number;
-      quadBytes: number;
-    }
-  | { type: "light"; world: number; key: number; light: Uint16Array }
+  | { type: "mesh"; world: number; key: number; quads: Uint8Array; quadCount: number }
+  /** Writes for the light volume (see LightLayout), applied whole. */
+  | { type: "light"; world: number; update: LightLayoutUpdate }
   /** The semantic of every cell-state id (index 0 is empty), sent when new states appear. */
   | { type: "states"; world: number; semantics: string[] }
   | { type: "idle"; world: number; seq: number }
@@ -107,7 +104,8 @@ export interface MeshResult {
   readonly key: number;
   readonly quads: Uint8Array;
   readonly quadCount: number;
-  readonly quadBytes: number;
+  /** The light bricks the faces read (ChunkMesh.lightBricks). */
+  readonly lightBricks: Uint16Array;
   /** Time spent meshing. */
   readonly ms: number;
 }

@@ -34,7 +34,7 @@ for (const target of targets) {
       world.copyPadded(cx, cy, cz, cells);
       copyTimes.push(performance.now() - start);
       start = performance.now();
-      quads += meshChunk({ bits, cells, light: null, opaque: null }).quadCount;
+      quads += meshChunk({ bits, cells, lightBrickBits: null }).quadCount;
       meshTimes.push(performance.now() - start);
     }
     const meshMs = performance.now() - t;

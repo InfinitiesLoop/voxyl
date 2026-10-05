@@ -1,13 +1,14 @@
 import { type CellStateTable, chunkKeyToCoords, type World } from "@voxyl/core";
-import { LightEngine, type LightMaterials } from "@voxyl/light";
+import { GPU_BRICK_BITS, LightEngine, type LightMaterials } from "@voxyl/light";
 import { paddedVolume } from "@voxyl/mesher";
+import { LightLayout, type LightLayoutUpdate } from "./light-layout.ts";
 
 /**
- * How faces are lit. "vertex" bakes light into the quads (so a light change remeshes);
- * "volume" keeps quads plain and sends each meshed chunk's padded light for the renderer to
- * read on the GPU (so a light change resends light, never meshes). Both compute the same light.
+ * How faces are lit: not at all, or from the light volume (light the renderer reads per
+ * fragment from bricks of light the session sends; a light change resends bricks, never
+ * meshes).
  */
-export type LightingMode = "off" | "vertex" | "volume";
+export type LightingMode = "off" | "volume";
 
 /** Opacity and emission per cell state, from whatever decides looks (the palette). */
 export type MaterialsFor = (states: CellStateTable) => LightMaterials;
@@ -19,16 +20,8 @@ export interface MeshJob {
   readonly bits: number;
   /** World.copyPadded() output. */
   readonly cells: Uint16Array;
-  /** Light to bake into the quads ("vertex" lighting), or null for plain quads. */
-  readonly light: Uint16Array | null;
-  /** Per cell-state id, nonzero if it blocks light; null for plain quads. */
-  readonly opaque: Uint8Array | null;
-}
-
-/** A meshed chunk's padded light with light-blocking cells marked ("volume" lighting). */
-export interface LightSlot {
-  readonly key: number;
-  readonly light: Uint16Array;
+  /** Brick size for the light bricks the mesh reports (ChunkMesh.lightBricks). */
+  readonly lightBrickBits: number;
 }
 
 export interface SessionStats {
@@ -36,14 +29,15 @@ export interface SessionStats {
   /** Chunks waiting to be meshed. */
   readonly queued: number;
   readonly inFlight: number;
-  /** Meshed chunks waiting for their light to be sent. */
-  readonly lightQueued: number;
+  /** Light bricks kept on the GPU, and chunk tables pointing at them. */
+  readonly lightBricks: number;
+  readonly lightTables: number;
   /** Time the last full relight took, if lighting is on. */
   readonly lightAllMs: number | null;
   /** Light engine memory. */
   readonly lightMb: number;
-  /** Time to copy one chunk's light for sending, over recent ones. */
-  readonly lightCopyMs: number;
+  /** Time to copy one brick of light for sending, over recent batches, in microseconds. */
+  readonly lightCopyUs: number;
 }
 
 const perf = (globalThis as { performance?: { now(): number } }).performance;
@@ -60,13 +54,14 @@ export function sameMaterials(a: LightMaterials, b: LightMaterials): boolean {
 
 /**
  * One World and everything derived from it that the renderer needs: which chunks to mesh,
- * nearest the camera first, and (with volume lighting) which chunks' light to send. It owns
- * the light engine, so lighting the world never runs on the thread that draws.
+ * nearest the camera first, and (with lighting on) which bricks of light to send and where
+ * they go on the GPU (a LightLayout). It owns the light engine, so lighting the world never
+ * runs on the thread that draws.
  *
  * It is a plain state machine, with no workers or timers: edit `world`, call sync(), then
- * hand out work with takeJob() and takeLight() and report finished meshes with finishJob().
- * At most one job per chunk is in flight, so a chunk's meshes finish in the order they
- * started; a chunk edited while it is being meshed is meshed again afterwards.
+ * hand out work with takeJob() and takeLightUpdate() and report finished meshes with
+ * finishJob(). At most one job per chunk is in flight, so a chunk's meshes finish in the
+ * order they started; a chunk edited while it is being meshed is meshed again afterwards.
  */
 export class WorldSession {
   readonly world: World;
@@ -74,6 +69,7 @@ export class WorldSession {
   #materialsFor: MaterialsFor | null = null;
   #materials: LightMaterials | null = null;
   #light: LightEngine | null = null;
+  #layout: LightLayout | null = null;
   #lightAllMs: number | null = null;
   readonly #camera = [0, 0, 0];
 
@@ -84,11 +80,8 @@ export class WorldSession {
   readonly #again = new Set<number>();
   readonly #removed: number[] = [];
   #nextJob = 1;
-  /** Chunks whose latest mesh has quads: the ones whose light the renderer needs. */
-  readonly #meshed = new Set<number>();
-  readonly #lightQueue = new Set<number>();
-  /** Meshed chunks whose current light has been sent. */
-  readonly #lightSent = new Set<number>();
+  /** The light bricks each meshed chunk's faces read, kept with lighting off too. */
+  readonly #meshBricks = new Map<number, Uint16Array>();
   readonly #copyTimes: number[] = [];
 
   constructor(world: World) {
@@ -100,35 +93,42 @@ export class WorldSession {
     return this.#mode;
   }
 
+  /** The light layout, while lighting is on (for its brick and table sizes). */
+  get layout(): LightLayout | null {
+    return this.#layout;
+  }
+
   /**
    * Switches lighting. Turning it on lights the whole world now, which takes seconds on big
-   * worlds. Baked light remeshes every chunk when it starts or stops; volume light resends
-   * light for every meshed chunk.
+   * worlds, and then sends every brick of light the meshes read.
    */
   setLighting(mode: LightingMode, materialsFor: MaterialsFor | null = this.#materialsFor): void {
     if (mode === this.#mode) return;
-    if (mode !== "off" && !materialsFor) throw new Error("lighting needs materials");
-    const previous = this.#mode;
     this.#mode = mode;
     if (mode === "off") {
       this.#light = null;
+      this.#layout = null;
       this.#materials = null;
       this.#lightAllMs = null;
       this.world.recordChanges(false);
-    } else if (!this.#light && materialsFor) {
-      this.#materialsFor = materialsFor;
-      this.#materials = materialsFor(this.world.states);
-      this.#light = new LightEngine(this.world, this.#materials);
-      this.world.recordChanges(true);
-      this.#relightAll();
+      return;
     }
-    if (previous === "vertex" || mode === "vertex") this.#remeshAll();
-    this.#resendLight();
+    if (!materialsFor) throw new Error("lighting needs materials");
+    this.#materialsFor = materialsFor;
+    this.#materials = materialsFor(this.world.states);
+    this.#light = new LightEngine(this.world, this.#materials);
+    this.#layout = new LightLayout({
+      chunkBits: this.world.layout.bits,
+      brickBits: GPU_BRICK_BITS,
+    });
+    for (const [key, bricks] of this.#meshBricks) this.#layout.setMeshBricks(key, bricks);
+    this.world.recordChanges(true);
+    this.#relightAll();
   }
 
   /**
    * New looks (a palette change). Returns true if the light changed, in which case the whole
-   * world was relit and light is resent (or, baked, every chunk remeshed).
+   * world was relit and every brick is resent.
    */
   setMaterials(materialsFor: MaterialsFor): boolean {
     this.#materialsFor = materialsFor;
@@ -139,8 +139,6 @@ export class WorldSession {
     this.#materials = next;
     light.setMaterials(next);
     this.#relightAll();
-    if (this.#mode === "vertex") this.#remeshAll();
-    this.#resendLight();
     return true;
   }
 
@@ -162,10 +160,7 @@ export class WorldSession {
         light.setMaterials(this.#materials);
       }
       light.update(this.world.takeChanges());
-      for (const key of light.takeDirtyChunks()) {
-        if (this.#mode === "vertex") this.#enqueue(key);
-        else if (this.#meshed.has(key)) this.#lightQueue.add(key);
-      }
+      this.#layout?.markDirty(light.takeDirty());
     }
     for (const key of this.world.takeDirtyChunks()) this.#enqueue(key);
   }
@@ -189,21 +184,18 @@ export class WorldSession {
       if (key === undefined || !this.#queue.delete(key)) continue;
       const [cx, cy, cz] = chunkKeyToCoords(key);
       if (!this.world.chunk(cx, cy, cz)) {
-        // Emptied: its mesh goes, and so does its light.
+        // Emptied: its mesh goes, and nothing reads light for it any more.
         this.#removed.push(key);
-        this.#forget(key);
+        this.#setMeshBricks(key, new Uint16Array(0));
         continue;
       }
       const bits = this.world.layout.bits;
-      const volume = paddedVolume(bits);
-      const baked = this.#mode === "vertex" ? this.#light : null;
       const job: MeshJob = {
         jobId: this.#nextJob++,
         key,
         bits,
-        cells: this.world.copyPadded(cx, cy, cz, new Uint16Array(volume)),
-        light: baked ? baked.copyPadded(cx, cy, cz, new Uint16Array(volume)) : null,
-        opaque: baked && this.#materials ? this.#materials.opaque.slice() : null,
+        cells: this.world.copyPadded(cx, cy, cz, new Uint16Array(paddedVolume(bits))),
+        lightBrickBits: GPU_BRICK_BITS,
       };
       this.#inFlight.set(key, job.jobId);
       return job;
@@ -211,16 +203,11 @@ export class WorldSession {
     return null;
   }
 
-  /** Reports a finished mesh job and whether its mesh has any quads. */
-  finishJob(key: number, jobId: number, quadCount: number): void {
+  /** Reports a finished mesh job: its quad count and the light bricks its faces read. */
+  finishJob(key: number, jobId: number, lightBricks: Uint16Array): void {
     if (this.#inFlight.get(key) === jobId) this.#inFlight.delete(key);
     if (this.#again.delete(key)) this.#enqueue(key);
-    if (quadCount > 0) {
-      this.#meshed.add(key);
-      if (this.#mode === "volume" && !this.#lightSent.has(key)) this.#lightQueue.add(key);
-    } else {
-      this.#forget(key);
-    }
+    this.#setMeshBricks(key, lightBricks);
   }
 
   /** Chunks that became empty since the last call: the renderer drops their meshes. */
@@ -228,27 +215,24 @@ export class WorldSession {
     return this.#removed.splice(0);
   }
 
-  /** The next meshed chunk's light to send (volume lighting), or null if none is due. */
-  takeLight(): LightSlot | null {
+  /**
+   * The next batch of GPU writes for the light volume, with at most `maxBricks` bricks of
+   * light, or null if nothing is waiting (or lighting is off).
+   */
+  takeLightUpdate(maxBricks: number): LightLayoutUpdate | null {
     const light = this.#light;
-    for (const key of this.#lightQueue) {
-      this.#lightQueue.delete(key);
-      if (!light || !this.#meshed.has(key)) continue;
-      const [cx, cy, cz] = chunkKeyToCoords(key);
-      const start = now();
-      const data = light.copyPadded(
-        cx,
-        cy,
-        cz,
-        new Uint16Array(paddedVolume(this.world.layout.bits)),
-        true,
-      );
-      this.#copyTimes.push(now() - start);
-      if (this.#copyTimes.length > 256) this.#copyTimes.shift();
-      this.#lightSent.add(key);
-      return { key, light: data };
+    const layout = this.#layout;
+    if (!light || !layout) return null;
+    const start = now();
+    const update = layout.takeUpdate(
+      (origin, size, out) => light.copyBox(origin, size, out, true),
+      maxBricks,
+    );
+    if (update && update.slots.length > 0) {
+      this.#copyTimes.push(((now() - start) * 1000) / update.slots.length);
+      if (this.#copyTimes.length > 64) this.#copyTimes.shift();
     }
-    return null;
+    return update;
   }
 
   /** True when every edit so far has been meshed and its light sent. Call sync() first. */
@@ -259,7 +243,7 @@ export class WorldSession {
       this.#inFlight.size === 0 &&
       this.#again.size === 0 &&
       this.#removed.length === 0 &&
-      this.#lightQueue.size === 0
+      !this.#layout?.pending
     );
   }
 
@@ -269,11 +253,18 @@ export class WorldSession {
       lighting: this.#mode,
       queued: this.#queue.size + this.#again.size,
       inFlight: this.#inFlight.size,
-      lightQueued: this.#lightQueue.size,
+      lightBricks: this.#layout?.brickCount ?? 0,
+      lightTables: this.#layout?.tableCount ?? 0,
       lightAllMs: this.#lightAllMs,
       lightMb: (this.#light?.memoryBytes ?? 0) / 2 ** 20,
-      lightCopyMs: times.length > 0 ? times.reduce((s, t) => s + t, 0) / times.length : 0,
+      lightCopyUs: times.length > 0 ? times.reduce((s, t) => s + t, 0) / times.length : 0,
     };
+  }
+
+  #setMeshBricks(key: number, bricks: Uint16Array): void {
+    if (bricks.length > 0) this.#meshBricks.set(key, bricks);
+    else this.#meshBricks.delete(key);
+    this.#layout?.setMeshBricks(key, bricks);
   }
 
   #relightAll(): void {
@@ -283,17 +274,7 @@ export class WorldSession {
     const start = now();
     light.computeAll();
     this.#lightAllMs = now() - start;
-    light.takeDirtyChunks();
-  }
-
-  #remeshAll(): void {
-    for (const key of this.world.chunkKeys()) this.#enqueue(key);
-  }
-
-  #resendLight(): void {
-    this.#lightQueue.clear();
-    this.#lightSent.clear();
-    if (this.#mode === "volume") for (const key of this.#meshed) this.#lightQueue.add(key);
+    this.#layout?.markDirty(light.takeDirty());
   }
 
   #enqueue(key: number): void {
@@ -303,11 +284,5 @@ export class WorldSession {
       this.#queue.add(key);
       this.#orderStale = true;
     }
-  }
-
-  #forget(key: number): void {
-    this.#meshed.delete(key);
-    this.#lightSent.delete(key);
-    this.#lightQueue.delete(key);
   }
 }

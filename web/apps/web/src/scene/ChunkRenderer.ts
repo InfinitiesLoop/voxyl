@@ -1,7 +1,7 @@
 import { chunkKeyToCoords } from "@voxyl/core";
-import { LIT_QUAD_BYTES } from "@voxyl/mesher";
+import { GPU_BRICK_BITS } from "@voxyl/light";
+import { QUAD_BYTES } from "@voxyl/mesher";
 import type { LightingMode } from "@voxyl/session";
-import { uniform } from "three/tsl";
 import * as THREE from "three/webgpu";
 import { type Palette, UNDECIDED_COLOR } from "../palettes.ts";
 import type { WorldOutput } from "../world/WorldClient.ts";
@@ -9,7 +9,6 @@ import { LightVolume } from "./light-volume.ts";
 import {
   createFlatMaterial,
   createLightUniforms,
-  createVertexLitMaterial,
   createVolumeLitMaterial,
   EMISSIVE_ALPHA,
   type LightUniforms,
@@ -29,48 +28,45 @@ export interface ChunkRendererStats {
   /** Updates from the world worker waiting to be applied. */
   readonly pending: number;
   readonly lighting: LightingMode;
-  /** Light volume memory on the GPU (volume lighting). */
+  /** Light volume memory on the GPU. */
   readonly lightGpuMb: number;
-  /** Time to write one chunk's light to the GPU, over recent ones. */
+  /** Time to apply one light update (up to 4096 bricks) on this thread, over recent ones. */
   readonly lightWriteMs: number;
 }
 
 /**
- * Draws one world's chunks from what the world worker sends: meshes, light for the light
- * volume, and idle markers, applied in arrival order within a per-frame budget. It owns
- * nothing about the world itself, only GPU state: one mesh per chunk, the materials, the
- * palette texture and the light volume.
+ * Draws one world's chunks from what the world worker sends: meshes, light volume writes
+ * and idle markers, applied in arrival order within a per-frame budget. It owns nothing
+ * about the world itself, only GPU state: one mesh per chunk, the materials, the palette
+ * texture and the light volume.
  */
 export class ChunkRenderer {
   readonly group = new THREE.Group();
   readonly #renderer: THREE.WebGPURenderer;
   readonly #size: number;
+  readonly #chunkBits: number;
   readonly #paletteData: Uint8Array;
   readonly #paletteTexture: THREE.DataTexture;
   readonly #uniforms: LightUniforms = createLightUniforms();
   readonly #flatMaterial: THREE.MeshBasicNodeMaterial;
-  readonly #vertexMaterial: THREE.MeshBasicNodeMaterial;
-  /** Each chunk mesh's light slot origin, for the volume materials. */
-  readonly #slot = uniform(new THREE.Vector3()).onObjectUpdate(
-    ({ object }) => object?.userData.lightSlot as THREE.Vector3 | undefined,
-  );
   #palette: Palette;
   #semantics: string[] = [""];
   #paletteDirty = true;
   #mode: LightingMode = "off";
   #volume: LightVolume | null = null;
-  /** Meshes whose light slot holds their light: they draw lit; the rest draw flat until then. */
-  readonly #lit = new Set<number>();
+  #volumeMaterial: THREE.MeshBasicNodeMaterial | null = null;
+  /** Whether meshes draw with the light volume yet (see revealLight). */
+  #lightShown = false;
   readonly #meshes = new Map<number, THREE.Mesh>();
   readonly #updates: Update[] = [];
   #appliedSeq = -1;
   #quads = 0;
-  #quadBytes = 0;
   readonly #writeTimes: number[] = [];
 
   constructor(renderer: THREE.WebGPURenderer, chunkSize: number, palette: Palette) {
     this.#renderer = renderer;
     this.#size = chunkSize;
+    this.#chunkBits = Math.log2(chunkSize);
     this.#palette = palette;
     this.#paletteData = new Uint8Array(PALETTE_SIZE * PALETTE_SIZE * 4);
     this.#paletteTexture = new THREE.DataTexture(this.#paletteData, PALETTE_SIZE, PALETTE_SIZE);
@@ -79,7 +75,6 @@ export class ChunkRenderer {
     this.#paletteTexture.minFilter = THREE.NearestFilter;
     this.#paletteTexture.generateMipmaps = false;
     this.#flatMaterial = createFlatMaterial(this.#paletteTexture);
-    this.#vertexMaterial = createVertexLitMaterial(this.#paletteTexture, this.#uniforms);
     this.group.name = "chunks";
   }
 
@@ -98,21 +93,41 @@ export class ChunkRenderer {
   }
 
   /**
-   * Switches how light is drawn. The world worker computes it; here, volume lighting needs a
-   * light volume, and meshes draw flat until their chunk's light arrives.
+   * Switches how faces are lit. With lighting on, a light volume fills as the world worker
+   * sends light; meshes keep drawing flat until revealLight(), so the world lights up at
+   * once rather than a few chunks at a time.
    */
   setLighting(mode: LightingMode): void {
     if (mode === this.#mode) return;
     this.#mode = mode;
-    this.#lit.clear();
     this.#volume?.dispose();
-    this.#volume =
-      mode === "volume"
-        ? new LightVolume(this.#renderer, this.#size, (atlas) =>
-            createVolumeLitMaterial(this.#paletteTexture, this.#uniforms, atlas, this.#slot),
-          )
-        : null;
-    for (const [key, mesh] of this.#meshes) mesh.material = this.#materialFor(key, mesh);
+    this.#volumeMaterial?.dispose();
+    this.#volume = null;
+    this.#volumeMaterial = null;
+    this.#lightShown = false;
+    if (mode === "volume") {
+      const brickBits = Math.min(GPU_BRICK_BITS, this.#chunkBits);
+      this.#volume = new LightVolume(
+        this.#renderer,
+        1 << (3 * brickBits),
+        (this.#size >> brickBits) ** 3,
+      );
+      this.#volumeMaterial = createVolumeLitMaterial(
+        this.#paletteTexture,
+        this.#uniforms,
+        this.#volume,
+        this.#chunkBits,
+        brickBits,
+      );
+    }
+    this.#applyMaterial();
+  }
+
+  /** Starts drawing with the light volume. Call once its light has arrived. */
+  revealLight(): void {
+    if (!this.#volumeMaterial || this.#lightShown) return;
+    this.#lightShown = true;
+    this.#applyMaterial();
   }
 
   /** Time of day, 0 (midnight) to 1 (noon). Costs nothing: it's one shader value. */
@@ -137,7 +152,7 @@ export class ChunkRenderer {
     this.#paletteDirty = true;
   }
 
-  /** Queues a mesh, light or idle marker from the world worker; applied in update(). */
+  /** Queues a mesh, light update or idle marker from the world worker; applied in update(). */
   receive(update: Update): void {
     this.#updates.push(update);
   }
@@ -151,9 +166,9 @@ export class ChunkRenderer {
       const update = this.#updates[i];
       if (!update) continue;
       if (update.type === "idle") this.#appliedSeq = update.seq;
-      else if (update.type === "light") this.#applyLight(update.key, update.light);
+      else if (update.type === "light") this.#applyLight(update.update);
       else if (update.quadCount === 0) this.#removeMesh(update.key);
-      else this.#setMesh(update.key, update.quads, update.quadCount, update.quadBytes);
+      else this.#setMesh(update.key, update.quads, update.quadCount);
     }
     this.#updates.splice(0, i);
   }
@@ -163,7 +178,7 @@ export class ChunkRenderer {
     return {
       meshes: this.#meshes.size,
       quads: this.#quads,
-      quadBytes: this.#quadBytes,
+      quadBytes: this.#quads * QUAD_BYTES,
       pending: this.#updates.length,
       lighting: this.#mode,
       lightGpuMb: (this.#volume?.memoryBytes ?? 0) / 2 ** 20,
@@ -176,29 +191,26 @@ export class ChunkRenderer {
     this.#meshes.clear();
     this.group.clear();
     this.#flatMaterial.dispose();
-    this.#vertexMaterial.dispose();
+    this.#volumeMaterial?.dispose();
     this.#volume?.dispose();
     this.#paletteTexture.dispose();
   }
 
-  /** Baked-light quads need the vertex material whatever the mode, until they are remeshed. */
-  #materialFor(key: number, mesh: THREE.Mesh): THREE.Material {
-    if (mesh.geometry.userData.quadBytes === LIT_QUAD_BYTES) return this.#vertexMaterial;
-    if (this.#volume && this.#lit.has(key)) return this.#volume.materialFor(key, mesh);
-    return this.#flatMaterial;
+  get #material(): THREE.Material {
+    return this.#lightShown && this.#volumeMaterial ? this.#volumeMaterial : this.#flatMaterial;
   }
 
-  #applyLight(key: number, light: Uint16Array): void {
-    const mesh = this.#meshes.get(key);
-    const volume = this.#volume;
-    if (!mesh || !volume) return;
-    volume.materialFor(key, mesh); // gives the chunk a slot
+  #applyMaterial(): void {
+    const material = this.#material;
+    for (const mesh of this.#meshes.values()) mesh.material = material;
+  }
+
+  #applyLight(update: Parameters<LightVolume["apply"]>[0]): void {
+    if (!this.#volume) return;
     const start = performance.now();
-    volume.upload(key, light);
+    this.#volume.apply(update);
     this.#writeTimes.push(performance.now() - start);
-    if (this.#writeTimes.length > 256) this.#writeTimes.shift();
-    this.#lit.add(key);
-    mesh.material = this.#materialFor(key, mesh);
+    if (this.#writeTimes.length > 64) this.#writeTimes.shift();
   }
 
   #syncPalette(): void {
@@ -216,28 +228,18 @@ export class ChunkRenderer {
     this.#paletteDirty = false;
   }
 
-  #setMesh(key: number, quads: Uint8Array, quadCount: number, quadBytes: number): void {
+  #setMesh(key: number, quads: Uint8Array, quadCount: number): void {
     const size = this.#size;
     const geometry = new THREE.InstancedBufferGeometry();
-    geometry.userData.quadBytes = quadBytes;
     // Each geometry owns its base quad: disposing a geometry frees all of its attributes.
     geometry.setIndex([0, 1, 2, 0, 2, 3]);
     geometry.setAttribute(
       "position",
       new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0], 3),
     );
-    const packed = new THREE.InstancedInterleavedBuffer(quads, quadBytes);
-    const unorm4 = (offset: number) =>
-      new THREE.InterleavedBufferAttribute(packed, 4, offset, true);
-    geometry.setAttribute("quadA", unorm4(0));
-    geometry.setAttribute("quadB", unorm4(4));
-    if (quadBytes === LIT_QUAD_BYTES) {
-      geometry.setAttribute("corner0", unorm4(8));
-      geometry.setAttribute("corner1", unorm4(12));
-      geometry.setAttribute("corner2", unorm4(16));
-      geometry.setAttribute("corner3", unorm4(20));
-      geometry.setAttribute("cornerAo", unorm4(24));
-    }
+    const packed = new THREE.InstancedInterleavedBuffer(quads, QUAD_BYTES);
+    geometry.setAttribute("quadA", new THREE.InterleavedBufferAttribute(packed, 4, 0, true));
+    geometry.setAttribute("quadB", new THREE.InterleavedBufferAttribute(packed, 4, 4, true));
     geometry.instanceCount = quadCount;
     // Bounds can't come from the base quad: they are the chunk's cube.
     geometry.boundingBox = new THREE.Box3(
@@ -251,11 +253,11 @@ export class ChunkRenderer {
 
     let mesh = this.#meshes.get(key);
     if (mesh) {
-      this.#forget(mesh);
+      this.#quads -= (mesh.geometry as THREE.InstancedBufferGeometry).instanceCount;
       mesh.geometry.dispose();
       mesh.geometry = geometry;
     } else {
-      mesh = new THREE.Mesh(geometry);
+      mesh = new THREE.Mesh(geometry, this.#material);
       const [cx, cy, cz] = chunkKeyToCoords(key);
       mesh.position.set(cx * size, cy * size, cz * size);
       mesh.matrixAutoUpdate = false;
@@ -263,26 +265,15 @@ export class ChunkRenderer {
       this.#meshes.set(key, mesh);
       this.group.add(mesh);
     }
-    mesh.material = this.#materialFor(key, mesh);
     this.#quads += quadCount;
-    this.#quadBytes += quadCount * quadBytes;
   }
 
   #removeMesh(key: number): void {
     const mesh = this.#meshes.get(key);
     if (!mesh) return;
-    this.#forget(mesh);
+    this.#quads -= (mesh.geometry as THREE.InstancedBufferGeometry).instanceCount;
     mesh.geometry.dispose();
     this.group.remove(mesh);
     this.#meshes.delete(key);
-    this.#volume?.free(key);
-    this.#lit.delete(key);
-  }
-
-  /** Takes a mesh's quads out of the totals. */
-  #forget(mesh: THREE.Mesh): void {
-    const geometry = mesh.geometry as THREE.InstancedBufferGeometry;
-    this.#quads -= geometry.instanceCount;
-    this.#quadBytes -= geometry.instanceCount * (geometry.userData.quadBytes as number);
   }
 }

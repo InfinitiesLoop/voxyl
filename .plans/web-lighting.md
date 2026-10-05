@@ -1,15 +1,14 @@
 # Voxyl Web — Storage by Content and Lighting
 
-Status (2026-10-04): **World and light engine run in a worker** (done). **CPU light is
-stored sparsely** in 8³ bricks (done: 249 MB to 54 MB at 5M cells, 901 MB to 198 MB at 20M).
-**The GPU layout needs a decision from the user**: the measurements favour per-face light over
-the sparse light volume that was planned (see "Sparse light: measurements"). Storage by content, the light
-engine, Minecraft's lightmap, and both ways of drawing light (baked into quads, or read from a
-light volume) work end to end. Part of Phase 0 in [`web-migration.md`](web-migration.md).
+Status (2026-10-05): **Sparse light, CPU and GPU, done.** The World and light engine run in
+a worker; CPU light lives in 8³ bricks (249 MB to 54 MB at 5M cells); GPU light is a sparse
+light volume of 4³ bricks (178 MB to 60 MB) read through a chunk grid and brick tables, and
+costs about 0.3-0.6 ms of GPU per frame. Baked light is gone. A shader bug that misread light
+along every brick boundary was found by the user and fixed (see "Shader bug" below). Next: faster flood fill and volume
+relights for big fills, then the M4. Part of Phase 0 in [`web-migration.md`](web-migration.md).
 
-Lighting is a setting: `Off`, `Baked in meshes` (`vertex`) or `Light volume` (`volume`).
-With it off, no light is computed or stored and the mesher behaves exactly as before, so if
-it doesn't scale it can be switched off rather than ripped out.
+Lighting is a setting, `Off` or `On` (`lighting=off|volume`). With it off, no light is
+computed or stored, so if it doesn't scale it can be switched off rather than ripped out.
 
 ## Storage by content
 
@@ -72,29 +71,40 @@ reads the way it does in a dark Minecraft world:
 
 Time of day and Brightness are shader values: changing them costs nothing.
 
-## Rendering
+## Rendering: the sparse light volume
 
-Both lit renderers compute identical light. Corner light is the average of the open cells
-around the corner in front of the face; corners are blended bilinearly across each cell in
-the fragment (no triangle-split artefacts). Screenshots of the two modes differ only in edge
-antialiasing.
+Quads stay plain (8 bytes) and merge on cell state alone. Light is read per fragment: the
+shader finds the empty cell in front of its face and the 8 around it in the face's plane,
+then per corner averages the light of the open cells around it and applies Minecraft's
+occlusion, blending the corners bilinearly across the cell. Light-blocking cells are stored
+as OPAQUE_LIGHT (0xffff) in the light itself, so occlusion needs no extra memory.
 
-- **Baked (`vertex`).** Quads carry their four corners' light and occlusion: 28 bytes per
-  quad instead of 8. Faces merge only when corners match, so gradients split quads. A light
-  change remeshes every chunk it touches.
-- **Light volume (`volume`).** Quads stay plain (8 bytes) and merge on cell state alone. Each
-  chunk with a mesh gets a slot in a 3D texture holding its padded light, (size + 2)³ cells
-  at 16 bits, with light-blocking cells marked 0xffff so occlusion needs no extra memory.
-  The fragment shader finds the empty cell in front of its face, reads the 3 x 3 cells around
-  it, and does what the mesher does. A light change rewrites the chunk's slot (1.5 ms: a
-  1.2 ms copy and a 0.3 ms write) instead of remeshing it. Slots live in pages of about
-  16 MB, one material per page; each mesh passes its slot origin through a per-object
-  uniform. Pages are written directly through the WebGPU queue, so this mode needs WebGPU.
+- **What is kept.** Only 4³ bricks holding a cell some face reads. Mesh workers list them per
+  chunk (`ChunkMesh.lightBricks`); the session's `LightLayout` reference-counts them across
+  meshes, so a brick lives while any mesh reads it.
+- **Where it lives.** A pool of brick slots (64 cells at 16 bits each, a row segment of one
+  3D texture), a table per chunk (slot + 1 per brick, 0 = none), and a grid over chunk
+  coordinates (table + 1). A cell's light is grid -> table -> pool; a missing brick reads as
+  open sky. The 9 cells a fragment reads span at most 2 x 2 bricks, so it does 4 grid/table
+  lookups and 9 pool reads.
+- **Who decides.** The world worker's `LightLayout` allocates slots and tables and builds the
+  grid; it sends updates of up to 4096 bricks, bricks before the tables that point at them,
+  so the GPU never points at light that isn't there. The main thread only copies updates into
+  three textures (`LightVolume`), growing them a layer at a time with a GPU copy.
+- **Dirty tracking.** The light engine reports changed light per 4³ brick (light-blocking
+  changes included); only bricks some mesh reads are resent.
+- **Showing it.** Meshes draw flat until the worker reports idle after lighting turns on or a
+  world loads, then the whole world switches to lit at once.
 
-## Findings
+This was chosen over per-face light (42 MB, slightly smaller) because a volume also lights
+sub-cell geometry (shaped parts, Phase 2) and leaves room for volumetric effects; the user
+decided on 2026-10-04.
 
-Measured 2026-10-03 on the 5M-cell city with 64³ chunks, headless Edge on an Intel Arc B580
-at 1600x900 (frame time is capped by vsync, so GPU cost doesn't show yet).
+## Findings: dense volume vs baked (2026-10-03, superseded)
+
+Measured on the 5M-cell city with 64³ chunks, headless Edge on an Intel Arc B580 at
+1600x900. Baked light and the dense volume have since been replaced by the sparse volume
+(see "Sparse light volume (done)" below); kept for the comparison.
 
 | Measure | Off | Baked | Light volume |
 | --- | --- | --- | --- |
@@ -130,11 +140,9 @@ at 1600x900 (frame time is capped by vsync, so GPU cost doesn't show yet).
 - Storage by content: 64³ chunk storage fell from 162 MB to 34 MB at 5M cells and from
   730 MB to 132 MB at 20M.
 
-**Decision (user, 2026-10-04):** the light volume is the lit renderer. Baked light goes once
-the volume's memory is fixed (step 2). Baked light can't get its quad count back; the
-volume's costs are all fixable without changing what it draws. (When baked goes, the WebGL2
-fallback loses lighting, which currently falls back to baked; decide then whether to keep
-baked for WebGL2 or show WebGL2 unlit.)
+**Decisions (user, 2026-10-04):** the light volume is the lit renderer, and baked light was
+removed once the volume's memory was fixed. Baked light couldn't get its quad count back.
+WebGL2 (no WebGPU) now draws unlit.
 
 ## World worker (done, 2026-10-04)
 
@@ -196,26 +204,76 @@ material on first use (the hitches). Sparse light replaces exactly that traffic.
   sub-cell parts at arbitrary positions), which per-face light cannot without a second
   mechanism.
 
+A follow-up measurement settled it: **4³ bricks without an apron**, holding every cell a face
+reads (front cell and its 3 x 3 neighbours) with opacity marks inline, need 43 MB plus 7 MB
+of tables (8³: 68 MB; 16³: 108 MB). That is a volume at nearly per-face cost.
+
+## Sparse light volume (done, 2026-10-04)
+
+CPU: the light engine stores 8³ bricks only where a cell differs from its default. GPU: the
+4³ brick volume described under "Rendering". Baked light (`vertex` mode, 28-byte lit quads,
+light in mesh jobs, the mesher's lit path) is removed.
+
+Tests: the mesher's light-brick lists are checked against brute force; the light engine's
+dirty bricks are checked to cover every 4³ brick whose light or opacity marks an edit
+changed; and the session test applies every layout update to a simulated GPU and checks that
+every cell a face reads looks up (grid -> table -> pool) to exactly a fresh build's light,
+with no table entry left pointing at a brick nothing reads, across random edits, lighting
+switches and palette changes. A deliberate bug (light sent without opacity marks) fails it.
+
+Measured on the 5M city, headless Edge, B580 (light memory also at 20M):
+
+| Measure | Dense volume, main thread | Sparse volume, world worker |
+| --- | --- | --- |
+| Light on the GPU | 178 MB | **60 MB** (350K bricks, 48 MB pool) |
+| Light on the CPU | 249 MB (901 MB at 20M) | **54 MB** (198 MB at 20M) |
+| GPU time per frame p50 / p95 | not measured | 1.3 / 2.6 ms after the shader fix (1.0 / 2.0 ms unlit) |
+| Lit initial mesh | 3.0 s | 3.6 s (light fills in, then shows at once) |
+| Single edit to visible p50 / p95 | 17 / 33 ms | 17.5 / 18.6 ms |
+| Roof hole open | 18 ms | 17 ms |
+| 100k-cell fill / clear | 421 / 416 ms | 475 / 457 ms |
+| 1M-cell fill / clear | 2.0 / 3.1 s | 2.6 / 3.4 s |
+| Rendering matches dense | – | 1 of 55K sampled pixels differs, by 3/255 (but see "Shader bug") |
+
+- GPU time comes from timestamp queries (now in the HUD and the benchmark's flight). The
+  shader's 4 lookups and 9 pool reads cost about 0.3-0.6 ms at 1600x900; at 4K expect
+  ~2.5 ms. The first figures came from the buggy shader, which skipped lookups; with the
+  fix, flight GPU time is 1.3 / 2.6 ms p50 / p95, the same within noise.
+- Headless frame times this session paced at 17.6 ms for every mode, lighting off included:
+  that is the machine's display pacing, not rendering. Compare GPU time instead.
+- Bulk fills are still bound by the light engine (steps 1 and 2 below).
+
+### Shader bug (found and fixed 2026-10-05)
+
+The user saw a bright blob in the middle of every cell at night, with dark seams every 4
+cells. Each of the 9 light samples was right on its own (checked by drawing one at a time);
+combined, the corners read some neighbours as "no brick" (open sky, no block light) wherever
+a neighbour sat in a different 4³ brick from the front cell.
+
+Cause: three's TSL assigns a `.toVar()` lazily, at its first use, when it is built outside a
+`Fn`, and compiles `select()` to `if`/`else`. The four brick-slot variables were first used
+inside the branch that picks the front cell's brick, so only one was assigned; neighbours on
+other paths read the others as 0. Building the light inside `Fn(() => ...)()` assigns every
+variable where it is created, before any branch. **Any TSL that shares `.toVar()` values
+between `select()` branches must be built inside a `Fn`.**
+
+Why tests and the dense comparison missed it: the session test checks the layout on the
+CPU, not the shader; the pixel comparison was by daylight, where a missing brick (sky 15, no
+block light) looks almost the same as the real light. Block-lit scenes at night show it. A
+check worth adding: compare the lit render at midnight with a lamp against a CPU reference.
+
 ## Next steps
 
-1. ~~CPU light in 8³ bricks~~ (done, 2026-10-04). The engine stores a brick only once a
-   cell in it differs from its default; whole-world light is 54 MB at 5M cells (38,706 bricks
-   plus 10 MB of opacity bits) and 198 MB at 20M (was 249 MB and 901 MB). Full relight time is
-   unchanged; bulk fills got about 15% slower from the brick lookup (1M fill 2.6 s in Node),
-   which step 3 should more than recover. Bricks are never freed until the next full relight;
-   compact them if long editing sessions grow memory.
-2. **GPU light layout: decide, then build.** Recommendation: per-face light (42 MB, simplest
-   shader, one material, small uploads), keeping the volume renderer's code path in mind for
-   non-voxel things later. The alternative is default-aware 8³ bricks (88 MB, three dependent
-   lookups per fragment). Either way, one storage buffer or pool replaces the seven pages and
-   the per-object uniform, which also fixes the upload hitches. Then remove baked lighting
-   (`vertex` mode, `LIT_QUAD_BYTES`, light in mesh jobs); WebGL2 then draws unlit.
-3. **Faster flood fill.** Within a chunk, step to neighbours by index arithmetic instead of a
-   chunk lookup per neighbour. Sky light is 1.7 of the 2.3 s full relight.
-4. **Relight big fills as volumes.** Clear the box's light directly and seed only its
-   surface; 1M-cell fills take 2-3 s today, all of it in the light engine.
-5. **Measure on the M4**, and GPU time with timestamp queries.
-6. Maybe: intensity-plus-colour block light, so coloured lamps keep their hue as they fade
+1. **Faster flood fill.** Within a chunk, step to neighbours by index arithmetic instead of a
+   chunk lookup per neighbour, and cache the current brick. Sky light is 1.7 of the 2.3 s
+   full relight; the brick storage added about 15% to bulk fills.
+2. **Relight big fills as volumes.** Clear the box's light directly and seed only its
+   surface; 1M-cell fills take 2.6-3.4 s, nearly all of it in the light engine.
+3. **Measure on the M4** (the Phase 0 reference laptop) and in Chrome at 4K, GPU time
+   included.
+4. Compact light bricks: CPU bricks are never freed until the next full relight, and GPU
+   slots are reused but the pool never shrinks. Fine for now; revisit if long sessions grow.
+5. Maybe: intensity-plus-colour block light, so coloured lamps keep their hue as they fade
    (a cyan lamp's pool has a blue rim today).
 
 ## Sources

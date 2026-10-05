@@ -1,8 +1,9 @@
-import { World } from "@voxyl/core";
+import { chunkKey, World } from "@voxyl/core";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
   FULL_SKY,
+  GPU_BRICK_BITS,
   LightEngine,
   type LightMaterials,
   OPAQUE_LIGHT,
@@ -259,6 +260,55 @@ describe("LightEngine", () => {
     },
     60_000,
   );
+
+  it("reports every GPU brick whose light or light-blocking cells an edit changed", () => {
+    const G = 1 << GPU_BRICK_BITS;
+    fc.assert(
+      fc.property(
+        fc.array(boxArb, { minLength: 1, maxLength: 8 }),
+        fc.array(boxArb, { minLength: 1, maxLength: 3 }),
+        (initial, edits) => {
+          const { world, ids, materials } = setup(4);
+          for (const box of initial) applyBox(world, ids, box);
+          const engine = new LightEngine(world, materials);
+          engine.computeAll();
+          expect(engine.takeDirty().all).toBe(true);
+          // Every brick of a region wide enough for light to change in, as the GPU sees it.
+          const snapshot = () => {
+            const bricks = new Map<string, string>();
+            const out = new Uint16Array(G ** 3);
+            for (let y = -4; y < 32; y += G)
+              for (let z = -32; z < 32; z += G)
+                for (let x = -32; x < 32; x += G)
+                  bricks.set(
+                    `${x},${y},${z}`,
+                    engine.copyBox([x, y, z], [G, G, G], out, true).join(),
+                  );
+            return bricks;
+          };
+          const before = snapshot();
+          world.recordChanges(true);
+          for (const box of edits) applyBox(world, ids, box);
+          engine.update(world.takeChanges());
+          const { all, bricks } = engine.takeDirty();
+          if (all) return; // an edit at or below the floor relit everything
+          const S = world.layout.size;
+          const reported = (x: number, y: number, z: number) => {
+            const key = chunkKey(Math.floor(x / S), Math.floor(y / S), Math.floor(z / S));
+            const n = S / G;
+            const local = (x & (S - 1)) / G + ((z & (S - 1)) / G) * n + ((y & (S - 1)) / G) * n * n;
+            return bricks.get(key)?.has(local) ?? false;
+          };
+          for (const [at, after] of snapshot()) {
+            if (after === before.get(at)) continue;
+            const [x, y, z] = at.split(",").map(Number) as [number, number, number];
+            expect(reported(x, y, z), `brick at ${at} changed but was not reported`).toBe(true);
+          }
+        },
+      ),
+      { numRuns: 60 },
+    );
+  }, 60_000);
 
   it("relights edits incrementally to exactly what a full recompute gives", () => {
     fc.assert(

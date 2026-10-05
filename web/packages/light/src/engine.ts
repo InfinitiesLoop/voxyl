@@ -15,6 +15,11 @@ const BLOCK_SHIFTS = [8, 4, 0] as const;
 const NO_TOP = -0x80000000;
 /** Light is stored in bricks of 2^BRICK_BITS cells a side (or whole chunks, if smaller). */
 const BRICK_BITS = 3;
+/**
+ * Changed light is reported in bricks of 2^GPU_BRICK_BITS cells a side: the renderer keeps
+ * light in bricks this size, so these are the units it rewrites.
+ */
+export const GPU_BRICK_BITS = 2;
 
 const DX = [1, -1, 0, 0, 0, 0] as const;
 const DY = [0, 0, 1, -1, 0, 0] as const;
@@ -58,8 +63,14 @@ export class LightEngine {
   #brickCount = 0;
   readonly #opaque = new Map<number, Uint32Array>();
   readonly #tops = new Map<number, Int32Array>();
-  readonly #dirty = new Set<number>();
-  #lastDirty = Number.NaN;
+  /** Changed light since takeDirty(), per chunk key: local indices of its GPU bricks. */
+  readonly #dirty = new Map<number, Set<number>>();
+  #allDirty = false;
+  // The chunk and brick the last write marked, so runs of writes skip the lookups.
+  #dirtyChunk = Number.NaN;
+  #dirtySet: Set<number> | undefined;
+  #dirtyBrick = -1;
+  readonly #gpuBits: number;
   /**
    * One row below the lowest cell: the bottom of the lit world, like Minecraft's. Nothing
    * below it is stored or visited, which keeps open columns from lighting downward forever.
@@ -86,6 +97,7 @@ export class LightEngine {
     this.#volume = L.volume;
     this.#brickBits = Math.min(BRICK_BITS, L.bits);
     this.#brickMask = (1 << this.#brickBits) - 1;
+    this.#gpuBits = Math.min(GPU_BRICK_BITS, L.bits);
   }
 
   /** Replaces the materials. Call computeAll() afterwards. */
@@ -207,7 +219,8 @@ export class LightEngine {
     }
     this.lastTimings = { scanMs, skyMs, blockMs: now() - start };
 
-    for (const key of this.#world.chunkKeys()) this.#dirty.add(key);
+    this.#dirty.clear();
+    this.#allDirty = true;
   }
 
   /** How long the phases of the last computeAll() took. */
@@ -372,23 +385,29 @@ export class LightEngine {
       this.#spread(shift, refill);
     }
 
-    // 5. Ambient occlusion and face culling read neighbouring cells: remesh around every change.
+    // 5. The renderer reads light-blocking cells too (as OPAQUE_LIGHT): mark every changed cell.
     for (let i = 0; i < cells.length; i += 5)
       this.#markDirty(cells[i] ?? 0, cells[i + 1] ?? 0, cells[i + 2] ?? 0);
   }
 
-  /** Keys of chunks whose meshes are stale because light or occlusion around them changed. */
-  takeDirtyChunks(): number[] {
-    const keys = [...this.#dirty];
+  /**
+   * What changed since the last call: per chunk key, the local indices of its GPU bricks
+   * (GPU_BRICK_BITS cells a side) whose light or light-blocking cells changed. `all` means
+   * everything did (a full relight), and then `bricks` is empty.
+   */
+  takeDirty(): { all: boolean; bricks: Map<number, Set<number>> } {
+    const taken = { all: this.#allDirty, bricks: new Map(this.#dirty) };
     this.#dirty.clear();
-    this.#lastDirty = Number.NaN;
-    return keys;
+    this.#allDirty = false;
+    this.#dirtyChunk = Number.NaN;
+    this.#dirtySet = undefined;
+    this.#dirtyBrick = -1;
+    return taken;
   }
 
   /**
    * Writes the light of chunk [cx, cy, cz] plus a one-cell border into `out`, in the padded
-   * layout World.copyPadded() uses. With `markOpaque`, light-blocking cells read OPAQUE_LIGHT
-   * instead of their light, so one array carries both light and occlusion (for the GPU).
+   * layout World.copyPadded() uses. With `markOpaque`, light-blocking cells read OPAQUE_LIGHT.
    */
   copyPadded(
     cx: number,
@@ -398,18 +417,42 @@ export class LightEngine {
     markOpaque = false,
   ): Uint16Array {
     const S = this.#size;
-    // The padded box is 27 regions, each inside one chunk: the chunk itself, 6 faces, 12 edges
-    // and 8 corners from its neighbours. Copying region by region looks each chunk up once.
-    const from = (d: number) => (d < 0 ? 0 : d > 0 ? S + 1 : 1);
-    const to = (d: number) => (d < 0 ? 0 : d > 0 ? S + 1 : S);
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dz = -1; dz <= 1; dz++) {
-        for (let dx = -1; dx <= 1; dx++) {
+    return this.copyBox(
+      [cx * S - 1, cy * S - 1, cz * S - 1],
+      [S + 2, S + 2, S + 2],
+      out,
+      markOpaque,
+    );
+  }
+
+  /**
+   * Writes the light of the box of `size` cells starting at world cell `origin` into `out`,
+   * indexed x + z * sx + y * sx * sz. With `markOpaque`, light-blocking cells read
+   * OPAQUE_LIGHT instead of their light, so one array carries both light and occlusion.
+   */
+  copyBox(
+    origin: readonly [number, number, number],
+    size: readonly [number, number, number],
+    out: Uint16Array,
+    markOpaque = false,
+  ): Uint16Array {
+    const b = this.#bits;
+    const [x0, y0, z0] = origin;
+    const [sx, sy, sz] = size;
+    // Split the box at chunk boundaries, so each piece looks its chunk up once.
+    const next = (v: number, end: number) => Math.min(end, ((v >> b) + 1) << b);
+    for (let y = y0; y < y0 + sy; y = next(y, y0 + sy)) {
+      const y1 = next(y, y0 + sy) - 1;
+      for (let z = z0; z < z0 + sz; z = next(z, z0 + sz)) {
+        const z1 = next(z, z0 + sz) - 1;
+        for (let x = x0; x < x0 + sx; x = next(x, x0 + sx)) {
+          const x1 = next(x, x0 + sx) - 1;
           this.#copyRegion(
             out,
-            [cx * S - 1, cy * S - 1, cz * S - 1],
-            [from(dx), from(dy), from(dz)],
-            [to(dx), to(dy), to(dz)],
+            origin,
+            [sx, sz],
+            [x - x0, y - y0, z - z0],
+            [x1 - x0, y1 - y0, z1 - z0],
             markOpaque,
           );
         }
@@ -419,18 +462,18 @@ export class LightEngine {
   }
 
   /**
-   * Copies padded cells p0..p1 (inclusive, all inside one chunk) of a box whose padded cell
-   * [0, 0, 0] is at world `origin`.
+   * Copies cells p0..p1 (inclusive, all inside one chunk) of a box whose cell [0, 0, 0] is at
+   * world `origin` and whose rows and layers are `strides[0]` and `strides[1]` cells long.
    */
   #copyRegion(
     out: Uint16Array,
     origin: readonly [number, number, number],
+    strides: readonly [number, number],
     p0: readonly [number, number, number],
     p1: readonly [number, number, number],
     markOpaque: boolean,
   ): void {
-    const S = this.#size;
-    const P = S + 2;
+    const [rowCells, layerRows] = strides;
     const b = this.#bits;
     const m = this.#mask;
     const [ox, oy, oz] = origin;
@@ -449,7 +492,7 @@ export class LightEngine {
       const y = oy + py;
       for (let pz = pz0; pz <= pz1; pz++) {
         const z = oz + pz;
-        const o = px0 + pz * P + py * P * P;
+        const o = px0 + pz * rowCells + py * rowCells * layerRows;
         if (y < this.#floor) {
           out.fill(0, o, o + n); // nothing lives or is lit below the floor
           continue;
@@ -750,35 +793,28 @@ export class LightEngine {
     return this.#topAt(x, z);
   }
 
-  /** Marks the chunk holding [x, y, z], and any chunk whose padded border includes it. */
+  /** Records that the GPU brick holding [x, y, z] changed. Called on every light write. */
   #markDirty(x: number, y: number, z: number): void {
+    if (this.#allDirty) return;
     const b = this.#bits;
-    const last = this.#size - 1;
-    const cx = x >> b;
-    const cy = y >> b;
-    const cz = z >> b;
-    const lx = x & this.#mask;
-    const ly = y & this.#mask;
-    const lz = z & this.#mask;
-    if (lx !== 0 && lx !== last && ly !== 0 && ly !== last && lz !== 0 && lz !== last) {
-      // The common case, and called on every light write: skip repeats of the same chunk.
-      const key = chunkKey(cx, cy, cz);
-      if (key !== this.#lastDirty) {
-        this.#dirty.add(key);
-        this.#lastDirty = key;
+    const key = chunkKey(x >> b, y >> b, z >> b);
+    if (key !== this.#dirtyChunk) {
+      let set = this.#dirty.get(key);
+      if (!set) {
+        set = new Set();
+        this.#dirty.set(key, set);
       }
-      return;
+      this.#dirtyChunk = key;
+      this.#dirtySet = set;
+      this.#dirtyBrick = -1;
     }
-    const x0 = lx === 0 ? -1 : 0;
-    const x1 = lx === last ? 1 : 0;
-    const y0 = ly === 0 ? -1 : 0;
-    const y1 = ly === last ? 1 : 0;
-    const z0 = lz === 0 ? -1 : 0;
-    const z1 = lz === last ? 1 : 0;
-    for (let dy = y0; dy <= y1; dy++) {
-      for (let dz = z0; dz <= z1; dz++) {
-        for (let dx = x0; dx <= x1; dx++) this.#dirty.add(chunkKey(cx + dx, cy + dy, cz + dz));
-      }
+    const m = this.#mask;
+    const g = this.#gpuBits;
+    const n = b - g;
+    const brick = ((x & m) >> g) + (((z & m) >> g) << n) + (((y & m) >> g) << (2 * n));
+    if (brick !== this.#dirtyBrick) {
+      this.#dirtySet?.add(brick);
+      this.#dirtyBrick = brick;
     }
   }
 }

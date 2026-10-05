@@ -317,6 +317,11 @@ Done and proven, all on the B580 (headless Edge plus the user's Chrome at 3840x1
 - [x] `pnpm shot` to check the running dev server headless.
 - [x] World, light engine and mesh scheduling in a world worker (`packages/session`,
   `apps/web/src/world/`): generating and lighting never block drawing (2026-10-04).
+- [x] Sparse light: CPU light in 8³ bricks (54 MB at 5M cells, was 249 MB) and a sparse 4³
+  brick light volume on the GPU (60 MB, was 178 MB; about 0.3-0.6 ms of GPU per frame). Baked
+  light removed (2026-10-04). A TSL bug that misread light at brick boundaries fixed
+  (2026-10-05, see the lighting plan's "Shader bug").
+- [x] GPU time per frame from timestamp queries, in the HUD and the benchmark.
 
 Still open for the Phase 0 gate:
 
@@ -328,11 +333,11 @@ Still open for the Phase 0 gate:
 **Next steps, in order** (the user agreed on the worker and sparse light on 2026-10-04):
 
 1. ~~World and light engine in a worker~~ (done).
-2. **Sparse light**: CPU light in 8³ bricks is done (249 MB to 54 MB at 5M cells). Next is
-   the GPU layout, which needs the user's decision between per-face light (recommended, 42 MB)
-   and default-aware bricks (88 MB); see [`web-lighting.md`](web-lighting.md), "Sparse light:
-   measurements". Then drop baked lighting.
-3. The open Phase 0 items above, M4 run first.
+2. ~~Sparse light~~ (done; the user chose the sparse light volume over per-face light, for
+   shaped parts and future volumetric effects).
+3. **Light engine speed**: faster flood fill and volume relights for big fills (1M-cell fills
+   take 2.6-3.4 s); see [`web-lighting.md`](web-lighting.md), "Next steps".
+4. The open Phase 0 items above, M4 run first.
 
 ## Testing and verification
 

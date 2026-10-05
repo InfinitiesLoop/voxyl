@@ -45,6 +45,8 @@ export interface BenchResult {
     readonly seconds: number;
     readonly frameMs: Distribution;
     readonly cpuMs: Distribution;
+    /** GPU time per frame, from timestamp queries (count 0 where unsupported). */
+    readonly gpuMs: Distribution;
   };
   readonly singleEdits: Distribution & { readonly misses: number };
   readonly bulk: readonly BulkEdit[];
@@ -216,6 +218,7 @@ export async function runBench(
       seconds: FLIGHT_SECONDS,
       frameMs: distribution(flight.frameMs),
       cpuMs: distribution(flight.cpuMs),
+      gpuMs: distribution(flight.gpuMs),
     },
     singleEdits: { ...distribution(latencies), misses },
     bulk,

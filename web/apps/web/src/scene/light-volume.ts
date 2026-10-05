@@ -1,153 +1,211 @@
+import type { LightLayoutUpdate } from "@voxyl/session";
+import { texture3D } from "three/tsl";
 import * as THREE from "three/webgpu";
 
-/** Target size of one page of light slots. */
-const PAGE_BYTES = 16 * 2 ** 20;
-
-interface Page {
-  readonly texture: THREE.Data3DTexture;
-  readonly gpu: GPUTexture;
-  readonly material: THREE.Material;
-  readonly free: number[];
-}
-
-interface Slot {
-  readonly page: number;
-  readonly index: number;
-  /** Where the slot starts, in cells along world x, y, z (the shader swaps y and z). */
-  readonly origin: THREE.Vector3;
-}
-
-/** What the volume renderer needs from three's WebGPU backend, which it doesn't type. */
+/** What the light volume needs from three's WebGPU backend, which it doesn't type. */
 interface WebGPUBackendInternals {
   readonly isWebGPUBackend?: boolean;
   readonly device: GPUDevice;
   get(texture: THREE.Texture): { texture?: GPUTexture };
 }
 
+type TextureNode = ReturnType<typeof texture3D>;
+
 /**
- * Light for the GPU: every chunk with a mesh gets a slot holding its padded light, (size + 2)³
- * cells at 16 bits (sky, red, green, blue; OPAQUE_LIGHT where a cell blocks light), which the
- * volume material reads in the fragment shader. A light change rewrites the slot, never the
- * mesh.
- *
- * Slots live in pages: cubic 3D textures of about PAGE_BYTES, each with its own material
- * (three binds textures per material). A chunk mesh uses its page's material and tells the
- * shader its slot origin through userData.lightSlot. Pages are written straight through the
- * WebGPU queue, a slot at a time: three would re-upload a whole texture.
+ * A 3D texture used as one long array of unsigned integers: element i lives at
+ * (i % width, (i / width) % height, i / (width * height)). It grows a layer at a time,
+ * copying what it holds on the GPU, and is written directly through the WebGPU queue in
+ * row-aligned pieces. The shader reads it through `node`, which
+ * follows the texture when it grows.
  */
-export class LightVolume {
+class LinearTexture {
+  readonly node: TextureNode;
+  readonly widthBits: number;
+  readonly heightBits: number;
   readonly #renderer: THREE.WebGPURenderer;
   readonly #backend: WebGPUBackendInternals;
-  readonly #padded: number;
-  readonly #perAxis: number;
-  readonly #makeMaterial: (atlas: THREE.Data3DTexture) => THREE.Material;
-  readonly #pages: Page[] = [];
-  readonly #slots = new Map<number, Slot>();
+  readonly #format: "r16uint" | "r32uint";
+  readonly #bytes: number;
+  #texture: THREE.Data3DTexture;
+  #gpu: GPUTexture;
+  #layers: number;
+
+  constructor(
+    renderer: THREE.WebGPURenderer,
+    format: "r16uint" | "r32uint",
+    widthBits: number,
+    heightBits: number,
+  ) {
+    this.#renderer = renderer;
+    this.#backend = renderer.backend as unknown as WebGPUBackendInternals;
+    this.#format = format;
+    this.#bytes = format === "r16uint" ? 2 : 4;
+    this.widthBits = widthBits;
+    this.heightBits = heightBits;
+    this.#layers = 1;
+    [this.#texture, this.#gpu] = this.#create(1);
+    this.node = texture3D(this.#texture);
+  }
+
+  /** Elements per layer. */
+  get #perLayer(): number {
+    return 1 << (this.widthBits + this.heightBits);
+  }
+
+  get memoryBytes(): number {
+    return this.#perLayer * this.#layers * this.#bytes;
+  }
+
+  /** Grows (keeping what it holds) to the fewest layers that fit `elements`. */
+  ensure(elements: number): void {
+    const layers = Math.max(this.#layers, Math.ceil(elements / this.#perLayer));
+    if (layers === this.#layers) return;
+    const [texture, gpu] = this.#create(layers);
+    const encoder = this.#backend.device.createCommandEncoder();
+    const W = 1 << this.widthBits;
+    const H = 1 << this.heightBits;
+    encoder.copyTextureToTexture(
+      { texture: this.#gpu },
+      { texture: gpu },
+      { width: W, height: H, depthOrArrayLayers: this.#layers },
+    );
+    this.#backend.device.queue.submit([encoder.finish()]);
+    this.#texture.dispose();
+    this.#texture = texture;
+    this.#gpu = gpu;
+    this.#layers = layers;
+    this.node.value = texture;
+  }
+
+  /** Writes `data` starting at element `offset`. */
+  write(offset: number, data: Uint16Array | Uint32Array): void {
+    const W = 1 << this.widthBits;
+    const H = 1 << this.heightBits;
+    const queue = this.#backend.device.queue;
+    let done = 0;
+    while (done < data.length) {
+      const i = offset + done;
+      const x = i & (W - 1);
+      const y = (i >> this.widthBits) & (H - 1);
+      const z = Math.floor(i / this.#perLayer);
+      const left = data.length - done;
+      // Whole rows at once when starting a row, else the rest of this row.
+      const rows = x === 0 ? Math.min(Math.floor(left / W), H - y) : 0;
+      const width = rows > 0 ? W : Math.min(left, W - x);
+      const height = rows > 0 ? rows : 1;
+      const count = width * height;
+      queue.writeTexture(
+        { texture: this.#gpu, origin: { x, y, z } },
+        data,
+        { offset: done * this.#bytes, bytesPerRow: width * this.#bytes, rowsPerImage: height },
+        { width, height, depthOrArrayLayers: 1 },
+      );
+      done += count;
+    }
+  }
+
+  dispose(): void {
+    this.#texture.dispose();
+  }
+
+  #create(layers: number): [THREE.Data3DTexture, GPUTexture] {
+    const texture = new THREE.Data3DTexture(
+      null,
+      1 << this.widthBits,
+      1 << this.heightBits,
+      layers,
+    );
+    texture.format = THREE.RedIntegerFormat;
+    texture.type = THREE.UnsignedIntType; // binds as texture_3d<u32>; stored at #format
+    texture.internalFormat = this.#format as THREE.PixelFormatGPU;
+    texture.magFilter = THREE.NearestFilter;
+    texture.minFilter = THREE.NearestFilter;
+    texture.generateMipmaps = false;
+    // Allocate the GPU texture without uploading anything: it is written piece by piece.
+    texture.source.dataReady = false;
+    texture.needsUpdate = true;
+    this.#renderer.initTexture(texture);
+    const gpu = this.#backend.get(texture).texture;
+    if (!gpu) throw new Error("light texture was not created");
+    return [texture, gpu];
+  }
+}
+
+/** The grid: a chunk grid of table indices, rebuilt when it changes. */
+export interface LightGridUniforms {
+  readonly origin: THREE.Vector3;
+  readonly size: THREE.Vector3;
+}
+
+/**
+ * Light for the GPU, laid out by the world worker (LightLayout): a pool of light bricks, a
+ * table per chunk mapping its bricks to pool slots, and a grid mapping chunks to tables.
+ * This only copies the worker's updates into three textures; the volume material reads
+ * them (see createVolumeLitMaterial). Needs WebGPU: textures are written through its queue.
+ */
+export class LightVolume {
+  /** Brick light: 16 bits per cell, brickVolume cells per slot. */
+  readonly pool: LinearTexture;
+  /** Chunk tables: slot + 1 per brick (0 = none). */
+  readonly tables: LinearTexture;
+  /** Chunk grid: table + 1 per chunk (0 = none). */
+  readonly grid: LinearTexture;
+  readonly gridUniforms: LightGridUniforms = {
+    origin: new THREE.Vector3(),
+    size: new THREE.Vector3(),
+  };
+  readonly brickVolume: number;
+  readonly tableLength: number;
 
   /** True if the renderer can host light volumes (WebGPU, not the WebGL fallback). */
   static supported(renderer: THREE.WebGPURenderer): boolean {
     return (renderer.backend as unknown as WebGPUBackendInternals).isWebGPUBackend === true;
   }
 
-  constructor(
-    renderer: THREE.WebGPURenderer,
-    chunkSize: number,
-    makeMaterial: (atlas: THREE.Data3DTexture) => THREE.Material,
-  ) {
-    this.#renderer = renderer;
-    this.#backend = renderer.backend as unknown as WebGPUBackendInternals;
-    this.#padded = chunkSize + 2;
-    this.#perAxis = Math.max(1, Math.floor(Math.cbrt(PAGE_BYTES / (2 * this.#padded ** 3))));
-    this.#makeMaterial = makeMaterial;
+  constructor(renderer: THREE.WebGPURenderer, brickVolume: number, tableLength: number) {
+    this.brickVolume = brickVolume;
+    this.tableLength = tableLength;
+    // Layers of 4M bricks' cells (8 MB), 512K table entries (2 MB) and 64K chunks (256 KB).
+    this.pool = new LinearTexture(renderer, "r16uint", 11, 11);
+    this.tables = new LinearTexture(renderer, "r32uint", 11, 8);
+    this.grid = new LinearTexture(renderer, "r32uint", 8, 8);
   }
 
-  /** GPU memory held by pages. */
   get memoryBytes(): number {
-    return this.#pages.length * 2 * (this.#padded * this.#perAxis) ** 3;
+    return this.pool.memoryBytes + this.tables.memoryBytes + this.grid.memoryBytes;
   }
 
-  get slotCount(): number {
-    return this.#slots.size;
-  }
-
-  has(key: number): boolean {
-    return this.#slots.has(key);
-  }
-
-  /** The material for the chunk's slot, allocating one if needed. */
-  materialFor(key: number, mesh: THREE.Object3D): THREE.Material {
-    const slot = this.#slots.get(key) ?? this.#allocate(key);
-    mesh.userData.lightSlot = slot.origin;
-    const page = this.#pages[slot.page];
-    if (!page) throw new Error(`light page ${slot.page} missing`);
-    return page.material;
-  }
-
-  /** Writes a chunk's padded light (as LightEngine.copyPadded(..., true) gives it). */
-  upload(key: number, light: Uint16Array): void {
-    const slot = this.#slots.get(key);
-    const page = slot && this.#pages[slot.page];
-    if (!slot || !page) return;
-    const P = this.#padded;
-    this.#backend.device.queue.writeTexture(
-      { texture: page.gpu, origin: { x: slot.origin.x, y: slot.origin.z, z: slot.origin.y } },
-      light,
-      { bytesPerRow: P * 2, rowsPerImage: P },
-      { width: P, height: P, depthOrArrayLayers: P },
-    );
-  }
-
-  free(key: number): void {
-    const slot = this.#slots.get(key);
-    if (!slot) return;
-    this.#slots.delete(key);
-    this.#pages[slot.page]?.free.push(slot.index);
+  /** Applies one update from the world worker: bricks, then tables, then the grid. */
+  apply(update: LightLayoutUpdate): void {
+    const V = this.brickVolume;
+    this.pool.ensure(update.poolBricks * V);
+    this.tables.ensure(update.tableCount * this.tableLength);
+    // Bricks come in slot order: write each run of consecutive slots in one go.
+    const { slots, bricks } = update;
+    for (let i = 0; i < slots.length; ) {
+      let j = i + 1;
+      while (j < slots.length && slots[j] === (slots[j - 1] ?? 0) + 1) j++;
+      this.pool.write((slots[i] ?? 0) * V, bricks.subarray(i * V, j * V));
+      i = j;
+    }
+    const L = this.tableLength;
+    update.tables.forEach((table, t) => {
+      this.tables.write(table * L, update.tableData.subarray(t * L, (t + 1) * L));
+    });
+    if (update.grid) {
+      const { origin, size, data } = update.grid;
+      this.grid.ensure(data.length);
+      this.grid.write(0, data);
+      this.gridUniforms.origin.set(origin[0], origin[1], origin[2]);
+      this.gridUniforms.size.set(size[0], size[1], size[2]);
+    }
   }
 
   dispose(): void {
-    for (const page of this.#pages) {
-      page.texture.dispose();
-      page.material.dispose();
-    }
-    this.#pages.length = 0;
-    this.#slots.clear();
-  }
-
-  #allocate(key: number): Slot {
-    let page = this.#pages.findIndex((p) => p.free.length > 0);
-    if (page < 0) page = this.#addPage();
-    const index = this.#pages[page]?.free.pop() ?? 0;
-    const n = this.#perAxis;
-    const P = this.#padded;
-    const origin = new THREE.Vector3(
-      (index % n) * P,
-      Math.floor(index / (n * n)) * P,
-      (Math.floor(index / n) % n) * P,
-    );
-    const slot = { page, index, origin };
-    this.#slots.set(key, slot);
-    return slot;
-  }
-
-  #addPage(): number {
-    const side = this.#padded * this.#perAxis;
-    const texture = new THREE.Data3DTexture(null, side, side, side);
-    texture.name = `light page ${this.#pages.length}`;
-    texture.format = THREE.RedIntegerFormat;
-    texture.type = THREE.UnsignedIntType; // binds as texture_3d<u32>; stored as r16uint below
-    texture.internalFormat = "r16uint" as THREE.PixelFormatGPU;
-    texture.magFilter = THREE.NearestFilter;
-    texture.minFilter = THREE.NearestFilter;
-    texture.generateMipmaps = false;
-    // Allocate the GPU texture without uploading anything: slots are written one by one.
-    texture.source.dataReady = false;
-    texture.needsUpdate = true;
-    this.#renderer.initTexture(texture);
-    const gpu = this.#backend.get(texture).texture;
-    if (!gpu) throw new Error("light page texture was not created");
-    const slots = this.#perAxis ** 3;
-    const free = Array.from({ length: slots }, (_, i) => slots - 1 - i); // pop() hands out 0 first
-    this.#pages.push({ texture, gpu, material: this.#makeMaterial(texture), free });
-    return this.#pages.length - 1;
+    this.pool.dispose();
+    this.tables.dispose();
+    this.grid.dispose();
   }
 }
+
+export type { LinearTexture };

@@ -1,5 +1,6 @@
 export {
   FULL_SKY,
+  GPU_BRICK_BITS,
   LightEngine,
   type LightMaterials,
   OPAQUE_LIGHT,

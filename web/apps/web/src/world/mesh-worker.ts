@@ -19,18 +19,12 @@ scope.addEventListener("message", (event) => {
   port.onmessage = (e: MessageEvent<MeshRequest>) => {
     const { world, job } = e.data;
     const start = performance.now();
-    const { quads, quadCount, quadBytes } = meshChunk(job);
+    const { quads, quadCount, lightBricks } = meshChunk(job);
+    const ms = performance.now() - start;
     const reply: MeshReply = {
       world,
-      result: {
-        jobId: job.jobId,
-        key: job.key,
-        quads,
-        quadCount,
-        quadBytes,
-        ms: performance.now() - start,
-      },
+      result: { jobId: job.jobId, key: job.key, quads, quadCount, lightBricks, ms },
     };
-    port.postMessage(reply, [quads.buffer]);
+    port.postMessage(reply, [quads.buffer, lightBricks.buffer]);
   };
 });

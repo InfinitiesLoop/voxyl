@@ -109,9 +109,8 @@ export function Hud({
             }
           >
             <option value="off">Off</option>
-            <option value="vertex">Baked in meshes</option>
             <option value="volume" disabled={!volumeLighting}>
-              Light volume
+              On
             </option>
           </select>
         </label>
@@ -145,6 +144,10 @@ export function Hud({
         </dd>
         <dt>Main thread</dt>
         <dd>{f ? `p50 ${ms(f.cpuP50, 2)} · p95 ${ms(f.cpuP95, 2)}` : "–"}</dd>
+        <dt>GPU</dt>
+        <dd>
+          {f?.gpuP50 != null ? `p50 ${ms(f.gpuP50, 2)} · p95 ${ms(f.gpuP95, 2)}` : "not measured"}
+        </dd>
         <dt>Draws</dt>
         <dd>{f ? `${count(f.drawCalls)} calls · ${count(f.triangles)} triangles` : "–"}</dd>
         <dt>World</dt>
@@ -161,9 +164,7 @@ export function Hud({
         </dd>
         <dt>Queue</dt>
         <dd>
-          {w && c
-            ? `${w.queued} waiting · ${w.inFlight} meshing · ${w.lightQueued + c.pending} to apply`
-            : "–"}
+          {w && c ? `${w.queued} waiting · ${w.inFlight} meshing · ${c.pending} to apply` : "–"}
         </dd>
         <dt>Memory</dt>
         <dd>
@@ -176,11 +177,7 @@ export function Hud({
         <dt>Light</dt>
         <dd>
           {c && w && c.lighting !== "off"
-            ? `all ${ms(w.lightAllMs, 0)} · ${w.lightMb.toFixed(0)} MB${
-                c.lighting === "volume"
-                  ? ` · GPU ${c.lightGpuMb.toFixed(0)} MB · copy ${ms(w.lightCopyMs, 2)} + write ${ms(c.lightWriteMs, 2)}/chunk`
-                  : ""
-              }`
+            ? `all ${ms(w.lightAllMs, 0)} · CPU ${w.lightMb.toFixed(0)} MB · GPU ${c.lightGpuMb.toFixed(0)} MB, ${count(w.lightBricks)} bricks · copy ${w.lightCopyUs.toFixed(1)} µs/brick · write ${ms(c.lightWriteMs, 2)}/batch`
             : "off"}
         </dd>
         <dt>Timing</dt>
@@ -232,9 +229,7 @@ export function BenchPanel({ result, onClose }: { result: BenchResult; onClose: 
             <th>Light whole world</th>
             <td>
               {result.lighting !== "off"
-                ? `${ms(result.lightAllMs, 0)} · ${result.lightMb.toFixed(0)} MB${
-                    result.lighting === "volume" ? ` · GPU ${result.lightGpuMb.toFixed(0)} MB` : ""
-                  } (${result.lighting})`
+                ? `${ms(result.lightAllMs, 0)} · CPU ${result.lightMb.toFixed(0)} MB · GPU ${result.lightGpuMb.toFixed(0)} MB`
                 : "lighting off"}
             </td>
           </tr>
@@ -245,6 +240,10 @@ export function BenchPanel({ result, onClose }: { result: BenchResult; onClose: 
           <tr>
             <th>Flight main thread</th>
             <td>{dist(result.flight.cpuMs)}</td>
+          </tr>
+          <tr>
+            <th>Flight GPU time</th>
+            <td>{result.flight.gpuMs.count > 0 ? dist(result.flight.gpuMs) : "not measured"}</td>
           </tr>
           <tr>
             <th>Single edit to visible</th>

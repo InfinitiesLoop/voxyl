@@ -6,7 +6,7 @@
 
 import { chunkKey, chunkKeyToCoords, World } from "@voxyl/core";
 import { generateCity } from "@voxyl/fixtures";
-import { meshChunk, paddedVolume } from "@voxyl/mesher";
+import { meshChunk, paddedVolume, QUAD_BYTES } from "@voxyl/mesher";
 import { LightEngine, packEmission } from "../src/index.ts";
 
 const target = Number(process.argv[2] ?? 5_000_000);
@@ -150,6 +150,35 @@ for (const [bits, set] of bricks) {
   );
 }
 
+// GPU option: bricks without an apron, holding every cell a face reads (the 3 x 3 cells around
+// its front cell, in the face's plane), each sample looked up through a brick table.
+for (const bits of [2, 3, 4]) {
+  const B = 1 << bits;
+  const read = new Set<number>();
+  world.forEachCell((x, y, z) => {
+    for (const [dx, dy, dz] of D) {
+      const fx = x + dx;
+      const fy = y + dy;
+      const fz = z + dz;
+      if (world.getId(fx, fy, fz) !== 0) continue;
+      // The face's plane: the two axes the normal doesn't use.
+      for (let a = -1; a <= 1; a++) {
+        for (let b = -1; b <= 1; b++) {
+          const sx = fx + (dx === 0 ? a : 0);
+          const sy = fy + (dy === 0 ? (dx === 0 ? b : a) : 0);
+          const sz = fz + (dz === 0 ? b : 0);
+          read.add(chunkKey(sx >> bits, sy >> bits, sz >> bits));
+        }
+      }
+    }
+  });
+  const tables = world.chunkCount * 1.3 * (64 / B) ** 3 * 4; // about 1.3 tables per chunk
+  console.log(
+    `GPU ${B}³ bricks of every cell faces read, no apron: ${read.size} ` +
+      `(${((read.size * B ** 3 * 2) / 2 ** 20).toFixed(0)} MB + ${(tables / 2 ** 20).toFixed(0)} MB of tables)`,
+  );
+}
+
 // GPU option: per-face light, each greedy quad carrying a (w + 2) x (h + 2) grid of light
 // around it (the ring is for smoothing and occlusion), so memory follows surface area.
 let grid = 0;
@@ -160,12 +189,11 @@ for (const key of world.chunkKeys()) {
   const mesh = meshChunk({
     bits: 6,
     cells: world.copyPadded(cx, cy, cz, cells),
-    light: null,
-    opaque: null,
+    lightBrickBits: null,
   });
   for (let q = 0; q < mesh.quadCount; q++) {
-    const w = mesh.quads[q * mesh.quadBytes + 4] ?? 0;
-    const h = mesh.quads[q * mesh.quadBytes + 5] ?? 0;
+    const w = mesh.quads[q * QUAD_BYTES + 4] ?? 0;
+    const h = mesh.quads[q * QUAD_BYTES + 5] ?? 0;
     grid += (w + 2) * (h + 2);
   }
   quads += mesh.quadCount;

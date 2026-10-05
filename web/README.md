@@ -26,9 +26,9 @@ Other scripts: `pnpm test:watch`, `pnpm format` (Biome, fixes formatting and imp
 
 ```
 packages/core/      world, chunks (stored by content), cell states, raycast: no DOM, no Node
-packages/mesher/    greedy chunk mesher with smooth light and ambient occlusion (runs in workers)
+packages/mesher/    greedy chunk mesher; also lists the light bricks its faces read (runs in workers)
 packages/light/     Minecraft-style sky and colored block light, incremental on edits
-packages/session/   WorldSession: a World, its light and the mesh/light scheduling, headless
+packages/session/   WorldSession: a World, its light, mesh scheduling and the GPU light layout
 packages/fixtures/  seeded test worlds (the benchmark city)
 apps/web/           the React + Three.js app (Vite), with the in-app benchmark
 tools/              dev tools (shot)
@@ -61,26 +61,26 @@ double mount included.
 - `pnpm bench:mesh [cells ...] [--bits=5,6,7]`: meshing and storage cost on one CPU thread.
 - `pnpm bench:sparse [cells]`: how much light memory sparse layouts would need (CPU bricks,
   GPU bricks, per-face light) on the city.
-- `pnpm bench:light [cells ...]`: full relight, light memory, lit quad counts, the light
-  volume copy per chunk, and incremental relights for single edits, a roof hole and big fills.
+- `pnpm bench:light [cells ...]`: full relight, light memory, the light bricks faces read and
+  their copy cost, and incremental relights for single edits, a roof hole and big fills.
 - In the app, pick a world, chunk size and lighting (also in the URL, e.g.
   `?world=city-5m&chunk=64&lighting=volume&daylight=0&brightness=50`) and press **Run
-  benchmark**: a scripted flight, 100 single-cell edits, a roof hole and 100k/1M box fills,
-  measured to the frame they appear. The result can be copied as JSON and is also on
-  `window.__voxylBench`.
+  benchmark**: a scripted flight (frame, main-thread and GPU time), 100 single-cell edits, a
+  roof hole and 100k/1M box fills, measured to the frame they appear. The result can be
+  copied as JSON and is also on `window.__voxylBench`. GPU time comes from timestamp
+  queries; headless frame times follow the machine's display pacing, so compare GPU time.
 
-Lighting (`lighting=` in the URL) is `off`, `vertex` (light baked into the quads, so a light
-change remeshes) or `volume` (plain quads; the shader reads light from a 3D texture per chunk,
-so a light change rewrites the texture). Both lit modes compute the same Minecraft-style light;
-`volume` needs WebGPU. Time of day (`daylight`, 0 midnight to 100 noon) and Brightness
-(`brightness`, Minecraft's slider: 0 Moody, 50 default, 100 Bright) are shader values and cost
-nothing to change.
+Lighting (`lighting=` in the URL) is `off` or `volume`: Minecraft-style light the shader reads
+per fragment from a sparse light volume (bricks of light only where faces read it), so a light
+change rewrites a few bricks and never remeshes. It needs WebGPU; WebGL2 draws unlit. Time of
+day (`daylight`, 0 midnight to 100 noon) and Brightness (`brightness`, Minecraft's slider:
+0 Moody, 50 default, 100 Bright) are shader values and cost nothing to change.
 
 ## Rules of the road
 
-- `core`, `mesher` and `light` compile with no DOM or Node types, so anything that touches
-  `document`, `window` or `process` fails their typecheck. Keep it that way: the same code runs
-  in the tab, in workers and on the server.
+- `core`, `mesher`, `light` and `session` compile with no DOM or Node types, so anything that
+  touches `document`, `window` or `process` fails their typecheck. Keep it that way: the same
+  code runs in the tab, in workers and on the server.
 - Cells store semantics, never materials. Palettes (colours, transparency, emission) live
   outside `World`, and light is derived from both, never saved.
 - React draws UI chrome only. The world is rendered by Three.js from chunk data, never as React

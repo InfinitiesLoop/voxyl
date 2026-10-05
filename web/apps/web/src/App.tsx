@@ -17,8 +17,6 @@ export interface Settings {
   brightness: number;
 }
 
-const LIGHTING_MODES: readonly LightingMode[] = ["off", "vertex", "volume"];
-
 function percent(value: string | null, fallback: number): number {
   const n = Number(value ?? fallback);
   return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : fallback;
@@ -34,8 +32,8 @@ function readSettings(): Settings {
     world,
     chunk: (CHUNK_SIZES as readonly number[]).includes(chunk) ? chunk : 64,
     palette: Math.max(0, palette),
-    // "on" is from before there were two kinds of lighting.
-    lighting: lighting === "on" ? "volume" : (LIGHTING_MODES.find((m) => m === lighting) ?? "off"),
+    // "on" and "vertex" are from earlier versions; any lighting now means the light volume.
+    lighting: lighting === null || lighting === "off" ? "off" : "volume",
     daylight: percent(params.get("daylight"), 100),
     brightness: percent(params.get("brightness"), 50),
   };

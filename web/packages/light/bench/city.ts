@@ -1,10 +1,10 @@
 // Light engine benchmark on the city fixtures, on one thread.
 // Run from web/: pnpm bench:light [cells ...] [--bits=6]
 
-import { chunkKeyToCoords, EMPTY_ID, World } from "@voxyl/core";
+import { chunkKey, chunkKeyToCoords, EMPTY_ID, World } from "@voxyl/core";
 import { CITY_SEMANTICS, generateCity, mulberry32 } from "@voxyl/fixtures";
 import { meshChunk, paddedVolume } from "@voxyl/mesher";
-import { LightEngine, type LightMaterials, packEmission } from "../src/index.ts";
+import { GPU_BRICK_BITS, LightEngine, type LightMaterials, packEmission } from "../src/index.ts";
 
 const args = process.argv.slice(2);
 const bitsArg = args.find((a) => a.startsWith("--bits="));
@@ -43,29 +43,42 @@ for (const target of targets) {
     const fullMs = performance.now() - t;
     const memoryMb = engine.memoryBytes / 2 ** 20;
     const lightBricks = engine.lightBrickCount;
-    engine.takeDirtyChunks();
+    engine.takeDirty();
+    /** GPU light bricks the last change touched. */
+    const dirtyBricks = () => {
+      const { all, bricks } = engine.takeDirty();
+      let n = 0;
+      for (const set of bricks.values()) n += set.size;
+      return all ? "all" : n;
+    };
 
-    // Mesh every chunk with and without light: lighting splits faces with gradients.
-    const opaqueTable = cityMaterials(world).opaque;
+    // Mesh every chunk, collecting the light bricks its faces read, then copy each of those
+    // bricks the way the renderer's light volume receives them.
     const cells = new Uint16Array(paddedVolume(bits));
-    const lightCells = new Uint16Array(paddedVolume(bits));
-    let unlitQuads = 0;
-    let litQuads = 0;
-    let litMeshMs = 0;
-    let gpuCopyMs = 0;
+    const G = 1 << GPU_BRICK_BITS;
+    const n = (1 << bits) / G;
+    const NB = n + 2;
+    const needed = new Set<number>();
+    let quadCount = 0;
     for (const key of world.chunkKeys()) {
       const [kx, ky, kz] = chunkKeyToCoords(key);
       world.copyPadded(kx, ky, kz, cells);
-      unlitQuads += meshChunk({ bits, cells, light: null, opaque: null }).quadCount;
-      engine.copyPadded(kx, ky, kz, lightCells);
-      let start = performance.now();
-      litQuads += meshChunk({ bits, cells, light: lightCells, opaque: opaqueTable }).quadCount;
-      litMeshMs += performance.now() - start;
-      // What the light volume uploads per chunk: light with light-blocking cells marked.
-      start = performance.now();
-      engine.copyPadded(kx, ky, kz, lightCells, true);
-      gpuCopyMs += performance.now() - start;
+      const mesh = meshChunk({ bits, cells, lightBrickBits: GPU_BRICK_BITS });
+      quadCount += mesh.quadCount;
+      for (const b of mesh.lightBricks) {
+        const bx = kx * n + (b % NB) - 1;
+        const bz = kz * n + (Math.floor(b / NB) % NB) - 1;
+        const by = ky * n + Math.floor(b / (NB * NB)) - 1;
+        needed.add(chunkKey(bx, by, bz));
+      }
     }
+    const brick = new Uint16Array(G ** 3);
+    const copyStart = performance.now();
+    for (const key of needed) {
+      const [bx, by, bz] = chunkKeyToCoords(key);
+      engine.copyBox([bx * G, by * G, bz * G], [G, G, G], brick, true);
+    }
+    const copyMs = performance.now() - copyStart;
 
     world.recordChanges(true);
     const glow = world.states.intern({ semantic: "Glow" });
@@ -85,7 +98,7 @@ for (const target of targets) {
       t = performance.now();
       engine.update(world.takeChanges());
       single.push(performance.now() - t);
-      dirtyCounts.push(engine.takeDirtyChunks().length);
+      dirtyCounts.push(Number(dirtyBricks()));
     }
 
     // A roof hole: clear a 5x5 patch of the tallest roof near the centre, so sky floods in.
@@ -121,7 +134,7 @@ for (const target of targets) {
         t = performance.now();
         engine.update(world.takeChanges());
         roof.push(
-          `${clear ? "open" : "close"} ${ms(performance.now() - t)} (${engine.takeDirtyChunks().length} chunks)`,
+          `${clear ? "open" : "close"} ${ms(performance.now() - t)} (${dirtyBricks()} bricks)`,
         );
       }
     }
@@ -140,7 +153,7 @@ for (const target of targets) {
         t = performance.now();
         engine.update(world.takeChanges());
         bulk.push(
-          `${label} ${clear ? "clear" : "fill"} ${ms(performance.now() - t)} (${engine.takeDirtyChunks().length} chunks)`,
+          `${label} ${clear ? "clear" : "fill"} ${ms(performance.now() - t)} (${dirtyBricks()} bricks)`,
         );
       }
     }
@@ -150,9 +163,9 @@ for (const target of targets) {
         `${(world.cellCount / 1e6).toFixed(2)}M cells, ${1 << bits}^3 chunks:`,
         `light all ${ms(fullMs)} (scan ${ms(engine.lastTimings.scanMs)}, sky ${ms(engine.lastTimings.skyMs)}, block ${ms(engine.lastTimings.blockMs)})`,
         `memory ${memoryMb.toFixed(0)} MB (${lightBricks} light bricks stored)`,
-        `quads ${(unlitQuads / 1e6).toFixed(2)}M unlit, ${(litQuads / 1e6).toFixed(2)}M lit (lit meshing ${ms(litMeshMs / world.chunkCount)} per chunk)`,
-        `light volume copy ${ms(gpuCopyMs / world.chunkCount)} per chunk`,
-        `single edit p50 ${ms(pct(single, 0.5))} p95 ${ms(pct(single, 0.95))} max ${ms(Math.max(...single))}, remesh p50 ${pct(dirtyCounts, 0.5)} chunks`,
+        `quads ${(quadCount / 1e6).toFixed(2)}M; faces read ${needed.size} light bricks of ${G}³ (${((needed.size * G ** 3 * 2) / 2 ** 20).toFixed(0)} MB on the GPU)`,
+        `light brick copy ${((copyMs * 1000) / needed.size).toFixed(2)} µs per brick, ${ms(copyMs)} for all`,
+        `single edit p50 ${ms(pct(single, 0.5))} p95 ${ms(pct(single, 0.95))} max ${ms(Math.max(...single))}, p50 ${pct(dirtyCounts, 0.5)} light bricks rewritten`,
         `roof hole: ${roof.join(", ") || "no roof found"}`,
         `bulk: ${bulk.join(", ")}`,
       ].join("\n  "),

@@ -23,6 +23,9 @@ export interface FrameStats {
   readonly frameP95: number;
   readonly cpuP50: number;
   readonly cpuP95: number;
+  /** GPU time per frame (timestamp queries), or null where the browser has none. */
+  readonly gpuP50: number | null;
+  readonly gpuP95: number | null;
   readonly drawCalls: number;
   readonly triangles: number;
 }
@@ -46,6 +49,7 @@ export interface EngineStats {
 export interface FrameRecording {
   readonly frameMs: number[];
   readonly cpuMs: number[];
+  readonly gpuMs: number[];
 }
 
 export type Autopilot = (seconds: number) => {
@@ -59,7 +63,7 @@ export type Autopilot = (seconds: number) => {
  * this but never touches the scene.
  */
 export class Engine {
-  readonly renderer = new THREE.WebGPURenderer({ antialias: true });
+  readonly renderer = new THREE.WebGPURenderer({ antialias: true, trackTimestamp: true });
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(60, 1, 0.1, 6000);
   readonly fly: FlyCamera;
@@ -80,6 +84,11 @@ export class Engine {
 
   readonly #frameMs = new Float64Array(FRAME_WINDOW);
   readonly #cpuMs = new Float64Array(FRAME_WINDOW);
+  readonly #gpuMs = new Float64Array(FRAME_WINDOW);
+  #gpuFrames = 0;
+  #gpuPending = false;
+  /** Frames rendered since timestamps were last resolved. */
+  #unresolved = 0;
   #frames = 0;
   #lastTime = -1;
   #frameWaiters: (() => void)[] = [];
@@ -154,7 +163,9 @@ export class Engine {
     this.home();
     const start = performance.now();
     void this.whenIdle().then(() => {
-      if (this.#worldId === id) this.#initialMeshMs = performance.now() - start;
+      if (this.#worldId !== id) return;
+      this.#initialMeshMs = performance.now() - start;
+      chunks.revealLight();
     });
     this.#placeId = await this.world.request({
       type: "intern",
@@ -186,14 +197,19 @@ export class Engine {
   }
 
   /**
-   * Minecraft-style light: off, baked into meshes, or from a light volume. Kept across loads.
-   * Resolves once the world worker has lit the world; drawing carries on meanwhile.
+   * Minecraft-style light from a light volume, or off; kept across loads. Without WebGPU the
+   * world stays unlit. Resolves once the world worker has lit the world and its light is on
+   * screen; drawing carries on meanwhile, unlit until then.
    */
   async setLighting(requested: LightingMode): Promise<void> {
-    const mode = requested === "volume" && !this.volumeLighting ? "vertex" : requested;
+    const mode = this.volumeLighting ? requested : "off";
     this.#lighting = mode;
-    this.#chunks?.setLighting(mode);
+    const chunks = this.#chunks;
+    chunks?.setLighting(mode);
     await this.world.request({ type: "lighting", mode });
+    if (mode === "off" || !chunks) return;
+    await this.whenIdle();
+    if (this.#chunks === chunks && this.#lighting === mode) chunks.revealLight();
   }
 
   get lighting(): LightingMode {
@@ -229,11 +245,11 @@ export class Engine {
   }
 
   startRecording(): void {
-    this.#recording = { frameMs: [], cpuMs: [] };
+    this.#recording = { frameMs: [], cpuMs: [], gpuMs: [] };
   }
 
   stopRecording(): FrameRecording {
-    const recording = this.#recording ?? { frameMs: [], cpuMs: [] };
+    const recording = this.#recording ?? { frameMs: [], cpuMs: [], gpuMs: [] };
     this.#recording = null;
     return recording;
   }
@@ -247,6 +263,7 @@ export class Engine {
     const n = Math.min(this.#frames, FRAME_WINDOW);
     const frame = sortedWindow(this.#frameMs, n);
     const cpu = sortedWindow(this.#cpuMs, n);
+    const gpu = sortedWindow(this.#gpuMs, Math.min(this.#gpuFrames, FRAME_WINDOW));
     const mean = frame.length > 0 ? frame.reduce((s, t) => s + t, 0) / frame.length : 0;
     const info = this.renderer.info.render;
     const memory = (performance as { memory?: { usedJSHeapSize: number } }).memory;
@@ -257,6 +274,8 @@ export class Engine {
         frameP95: percentile(frame, 0.95),
         cpuP50: percentile(cpu, 0.5),
         cpuP95: percentile(cpu, 0.95),
+        gpuP50: gpu.length > 0 ? percentile(gpu, 0.5) : null,
+        gpuP95: gpu.length > 0 ? percentile(gpu, 0.95) : null,
         drawCalls: info.drawCalls,
         triangles: info.triangles,
       },
@@ -322,6 +341,7 @@ export class Engine {
     }
     this.#chunks?.update();
     this.renderer.render(this.scene, this.camera);
+    this.#resolveGpuTime();
     if (this.#idleWaiters.length > 0 && this.#settled) {
       const waiters = this.#idleWaiters;
       this.#idleWaiters = [];
@@ -342,6 +362,31 @@ export class Engine {
     const waiters = this.#frameWaiters;
     this.#frameWaiters = [];
     for (const resolve of waiters) resolve();
+  }
+
+  /**
+   * Reads back GPU time from the timestamp queries, at most one read at a time; a read that
+   * covers several frames is split evenly between them.
+   */
+  #resolveGpuTime(): void {
+    this.#unresolved++;
+    if (this.#gpuPending) return;
+    this.#gpuPending = true;
+    const frames = this.#unresolved;
+    this.#unresolved = 0;
+    this.renderer.resolveTimestampsAsync("render").then(
+      (ms) => {
+        this.#gpuPending = false;
+        if (typeof ms !== "number" || ms <= 0) return;
+        const perFrame = ms / frames;
+        this.#gpuMs[this.#gpuFrames % FRAME_WINDOW] = perFrame;
+        this.#gpuFrames++;
+        this.#recording?.gpuMs.push(perFrame);
+      },
+      () => {
+        this.#gpuPending = false;
+      },
+    );
   }
 
   #resize(): void {
