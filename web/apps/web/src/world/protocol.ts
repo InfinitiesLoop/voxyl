@@ -9,6 +9,7 @@
 // been replaced are dropped.
 
 import type { CellStateInput } from "@voxyl/core";
+import type { StateShape } from "@voxyl/mesher";
 import type { LightingMode, LightLayoutUpdate, MeshJob } from "@voxyl/session";
 import type { Palette } from "../palettes.ts";
 import type { WorldInfo, WorldKind } from "../worlds.ts";
@@ -79,7 +80,15 @@ export interface WorldStats {
 export type FromWorld =
   | { type: "reply"; seq: number; value: unknown }
   | { type: "error"; seq: number; message: string }
-  | { type: "mesh"; world: number; key: number; quads: Uint8Array; quadCount: number }
+  | {
+      type: "mesh";
+      world: number;
+      key: number;
+      quads: Uint16Array;
+      quadCount: number;
+      tris: Uint16Array;
+      triCount: number;
+    }
   /** Writes for the light volume (see LightLayout), applied whole. */
   | { type: "light"; world: number; update: LightLayoutUpdate }
   /** The semantic of every cell-state id (index 0 is empty), sent when new states appear. */
@@ -87,11 +96,13 @@ export type FromWorld =
   | { type: "idle"; world: number; seq: number }
   | { type: "stats"; world: number; stats: WorldStats };
 
-/** A mesh job as the world worker sends it to a mesh worker, tagged with its world. */
-export interface MeshRequest {
-  readonly world: number;
-  readonly job: MeshJob;
-}
+/**
+ * What the world worker sends a mesh worker, tagged with its world: a job, or the shapes of
+ * cell states from id `from` on (sent before any job that uses them).
+ */
+export type MeshRequest =
+  | { readonly world: number; readonly job: MeshJob }
+  | { readonly world: number; readonly from: number; readonly shapes: readonly StateShape[] };
 
 /** What a mesh worker sends back. */
 export interface MeshReply {
@@ -102,8 +113,10 @@ export interface MeshReply {
 export interface MeshResult {
   readonly jobId: number;
   readonly key: number;
-  readonly quads: Uint8Array;
+  readonly quads: Uint16Array;
   readonly quadCount: number;
+  readonly tris: Uint16Array;
+  readonly triCount: number;
   /** The light bricks the faces read (ChunkMesh.lightBricks). */
   readonly lightBricks: Uint16Array;
   /** Time spent meshing. */

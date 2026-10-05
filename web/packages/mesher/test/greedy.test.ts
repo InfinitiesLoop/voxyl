@@ -1,7 +1,7 @@
 import { chunkKey, chunkKeyToCoords, World } from "@voxyl/core";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { FACES, meshChunk, paddedVolume, QUAD_BYTES } from "../src/index.ts";
+import { FACES, meshChunk, paddedVolume, QUAD_WORDS, ShapeTable } from "../src/index.ts";
 
 interface Quad {
   x: number;
@@ -13,18 +13,23 @@ interface Quad {
   id: number;
 }
 
-function quadsOf(mesh: { quads: Uint8Array; quadCount: number }): Quad[] {
+/** Whole-cell quads, by the cell each starts at (quads store their corner in eighths). */
+function quadsOf(mesh: { quads: Uint16Array; quadCount: number }): Quad[] {
   const { quads, quadCount } = mesh;
   return Array.from({ length: quadCount }, (_, q) => {
-    const at = (i: number) => quads[q * QUAD_BYTES + i] ?? 0;
+    const at = (i: number) => quads[q * QUAD_WORDS + i] ?? 0;
+    const face = FACES[at(3)];
+    if (!face) throw new Error(`bad face ${at(3)}`);
+    const p = [at(0) / 8, at(1) / 8, at(2) / 8];
+    if (face.sign > 0) p[face.axis] = (p[face.axis] ?? 0) - 1;
     return {
-      x: at(0),
-      y: at(1),
-      z: at(2),
+      x: p[0] ?? 0,
+      y: p[1] ?? 0,
+      z: p[2] ?? 0,
       face: at(3),
-      w: at(4),
-      h: at(5),
-      id: at(6) | (at(7) << 8),
+      w: at(4) / 8,
+      h: at(5) / 8,
+      id: at(6),
     };
   });
 }
@@ -33,7 +38,9 @@ function quadsOf(mesh: { quads: Uint8Array; quadCount: number }): Quad[] {
 function meshOrigin(world: World) {
   const L = world.layout;
   const cells = world.copyPadded(0, 0, 0, new Uint16Array(paddedVolume(L.bits)));
-  return quadsOf(meshChunk({ bits: L.bits, cells, lightBrickBits: null }));
+  return quadsOf(
+    meshChunk({ bits: L.bits, cells, lightBrickBits: null }, ShapeTable.of(world.states)),
+  );
 }
 
 describe("meshChunk", () => {
@@ -91,7 +98,8 @@ function meshedFaces(world: World): Map<string, number> {
   for (const key of world.chunkKeys()) {
     const [cx, cy, cz] = chunkKeyToCoords(key);
     world.copyPadded(cx, cy, cz, cells);
-    for (const q of quadsOf(meshChunk({ bits: L.bits, cells, lightBrickBits: null }))) {
+    const shapes = ShapeTable.of(world.states);
+    for (const q of quadsOf(meshChunk({ bits: L.bits, cells, lightBrickBits: null }, shapes))) {
       const face = FACES[q.face];
       if (!face) throw new Error(`bad face ${q.face}`);
       for (let du = 0; du < q.w; du++) {
@@ -172,7 +180,10 @@ describe.each([3, 4])("meshing a world of %i-bit chunks", (chunkBits) => {
         for (const key of world.chunkKeys()) {
           const [cx, cy, cz] = chunkKeyToCoords(key);
           world.copyPadded(cx, cy, cz, cells);
-          const mesh = meshChunk({ bits: chunkBits, cells, lightBrickBits: brickBits });
+          const mesh = meshChunk(
+            { bits: chunkBits, cells, lightBrickBits: brickBits },
+            ShapeTable.of(world.states),
+          );
           expect([...mesh.lightBricks]).toEqual([...(want.get(key) ?? [])].sort((p, q) => p - q));
         }
       }),

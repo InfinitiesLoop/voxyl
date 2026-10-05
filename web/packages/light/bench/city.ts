@@ -3,7 +3,7 @@
 
 import { chunkKey, chunkKeyToCoords, EMPTY_ID, World } from "@voxyl/core";
 import { CITY_SEMANTICS, generateCity, mulberry32 } from "@voxyl/fixtures";
-import { meshChunk, paddedVolume } from "@voxyl/mesher";
+import { meshChunk, paddedVolume, ShapeTable } from "@voxyl/mesher";
 import { GPU_BRICK_BITS, LightEngine, type LightMaterials, packEmission } from "../src/index.ts";
 
 const args = process.argv.slice(2);
@@ -59,11 +59,12 @@ for (const target of targets) {
     const n = (1 << bits) / G;
     const NB = n + 2;
     const needed = new Set<number>();
+    const shapes = ShapeTable.of(world.states);
     let quadCount = 0;
     for (const key of world.chunkKeys()) {
       const [kx, ky, kz] = chunkKeyToCoords(key);
       world.copyPadded(kx, ky, kz, cells);
-      const mesh = meshChunk({ bits, cells, lightBrickBits: GPU_BRICK_BITS });
+      const mesh = meshChunk({ bits, cells, lightBrickBits: GPU_BRICK_BITS }, shapes);
       quadCount += mesh.quadCount;
       for (const b of mesh.lightBricks) {
         const bx = kx * n + (b % NB) - 1;

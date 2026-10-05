@@ -305,12 +305,13 @@ frame pacing is rougher than a real browser window, so treat frame p95 as pessim
   is free at 4K on the B580). Details, numbers and its next steps are in
   [`web-lighting.md`](web-lighting.md).
 
-### Phase 0 status (2026-10-04)
+### Phase 0 status (2026-10-05)
 
 Done and proven, all on the B580 (headless Edge plus the user's Chrome at 3840x1906):
 
 - [x] Chunked core with storage by content, raycast, cell-state interning (`packages/core`).
-- [x] Greedy mesher in a worker pool, 8-byte packed quads, palette lookup texture.
+- [x] Greedy mesher in a worker pool, packed quads (16 bytes since shaped parts, was 8),
+  palette lookup texture.
 - [x] Seeded city fixtures (1M, 5M, 20M cells) and the in-app benchmark (`Run benchmark`).
 - [x] 5M cells at 60 fps, p95 16.8 ms, with lighting on or off; one-frame edits.
 - [x] Minecraft-style light engine, Minecraft's lightmap, and the light volume renderer.
@@ -322,22 +323,115 @@ Done and proven, all on the B580 (headless Edge plus the user's Chrome at 3840x1
   light removed (2026-10-04). A TSL bug that misread light at brick boundaries fixed
   (2026-10-05, see the lighting plan's "Shader bug").
 - [x] GPU time per frame from timestamp queries, in the HUD and the benchmark.
+- [x] Shaped parts meshed, lit and measured on a decorated city (2026-10-05, "Shaped parts"
+  below). The user dropped the Godot exporter for Phase 0: microblocks and ArchitectureCraft
+  roofs on the city fixture test the same thing.
 
 Still open for the Phase 0 gate:
 
-- [ ] Run the benchmark on the MacBook M4 (the reference laptop for the gate).
-- [ ] ChatGPT widget WebSocket test: can a widget hold a socket to our relay?
-- [ ] Tier 1 CPU rasterizer prototype (agent screenshots).
-- [ ] Godot exporter for Conduit Factory, and a dense shaped-parts fixture.
+- [ ] Run the benchmark on the MacBook M4 (the reference laptop for the gate). On hold.
+- [ ] ChatGPT widget relay test. Researched (below); a live probe is still needed.
+- [ ] Tier 1 CPU rasterizer prototype (agent screenshots). On hold.
 
-**Next steps, in order** (the user agreed on the worker and sparse light on 2026-10-04):
+**Next steps, in order** (updated 2026-10-05, when the user called lighting done for now):
 
 1. ~~World and light engine in a worker~~ (done).
 2. ~~Sparse light~~ (done; the user chose the sparse light volume over per-face light, for
    shaped parts and future volumetric effects).
-3. **Light engine speed**: faster flood fill and volume relights for big fills (1M-cell fills
-   take 2.6-3.4 s); see [`web-lighting.md`](web-lighting.md), "Next steps".
-4. The open Phase 0 items above, M4 run first.
+3. ~~ChatGPT widget research~~ (done, below).
+4. ~~Shaped parts in the city fixture~~ (done, below). The user judged the performance more
+   than adequate (2026-10-05): perf work waits until it comes up again.
+5. **The ChatGPT widget live probe**, after a refresher on where builds are stored.
+6. Later: the rasterizer and the M4 run. Perf backlog, for when it matters: faster cube
+   meshing (binary greedy meshing, for one-frame edits on decorated builds; see "Shaped
+   parts") and light engine speed (1M-cell fills relight in 2.6-3.4 s; see
+   [`web-lighting.md`](web-lighting.md), "Next steps").
+
+### Shaped parts (2026-10-05)
+
+The plan's risk was that parts can't be greedy-merged like cubes, so dense microblock builds
+might blow the triangle or memory budget. Tested on the city fixture decorated with parts
+(`world=parts-1m`, `parts-5m`, `parts-20m`; `generateCity({ parts: true })`;
+`pnpm bench:mesh --parts`).
+
+**What was built**
+
+- `packages/shapes`: microblock boxes on the 1/8 grid with the Godot app's (FMP's) slot
+  numbering, and the ArchitectureCraft roof family (tiles, corners, ridges, valleys, slope
+  tiles A-C) in all 24 orientations, ported from `ShapeCatalog.gd` and `ArchShapes.gd`. AC's
+  `.objson` model shapes (cylinders, cornices, arches, ...) are not ported yet; unknown shapes
+  draw as whole cubes.
+- Mesher: each cell state's part geometry is built once: an 8³ grid meshed into rects, roof
+  triangles, and an 8 x 8 cover mask per side. Each shaped cell is then a lookup plus
+  neighbour culling. Microblock faces join the cube quads (quads now store eighths), merged
+  across cells where they line up, so they cost no extra draw. Roof shapes become instanced
+  triangles (24 bytes, corners in 1/48 cell), one more draw in chunks that have any. A cube
+  face is hidden only when its neighbour covers that whole side. A part face or triangle is
+  hidden when its neighbour covers what it covers.
+- Light: shaped cells let light through (Minecraft lights slabs and stairs from their
+  neighbours). The shader now works from any normal. Shade blends Minecraft's per-face
+  values by the normal, and light is read from the cell just in front of the surface, in the
+  plane of the face the normal points most along.
+- The fixture: facades in three styles. "Ledges" puts a post on each trim band, a strip sill
+  under each window and a panel pilaster on each mullion. "Frames" puts a hollow cover round
+  each window, a cover band on solid rows and a pillar up each corner. "Plain" has none. Low
+  buildings get hip roofs of tile rings stepping up to a ridge, and towers get a tiled eave
+  in place of the parapet. The blocks underneath are the same city.
+
+**Measured** (5M-cell cities, 64³ chunks, lighting on, headless Edge, B580, 1600x900):
+
+| City | Shaped cells | Quads | Triangles | Quads + tris on GPU | Draws | GPU p50 / p95 | Main thread p50 | Single edit p50 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Plain | 0 | 0.68M | 0 | 10 MB | 300 | 2.0 / 3.7 ms | 2.8 ms | 17.5 ms (1 frame) |
+| Shaped | 1.0M | 2.40M | 1.46M | 70 MB | 501 | 3.0 / 4.8 ms | 4.0 ms | 34.4 ms (2 frames) |
+
+- **The GPU copes easily.** 1M shaped cells (a fifth of the world) add 1 ms of GPU per
+  frame and 60 MB. At this density the risk the plan named doesn't bite.
+- **Mesh time is the cost.** Shaped chunks take 9.7 ms (p50) to mesh in a worker, against
+  3.8 ms for plain ones, so an edit there lands a frame late. Profiled, the part pass adds
+  only about 1 ms. The rest is the cube pass doing more work, because decorations expose many
+  more cube faces: the same chunk takes 6.1 ms plain and 9.6 ms with its part cells meshed as
+  cubes. A faster cube mesher (in the perf backlog) is the fix, and it helps plain builds
+  too.
+- Cube-only chunks keep the old two-read face test. A chunk with shaped cells precomputes one
+  byte per cell (sides covered, cube or not). Without that split, the plain city meshed 2x
+  slower.
+- Memory could halve later. Part quads could pack into 8 bytes for chunks up to 64³, and roof
+  tiles inside hip roofs keep back faces nobody sees (the attic is hollow).
+
+### ChatGPT widget research (2026-10-05)
+
+Web research only, no live test yet. The question: can a ChatGPT widget keep a live channel
+to our relay so tool calls run in it?
+
+- **Network access is declared, then enforced by CSP.** A widget's MCP resource lists origins
+  in `_meta.ui.csp.connectDomains` (the MCP Apps standard; ChatGPT also reads the legacy
+  `_meta["openai/widgetCSP"].connect_domains`). These become `connect-src`, which covers
+  `fetch`, `EventSource` and `WebSocket`. Undeclared origins are blocked.
+- **WebSockets: likely, not proven in ChatGPT.** The MCP Apps spec and its guides list `wss://`
+  origins in `connectDomains`. A Codex desktop issue (openai/codex#49679, 2026-09-30) shows
+  a declared `wss://` origin passing CSP there. But an OpenAI forum thread from Oct-Nov 2025
+  reported ChatGPT rewriting `wss://` entries in the legacy field to `https://`, which blocks
+  the socket (CSP's `https` source does not match `wss`), and no fix was posted.
+- **A streaming fallback is safe either way.** Server-sent events or a streamed `fetch` down,
+  plus `POST` up, are plain `https` requests that `connectDomains` covers. The relay protocol
+  should work over either, so this risk can't block the architecture.
+- **The widget stays alive in fullscreen and picture-in-picture.** OpenAI's display mode docs
+  say PiP stays put while the user scrolls and sends more prompts, and tools can run while a
+  fullscreen view is open. So "a tab is attached" means a fullscreen or PiP Voxyl widget. The
+  Android app remounts a widget when its display mode changes, so the widget must reattach
+  and resync on mount. What happens to an inline widget scrolled out of view is unknown.
+- **Workers run.** A spike on ChatGPT web with CSP enforced (everything3d/e3d-openscad-studio
+  issue #12, 2026-10-05) ran a blob Worker and instantiated 9 MB of wasm. Workers need blob
+  URLs, because a worker script from our asset domain fails the same-origin check.
+- **Unknown until tested live:** WebGPU in the sandboxed iframe (WebGL2 is the fallback),
+  OPFS or IndexedDB in the sandbox origin, timer throttling when the widget isn't visible,
+  and relay round-trip latency.
+- **A live probe is cheap.** That spike served its MCP server through a free Cloudflare quick
+  tunnel (`trycloudflare.com`, no account), so the probe needs only a local Node server and
+  the user adding it in ChatGPT developer mode. It should report WSS, SSE and streamed
+  fetch, WebGPU and WebGL2, a blob module worker, OPFS and IndexedDB, timers while hidden,
+  and round-trip time.
 
 ## Testing and verification
 
@@ -373,7 +467,7 @@ host tool execution. Both are checked in Phase 0, before any port work.
 | ChatGPT widget sandbox | Client-side tool execution needs the widget iframe to hold a live connection to our relay. The Apps SDK's network rules may not allow it. | Prove it in Phase 0. If it fails, ChatGPT sessions run on the headless server host, which works but costs server CPU. |
 | Port drift | Godot keeps gaining features while the port chases it, so the target keeps moving. | Freeze large Godot features from Phase 1 until the Phase 4 gate. Fixes and builds continue. |
 | Renderer misses targets | The whole case for the move rests on big builds staying smooth. | Phase 0 measures the renderer on 5M cells before anything else is ported. If it misses, the fallback is a Rust or WASM mesher behind the same worker interface. |
-| Shaped-part and model meshing cost | Parts and custom models can't be greedy-merged, and dense microblock builds may blow the triangle budget. | Include a dense parts fixture in the Phase 0 bench, and cache per-chunk part geometry. |
+| Shaped-part and model meshing cost | Parts and custom models can't be greedy-merged, and dense microblock builds may blow the triangle budget. | Include a dense parts fixture in the Phase 0 bench, and cache per-chunk part geometry. Measured in Phase 0: the GPU copes; mesh time is the cost (see "Shaped parts"). |
 | Agent quality differs by host model | ChatGPT's model may use the tools less well than Claude does. | The agent eval set runs against several models at each gate. Tool descriptions are tuned for the weakest one that matters. |
 | Serverless memory limits | A Worker has about 128 MB, which won't hold a large world. | The headless host loads only the chunks a tool call touches. A plain Node host stays a drop-in escape hatch. |
 

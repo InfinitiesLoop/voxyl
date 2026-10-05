@@ -62,8 +62,10 @@ export function lightMaterials(palette: Palette, states: CellStateTable): LightM
   const opaque = new Uint8Array(size);
   const emission = new Uint16Array(size);
   for (let id = 1; id < size; id++) {
-    const material = palette.materials[states.get(id)?.semantic ?? ""];
-    opaque[id] = material?.transparent ? 0 : 1;
+    const state = states.get(id);
+    const material = palette.materials[state?.semantic ?? ""];
+    // Shaped parts let light through, as Minecraft's slabs and stairs light from their neighbours.
+    opaque[id] = material?.transparent || (state?.parts.length ?? 0) > 0 ? 0 : 1;
     if (material?.emits) emission[id] = packEmission(material.emits.color, material.emits.level);
   }
   return { opaque, emission };

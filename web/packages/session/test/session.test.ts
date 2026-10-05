@@ -1,6 +1,6 @@
 import { type CellStateTable, chunkKeyToCoords, World } from "@voxyl/core";
 import { GPU_BRICK_BITS, LightEngine, type LightMaterials, packEmission } from "@voxyl/light";
-import { type ChunkMesh, meshChunk, paddedVolume } from "@voxyl/mesher";
+import { type ChunkMesh, meshChunk, paddedVolume, ShapeTable } from "@voxyl/mesher";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
@@ -47,8 +47,15 @@ function apply(view: View, update: LightLayoutUpdate, brickVolume: number, table
   if (update.grid) view.grid = update.grid;
 }
 
+const tables = new WeakMap<WorldSession, ShapeTable>();
+
 /** Runs the session's work to completion, meshing on this thread, as the workers would. */
 function settle(session: WorldSession, view: View): void {
+  let table = tables.get(session);
+  if (!table) {
+    table = new ShapeTable();
+    tables.set(session, table);
+  }
   // The renderer keeps a light volume only with lighting on.
   if (session.lighting === "off") {
     view.pool.clear();
@@ -57,8 +64,10 @@ function settle(session: WorldSession, view: View): void {
   }
   for (let round = 0; round < 1000; round++) {
     session.sync();
+    const added = session.takeShapes();
+    if (added) table.update(added.from, added.shapes);
     for (let job = session.takeJob(); job; job = session.takeJob()) {
-      const mesh = meshChunk(job);
+      const mesh = meshChunk(job, table);
       if (mesh.quadCount > 0) view.meshes.set(job.key, mesh);
       else view.meshes.delete(job.key);
       session.finishJob(job.key, job.jobId, mesh.lightBricks);
@@ -107,7 +116,10 @@ function expectFresh(world: World, view: View, mode: LightingMode, materials: Ma
   for (const key of world.chunkKeys()) {
     const [cx, cy, cz] = chunkKeyToCoords(key);
     const cells = world.copyPadded(cx, cy, cz, new Uint16Array(paddedVolume(bits)));
-    const mesh = meshChunk({ bits, cells, lightBrickBits: GPU_BRICK_BITS });
+    const mesh = meshChunk(
+      { bits, cells, lightBrickBits: GPU_BRICK_BITS },
+      ShapeTable.of(world.states),
+    );
     if (mesh.quadCount > 0) meshes.set(key, mesh);
     for (const b of mesh.lightBricks) {
       needed.add(

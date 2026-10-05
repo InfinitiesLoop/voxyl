@@ -6,7 +6,7 @@
 
 import { chunkKey, chunkKeyToCoords, World } from "@voxyl/core";
 import { generateCity } from "@voxyl/fixtures";
-import { meshChunk, paddedVolume, QUAD_BYTES } from "@voxyl/mesher";
+import { meshChunk, paddedVolume, QUAD_WORDS, ShapeTable } from "@voxyl/mesher";
 import { LightEngine, packEmission } from "../src/index.ts";
 
 const target = Number(process.argv[2] ?? 5_000_000);
@@ -184,16 +184,20 @@ for (const bits of [2, 3, 4]) {
 let grid = 0;
 let quads = 0;
 const cells = new Uint16Array(paddedVolume(6));
+const shapes = ShapeTable.of(world.states);
 for (const key of world.chunkKeys()) {
   const [cx, cy, cz] = chunkKeyToCoords(key);
-  const mesh = meshChunk({
-    bits: 6,
-    cells: world.copyPadded(cx, cy, cz, cells),
-    lightBrickBits: null,
-  });
+  const mesh = meshChunk(
+    {
+      bits: 6,
+      cells: world.copyPadded(cx, cy, cz, cells),
+      lightBrickBits: null,
+    },
+    shapes,
+  );
   for (let q = 0; q < mesh.quadCount; q++) {
-    const w = mesh.quads[q * QUAD_BYTES + 4] ?? 0;
-    const h = mesh.quads[q * QUAD_BYTES + 5] ?? 0;
+    const w = (mesh.quads[q * QUAD_WORDS + 4] ?? 0) / 8;
+    const h = (mesh.quads[q * QUAD_WORDS + 5] ?? 0) / 8;
     grid += (w + 2) * (h + 2);
   }
   quads += mesh.quadCount;

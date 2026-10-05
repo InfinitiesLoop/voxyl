@@ -1,6 +1,6 @@
 import { type CellStateTable, chunkKeyToCoords, type World } from "@voxyl/core";
 import { GPU_BRICK_BITS, LightEngine, type LightMaterials } from "@voxyl/light";
-import { paddedVolume } from "@voxyl/mesher";
+import { describeStates, paddedVolume, type StateShape } from "@voxyl/mesher";
 import { LightLayout, type LightLayoutUpdate } from "./light-layout.ts";
 
 /**
@@ -83,6 +83,8 @@ export class WorldSession {
   /** The light bricks each meshed chunk's faces read, kept with lighting off too. */
   readonly #meshBricks = new Map<number, Uint16Array>();
   readonly #copyTimes: number[] = [];
+  /** States described to the mesher so far (see takeShapes). */
+  #described = 0;
 
   constructor(world: World) {
     this.world = world;
@@ -163,6 +165,20 @@ export class WorldSession {
       this.#layout?.markDirty(light.takeDirty());
     }
     for (const key of this.world.takeDirtyChunks()) this.#enqueue(key);
+  }
+
+  /**
+   * The shapes of cell states added since the last call, for the mesher's ShapeTable, or null
+   * if there are none. Mesh jobs hold state ids, so deliver these before any job taken after.
+   * Describing parts can intern their semantics as new states (see describeStates).
+   */
+  takeShapes(): { from: number; shapes: StateShape[] } | null {
+    const states = this.world.states;
+    if (states.size <= this.#described) return null;
+    const from = this.#described + 1;
+    const shapes = describeStates(states, from);
+    this.#described = from + shapes.length - 1;
+    return { from, shapes };
   }
 
   /** The next chunk to mesh, nearest the camera first, or null if none can start now. */

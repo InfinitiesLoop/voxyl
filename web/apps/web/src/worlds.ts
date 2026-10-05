@@ -1,13 +1,23 @@
 import { World } from "@voxyl/core";
 import { generateCity } from "@voxyl/fixtures";
 
-export type WorldKind = "pillar" | "city-1m" | "city-5m" | "city-20m";
+export type WorldKind =
+  | "pillar"
+  | "city-1m"
+  | "city-5m"
+  | "city-20m"
+  | "parts-1m"
+  | "parts-5m"
+  | "parts-20m";
 
 export const WORLD_KINDS: readonly { kind: WorldKind; label: string }[] = [
   { kind: "pillar", label: "Demo pillar" },
   { kind: "city-1m", label: "City, 1M cells" },
   { kind: "city-5m", label: "City, 5M cells" },
   { kind: "city-20m", label: "City, 20M cells" },
+  { kind: "parts-1m", label: "Shaped city, 1M cells" },
+  { kind: "parts-5m", label: "Shaped city, 5M cells" },
+  { kind: "parts-20m", label: "Shaped city, 20M cells" },
 ];
 
 export const CHUNK_SIZES = [16, 32, 64, 128] as const;
@@ -32,6 +42,9 @@ const CITY_TARGETS: Record<Exclude<WorldKind, "pillar">, number> = {
   "city-1m": 1_000_000,
   "city-5m": 5_000_000,
   "city-20m": 20_000_000,
+  "parts-1m": 1_000_000,
+  "parts-5m": 5_000_000,
+  "parts-20m": 20_000_000,
 };
 
 export function buildWorld(kind: WorldKind, chunkSize: number): BuiltWorld {
@@ -43,7 +56,11 @@ export function buildWorld(kind: WorldKind, chunkSize: number): BuiltWorld {
     const info = { kind, chunkSize, center: [0, 8, 0], extent: 16, top: 17, generateMs } as const;
     return { world, info };
   }
-  const stats = generateCity(world, { targetCells: CITY_TARGETS[kind], seed: 1 });
+  const stats = generateCity(world, {
+    targetCells: CITY_TARGETS[kind],
+    seed: 1,
+    parts: kind.startsWith("parts-"),
+  });
   const generateMs = performance.now() - start;
   const center = [
     (stats.min[0] + stats.max[0] + 1) / 2,

@@ -37,6 +37,8 @@ export interface BenchResult {
   readonly chunkSize: number;
   readonly chunks: number;
   readonly quads: number;
+  /** Triangles of sloped shaped parts. */
+  readonly tris: number;
   readonly quadMb: number;
   readonly workers: number;
   readonly generateMs: number;
@@ -210,6 +212,7 @@ export async function runBench(
     chunkSize: info.chunkSize,
     chunks: stats.world?.chunkCount ?? 0,
     quads: stats.chunks?.quads ?? 0,
+    tris: stats.chunks?.tris ?? 0,
     quadMb: stats.quadMb,
     workers: stats.meshWorkers,
     generateMs: info.generateMs,

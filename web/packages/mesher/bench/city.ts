@@ -1,16 +1,18 @@
 // CPU-side meshing benchmark: generates city fixtures and meshes every chunk on one thread.
-// Run from web/: pnpm bench:mesh [cells ...] [--bits=5,6,7]
+// Run from web/: pnpm bench:mesh [cells ...] [--bits=5,6,7] [--parts]
+// --parts decorates the city with shaped parts (microblocks and roof tiles).
 // GPU and frame-time numbers come from the in-app bench; this isolates the mesher.
 
 import { chunkKeyToCoords, World } from "@voxyl/core";
 import { generateCity } from "@voxyl/fixtures";
-import { meshChunk, paddedVolume } from "../src/index.ts";
+import { meshChunk, paddedVolume, QUAD_BYTES, ShapeTable, TRI_BYTES } from "../src/index.ts";
 
 const args = process.argv.slice(2);
 const bitsArg = args.find((a) => a.startsWith("--bits="));
 const bitsList = bitsArg ? bitsArg.slice(7).split(",").map(Number) : [5, 6, 7];
 const sizes = args.filter((a) => !a.startsWith("--")).map(Number);
 const targets = sizes.length > 0 ? sizes : [1_000_000, 5_000_000];
+const parts = args.includes("--parts");
 
 const ms = (t: number) => `${t.toFixed(0)} ms`;
 const pct = (sorted: number[], p: number) =>
@@ -20,13 +22,19 @@ for (const target of targets) {
   for (const bits of bitsList) {
     const world = new World({ chunkBits: bits });
     let t = performance.now();
-    generateCity(world, { targetCells: target, seed: 1 });
+    generateCity(world, { targetCells: target, seed: 1, parts });
     const genMs = performance.now() - t;
+    const shapes = ShapeTable.of(world.states);
+    let shaped = 0;
+    world.forEachCell((_x, _y, _z, id) => {
+      if (shapes.geometry[id]) shaped++;
+    });
 
     const copyTimes: number[] = [];
     const meshTimes: number[] = [];
     const cells = new Uint16Array(paddedVolume(bits));
     let quads = 0;
+    let tris = 0;
     t = performance.now();
     for (const key of world.chunkKeys()) {
       const [cx, cy, cz] = chunkKeyToCoords(key);
@@ -34,7 +42,9 @@ for (const target of targets) {
       world.copyPadded(cx, cy, cz, cells);
       copyTimes.push(performance.now() - start);
       start = performance.now();
-      quads += meshChunk({ bits, cells, lightBrickBits: null }).quadCount;
+      const mesh = meshChunk({ bits, cells, lightBrickBits: null }, shapes);
+      quads += mesh.quadCount;
+      tris += mesh.triCount;
       meshTimes.push(performance.now() - start);
     }
     const meshMs = performance.now() - t;
@@ -47,7 +57,8 @@ for (const target of targets) {
         `${(world.cellCount / 1e6).toFixed(2)}M cells, ${size}^3 chunks:`,
         `generate ${ms(genMs)}`,
         `mesh all ${ms(meshMs)} (${world.chunkCount} chunks; per chunk copy p50 ${pct(copyTimes, 0.5).toFixed(2)} ms, mesh p50 ${pct(meshTimes, 0.5).toFixed(2)} ms, p95 ${pct(meshTimes, 0.95).toFixed(2)} ms)`,
-        `${(quads / 1e6).toFixed(2)}M quads`,
+        `${(shaped / 1e6).toFixed(2)}M shaped cells`,
+        `${(quads / 1e6).toFixed(2)}M quads, ${(tris / 1e6).toFixed(2)}M tris (${((quads * QUAD_BYTES + tris * TRI_BYTES) / 2 ** 20).toFixed(0)} MB)`,
         `storage ${(world.memoryBytes / 2 ** 20).toFixed(0)} MB (dense would be ${denseMb.toFixed(0)} MB)`,
       ].join(" | "),
     );

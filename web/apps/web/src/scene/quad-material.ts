@@ -1,7 +1,9 @@
-import { FACES } from "@voxyl/mesher";
+import { FACES, TRI_SCALE } from "@voxyl/mesher";
 import {
+  abs,
   attribute,
   clamp,
+  cross,
   dot,
   Fn,
   float,
@@ -11,6 +13,7 @@ import {
   max,
   mix,
   modelWorldMatrix,
+  normalize,
   positionGeometry,
   pow,
   select,
@@ -40,12 +43,12 @@ const unit = (axis: number, sign = 1) =>
 const FACE_U = FACES.map((f) => unit(f.u));
 const FACE_V = FACES.map((f) => unit(f.v));
 const FACE_NORMAL = FACES.map((f) => unit(f.axis, f.sign));
-// A +X face sits on the far side of its cell; a -X face on the near side.
-const FACE_OFFSET = FACES.map((f) => (f.sign > 0 ? unit(f.axis) : new THREE.Vector3()));
-// Fixed brightness per face (+X, -X, +Y, -Y, +Z, -Z). Unlit, every side differs a little so
-// shapes read without light; lit, Minecraft's: top 1, east/west 0.6, north/south 0.8, bottom 0.5.
-const FLAT_SHADE = [0.8, 0.7, 1.0, 0.5, 0.9, 0.62];
-const LIT_SHADE = [0.6, 0.6, 1.0, 0.5, 0.8, 0.8];
+// Fixed brightness by facing, as [+X, +Y, +Z] and [-X, -Y, -Z]. Unlit, every side differs a
+// little so shapes read without light; lit, Minecraft's: top 1, east/west 0.6, north/south
+// 0.8, bottom 0.5. A sloped face blends them by its normal's squared components.
+const FLAT_SHADE = { positive: [0.8, 1.0, 0.9], negative: [0.7, 0.5, 0.62] } as const;
+const LIT_SHADE = { positive: [0.6, 1.0, 0.8], negative: [0.6, 0.5, 0.8] } as const;
+type Shades = typeof FLAT_SHADE | typeof LIT_SHADE;
 
 const makeFloat = (value: number) => uniform(value);
 type FloatUniform = ReturnType<typeof makeFloat>;
@@ -62,26 +65,71 @@ export function createLightUniforms(): LightUniforms {
   return { daylight: makeFloat(1), brightness: makeFloat(0.5) };
 }
 
-/** Unpacks the quad header every material shares: position, face, palette colour. */
-function quadBasics(palette: THREE.Texture) {
-  const a = attribute("quadA", "vec4").mul(255).round(); // x, y, z, face
-  const b = attribute("quadB", "vec4").mul(255).round(); // w, h, id low, id high
-  const face = a.w.toInt();
-  const corner = positionGeometry.xy; // the base quad's corner, 0 or 1 along U and V
+/** What the mesher draws: axis-aligned quads, or triangles for sloped shaped parts. */
+export type SurfaceKind = "quad" | "tri";
+
+/**
+ * Unpacks a quad or triangle (see ChunkMesh) in the vertex stage: its chunk-local position in
+ * cells, its normal, and the cell-state id that colours it. Both are instanced: a quad from
+ * a base square with corners 0 or 1 along U and V, a triangle from a base triangle whose
+ * corners weight its three stored corners.
+ */
+function surface(kind: SurfaceKind) {
   // Explicit type arguments: inferred, the element type widens to string and loses its methods.
-  const u = uniformArray<"vec3">(FACE_U, "vec3").element(face);
-  const v = uniformArray<"vec3">(FACE_V, "vec3").element(face);
-  const offset = uniformArray<"vec3">(FACE_OFFSET, "vec3").element(face);
-  const position = a.xyz
-    .add(offset)
-    .add(u.mul(corner.x.mul(b.x)))
-    .add(v.mul(corner.y.mul(b.y)));
-  const id = b.z.add(b.w.mul(256));
+  if (kind === "quad") {
+    const a = attribute("quadA", "vec4").mul(65535).round(); // x, y, z (eighths), face
+    const b = attribute("quadB", "vec4").mul(65535).round(); // w, h (eighths), id, unused
+    const face = a.w.toInt();
+    const corner = positionGeometry.xy;
+    const u = uniformArray<"vec3">(FACE_U, "vec3").element(face);
+    const v = uniformArray<"vec3">(FACE_V, "vec3").element(face);
+    const position = a.xyz
+      .add(u.mul(corner.x.mul(b.x)))
+      .add(v.mul(corner.y.mul(b.y)))
+      .div(8);
+    const normal = uniformArray<"vec3">(FACE_NORMAL, "vec3").element(face);
+    return { position, normal, id: b.z };
+  }
+  const p0 = attribute("triA", "vec4").mul(65535).round(); // x, y, z, id
+  const p1 = attribute("triB", "vec4").mul(65535).round().xyz;
+  const p2 = attribute("triC", "vec4").mul(65535).round().xyz;
+  const w = positionGeometry;
+  const position = p0.xyz.mul(w.x).add(p1.mul(w.y)).add(p2.mul(w.z)).div(TRI_SCALE);
+  const normal = normalize(cross(p1.sub(p0.xyz), p2.sub(p0.xyz)));
+  return { position, normal, id: p0.w };
+}
+
+/** The palette colour of a cell-state id, looked up once per vertex. */
+function paletteColor(palette: THREE.Texture, id: THREE.Node<"float">) {
   const paletteUv = varying<"vec2">(
     vec2(id.mod(PALETTE_SIZE), id.div(PALETTE_SIZE).floor()).add(0.5).div(PALETTE_SIZE),
   );
-  const color = texture(palette, paletteUv);
-  return { face, corner, position, color };
+  return texture(palette, paletteUv);
+}
+
+/** Brightness by facing: the shades of each axis, weighted by the normal's squares. */
+function shadeOf(normal: THREE.Node<"vec3">, shades: Shades) {
+  const [px, py, pz] = shades.positive;
+  const [nx, ny, nz] = shades.negative;
+  const sq = normal.mul(normal);
+  return sq.x
+    .mul(select(normal.x.greaterThan(0), float(px), float(nx)))
+    .add(sq.y.mul(select(normal.y.greaterThan(0), float(py), float(ny))))
+    .add(sq.z.mul(select(normal.z.greaterThan(0), float(pz), float(nz))));
+}
+
+/** The face (FACES order: +X, -X, +Y, -Y, +Z, -Z) a normal points most along; Y wins ties. */
+function dominantFace(n: THREE.Node<"vec3">) {
+  const a = abs(n);
+  return select(
+    a.y.greaterThanEqual(a.x).and(a.y.greaterThanEqual(a.z)),
+    select(n.y.greaterThan(0), float(2), float(3)),
+    select(
+      a.z.greaterThanEqual(a.x),
+      select(n.z.greaterThan(0), float(4), float(5)),
+      select(n.x.greaterThan(0), float(0), float(1)),
+    ),
+  );
 }
 
 /**
@@ -124,13 +172,16 @@ function minecraftFactor(light: THREE.Node<"vec3">, shade: THREE.Node<"float">) 
   return pow(light.mul(shade), vec3(2.2, 2.2, 2.2));
 }
 
-/** Lighting off: palette colour and a fixed shade per face. */
-export function createFlatMaterial(palette: THREE.Texture): THREE.MeshBasicNodeMaterial {
-  const { face, position, color } = quadBasics(palette);
+/** Lighting off: palette colour and a fixed shade by facing. */
+export function createFlatMaterial(
+  palette: THREE.Texture,
+  kind: SurfaceKind,
+): THREE.MeshBasicNodeMaterial {
+  const { position, normal, id } = surface(kind);
   const material = new THREE.MeshBasicNodeMaterial();
   material.positionNode = position;
-  const shade = varying<"float">(uniformArray<"float">(FLAT_SHADE, "float").element(face));
-  material.colorNode = color.rgb.mul(shade);
+  const shade = varying<"float">(shadeOf(normal, FLAT_SHADE));
+  material.colorNode = paletteColor(palette, id).rgb.mul(shade);
   return material;
 }
 
@@ -152,10 +203,11 @@ function loadLinear(tex: LinearTexture, index: THREE.Node<"uint">) {
 
 /**
  * Light from the light volume (see LightVolume and the world worker's LightLayout), so meshes
- * stay plain and merge on cell state alone. Each fragment finds the empty cell in front of
- * its face and reads the 3 x 3 cells around it in the face's plane, each looked up as chunk
- * grid -> chunk table -> brick pool. Then per corner: the average light of the open cells
- * around it and Minecraft's ambient occlusion, blended bilinearly across the cell.
+ * stay plain and merge on cell state alone. Each fragment finds the open cell just in front
+ * of its surface and reads the 3 x 3 cells around it in the plane of the face its normal
+ * points most along, each looked up as chunk grid -> chunk table -> brick pool. Then per
+ * corner: the average light of the open cells around it and Minecraft's ambient occlusion,
+ * blended bilinearly across the cell.
  */
 export function createVolumeLitMaterial(
   palette: THREE.Texture,
@@ -163,14 +215,16 @@ export function createVolumeLitMaterial(
   volume: LightVolume,
   chunkBits: number,
   brickBits: number,
+  kind: SurfaceKind,
 ): THREE.MeshBasicNodeMaterial {
-  const { face, position, color } = quadBasics(palette);
+  const { position, normal, id } = surface(kind);
+  const color = paletteColor(palette, id);
   const material = new THREE.MeshBasicNodeMaterial();
   material.positionNode = position;
-  const shade = varying<"float">(uniformArray<"float">(LIT_SHADE, "float").element(face));
+  const shade = varying<"float">(shadeOf(normal, LIT_SHADE));
   const world = varying<"vec3">(modelWorldMatrix.mul(vec4(position, 1)).xyz);
-  const faceIndex = varying<"float">(face.toFloat()).round().toInt();
-  const n = uniformArray<"vec3">(FACE_NORMAL, "vec3").element(faceIndex);
+  const surfaceNormal = varying<"vec3">(normal);
+  const faceIndex = varying<"float">(dominantFace(normal)).round().toInt();
   const u = uniformArray<"vec3">(FACE_U, "vec3").element(faceIndex);
   const v = uniformArray<"vec3">(FACE_V, "vec3").element(faceIndex);
 
@@ -217,7 +271,9 @@ export function createVolumeLitMaterial(
   // brick slots would be assigned only in the branch the front cell takes, and neighbours on
   // other paths would read them unset (as missing light) along every brick boundary.
   material.colorNode = Fn(() => {
-    const front = floor(world.add(n.mul(0.5))); // the empty cell the face looks into
+    // The cell just in front of the surface: beside a cube's face, or a shaped part's own
+    // cell (which lets light through) when the face lies inside it.
+    const front = floor(world.add(surfaceNormal.mul(1 / 64)));
     const within = world.sub(front);
     const fu = dot(within, u);
     const fv = dot(within, v);

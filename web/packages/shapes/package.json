@@ -1,5 +1,5 @@
 {
-  "name": "@voxyl/fixtures",
+  "name": "@voxyl/shapes",
   "private": true,
   "type": "module",
   "exports": {
@@ -7,10 +7,6 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p ."
-  },
-  "dependencies": {
-    "@voxyl/core": "workspace:*",
-    "@voxyl/shapes": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^7.0.2"

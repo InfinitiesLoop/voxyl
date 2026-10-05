@@ -4,6 +4,7 @@
 // main thread, together with light, in the order it produced them.
 
 import { type CellStateTable, EMPTY_ID, raycast } from "@voxyl/core";
+import type { StateShape } from "@voxyl/mesher";
 import { type LightingMode, WorldSession } from "@voxyl/session";
 import { lightMaterials, type Palette, paletteAt } from "../palettes.ts";
 import { buildWorld } from "../worlds.ts";
@@ -46,6 +47,8 @@ let meshPorts: MeshPort[] = [];
 let lastSeq = 0;
 let idlePosted = -1;
 let statesPosted = 0;
+/** Every state's shape so far, for mesh workers (id - 1 -> shape). */
+let shapes: StateShape[] = [];
 let pumpScheduled = false;
 const meshTimes: number[] = [];
 
@@ -65,6 +68,7 @@ function handle(command: Command): Replies[Command["type"]] {
       session = new WorldSession(built.world);
       worldId = command.world;
       statesPosted = 0;
+      shapes = [];
       idlePosted = -1;
       meshTimes.length = 0;
       if (mode !== "off") session.setLighting(mode, materials);
@@ -112,6 +116,12 @@ function pump(): void {
   const s = session;
   if (!s) return;
   s.sync();
+  const added = s.takeShapes();
+  if (added) {
+    shapes.push(...added.shapes);
+    const request: MeshRequest = { world: worldId, ...added };
+    for (const p of meshPorts) p.port.postMessage(request);
+  }
   postStates(s);
   for (;;) {
     let free: MeshPort | undefined;
@@ -125,7 +135,8 @@ function pump(): void {
     free.port.postMessage(request, [job.cells.buffer]);
   }
   for (const key of s.takeRemoved()) {
-    post({ type: "mesh", world: worldId, key, quads: new Uint8Array(0), quadCount: 0 });
+    const none = new Uint16Array(0);
+    post({ type: "mesh", world: worldId, key, quads: none, quadCount: 0, tris: none, triCount: 0 });
   }
   const start = performance.now();
   for (let u = s.takeLightUpdate(LIGHT_BATCH); u; u = s.takeLightUpdate(LIGHT_BATCH)) {
@@ -172,10 +183,13 @@ function onMeshReply(port: MeshPort, reply: MeshReply): void {
   port.load--;
   const s = session;
   if (s && reply.world === worldId) {
-    const { key, jobId, quads, quadCount, lightBricks, ms } = reply.result;
+    const { key, jobId, quads, quadCount, tris, triCount, lightBricks, ms } = reply.result;
     meshTimes.push(ms);
     if (meshTimes.length > 256) meshTimes.shift();
-    post({ type: "mesh", world: worldId, key, quads, quadCount }, [quads.buffer]);
+    post({ type: "mesh", world: worldId, key, quads, quadCount, tris, triCount }, [
+      quads.buffer,
+      tris.buffer,
+    ]);
     s.finishJob(key, jobId, lightBricks);
   }
   pump();
@@ -187,6 +201,11 @@ scope.addEventListener("message", (event) => {
     meshPorts = message.ports.map((port) => {
       const entry: MeshPort = { port, load: 0 };
       port.onmessage = (e: MessageEvent<MeshReply>) => onMeshReply(entry, e.data);
+      // Shapes of the states the world already has, if it was loaded first.
+      if (shapes.length > 0) {
+        const request: MeshRequest = { world: worldId, from: 1, shapes };
+        port.postMessage(request);
+      }
       return entry;
     });
     pump();

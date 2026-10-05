@@ -26,10 +26,12 @@ Other scripts: `pnpm test:watch`, `pnpm format` (Biome, fixes formatting and imp
 
 ```
 packages/core/      world, chunks (stored by content), cell states, raycast: no DOM, no Node
-packages/mesher/    greedy chunk mesher; also lists the light bricks its faces read (runs in workers)
+packages/shapes/    shaped parts: microblock boxes and architecture (roof) shapes in 24 orientations
+packages/mesher/    chunk mesher: greedy cube faces, shaped parts as merged quads and triangles;
+                    also lists the light bricks its faces read (runs in workers)
 packages/light/     Minecraft-style sky and colored block light, incremental on edits
 packages/session/   WorldSession: a World, its light, mesh scheduling and the GPU light layout
-packages/fixtures/  seeded test worlds (the benchmark city)
+packages/fixtures/  seeded test worlds (the benchmark city, plain or decorated with shaped parts)
 apps/web/           the React + Three.js app (Vite), with the in-app benchmark
 tools/              dev tools (shot)
 ```
@@ -58,13 +60,15 @@ double mount included.
 
 ## Benchmarks
 
-- `pnpm bench:mesh [cells ...] [--bits=5,6,7]`: meshing and storage cost on one CPU thread.
+- `pnpm bench:mesh [cells ...] [--bits=5,6,7] [--parts]`: meshing and storage cost on one CPU
+  thread; `--parts` decorates the city with shaped parts.
 - `pnpm bench:sparse [cells]`: how much light memory sparse layouts would need (CPU bricks,
   GPU bricks, per-face light) on the city.
 - `pnpm bench:light [cells ...]`: full relight, light memory, the light bricks faces read and
   their copy cost, and incremental relights for single edits, a roof hole and big fills.
 - In the app, pick a world, chunk size and lighting (also in the URL, e.g.
-  `?world=city-5m&chunk=64&lighting=volume&daylight=0&brightness=50`) and press **Run
+  `?world=city-5m&chunk=64&lighting=volume&daylight=0&brightness=50`; `world=parts-5m` is
+  the same city decorated with shaped parts) and press **Run
   benchmark**: a scripted flight (frame, main-thread and GPU time), 100 single-cell edits, a
   roof hole and 100k/1M box fills, measured to the frame they appear. The result can be
   copied as JSON and is also on `window.__voxylBench`. GPU time comes from timestamp
@@ -78,7 +82,7 @@ day (`daylight`, 0 midnight to 100 noon) and Brightness (`brightness`, Minecraft
 
 ## Rules of the road
 
-- `core`, `mesher`, `light` and `session` compile with no DOM or Node types, so anything that
+- `core`, `shapes`, `mesher`, `light` and `session` compile with no DOM or Node types, so anything that
   touches `document`, `window` or `process` fails their typecheck. Keep it that way: the same
   code runs in the tab, in workers and on the server.
 - Cells store semantics, never materials. Palettes (colours, transparency, emission) live

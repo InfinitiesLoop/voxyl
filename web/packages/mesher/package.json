@@ -10,8 +10,11 @@
   },
   "devDependencies": {
     "@types/node": "^24.19.1",
-    "@voxyl/core": "workspace:*",
     "@voxyl/fixtures": "workspace:*",
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@voxyl/core": "workspace:*",
+    "@voxyl/shapes": "workspace:*"
   }
 }

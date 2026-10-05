@@ -1,4 +1,5 @@
 import type { World } from "@voxyl/core";
+import { archSlot, edgeBetween } from "@voxyl/shapes";
 import { mulberry32 } from "./random.ts";
 
 /** The semantics a generated city uses. Palettes for benchmarks map these. */
@@ -9,6 +10,12 @@ export interface CityOptions {
   /** Stop adding lots once the world holds at least this many cells. */
   readonly targetCells: number;
   readonly seed?: number;
+  /**
+   * Decorate with shaped parts: microblock ledges, sills, pilasters, window frames and corner
+   * pillars on the facades, and roof tiles on the roofs (hip roofs on low buildings, a tiled
+   * eave on towers). The blocks underneath are the same city either way.
+   */
+  readonly parts?: boolean;
 }
 
 export interface CityStats {
@@ -36,12 +43,14 @@ export function generateCity(world: World, options: CityOptions): CityStats {
     CITY_SEMANTICS.map((s) => [s, world.states.intern({ semantic: s })]),
   ) as Record<CitySemantic, number>;
 
+  const parts = options.parts ? new PartIds(world) : null;
+
   let lots = 0;
   let ring = 0;
   let maxY = 0;
   while (world.cellCount < options.targetCells) {
     for (const [i, j] of ringLots(ring)) {
-      const top = buildLot(world, ids, rand, i, j, ring);
+      const top = buildLot(world, ids, rand, i, j, ring, parts);
       maxY = Math.max(maxY, top);
       lots++;
       if (world.cellCount >= options.targetCells) break;
@@ -77,6 +86,7 @@ function buildLot(
   i: number,
   j: number,
   ring: number,
+  parts: PartIds | null,
 ): number {
   const x0 = i * LOT_PITCH;
   const z0 = j * LOT_PITCH;
@@ -132,16 +142,182 @@ function buildLot(
     }
   }
 
-  // Roof slab, a parapet, and on taller towers a glowing crown.
+  // Roof slab, a parapet (or roof tiles), and on taller towers a glowing crown.
   const roofY = height + 1;
   world.fillBox(bx0, roofY, bz0, bx1, roofY, bz1, ids.Roof);
-  ring4(world, bx0, bz0, bx1, bz1, roofY + 1, ids.Trim);
+  const footprint = { x0: bx0, z0: bz0, x1: bx1, z1: bz1 };
+  // Decorations draw from their own sequence, so the blocks match the undecorated city.
+  if (parts) {
+    const decor = mulberry32(((i * 73856093) ^ (j * 19349663)) >>> 0);
+    decorateFacades(world, parts, decor, footprint, height);
+  }
   let top = roofY + 1;
+  if (parts && floors < 12) {
+    top = hipRoof(world, parts, footprint, roofY + 1);
+  } else if (parts) {
+    tileRing(world, parts, footprint, roofY + 1);
+  } else {
+    ring4(world, bx0, bz0, bx1, bz1, roofY + 1, ids.Trim);
+  }
   if (floors >= 12) {
     ring4(world, bx0 + 2, bz0 + 2, bx1 - 2, bz1 - 2, roofY + 2, ids.Glow);
-    top = roofY + 2;
+    top = Math.max(top, roofY + 2);
   }
   return top;
+}
+
+interface Footprint {
+  readonly x0: number;
+  readonly z0: number;
+  readonly x1: number;
+  readonly z1: number;
+}
+
+/** Interned single-part states, by semantic, shape and slot. */
+class PartIds {
+  readonly #world: World;
+  readonly #ids = new Map<string, number>();
+  constructor(world: World) {
+    this.#world = world;
+  }
+  get(semantic: CitySemantic, shape: string, slot: number): number {
+    const key = `${semantic}|${shape}|${slot}`;
+    let id = this.#ids.get(key);
+    if (id === undefined) {
+      id = this.#world.states.intern({ parts: [{ semantic, shape, slot }] });
+      this.#ids.set(key, id);
+    }
+    return id;
+  }
+}
+
+// Microblock sides: 0 -Y, 1 +Y, 2 -Z, 3 +Z, 4 -X, 5 +X.
+const DOWN = 0;
+const UP = 1;
+
+interface FacadeCell {
+  readonly x: number;
+  readonly z: number;
+  /** The side of the cell that faces the wall. */
+  readonly wall: number;
+  /** Position along the wall, from its low end. */
+  readonly along: number;
+  /** True on the wall's mullion columns (every third cell and both ends). */
+  readonly mullion: boolean;
+}
+
+/** The cells just outside each wall. */
+function facadeCells(b: Footprint): FacadeCell[] {
+  const out: FacadeCell[] = [];
+  const wx = b.x1 - b.x0;
+  const wz = b.z1 - b.z0;
+  for (let x = b.x0; x <= b.x1; x++) {
+    const along = x - b.x0;
+    const mullion = along % 3 === 0 || along === wx;
+    out.push({ x, z: b.z0 - 1, wall: 3, along, mullion });
+    out.push({ x, z: b.z1 + 1, wall: 2, along, mullion });
+  }
+  for (let z = b.z0; z <= b.z1; z++) {
+    const along = z - b.z0;
+    const mullion = along % 3 === 0 || along === wz;
+    out.push({ x: b.x0 - 1, z, wall: 5, along, mullion });
+    out.push({ x: b.x1 + 1, z, wall: 4, along, mullion });
+  }
+  return out;
+}
+
+/**
+ * Microblocks on the facades, in one of three styles. Ledges: a post along the top of every
+ * trim band, a strip sill under each window and a panel pilaster on each mullion. Frames: a
+ * hollow cover round each window, a cover band along each solid row and a pillar up each
+ * corner. Plain: none.
+ */
+function decorateFacades(
+  world: World,
+  parts: PartIds,
+  rand: () => number,
+  b: Footprint,
+  height: number,
+): void {
+  const style = rand();
+  if (style < 0.2) return;
+  const cells = facadeCells(b);
+  if (style < 0.6) {
+    for (let y = 1; y <= height; y++) {
+      const band = y % 4;
+      for (const c of cells) {
+        if (band === 0) {
+          world.setId(c.x, y, c.z, parts.get("Trim", "edge2", edgeBetween(c.wall, UP)));
+        } else if (band >= 2 && c.mullion) {
+          world.setId(c.x, y, c.z, parts.get("Mass", "face2", c.wall));
+        } else if (band === 2) {
+          world.setId(c.x, y, c.z, parts.get("Trim", "edge1", edgeBetween(c.wall, DOWN)));
+        }
+      }
+    }
+    return;
+  }
+  for (let y = 1; y <= height; y++) {
+    const band = y % 4;
+    for (const c of cells) {
+      if (band >= 2 && !c.mullion) {
+        world.setId(c.x, y, c.z, parts.get("Trim", "hollow1", c.wall));
+      } else if (band === 1) {
+        world.setId(c.x, y, c.z, parts.get("Mass", "face1", c.wall));
+      }
+    }
+    // Vertical edges (slots 0-3): bit 0 toward +Z, bit 1 toward +X, i.e. toward the building.
+    world.setId(b.x0 - 1, y, b.z0 - 1, parts.get("Trim", "edge4", 3));
+    world.setId(b.x1 + 1, y, b.z0 - 1, parts.get("Trim", "edge4", 1));
+    world.setId(b.x0 - 1, y, b.z1 + 1, parts.get("Trim", "edge4", 2));
+    world.setId(b.x1 + 1, y, b.z1 + 1, parts.get("Trim", "edge4", 0));
+  }
+}
+
+// Roof tiles stand on the floor (side 0). The slope faces -Z at turn 0, -X at 1, +Z at 2 and
+// +X at 3; an outer corner slopes to -Z and +X at turn 0, and each turn moves it a quarter.
+const TILE_TURN = { north: 0, west: 1, south: 2, east: 3 } as const;
+const CORNER_TURN = { northEast: 0, northWest: 1, southWest: 2, southEast: 3 } as const;
+
+/** One ring of roof tiles sloping outward around a footprint, at height y. */
+function tileRing(world: World, parts: PartIds, b: Footprint, y: number): void {
+  const tile = (turn: number) => parts.get("Roof", "roof_tile", archSlot(0, turn));
+  for (let x = b.x0 + 1; x < b.x1; x++) {
+    world.setId(x, y, b.z0, tile(TILE_TURN.north));
+    world.setId(x, y, b.z1, tile(TILE_TURN.south));
+  }
+  for (let z = b.z0 + 1; z < b.z1; z++) {
+    world.setId(b.x0, y, z, tile(TILE_TURN.west));
+    world.setId(b.x1, y, z, tile(TILE_TURN.east));
+  }
+  const corner = (turn: number) => parts.get("Roof", "roof_outer_corner", archSlot(0, turn));
+  world.setId(b.x1, y, b.z0, corner(CORNER_TURN.northEast));
+  world.setId(b.x0, y, b.z0, corner(CORNER_TURN.northWest));
+  world.setId(b.x0, y, b.z1, corner(CORNER_TURN.southWest));
+  world.setId(b.x1, y, b.z1, corner(CORNER_TURN.southEast));
+}
+
+/** A hip roof: rings of tiles stepping in and up to a ridge. Returns its top y. */
+function hipRoof(world: World, parts: PartIds, b: Footprint, y0: number): number {
+  const peak = parts.get("Roof", "roof_smart_ridge", archSlot(0, 0));
+  for (let k = 0; ; k++) {
+    const r = { x0: b.x0 + k, z0: b.z0 + k, x1: b.x1 - k, z1: b.z1 - k };
+    const y = y0 + k;
+    if (r.x0 > r.x1 || r.z0 > r.z1) return y - 1;
+    if (r.x0 === r.x1 || r.z0 === r.z1) {
+      // A ridge along the long side, with a peak at each end.
+      const alongX = r.z0 === r.z1;
+      const ridge = parts.get("Roof", "roof_ridge", archSlot(0, alongX ? 0 : 1));
+      for (let x = r.x0; x <= r.x1; x++) {
+        for (let z = r.z0; z <= r.z1; z++) {
+          const end = alongX ? x === r.x0 || x === r.x1 : z === r.z0 || z === r.z1;
+          world.setId(x, y, z, end ? peak : ridge);
+        }
+      }
+      return y;
+    }
+    tileRing(world, parts, r, y);
+  }
 }
 
 /** The four walls of a one-cell-high rectangle. */

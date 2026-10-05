@@ -159,7 +159,7 @@ export function Hud({
         <dt>Meshes</dt>
         <dd>
           {c && w && stats
-            ? `${count(c.meshes)} · ${count(c.quads)} quads · ${ms(w.meshMsAvg, 2)}/chunk · ${stats.meshWorkers} workers`
+            ? `${count(c.meshes)} · ${count(c.quads)} quads${c.tris > 0 ? ` · ${count(c.tris)} tris` : ""} · ${ms(w.meshMsAvg, 2)}/chunk · ${stats.meshWorkers} workers`
             : "–"}
         </dd>
         <dt>Queue</dt>
@@ -222,7 +222,8 @@ export function BenchPanel({ result, onClose }: { result: BenchResult; onClose: 
             <th>Initial mesh, all chunks</th>
             <td>
               {ms(result.initialMeshMs, 0)} ({count(result.chunks)} chunks, {count(result.quads)}{" "}
-              quads in {result.quadMb.toFixed(0)} MB, {result.workers} workers)
+              quads{result.tris > 0 ? `, ${count(result.tris)} tris` : ""} in{" "}
+              {result.quadMb.toFixed(0)} MB, {result.workers} workers)
             </td>
           </tr>
           <tr>

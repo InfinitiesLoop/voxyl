@@ -1,6 +1,6 @@
 import { chunkKeyToCoords } from "@voxyl/core";
 import { GPU_BRICK_BITS } from "@voxyl/light";
-import { QUAD_BYTES } from "@voxyl/mesher";
+import { QUAD_BYTES, QUAD_WORDS, TRI_BYTES, TRI_WORDS } from "@voxyl/mesher";
 import type { LightingMode } from "@voxyl/session";
 import * as THREE from "three/webgpu";
 import { type Palette, UNDECIDED_COLOR } from "../palettes.ts";
@@ -13,6 +13,7 @@ import {
   EMISSIVE_ALPHA,
   type LightUniforms,
   PALETTE_SIZE,
+  type SurfaceKind,
 } from "./quad-material.ts";
 
 /** Main-thread time per frame spent applying meshes and light from the world worker. */
@@ -23,7 +24,9 @@ type Update = Extract<WorldOutput, { type: "mesh" } | { type: "light" } | { type
 export interface ChunkRendererStats {
   readonly meshes: number;
   readonly quads: number;
-  /** GPU bytes held by quads. */
+  /** Triangles of shaped parts. */
+  readonly tris: number;
+  /** GPU bytes held by quads and triangles. */
   readonly quadBytes: number;
   /** Updates from the world worker waiting to be applied. */
   readonly pending: number;
@@ -48,19 +51,20 @@ export class ChunkRenderer {
   readonly #paletteData: Uint8Array;
   readonly #paletteTexture: THREE.DataTexture;
   readonly #uniforms: LightUniforms = createLightUniforms();
-  readonly #flatMaterial: THREE.MeshBasicNodeMaterial;
+  readonly #flatMaterials: Record<SurfaceKind, THREE.MeshBasicNodeMaterial>;
   #palette: Palette;
   #semantics: string[] = [""];
   #paletteDirty = true;
   #mode: LightingMode = "off";
   #volume: LightVolume | null = null;
-  #volumeMaterial: THREE.MeshBasicNodeMaterial | null = null;
+  #volumeMaterials: Record<SurfaceKind, THREE.MeshBasicNodeMaterial> | null = null;
   /** Whether meshes draw with the light volume yet (see revealLight). */
   #lightShown = false;
-  readonly #meshes = new Map<number, THREE.Mesh>();
+  readonly #meshes = new Map<number, ChunkMeshes>();
   readonly #updates: Update[] = [];
   #appliedSeq = -1;
   #quads = 0;
+  #tris = 0;
   readonly #writeTimes: number[] = [];
 
   constructor(renderer: THREE.WebGPURenderer, chunkSize: number, palette: Palette) {
@@ -74,7 +78,10 @@ export class ChunkRenderer {
     this.#paletteTexture.magFilter = THREE.NearestFilter;
     this.#paletteTexture.minFilter = THREE.NearestFilter;
     this.#paletteTexture.generateMipmaps = false;
-    this.#flatMaterial = createFlatMaterial(this.#paletteTexture);
+    this.#flatMaterials = {
+      quad: createFlatMaterial(this.#paletteTexture, "quad"),
+      tri: createFlatMaterial(this.#paletteTexture, "tri"),
+    };
     this.group.name = "chunks";
   }
 
@@ -101,9 +108,8 @@ export class ChunkRenderer {
     if (mode === this.#mode) return;
     this.#mode = mode;
     this.#volume?.dispose();
-    this.#volumeMaterial?.dispose();
+    this.#disposeVolumeMaterials();
     this.#volume = null;
-    this.#volumeMaterial = null;
     this.#lightShown = false;
     if (mode === "volume") {
       const brickBits = Math.min(GPU_BRICK_BITS, this.#chunkBits);
@@ -112,20 +118,23 @@ export class ChunkRenderer {
         1 << (3 * brickBits),
         (this.#size >> brickBits) ** 3,
       );
-      this.#volumeMaterial = createVolumeLitMaterial(
-        this.#paletteTexture,
-        this.#uniforms,
-        this.#volume,
-        this.#chunkBits,
-        brickBits,
-      );
+      const lit = (kind: SurfaceKind) =>
+        createVolumeLitMaterial(
+          this.#paletteTexture,
+          this.#uniforms,
+          this.#volume as LightVolume,
+          this.#chunkBits,
+          brickBits,
+          kind,
+        );
+      this.#volumeMaterials = { quad: lit("quad"), tri: lit("tri") };
     }
     this.#applyMaterial();
   }
 
   /** Starts drawing with the light volume. Call once its light has arrived. */
   revealLight(): void {
-    if (!this.#volumeMaterial || this.#lightShown) return;
+    if (!this.#volumeMaterials || this.#lightShown) return;
     this.#lightShown = true;
     this.#applyMaterial();
   }
@@ -167,8 +176,8 @@ export class ChunkRenderer {
       if (!update) continue;
       if (update.type === "idle") this.#appliedSeq = update.seq;
       else if (update.type === "light") this.#applyLight(update.update);
-      else if (update.quadCount === 0) this.#removeMesh(update.key);
-      else this.#setMesh(update.key, update.quads, update.quadCount);
+      else if (update.quadCount === 0 && update.triCount === 0) this.#removeMesh(update.key);
+      else this.#setMesh(update.key, update.quads, update.tris);
     }
     this.#updates.splice(0, i);
   }
@@ -178,7 +187,8 @@ export class ChunkRenderer {
     return {
       meshes: this.#meshes.size,
       quads: this.#quads,
-      quadBytes: this.#quads * QUAD_BYTES,
+      tris: this.#tris,
+      quadBytes: this.#quads * QUAD_BYTES + this.#tris * TRI_BYTES,
       pending: this.#updates.length,
       lighting: this.#mode,
       lightGpuMb: (this.#volume?.memoryBytes ?? 0) / 2 ** 20,
@@ -187,22 +197,31 @@ export class ChunkRenderer {
   }
 
   dispose(): void {
-    for (const mesh of this.#meshes.values()) mesh.geometry.dispose();
-    this.#meshes.clear();
+    for (const key of [...this.#meshes.keys()]) this.#removeMesh(key);
     this.group.clear();
-    this.#flatMaterial.dispose();
-    this.#volumeMaterial?.dispose();
+    this.#flatMaterials.quad.dispose();
+    this.#flatMaterials.tri.dispose();
+    this.#disposeVolumeMaterials();
     this.#volume?.dispose();
     this.#paletteTexture.dispose();
   }
 
-  get #material(): THREE.Material {
-    return this.#lightShown && this.#volumeMaterial ? this.#volumeMaterial : this.#flatMaterial;
+  #material(kind: SurfaceKind): THREE.Material {
+    const lit = this.#lightShown ? this.#volumeMaterials : null;
+    return (lit ?? this.#flatMaterials)[kind];
   }
 
   #applyMaterial(): void {
-    const material = this.#material;
-    for (const mesh of this.#meshes.values()) mesh.material = material;
+    for (const meshes of this.#meshes.values()) {
+      if (meshes.quads) meshes.quads.material = this.#material("quad");
+      if (meshes.tris) meshes.tris.material = this.#material("tri");
+    }
+  }
+
+  #disposeVolumeMaterials(): void {
+    this.#volumeMaterials?.quad.dispose();
+    this.#volumeMaterials?.tri.dispose();
+    this.#volumeMaterials = null;
   }
 
   #applyLight(update: Parameters<LightVolume["apply"]>[0]): void {
@@ -228,52 +247,113 @@ export class ChunkRenderer {
     this.#paletteDirty = false;
   }
 
-  #setMesh(key: number, quads: Uint8Array, quadCount: number): void {
-    const size = this.#size;
-    const geometry = new THREE.InstancedBufferGeometry();
-    // Each geometry owns its base quad: disposing a geometry frees all of its attributes.
-    geometry.setIndex([0, 1, 2, 0, 2, 3]);
-    geometry.setAttribute(
-      "position",
-      new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0], 3),
-    );
-    const packed = new THREE.InstancedInterleavedBuffer(quads, QUAD_BYTES);
-    geometry.setAttribute("quadA", new THREE.InterleavedBufferAttribute(packed, 4, 0, true));
-    geometry.setAttribute("quadB", new THREE.InterleavedBufferAttribute(packed, 4, 4, true));
-    geometry.instanceCount = quadCount;
-    // Bounds can't come from the base quad: they are the chunk's cube.
-    geometry.boundingBox = new THREE.Box3(
-      new THREE.Vector3(0, 0, 0),
-      new THREE.Vector3(size, size, size),
-    );
-    geometry.boundingSphere = new THREE.Sphere(
-      new THREE.Vector3(size / 2, size / 2, size / 2),
-      (size * Math.sqrt(3)) / 2,
-    );
-
-    let mesh = this.#meshes.get(key);
-    if (mesh) {
-      this.#quads -= (mesh.geometry as THREE.InstancedBufferGeometry).instanceCount;
-      mesh.geometry.dispose();
-      mesh.geometry = geometry;
-    } else {
-      mesh = new THREE.Mesh(geometry, this.#material);
-      const [cx, cy, cz] = chunkKeyToCoords(key);
-      mesh.position.set(cx * size, cy * size, cz * size);
-      mesh.matrixAutoUpdate = false;
-      mesh.updateMatrix();
-      this.#meshes.set(key, mesh);
-      this.group.add(mesh);
+  #setMesh(key: number, quads: Uint16Array, tris: Uint16Array): void {
+    let meshes = this.#meshes.get(key);
+    if (!meshes) {
+      meshes = { quads: null, tris: null };
+      this.#meshes.set(key, meshes);
     }
-    this.#quads += quadCount;
+    const quadCount = quads.length / QUAD_WORDS;
+    const triCount = tris.length / TRI_WORDS;
+    this.#quads += quadCount - instances(meshes.quads);
+    this.#tris += triCount - instances(meshes.tris);
+    meshes.quads = this.#place(
+      key,
+      meshes.quads,
+      "quad",
+      quadCount && quadGeometry(quads, this.#size),
+    );
+    meshes.tris = this.#place(key, meshes.tris, "tri", triCount && triGeometry(tris, this.#size));
+  }
+
+  /** Swaps a chunk mesh's geometry, creating or removing the mesh as needed. */
+  #place(
+    key: number,
+    mesh: THREE.Mesh | null,
+    kind: SurfaceKind,
+    geometry: THREE.InstancedBufferGeometry | 0,
+  ): THREE.Mesh | null {
+    mesh?.geometry.dispose();
+    if (!geometry) {
+      if (mesh) this.group.remove(mesh);
+      return null;
+    }
+    if (mesh) {
+      mesh.geometry = geometry;
+      return mesh;
+    }
+    const created = new THREE.Mesh(geometry, this.#material(kind));
+    const [cx, cy, cz] = chunkKeyToCoords(key);
+    const size = this.#size;
+    created.position.set(cx * size, cy * size, cz * size);
+    created.matrixAutoUpdate = false;
+    created.updateMatrix();
+    this.group.add(created);
+    return created;
   }
 
   #removeMesh(key: number): void {
-    const mesh = this.#meshes.get(key);
-    if (!mesh) return;
-    this.#quads -= (mesh.geometry as THREE.InstancedBufferGeometry).instanceCount;
-    mesh.geometry.dispose();
-    this.group.remove(mesh);
+    const meshes = this.#meshes.get(key);
+    if (!meshes) return;
+    this.#quads -= instances(meshes.quads);
+    this.#tris -= instances(meshes.tris);
+    this.#place(key, meshes.quads, "quad", 0);
+    this.#place(key, meshes.tris, "tri", 0);
     this.#meshes.delete(key);
   }
+}
+
+/** A chunk's meshes: whole faces as quads, and sloped shaped parts as triangles. */
+interface ChunkMeshes {
+  quads: THREE.Mesh | null;
+  tris: THREE.Mesh | null;
+}
+
+const instances = (mesh: THREE.Mesh | null) =>
+  mesh ? (mesh.geometry as THREE.InstancedBufferGeometry).instanceCount : 0;
+
+/** Bounds can't come from the base shape: they are the chunk's cube. */
+function setChunkBounds(geometry: THREE.BufferGeometry, size: number): void {
+  geometry.boundingBox = new THREE.Box3(
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(size, size, size),
+  );
+  geometry.boundingSphere = new THREE.Sphere(
+    new THREE.Vector3(size / 2, size / 2, size / 2),
+    (size * Math.sqrt(3)) / 2,
+  );
+}
+
+/** Instanced quads: a base square, and two normalized Uint16 vec4s per quad. */
+function quadGeometry(quads: Uint16Array, size: number): THREE.InstancedBufferGeometry {
+  const geometry = new THREE.InstancedBufferGeometry();
+  // Each geometry owns its base shape: disposing a geometry frees all of its attributes.
+  geometry.setIndex([0, 1, 2, 0, 2, 3]);
+  geometry.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0], 3),
+  );
+  const packed = new THREE.InstancedInterleavedBuffer(quads, QUAD_WORDS);
+  geometry.setAttribute("quadA", new THREE.InterleavedBufferAttribute(packed, 4, 0, true));
+  geometry.setAttribute("quadB", new THREE.InterleavedBufferAttribute(packed, 4, 4, true));
+  geometry.instanceCount = quads.length / QUAD_WORDS;
+  setChunkBounds(geometry, size);
+  return geometry;
+}
+
+/** Instanced triangles: a base triangle of corner weights, three Uint16 vec4s per triangle. */
+function triGeometry(tris: Uint16Array, size: number): THREE.InstancedBufferGeometry {
+  const geometry = new THREE.InstancedBufferGeometry();
+  geometry.setIndex([0, 1, 2]);
+  geometry.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute([1, 0, 0, 0, 1, 0, 0, 0, 1], 3),
+  );
+  const packed = new THREE.InstancedInterleavedBuffer(tris, TRI_WORDS);
+  geometry.setAttribute("triA", new THREE.InterleavedBufferAttribute(packed, 4, 0, true));
+  geometry.setAttribute("triB", new THREE.InterleavedBufferAttribute(packed, 4, 4, true));
+  geometry.setAttribute("triC", new THREE.InterleavedBufferAttribute(packed, 4, 8, true));
+  geometry.instanceCount = tris.length / TRI_WORDS;
+  setChunkBounds(geometry, size);
+  return geometry;
 }

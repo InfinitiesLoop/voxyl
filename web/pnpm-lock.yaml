@@ -242,6 +242,9 @@ importers:
       '@voxyl/core':
         specifier: workspace:*
         version: link:../core
+      '@voxyl/shapes':
+        specifier: workspace:*
+        version: link:../shapes
     devDependencies:
       typescript:
         specifier: ^7.0.2
@@ -267,13 +270,17 @@ importers:
         version: 7.0.2
 
   packages/mesher:
+    dependencies:
+      '@voxyl/core':
+        specifier: workspace:*
+        version: link:../core
+      '@voxyl/shapes':
+        specifier: workspace:*
+        version: link:../shapes
     devDependencies:
       '@types/node':
         specifier: ^24.19.1
         version: 24.19.1
-      '@voxyl/core':
-        specifier: workspace:*
-        version: link:../core
       '@voxyl/fixtures':
         specifier: workspace:*
         version: link:../fixtures
@@ -296,6 +303,12 @@ importers:
       '@voxyl/fixtures':
         specifier: workspace:*
         version: link:../fixtures
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+
+  packages/shapes:
+    devDependencies:
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
