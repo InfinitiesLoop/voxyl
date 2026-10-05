@@ -125,7 +125,8 @@ hosts.
 through React), Zustand for UI state, Three.js `WebGPURenderer`, Comlink for workers, Zod,
 Vitest, Playwright and pnpm workspaces.
 
-**State and sync**
+**State and sync** (for server-stored projects; local-only ones never leave the browser, see
+"Storage, limits and funding")
 
 - **One writer per project**, held as a lease by the relay. While a tab holds the lease, its
   world is authoritative, and both user edits and agent tool calls apply there.
@@ -151,6 +152,47 @@ device token, the first time they save to the server. Signing in links a Google 
 identity, and later Sign in with ChatGPT, to that same record, so nothing is copied or
 migrated. If the identity already belongs to another user, the two users' projects merge into
 one account.
+
+**Storage, limits and funding** (the user's decisions, 2026-10-05)
+
+There are two kinds of project. Server-stored is the default, and local-only is an explicit
+opt-in, chosen per project.
+
+| | Server-stored (default) | Local-only (opt-in, web app only) |
+| --- | --- | --- |
+| Where it lives | The server holds it. The browser's OPFS copy is a working copy that syncs. | Only in that browser's OPFS. Nothing is uploaded. |
+| Edits and rendering | Local in the tab, then streamed to the server as ops | Local |
+| Agents (ChatGPT, Claude Code, Codex) | Yes | No |
+| Other devices | Yes | No |
+| Free limits | 10 MB per account, across all projects, prefabs, palettes and the rest | None: use as much as the browser allows |
+| Server cost | Storage, sync, relay, and headless compute when no tab is attached | None beyond serving the app's static files |
+
+- **Builds made through ChatGPT are always server-stored.** Tool calls arrive at our MCP
+  endpoint and can come with no widget or tab open. The widget's own storage belongs to
+  ChatGPT's sandbox and may be wiped. And opening the build later in the web app needs a copy
+  we control.
+- **Near or over the 10 MB limit, the user sees a warning.** Still to decide: the warning
+  threshold, and what happens over the limit (new server saves refused, or the project goes
+  read-only).
+- **Inactive server-stored data expires (TTL).** Still to decide: how long, whether anonymous
+  and signed-in accounts get different periods, and whether there is a warning first.
+- **Rate limits curb abuse and overuse**: agent tool calls, headless compute, captures and
+  sync traffic.
+- **Local-only caveats.** Browsers can evict OPFS data unless the app is granted persistent
+  storage (`navigator.storage.persist()`), so ask for it when a local project is created and
+  offer export to a file as a backup. Probably also offer converting a project either way:
+  upload a local project when it fits the limit, or keep a server project local-only.
+- **Block imports are an open question.** One imported library is far bigger than 10 MB. A
+  possible answer: the Risks table already keeps imported textures and models in the user's
+  own OPFS, never uploaded (Mojang and mod licensing), so they would never count against the
+  limit. Only small metadata would sync: block ids, names, average colours, shape and model
+  references. Another device would then need the import done again for textures, while tiers
+  1 and 2 captures and agents get by on the colours. Not decided.
+- **Funding is donations only.** No paid tier is planned. The donation platform is still to
+  choose: Patreon, Ko-fi, GitHub Sponsors, Buy Me a Coffee or Stripe Payment Links. Weigh
+  fees, one-off against recurring giving, whether supporters link to accounts (no perks are
+  planned), and whether the ChatGPT app directory allows a donation link in the app (check
+  before submission).
 
 ## Agent screenshots
 
@@ -257,8 +299,10 @@ gate means fixing or rethinking that phase, not starting the next one.
    Chisel variations, pane healing, NEI roster, microblocks config, and schematic import and
    probe.
 6. **Public launch.** Account linking (Google and Apple first, Sign in with ChatGPT second),
-   upgrading anonymous users in place. Also cross-device sync, share links, quotas and rate
-   limits, the hosted default texture set, ChatGPT app submission and the donation link.
+   upgrading anonymous users in place. Also cross-device sync, share links, the 10 MB free
+   limit with its warnings, expiry of inactive data, rate limits, the hosted default texture
+   set, ChatGPT app submission and the donation link (see "Storage, limits and funding").
+   Local-only projects need no server, so they can ship as early as Phase 3.
 
 **While the port runs.** Godot gets fixes and keeps being used for builds, but no large new
 features from Phase 1 until the Phase 4 gate. Otherwise the parity target keeps moving.
@@ -477,6 +521,14 @@ host tool execution. Both are checked in Phase 0, before any port work.
   (Phase 0)
 - [ ] Which openly licensed texture set, or an original one, becomes the hosted default?
 - [ ] Should Codex and Claude Code connect to the hosted relay, a local relay, or both?
+- [ ] How do block imports work with server-stored projects and the 10 MB limit? (A
+  possible answer is under "Storage, limits and funding".)
+- [ ] The free limit's warning threshold and what happens over it; the expiry period for
+  inactive data.
+- [ ] Which donation platform, and is a donation link allowed in the ChatGPT app?
+- [x] Storage and funding: server-stored projects by default with a 10 MB free limit per
+  account, expiry on inactivity and rate limits; opt-in local-only projects with no limits;
+  donations only, no paid tier (2026-10-05).
 - [x] Lighting at launch: basic lighting ships in Phase 3, architected for Minecraft-style
   light. (Phase 0 then built Minecraft-style light as a setting; light is derived and never
   saved, so the format needs no light channels.)
