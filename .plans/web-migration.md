@@ -374,7 +374,8 @@ Done and proven, all on the B580 (headless Edge plus the user's Chrome at 3840x1
 Still open for the Phase 0 gate:
 
 - [ ] Run the benchmark on the MacBook M4 (the reference laptop for the gate). On hold.
-- [ ] ChatGPT widget relay test. Researched (below); a live probe is still needed.
+- [x] ChatGPT widget relay test (2026-10-05, "ChatGPT widget live probe" below): a ChatGPT
+  tool call ran inside the widget and returned an image the widget rendered.
 - [ ] Tier 1 CPU rasterizer prototype (agent screenshots). On hold.
 
 **Next steps, in order** (updated 2026-10-05, when the user called lighting done for now):
@@ -385,7 +386,8 @@ Still open for the Phase 0 gate:
 3. ~~ChatGPT widget research~~ (done, below).
 4. ~~Shaped parts in the city fixture~~ (done, below). The user judged the performance more
    than adequate (2026-10-05): perf work waits until it comes up again.
-5. **The ChatGPT widget live probe**, after a refresher on where builds are stored.
+5. ~~The ChatGPT widget live probe~~ (done, below). Left for later: a hidden tab for more
+   than 5 minutes, picture-in-picture, and the phone apps.
 6. Later: the rasterizer and the M4 run. Perf backlog, for when it matters: faster cube
    meshing (binary greedy meshing, for one-frame edits on decorated builds; see "Shaped
    parts") and light engine speed (1M-cell fills relight in 2.6-3.4 s; see
@@ -445,8 +447,8 @@ might blow the triangle or memory budget. Tested on the city fixture decorated w
 
 ### ChatGPT widget research (2026-10-05)
 
-Web research only, no live test yet. The question: can a ChatGPT widget keep a live channel
-to our relay so tool calls run in it?
+Web research, before the live probe (next section) answered most of it. The question: can a
+ChatGPT widget keep a live channel to our relay so tool calls run in it?
 
 - **Network access is declared, then enforced by CSP.** A widget's MCP resource lists origins
   in `_meta.ui.csp.connectDomains` (the MCP Apps standard; ChatGPT also reads the legacy
@@ -476,6 +478,54 @@ to our relay so tool calls run in it?
   the user adding it in ChatGPT developer mode. It should report WSS, SSE and streamed
   fetch, WebGPU and WebGL2, a blob module worker, OPFS and IndexedDB, timers while hidden,
   and round-trip time.
+
+### ChatGPT widget live probe (2026-10-05)
+
+`pnpm probe` (`tools/widget-probe/`) is a dependency-free MCP server (Streamable HTTP) with
+three tools. `voxyl_probe_open` shows a widget that tests the sandbox and posts a report back.
+`voxyl_probe_relay` sends an op (echo, count, caps, snapshot) down the widget's live channel
+and returns the widget's answer to ChatGPT. `voxyl_probe_results` returns the last report.
+The server logs everything to `shots/widget-probe.jsonl`. It ran behind a Cloudflare quick tunnel
+(`cloudflared tunnel --protocol http2 --url http://localhost:8787`), added at
+chatgpt.com/plugins (+ → Create custom MCP server, no auth) and used in a chat with `@`.
+
+**Result: the architecture works.** In ChatGPT on the web (Chrome, MacBook M5 Max), a model
+tool call was relayed into the widget and back in 72 ms (echo) and 34 ms (snapshot; the image
+rendered in the widget came back to the model as MCP image content).
+
+| Check | In the ChatGPT widget |
+| --- | --- |
+| WebSocket to our `wss://` origin | Works: opens in 196 ms, 21 ms round trips. The 2025 forum report of `wss` being rewritten no longer applies. |
+| Streamed POST response (push down, POST up) | Works: 44 ms round trips. The fallback if a host ever blocks sockets. |
+| SSE | Fails, but only because quick tunnels buffer every GET response to the end ([cloudflared#1449](https://github.com/cloudflare/cloudflared/issues/1449)); a real deployment won't have that. |
+| WebGPU | Renders (Apple Metal). WebGL2 works too. |
+| Blob workers (classic and module), wasm | Work |
+| OPFS, IndexedDB, localStorage | Read and write. 10 GB quota, already `persisted`. |
+| Origin | `https://<app id>.web-sandbox.oaiusercontent.com`, not cross-origin isolated (no SharedArrayBuffer) |
+| Host bridge | MCP Apps `ui/initialize` answers in 6 ms (host "chatgpt", protocol 2026-01-26, modes inline, fullscreen and pip). `window.openai` is present too (`callTool`, `requestDisplayMode`, `setWidgetState`, `uploadFile`, `requestModal`, ...). |
+| Tool result in the widget | Arrives 8 ms after load (`openai:set_globals`), so a session token can pair the widget with the server. |
+| Fullscreen | `requestDisplayMode` works (1728x873 on that screen). ChatGPT has no button of its own: the widget must offer one. |
+| Scrolled out of view | Frames drop from 120 to about 10-25 per second; timers and sockets keep running. |
+| Hidden tab | No frames, timers still about 1 per second, sockets stay open. The same widget instance was still alive after 2 minutes away. |
+
+**The one failure was ours.** After the user came back from another tab, relays timed out.
+The widget was alive, but its WebSocket had been idle for over 100 s, and Cloudflare closes
+idle sockets (reproduced in plain headless Edge: closed with 1006 after 128 s). The server
+hadn't noticed, so it kept sending into a dead socket. Fixed in the probe, and the relay needs
+the same:
+
+- The server sends WebSocket pings every 25 s. The browser answers them itself, even when a
+  background tab's timers are throttled. A socket that misses pings is closed.
+- The widget reconnects a dropped channel.
+- The server retries an op on the next channel after 4 s. Ops keep their id, and the widget
+  answers a repeat from its cache, so an op runs once.
+
+With that, an idle widget answered a relay after 150 s (21 ms over WebSocket).
+
+**Still untested:** a tab hidden for more than 5 minutes (Chrome then runs timers once a
+minute, but socket messages should still be delivered), picture-in-picture, and the phone
+apps. They are cheap to rerun with `pnpm probe` and a tunnel. The free ChatGPT plan ran out
+of image allowance during the test (the snapshots), so the next run may need a paid account.
 
 ## Testing and verification
 
@@ -508,7 +558,7 @@ host tool execution. Both are checked in Phase 0, before any port work.
 | Risk | Why it matters | Mitigation |
 | --- | --- | --- |
 | Minecraft and mod textures can't be hosted | The current 85 MB library is imported from Mojang and mod jars. A public site can't serve it. | Imports run in the browser from the user's own jar or modpack and stay in their OPFS, never uploaded. Hosted users get an original or openly licensed default set and tier 1 and 2 colours. Block ids still map for schematic export. |
-| ChatGPT widget sandbox | Client-side tool execution needs the widget iframe to hold a live connection to our relay. The Apps SDK's network rules may not allow it. | Prove it in Phase 0. If it fails, ChatGPT sessions run on the headless server host, which works but costs server CPU. |
+| ChatGPT widget sandbox | Client-side tool execution needs the widget iframe to hold a live connection to our relay. The Apps SDK's network rules may not allow it. | Proved in Phase 0 (2026-10-05): a WebSocket from the widget works, relayed tool calls take 20-70 ms, and WebGPU, workers and OPFS all work. Long-hidden tabs and phones are still untested; the headless host covers a widget that has gone away. |
 | Port drift | Godot keeps gaining features while the port chases it, so the target keeps moving. | Freeze large Godot features from Phase 1 until the Phase 4 gate. Fixes and builds continue. |
 | Renderer misses targets | The whole case for the move rests on big builds staying smooth. | Phase 0 measures the renderer on 5M cells before anything else is ported. If it misses, the fallback is a Rust or WASM mesher behind the same worker interface. |
 | Shaped-part and model meshing cost | Parts and custom models can't be greedy-merged, and dense microblock builds may blow the triangle budget. | Include a dense parts fixture in the Phase 0 bench, and cache per-chunk part geometry. Measured in Phase 0: the GPU copes; mesh time is the cost (see "Shaped parts"). |
@@ -517,8 +567,8 @@ host tool execution. Both are checked in Phase 0, before any port work.
 
 **Open questions**
 
-- [ ] Does the ChatGPT Apps sandbox allow a persistent WebSocket from the widget to our domain?
-  (Phase 0)
+- [x] Does the ChatGPT Apps sandbox allow a persistent WebSocket from the widget to our domain?
+  Yes, with keepalive pings (see "ChatGPT widget live probe").
 - [ ] Which openly licensed texture set, or an original one, becomes the hosted default?
 - [ ] Should Codex and Claude Code connect to the hosted relay, a local relay, or both?
 - [ ] How do block imports work with server-stored projects and the 10 MB limit? (A

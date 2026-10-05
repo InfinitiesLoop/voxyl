@@ -18,7 +18,8 @@
     "bench:mesh": "node packages/mesher/bench/city.ts",
     "bench:light": "node packages/light/bench/city.ts",
     "bench:sparse": "node packages/light/bench/sparse.ts",
-    "shot": "node tools/shot.ts"
+    "shot": "node tools/shot.ts",
+    "probe": "node tools/widget-probe/server.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",

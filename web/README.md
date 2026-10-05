@@ -80,6 +80,16 @@ change rewrites a few bricks and never remeshes. It needs WebGPU; WebGL2 draws u
 day (`daylight`, 0 midnight to 100 noon) and Brightness (`brightness`, Minecraft's slider:
 0 Moody, 50 default, 100 Bright) are shader values and cost nothing to change.
 
+## ChatGPT widget probe
+
+`pnpm probe` runs a small MCP server on port 8787 whose widget tests the ChatGPT sandbox
+(WebSocket, streamed fetch, WebGPU, workers, storage, timers) and relays tool calls into the open
+widget. Everything it reports is appended to `shots/widget-probe.jsonl`. To use it from
+ChatGPT, expose it with `cloudflared tunnel --protocol http2 --url http://localhost:8787`, add
+`<tunnel url>/mcp` at chatgpt.com/plugins (+, Create custom MCP server, no auth), then in a
+chat type `@`, pick it and ask it to open the Voxyl probe. `/probe/widget.html` serves the
+widget outside ChatGPT for local checks. Results are in the plan ("ChatGPT widget live probe").
+
 ## Rules of the road
 
 - `core`, `shapes`, `mesher`, `light` and `session` compile with no DOM or Node types, so anything that

@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --bg: #f6f7f8; --fg: #1d2125; --muted: #6b737b; --line: #dde1e5;
+    --ok: #157a3d; --bad: #b3261e; --accent: #0e8fa3;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #17191c; --fg: #e6e8ea; --muted: #949ca4; --line: #2c3035; --ok: #5cc98a; --bad: #f2827a; }
+  }
+  body { margin: 0; padding: 12px 14px; background: var(--bg); color: var(--fg);
+    font: 13px/1.4 system-ui, sans-serif; }
+  h1 { font-size: 15px; margin: 0 0 4px; }
+  .meta { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+  button { font: inherit; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line);
+    background: transparent; color: var(--fg); cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  table { border-collapse: collapse; width: 100%; }
+  td { padding: 3px 6px; border-top: 1px solid var(--line); vertical-align: top; }
+  td:first-child { white-space: nowrap; font-weight: 600; }
+  td.ok::before { content: "✓ "; color: var(--ok); }
+  td.bad::before { content: "✗ "; color: var(--bad); }
+  td.wait::before { content: "… "; color: var(--muted); }
+  .detail { color: var(--muted); word-break: break-word; }
+  #counter { font-weight: 700; color: var(--accent); }
+  canvas#snap { display: block; margin-top: 8px; max-width: 100%; border-radius: 6px; }
+  pre { font-size: 11px; color: var(--muted); white-space: pre-wrap; max-height: 120px; overflow: auto; }
+</style>
+</head>
+<body>
+<h1>Voxyl widget probe</h1>
+<div class="meta">server <span id="origin"></span> · widget <span id="session"></span> · relay counter <span id="counter">0</span></div>
+<div class="bar">
+  <button type="button" data-mode="fullscreen">Fullscreen</button>
+  <button type="button" data-mode="pip">Picture in picture</button>
+  <button type="button" data-mode="inline">Inline</button>
+  <button type="button" id="hostcall">Host tools/call</button>
+  <button type="button" id="rerun">Run again</button>
+</div>
+<table><tbody id="rows"></tbody></table>
+<canvas id="snap" width="320" height="200"></canvas>
+<pre id="events"></pre>
+<script type="module">
+const ORIGIN = "__ORIGIN__";
+const WS_ORIGIN = ORIGIN.replace(/^http/, "ws");
+const t0 = performance.now();
+const session = `w${Math.random().toString(36).slice(2, 8)}`;
+const $ = (s) => document.querySelector(s);
+const ms = (t) => `${Math.round(performance.now() - t)} ms`;
+const results = {};
+const events = [];
+let hostContext = {};
+let toolSession = null;
+let counter = 0;
+let ws = null;
+let sse = null;
+let down = null;
+
+$("#origin").textContent = ORIGIN;
+$("#session").textContent = session;
+
+const ORDER = ["bridge", "window.openai", "tool result", "env", "WebGPU", "WebGL2", "blob worker",
+  "blob module worker", "wasm", "OPFS", "IndexedDB", "localStorage", "storage", "fetch POST",
+  "streamed fetch", "WebSocket", "streamed POST downlink", "SSE", "host tools/call"];
+
+function render() {
+  const names = [...new Set([...ORDER, ...Object.keys(results)])].filter((n) => results[n]);
+  $("#rows").innerHTML = names.map((n) => {
+    const r = results[n];
+    const cls = r.ok === null ? "wait" : r.ok ? "ok" : "bad";
+    return `<tr><td class="${cls}">${n}</td><td class="detail">${escapeHtml(r.detail)}</td></tr>`;
+  }).join("");
+}
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+}
+function set(name, ok, detail) { results[name] = { ok, detail }; render(); }
+function event(kind, data) {
+  const line = `${Math.round(performance.now() - t0)} ms ${kind} ${data === undefined ? "" : JSON.stringify(data)}`;
+  events.push(line);
+  $("#events").textContent = events.slice(-30).join("\n");
+  post("/probe/event", { session, kind, data, uptime: Math.round(performance.now() - t0) }).catch(() => {});
+}
+function post(path, body) {
+  // text/plain keeps these "simple" requests: no CORS preflight in the timings.
+  return fetch(ORIGIN + path, { method: "POST", headers: { "content-type": "text/plain" }, body: JSON.stringify(body) });
+}
+function stats(times) {
+  const ok = times.filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
+  if (!ok.length) return "no replies";
+  const p = (q) => Math.round(ok[Math.min(ok.length - 1, Math.floor(q * ok.length))]);
+  return `p50 ${p(0.5)} ms, min ${Math.round(ok[0])}, max ${Math.round(ok.at(-1))} (${ok.length}/${times.length})`;
+}
+const withTimeout = (p, msTimeout, what) => Promise.race([p,
+  new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out after ${msTimeout} ms`)), msTimeout))]);
+
+// --- Host bridge (MCP Apps postMessage JSON-RPC, with ChatGPT's window.openai alongside) ---
+let rpcId = 0;
+const rpcWait = new Map();
+function rpc(method, params, timeout = 4000) {
+  return new Promise((res, rej) => {
+    const id = ++rpcId;
+    rpcWait.set(id, { res, rej });
+    window.parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+    setTimeout(() => { if (rpcWait.delete(id)) rej(new Error(`${method} timed out`)); }, timeout);
+  });
+}
+function adoptToolResult(structured, via) {
+  if (structured?.session && structured.session !== toolSession) {
+    toolSession = structured.session;
+    set("tool result", true, `session ${toolSession} via ${via} at ${Math.round(performance.now() - t0)} ms`);
+  }
+}
+window.addEventListener("message", (e) => {
+  if (e.source !== window.parent) return;
+  const m = e.data;
+  if (m?.jsonrpc !== "2.0") return;
+  if (m.id != null && !m.method && rpcWait.has(m.id)) {
+    const w = rpcWait.get(m.id);
+    rpcWait.delete(m.id);
+    if (m.error) w.rej(new Error(m.error.message)); else w.res(m.result);
+    return;
+  }
+  if (m.method === "ui/notifications/tool-result") adoptToolResult(m.params?.structuredContent, "ui/notifications/tool-result");
+  else if (m.method === "ui/notifications/host-context-changed") {
+    hostContext = { ...hostContext, ...m.params };
+    event("host-context", m.params);
+  } else if (m.method) event("host", { method: m.method });
+  if (m.id != null && m.method) window.parent.postMessage({ jsonrpc: "2.0", id: m.id, result: {} }, "*");
+});
+window.addEventListener("openai:set_globals", (e) => {
+  const g = e.detail?.globals ?? {};
+  if (g.toolOutput) adoptToolResult(g.toolOutput, "openai:set_globals");
+  if (g.displayMode) { hostContext.displayMode = g.displayMode; event("displayMode", g.displayMode); }
+});
+
+async function testBridge() {
+  if (window.parent === window) { set("bridge", false, "not in an iframe"); return; }
+  const t = performance.now();
+  try {
+    const r = await rpc("ui/initialize", {
+      protocolVersion: "2026-01-26",
+      appInfo: { name: "voxyl-probe", version: "0.0.1" },
+      clientInfo: { name: "voxyl-probe", version: "0.0.1" },
+      appCapabilities: { availableDisplayModes: ["inline", "fullscreen", "pip"] },
+    });
+    hostContext = r?.hostContext ?? {};
+    window.parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} }, "*");
+    const modes = (hostContext.availableDisplayModes ?? []).join("/");
+    set("bridge", true, `${r?.hostInfo?.name ?? "?"} ${r?.hostInfo?.version ?? ""}, protocol ${r?.protocolVersion}, ${ms(t)}; mode ${hostContext.displayMode ?? "?"}${modes ? ` of ${modes}` : ""}`);
+  } catch (e) {
+    set("bridge", false, String(e));
+  }
+  const oa = window.openai;
+  set("window.openai", !!oa, oa ? `${Object.keys(oa).join(", ")}; displayMode ${oa.displayMode}` : "absent");
+  if (oa?.toolOutput) adoptToolResult(oa.toolOutput, "window.openai.toolOutput");
+  if (!toolSession) set("tool result", null, "waiting");
+}
+
+async function requestMode(mode) {
+  try {
+    const r = window.openai?.requestDisplayMode
+      ? await window.openai.requestDisplayMode({ mode })
+      : await rpc("ui/request-display-mode", { mode });
+    hostContext.displayMode = r?.mode ?? mode;
+    event("mode", { asked: mode, got: r });
+  } catch (e) {
+    event("mode-error", { mode, error: String(e) });
+  }
+}
+
+async function hostToolCall() {
+  const t = performance.now();
+  try {
+    const r = window.openai?.callTool
+      ? await window.openai.callTool("voxyl_probe_results", {})
+      : await rpc("tools/call", { name: "voxyl_probe_results", arguments: {} }, 20000);
+    set("host tools/call", true, `${ms(t)}; ${JSON.stringify(r).length} bytes back`);
+  } catch (e) {
+    set("host tools/call", false, String(e));
+  }
+}
+
+// --- Capabilities ---
+function testEnv() {
+  set("env", true, `${location.origin || "(opaque)"}; ${innerWidth}x${innerHeight} @${devicePixelRatio}; crossOriginIsolated ${self.crossOriginIsolated}; SharedArrayBuffer ${typeof SharedArrayBuffer !== "undefined"}; hardwareConcurrency ${navigator.hardwareConcurrency}`);
+}
+
+async function testWebGpu() {
+  if (!navigator.gpu) return set("WebGPU", false, "navigator.gpu absent");
+  try {
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) return set("WebGPU", false, "no adapter");
+    const device = await adapter.requestDevice();
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 64;
+    const ctx = canvas.getContext("webgpu");
+    ctx.configure({ device, format: navigator.gpu.getPreferredCanvasFormat(), alphaMode: "opaque" });
+    const enc = device.createCommandEncoder();
+    enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(),
+      loadOp: "clear", clearValue: { r: 0, g: 0.6, b: 0.7, a: 1 }, storeOp: "store" }] }).end();
+    device.queue.submit([enc.finish()]);
+    await device.queue.onSubmittedWorkDone();
+    const i = adapter.info ?? {};
+    set("WebGPU", true, `rendered; ${[i.vendor, i.architecture, i.description].filter(Boolean).join(" ")}; maxBufferSize ${device.limits.maxBufferSize}`);
+  } catch (e) {
+    set("WebGPU", false, String(e));
+  }
+}
+
+function testWebGl2() {
+  const gl = document.createElement("canvas").getContext("webgl2");
+  if (!gl) return set("WebGL2", false, "no context");
+  const ext = gl.getExtension("WEBGL_debug_renderer_info");
+  set("WebGL2", true, ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
+}
+
+function testWorker(type) {
+  const name = type === "module" ? "blob module worker" : "blob worker";
+  return new Promise((done) => {
+    try {
+      const src = "self.onmessage = (e) => self.postMessage(e.data * 2);";
+      const url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+      const w = new Worker(url, { type });
+      const timer = setTimeout(() => { set(name, false, "no reply in 3 s"); done(); }, 3000);
+      w.onmessage = (e) => { clearTimeout(timer); w.terminate(); set(name, e.data === 42, "posted back"); done(); };
+      w.onerror = (e) => { clearTimeout(timer); set(name, false, `error ${e.message ?? ""}`); done(); };
+      w.postMessage(21);
+    } catch (e) {
+      set(name, false, String(e));
+      done();
+    }
+  });
+}
+
+async function testWasm() {
+  try {
+    const add = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 7, 1, 96, 2, 127, 127, 1, 127, 3, 2, 1, 0,
+      7, 7, 1, 3, 97, 100, 100, 0, 0, 10, 9, 1, 7, 0, 32, 0, 32, 1, 106, 11]);
+    const { instance } = await WebAssembly.instantiate(add);
+    set("wasm", instance.exports.add(20, 22) === 42, "instantiated and ran");
+  } catch (e) {
+    set("wasm", false, String(e));
+  }
+}
+
+async function testOpfs() {
+  try {
+    const root = await withTimeout(navigator.storage.getDirectory(), 3000, "getDirectory");
+    const fh = await root.getFileHandle("probe.txt", { create: true });
+    const before = await (await fh.getFile()).text();
+    const visits = (Number(before) || 0) + 1;
+    const w = await fh.createWritable();
+    await w.write(String(visits));
+    await w.close();
+    set("OPFS", true, `read/write ok; visit ${visits} (above 1 means it survived a remount)`);
+  } catch (e) {
+    set("OPFS", false, String(e));
+  }
+}
+
+async function testIdb() {
+  try {
+    const db = await withTimeout(new Promise((res, rej) => {
+      const r = indexedDB.open("voxyl-probe", 1);
+      r.onupgradeneeded = () => r.result.createObjectStore("kv");
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    }), 3000, "indexedDB.open");
+    const req = (mode, f) => new Promise((res, rej) => {
+      const q = f(db.transaction("kv", mode).objectStore("kv"));
+      q.onsuccess = () => res(q.result);
+      q.onerror = () => rej(q.error);
+    });
+    const visits = ((await req("readonly", (s) => s.get("visits"))) ?? 0) + 1;
+    await req("readwrite", (s) => s.put(visits, "visits"));
+    set("IndexedDB", true, `read/write ok; visit ${visits}`);
+  } catch (e) {
+    set("IndexedDB", false, String(e));
+  }
+}
+
+function testLocalStorage() {
+  try {
+    const visits = Number(localStorage.getItem("voxyl-probe-visits") ?? 0) + 1;
+    localStorage.setItem("voxyl-probe-visits", String(visits));
+    set("localStorage", true, `visit ${visits}`);
+  } catch (e) {
+    set("localStorage", false, String(e));
+  }
+}
+
+async function testStorage() {
+  try {
+    const est = await navigator.storage.estimate();
+    const persisted = await navigator.storage.persisted();
+    set("storage", true, `quota ${Math.round((est.quota ?? 0) / 2 ** 20)} MB, used ${Math.round((est.usage ?? 0) / 1024)} kB, persisted ${persisted}`);
+  } catch (e) {
+    set("storage", false, String(e));
+  }
+}
+
+// --- Network ---
+async function testFetch() {
+  try {
+    const times = [];
+    for (let i = 0; i < 10; i++) {
+      const t = performance.now();
+      await (await post("/probe/echo", { i })).text();
+      times.push(performance.now() - t);
+    }
+    set("fetch POST", true, `round trip ${stats(times)}`);
+  } catch (e) {
+    set("fetch POST", false, String(e));
+  }
+}
+
+async function testStream() {
+  try {
+    const t = performance.now();
+    // POST: Cloudflare quick tunnels buffer GET responses to the end.
+    const reader = (await post("/probe/stream", {})).body.getReader();
+    const arrivals = [];
+    for (;;) {
+      const { done } = await reader.read();
+      if (done) break;
+      arrivals.push(Math.round(performance.now() - t));
+    }
+    const spread = arrivals.at(-1) - arrivals[0];
+    set("streamed fetch", spread > 1000, `${arrivals.length} reads from ${arrivals[0]} to ${arrivals.at(-1)} ms${spread > 1000 ? " (streams)" : " (buffered)"}`);
+  } catch (e) {
+    set("streamed fetch", false, String(e));
+  }
+}
+
+function testWs() {
+  return new Promise((resolve) => {
+    let finished = false;
+    const finish = (ok, detail) => { if (!finished) { finished = true; set("WebSocket", ok, detail); resolve(); } };
+    const t = performance.now();
+    try {
+      ws = new WebSocket(`${WS_ORIGIN}/probe/ws?session=${session}`);
+    } catch (e) {
+      return finish(false, String(e));
+    }
+    setTimeout(() => finish(false, "did not open in 8 s"), 8000);
+    const pings = new Map();
+    wireWs(ws, pings);
+    ws.addEventListener("close", (e) => finish(false, `closed ${e.code}`));
+    ws.onopen = async () => {
+      const open = ms(t);
+      const times = [];
+      for (let k = 0; k < 10; k++) {
+        times.push(await new Promise((r) => {
+          const s = performance.now();
+          pings.set(k, () => r(performance.now() - s));
+          ws.send(JSON.stringify({ type: "ping", k }));
+          setTimeout(() => r(Number.NaN), 3000);
+        }));
+      }
+      finish(true, `open in ${open}; round trip ${stats(times)}`);
+    };
+    ws.onerror = () => finish(false, "error (blocked by CSP or the network?)");
+  });
+}
+
+// A dropped socket reconnects (once one has ever opened, so a CSP block doesn't spin).
+let wsEverOpened = false;
+function wireWs(socket, pings) {
+  socket.addEventListener("open", () => { wsEverOpened = true; });
+  socket.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.type === "pong") { pings?.get(m.k)?.(); pings?.delete(m.k); } else if (m.type === "op") handleOp(m, "ws");
+  };
+  socket.addEventListener("close", (e) => {
+    event("ws-close", { code: e.code });
+    if (ws === socket && wsEverOpened) setTimeout(() => { if (ws === socket) reopenWs(); }, 2000);
+  });
+}
+function reopenWs() {
+  const socket = new WebSocket(`${WS_ORIGIN}/probe/ws?session=${session}`);
+  ws = socket;
+  wireWs(socket);
+  socket.addEventListener("open", () => event("ws-reopened"));
+}
+
+// Fallback downlinks, both "POST up, push down": server-sent events (GET) and a streamed POST
+// response carrying one JSON message per line.
+const pongs = new Map();
+const hellos = { sse: null, down: null };
+function onDown(m, via) {
+  if (m.type === "hello") hellos[via]?.();
+  else if (m.type === "pong") { pongs.get(m.nonce)?.(); pongs.delete(m.nonce); }
+  else if (m.type === "op") handleOp(m, via);
+}
+function pingVia(via) {
+  return new Promise((res) => {
+    const nonce = Math.random().toString(36).slice(2);
+    const t = performance.now();
+    pongs.set(nonce, () => res(performance.now() - t));
+    post("/probe/ping", { session, nonce, via });
+    setTimeout(() => { if (pongs.delete(nonce)) res(Number.NaN); }, 5000);
+  });
+}
+function openSse() {
+  sse = new EventSource(`${ORIGIN}/probe/sse?session=${session}`);
+  sse.onmessage = (e) => onDown(JSON.parse(e.data), "sse");
+  sse.onerror = () => event("sse-error", { readyState: sse.readyState });
+}
+async function openDown() {
+  const controller = new AbortController();
+  down = controller;
+  // Reopen when the stream ends or fails, unless it was replaced (Run again).
+  const reopen = (why) => {
+    event("down-closed", why);
+    setTimeout(() => { if (down === controller) openDown().catch((e) => reopen(String(e))); }, 2000);
+  };
+  const res = await fetch(`${ORIGIN}/probe/down?session=${session}`, {
+    method: "POST", headers: { "content-type": "text/plain" }, body: "{}", signal: controller.signal });
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buf = "";
+  (async () => {
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += value;
+        const lines = buf.split("\n");
+        buf = lines.pop();
+        for (const line of lines) if (line) onDown(JSON.parse(line), "down");
+      }
+      reopen("ended");
+    } catch (e) {
+      reopen(String(e));
+    }
+  })();
+}
+function testDownlink(via) {
+  const name = via === "sse" ? "SSE" : "streamed POST downlink";
+  return new Promise((resolve) => {
+    const t = performance.now();
+    const timer = setTimeout(() => {
+      hellos[via] = null;
+      set(name, false, "no hello in 8 s (buffered by a proxy?)");
+      resolve();
+    }, 8000);
+    hellos[via] = async () => {
+      hellos[via] = null;
+      clearTimeout(timer);
+      const open = ms(t);
+      const times = [];
+      for (let i = 0; i < 5; i++) times.push(await pingVia(via));
+      set(name, true, `hello in ${open}; POST up, push down ${stats(times)}`);
+      resolve();
+    };
+    Promise.resolve().then(via === "sse" ? openSse : openDown).catch((e) => {
+      clearTimeout(timer);
+      set(name, false, String(e));
+      resolve();
+    });
+  });
+}
+
+// --- Relayed ops: the server sends these when ChatGPT calls voxyl_probe_relay ---
+// The server retries an op on another downlink when one is slow, so the same id can arrive twice:
+// answer repeats from the cache instead of running the op again.
+const answered = new Map();
+async function handleOp(m, via) {
+  let result = answered.get(m.id);
+  if (result) event("op-repeat", { op: m.op, via });
+  else try {
+    if (m.op === "echo") result = { text: m.args?.text ?? "", visible: document.visibilityState, uptimeMs: Math.round(performance.now() - t0) };
+    else if (m.op === "count") { counter++; $("#counter").textContent = counter; result = { count: counter }; }
+    else if (m.op === "caps") result = { results, hostContext, toolSession, events: events.slice(-20) };
+    else if (m.op === "snapshot") result = snapshot();
+    else throw new Error(`unknown op ${m.op}`);
+  } catch (e) {
+    result = { error: String(e) };
+  }
+  answered.set(m.id, result);
+  const reply = { type: "reply", id: m.id, session, result };
+  if (via === "ws" && ws?.readyState === 1) ws.send(JSON.stringify(reply));
+  else post("/probe/reply", reply);
+  event("op", { op: m.op, via });
+}
+
+function snapshot() {
+  const c = $("#snap");
+  const g = c.getContext("2d");
+  g.fillStyle = "#1b2a33";
+  g.fillRect(0, 0, c.width, c.height);
+  const s = 14;
+  const iso = (x, y, z) => [160 + (x - z) * s, 70 + (x + z) * s * 0.5 - y * s];
+  const shades = ["#7fd3df", "#3d9fae", "#2a7380"];
+  for (let x = 0; x < 6; x++) for (let z = 0; z < 6; z++) {
+    const h = 1 + ((x * 7 + z * 3 + counter) % 4);
+    for (let y = 0; y < h; y++) {
+      const face = (pts, color) => {
+        g.fillStyle = color;
+        g.beginPath();
+        for (const [i, [px, py]] of pts.entries()) i ? g.lineTo(px, py) : g.moveTo(px, py);
+        g.closePath();
+        g.fill();
+      };
+      face([iso(x, y + 1, z), iso(x + 1, y + 1, z), iso(x + 1, y + 1, z + 1), iso(x, y + 1, z + 1)], shades[0]);
+      face([iso(x, y, z + 1), iso(x + 1, y, z + 1), iso(x + 1, y + 1, z + 1), iso(x, y + 1, z + 1)], shades[1]);
+      face([iso(x + 1, y, z), iso(x + 1, y, z + 1), iso(x + 1, y + 1, z + 1), iso(x + 1, y + 1, z)], shades[2]);
+    }
+  }
+  g.fillStyle = "#e6e8ea";
+  g.font = "12px system-ui";
+  g.fillText(`rendered in the widget · counter ${counter} · ${new Date().toLocaleTimeString()}`, 10, 190);
+  return { png: c.toDataURL("image/png").split(",")[1], width: c.width, height: c.height };
+}
+
+// --- Heartbeats: show whether timers and frames keep running when the widget is hidden ---
+let lastTick = performance.now();
+let maxGap = 0;
+let frames = 0;
+setInterval(() => {
+  const now = performance.now();
+  maxGap = Math.max(maxGap, now - lastTick);
+  lastTick = now;
+}, 1000);
+const countFrames = () => { frames++; requestAnimationFrame(countFrames); };
+requestAnimationFrame(countFrames);
+function heartbeat(reason) {
+  post("/probe/heartbeat", {
+    session, reason, uptimeS: Math.round((performance.now() - t0) / 1000), visible: document.visibilityState,
+    focus: document.hasFocus(), maxTimerGapMs: Math.round(maxGap), framesSinceLast: frames,
+    mode: window.openai?.displayMode ?? hostContext.displayMode, size: [innerWidth, innerHeight],
+    ws: ws?.readyState ?? null, sse: sse?.readyState ?? null, down: !!down,
+  }).catch(() => {});
+  maxGap = 0;
+  frames = 0;
+}
+setInterval(() => heartbeat("timer"), 5000);
+document.addEventListener("visibilitychange", () => { event("visibility", document.visibilityState); heartbeat("visibility"); });
+window.addEventListener("pagehide", () => event("pagehide"));
+window.addEventListener("resize", () => event("resize", [innerWidth, innerHeight]));
+
+async function runAll() {
+  for (const k of Object.keys(results)) if (k !== "tool result" && k !== "bridge" && k !== "window.openai") delete results[k];
+  testEnv();
+  await testWebGpu();
+  testWebGl2();
+  await testWorker("classic");
+  await testWorker("module");
+  await testWasm();
+  await testOpfs();
+  await testIdb();
+  testLocalStorage();
+  await testStorage();
+  await testFetch();
+  await testStream();
+  if (!ws || ws.readyState > 1) await testWs();
+  if (!down) await testDownlink("down");
+  if (!sse || sse.readyState === 2) await testDownlink("sse");
+  await post("/probe/report", {
+    session, toolSession, results, hostContext, userAgent: navigator.userAgent,
+    openaiKeys: window.openai ? Object.keys(window.openai) : null, events,
+  }).catch((e) => event("report-failed", String(e)));
+}
+
+for (const b of document.querySelectorAll("[data-mode]")) b.addEventListener("click", () => requestMode(b.dataset.mode));
+$("#hostcall").addEventListener("click", hostToolCall);
+$("#rerun").addEventListener("click", () => { ws?.close(); sse?.close(); down?.abort(); ws = sse = down = null; runAll(); });
+
+snapshot();
+event("load", { href: location.href.slice(0, 80) });
+await testBridge();
+await runAll();
+</script>
+</body>
+</html>
