@@ -194,6 +194,56 @@ opt-in, chosen per project.
   planned), and whether the ChatGPT app directory allows a donation link in the app (check
   before submission).
 
+## ChatGPT app experience
+
+Agreed with the user on 2026-10-05, after the live widget probe. ChatGPT gives an app three
+display modes ([UI guidelines](https://developers.openai.com/plugins/concepts/ui-guidelines)):
+
+- **Inline:** a card in the chat that scrolls away.
+- **Fullscreen:** the composer stays on top, so the user keeps chatting while looking at the
+  app.
+- **Picture-in-picture:** a floating window pinned to the top of the chat while messages scroll
+  underneath.
+
+There is no side panel. A widget only appears for a tool declared with a UI template, which is
+fixed per tool.
+
+- **One-shots need no widget.** "Add a second floor to my warehouse" or "how much trim is in
+  the tower?" run as ordinary tools on the headless host. Nothing has to be open first.
+- **Results the user should see come back as a preview card.** One "show" tool carries the
+  template: a still image (a tier 1 or 2 capture) with an **Open in 3D** button. A screenshot
+  returned as MCP image content goes to the model, and the user doesn't reliably see it. Each
+  visual result gets a new card, so the chat becomes a visual history of the build. Old cards
+  stay cheap, because they are only images.
+- **Editing sessions happen in one live widget.** Open in 3D loads the engine into that card and
+  asks for fullscreen (desktop) or picture-in-picture (the "beside the chat" option). The editing
+  tools have no template, so later edits create no new widgets: they reach the open widget over
+  the relay and show up in place. The widget must offer its own fullscreen and
+  picture-in-picture buttons, because ChatGPT has none.
+- **Only one live 3D widget at a time.** Each one costs a GPU context and a worker pool. When a
+  newer card opens the editor, the older one drops back to its still image.
+- **Agents know what the user can see.** While an editor is attached, edit results say "the user
+  can see this in the open editor", so the model doesn't show another card after every change.
+
+**Relay connections** (why a live widget holds a WebSocket, and what that costs at scale)
+
+- **The server can't call into a browser.** A tool call reaches our MCP endpoint, not the
+  widget, so the widget keeps a channel open for the relay to push calls down. Polling instead
+  would bill a request and wake the relay on every poll.
+- **Idle sockets cost almost nothing on Durable Objects.** With the WebSocket Hibernation API, an
+  idle relay is evicted from memory while its sockets stay connected at Cloudflare's edge, and no
+  duration is billed. Protocol pings and `setWebSocketAutoResponse` replies are free and don't
+  wake it. Connecting costs one request, and incoming messages bill at 20 to 1
+  ([pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/)). We pay when
+  tool calls flow, which is work the headless host would otherwise do on our CPU.
+- **Keepalive:** a small ping every minute or so, auto-answered. The probe needed 25 s pings
+  only because its sockets went through a quick tunnel, which drops sockets idle for 100 s.
+- **Idle cutoff:** a widget drops its socket after about 10 minutes with no tool calls while its
+  tab is hidden. It reconnects when shown or clicked, and calls in the meantime run on the
+  headless host. This bounds open connections whatever happens.
+- **Sockets only live while a Voxyl widget is mounted in an open ChatGPT tab.** Closing the
+  chat or the tab closes them.
+
 ## Agent screenshots
 
 Captures default to a flat-shaded semantic render at 512 px. Anything richer is opt-in, and
