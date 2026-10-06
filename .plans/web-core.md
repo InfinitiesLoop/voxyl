@@ -1,7 +1,9 @@
 # Voxyl Web — Core Design (Phase 1)
 
-Status: **Draft for review** (2026-10-06). Nothing here is built yet beyond what Phase 0
-left in `packages/core` (chunks, storage by content, interned cell states, raycast).
+Status: **In review.** First draft 2026-10-06. The user's answers are folded in the same day
+(marked **Decided**); one model is still to confirm (section 2, "Questions"). Nothing here is
+built yet beyond what Phase 0 left in `packages/core` (chunks, storage by content, interned
+cell states, raycast).
 
 Phase 1 is a greenfield design (the user's decision, 2026-10-06): the web version doesn't
 have to be compatible with the Godot app. Godot's code and formats are inspiration. That app
@@ -11,163 +13,245 @@ knowing what is coming: agents driving builds over MCP, a server that stores pro
 for **performance and bandwidth** as well as clarity. The CLAUDE.md principles apply
 unchanged.
 
-Each section below says what Godot does, what the web version should do and why. The
-decisions to review are collected at the end.
+## 1. Edits are commands
 
-## 1. Semantics are a registry, not strings in cells
+**Decided.** Every change to a project is a **command**: a small, deterministic description of
+intent.
 
-**Godot.** Every cell stores its semantic as a string ("Base", "Trim"). Renaming a semantic
-rewrites every cell that uses it (`semantic_rename`). A shaped cell also mirrors its first
-part's semantic into `type_id`, a workaround so code that asks "what's here?" keeps working.
+```jsonc
+{ "id": "c7f2…", "kind": "fill", "where": { "box": [0, 0, 0, 40, 0, 30] },
+  "state": { "semantic": 12 }, "source": "Claude", "label": "Pour the hall floor" }
+```
 
-**Web.** Each project has a **semantic registry**: id → `{ name, description?, hint? }`.
-Cells reference semantics by small integer ids, through the interned cell-state table.
+Godot records each edit as per-cell before and after states, so a 1M-cell fill is a million
+entries. Here the command is what travels and what is kept:
 
-- **Renaming is free.** It changes the registry and no cells. The same goes for a
-  description or a colour hint.
-- **Descriptions are for agents.** A semantic can say what it means ("Trim: horizontal bands
-  at each floor line, one block deep"). Tools read it back, so an agent picking up a build
-  learns its vocabulary without asking. Undecided is still valid: a semantic needs no palette
-  mapping (principle 5).
-- **Names stay the key between projects.** Palettes and prefabs are shared across projects,
-  so they match semantics by name. Placing a prefab maps its names into the project's
-  registry, adding any that are missing.
-- **No first-part mirror.** A cell is either one whole block or a set of parts. Occupied
-  means a state id other than 0. Code that needs "the semantics here" asks for a list.
+- **Small on the wire.** The tab streams commands to the server, which replays them to get
+  the same cells. A 1M-cell fill is about a hundred bytes.
+- **Deterministic.** Applying a command depends only on the world and the command: no clocks,
+  no unseeded randomness, no dependence on hash-map order. A property test replays every
+  command kind on two worlds and compares them.
+- **Commands pin what they depend on.** Pasting a prefab names the prefab's content hash, so
+  a later edit to the prefab can't change what the old command meant. Clipboard pastes and
+  freehand strokes carry their cells, run-length encoded.
+- **Idempotent by id.** A command whose id has already been applied is acknowledged, not
+  reapplied. This covers ChatGPT's duplicate tool calls and sync retries alike. The relay
+  only needs the last few dozen ids in memory.
+- **Every command reports what it changed**: counts per semantic, bounds, and later anomalies
+  such as newly exposed holes. The delta is already in memory, so this costs nothing and saves
+  an agent a read call.
+- **Project changes are commands too**: semantic and palette edits, settings.
 
-## 2. Orientation is a rotation
+**Adding a command touches one new file** (the user's requirement). Each command kind is a
+module under `packages/core/src/commands/`:
 
-**Godot.** Orientation is Minecraft-shaped: a 6-way facing plus a top-half flag, in one int.
-Turning a region rotates facings around an axis, with special cases for the poles. Mirroring
-has known bugs (mirrored balustrades came out upside-down).
+```ts
+// commands/fill.ts
+export const fill = defineCommand({
+  kind: "fill",
+  args: z.object({ where: Region, state: CellStateRef }),   // also the MCP schema later
+  apply(ctx, { where, state }) {                            // writes through ctx only
+    const id = ctx.intern(state);
+    for (const run of ctx.cells(where)) ctx.setRun(run, id);
+  },
+});
+```
 
-**Web.** Orientation is one of the **24 rotations of the cube**, a number from 0 to 23.
+`commands/index.ts` is a list with one import per command. Everything else is generic and
+written once:
 
-- Transforms compose by table lookup. Turning a region multiplies every cell's rotation by
-  the turn, with no special cases.
-- Facing and upside-down are both rotations, so stairs, slabs and logs fit with nothing
-  extra.
-- **Mirroring** maps a rotation through the mirror and back to the nearest rotation. That is
-  exact for anything symmetric under the mirror (stairs, slabs, logs, most blocks). A
-  genuinely chiral block can't be mirrored by any rotation. That case can be flagged, or
-  handled by a palette-level "mirrored variant" later.
-- Schematic export maps the rotation to each block's Minecraft properties, so nothing
-  Minecraft-shaped lives in the core (principle 4).
+- **Undo:** the world journals every write `apply` makes, so no command implements an
+  inverse.
+- **Ids, labels and sources.**
+- **Change reports**, built from the journal.
+- **Previews and dry runs:** apply to a fork (section 6).
+- **Sync and replay.**
+- **Validation:** the same Zod schema validates the editor, the relay and, in Phase 4, the
+  MCP tool's arguments.
 
-Shaped parts keep their own slot numbering (FMP and ArchitectureCraft). Each shape family
-gets a slot-under-rotation table, as `packages/shapes` already does for AC.
+A command never needs to know about undo, sync, the relay or rendering.
 
-## 3. The cell model
+First set: `set` (explicit cells, RLE), `fill`, `clear`, `replace`, `move`, `copy`,
+`transform` (turn or mirror a region in place), `paste` (clipboard or prefab, with turn and
+mirror), `parts`, `rotate` (section 3), plus the semantic, palette and settings edits.
 
-A cell state is `{ semantic, rotation, tags?, parts? }`. A part is
+## 2. Semantics and palettes
+
+### What is decided
+
+- **Cells refer to semantics by id, never to a palette entry.** The project's **semantic
+  registry** says what the semantics are. Renaming a semantic, or anything else, is a
+  registry edit that touches no cells.
+- **A palette only maps.** It supplies the visuals for the semantics it has an opinion about,
+  for rendering. It no longer defines which semantics exist.
+- **Groups of a build are palettes, not named regions** (the user's call). The walkway is the
+  set of cells whose semantics belong to the Walkway palette. That stays true through any edit,
+  where a stored region would drift out of date. It also makes the walkway re-skinnable as a
+  unit.
+- **Palettes inherit from each other**, so a palette whose real purpose is to mark a part of the
+  build costs almost nothing to set up, and can still override anything about its parent.
+
+### The proposed model (to confirm)
+
+```
+Semantic  { id, name, description?, palette: paletteId, base?: semanticId,
+            form?: { shape?, rotation? } }          // intent: what it is and how it's placed
+Palette   { id, name, extends?: paletteId,
+            looks: Map<semanticId, Look> }          // what it looks like
+Look      { block?: "library:block", glow?, tint?, ... }   // material only
+```
+
+- **Every semantic lives in one palette.** That is its group. A new project starts with one
+  palette, and a simple build never needs a second.
+- **A child palette gets its parent's semantics as derived semantics.** Making Walkway extend
+  Factory means Walkway can place "Deck" and "Rail" right away. The first time one is placed,
+  the registry gains a Walkway semantic whose `base` is Factory's Deck. Its name, description,
+  form and look all come from the base until Walkway overrides them. The link is by id, so
+  renaming Factory's Deck renames Walkway's too, unless Walkway gave it its own name.
+- **Re-skinning the whole build is still one edit** (principle 3): change Factory's looks, and
+  every palette that inherits them follows. A child that overrides a look keeps its override.
+- **Regions by palette.** `{ "palette": "Walkway" }` is every cell whose semantic lives in
+  Walkway, optionally including Walkway's own child palettes.
+
+**Where parameters live.** The user asked whether things like shape belong to the semantic or
+to the palette entry, and floated allowing every parameter on both, with the palette entry as
+an optional override. The proposal splits them by what they are instead:
+
+- **Intent goes on the semantic: shape and placement rotation rules.** Shape is geometry, and
+  geometry is intent. A strip is a strip in every palette, and placed parts already store their
+  shape in the cell. Allowing a palette to override shape would only affect new placements, and
+  would leave a build whose old and new trim differ for no visible reason.
+- **Material goes on the palette's look: block, glow, tint.** A slab can glow in one palette and
+  not in another.
+- **Inheritance handles the rest.** A derived semantic can override its base's intent, and a
+  child palette can override its parent's looks. The flexibility the user wanted comes through
+  inheritance, with no "which side wins" rule to learn.
+
+Whole-block geometry (stairs, slab, full cube) still comes from the block the look maps to, as
+in Godot. An unmapped semantic is undecided and draws as a tinted cube (principle 5).
+
+### Questions for the user
+
+1. **Does this model match what you meant by palette inheritance?** In particular: derived
+   semantics are created the first time they are placed, and a child palette's own semantics
+   are what make up its region.
+2. **Shared palettes.** Godot's palettes are global and reused across projects. Here a palette
+   owns semantics, which are per project. Proposal: a project's palettes live in the project;
+   a reusable "theme" is a palette from a shared library that a project's root palette extends,
+   so a project gets its looks and keeps its own groups.
+3. **Alternative looks side by side** (keep a stone version and a concrete version and flip
+   between them). Inheritance doesn't give this by itself. It could come later as "variants" of a
+   palette, with the project choosing which variant is active. Not needed for Phase 1.
+
+## 3. Orientation and placement
+
+**Decided.** Orientation is one of the **24 rotations of the cube**, a number from 0 to 23.
+
+**How Godot does it today.** A cell stores a Minecraft-shaped facing: one of 6 directions
+plus a "top half" flag for upside-down stairs and slabs. The block type the palette maps to
+decides whether it draws as a cube, slab or stairs, and whether its importer limited it to
+horizontal facings. Turning a region rotates facings around an axis, with special cases for
+the poles. Mirroring has known bugs (mirrored balustrades came out upside-down).
+
+**Web.**
+
+- **Transforms compose by table lookup.** Turning a region multiplies every cell's rotation
+  by the turn. Facing and upside-down are both rotations, so stairs, slabs and logs need
+  nothing extra.
+- **Mirroring** maps a rotation through the mirror to the matching rotation. That is exact
+  for anything symmetric under the mirror, which covers almost every block. A truly
+  mirror-asymmetric block is flagged rather than silently mangled.
+- **Blocks opt into placement behaviour with data, not code** (the user's requirement). Each
+  block or semantic declares a **placement profile**:
+  - which rotations it allows (a torch: floor and four walls, never the ceiling; a hopper:
+    down and four sides; stairs: four facings, upright or upside-down; a log: three axes);
+  - how a click picks one, from a small set of rules Minecraft players know: face the player,
+    face away from the clicked face, attach to the clicked face, upside-down when the click
+    hits a block's upper half;
+  - which rotations look the same (a plain cube ignores rotation, a log is symmetric end to
+    end). Rotations are stored in that canonical form, so identical-looking cells share one
+    state.
+
+  The profile comes from the mapped block (the importer fills it in from Minecraft's block
+  states), and a semantic's form can set or narrow it, so undecided semantics place sensibly
+  too. There is no per-block code anywhere.
+- **Fixing an orientation.** A `rotate` command turns a cell (or a region) about an axis, as
+  in "rotate on this face", stepping to the next rotation the profile allows. The editor binds
+  it to a key on the hovered face, and agents get it as a tool.
+- **Parts (microblocks, ArchitectureCraft shapes)** keep their own slot numbering. Each shape
+  family declares its slots, how slots move under each rotation and mirror, and which slots can
+  share a cell. That is the same opt-in-by-data idea, kept in `packages/shapes`.
+
+Schematic export maps rotations to each block's Minecraft properties, so nothing
+Minecraft-shaped lives in the core (principle 4).
+
+## 4. The cell model
+
+A cell state is `{ semantic, rotation, tags?, parts? }`, where a part is
 `{ semantic, shape, slot }`. A cell is either a whole block or a list of parts, never both.
-States are interned per project into `Uint16` ids, as Phase 0 already does. Chunks store
-ids, with storage that follows content (empty, uniform or palette-packed bricks).
+Occupied means a state id other than 0. Godot's habit of mirroring the first part's semantic
+into the cell is gone: code that asks "what's here?" gets a list.
+
+States are interned per project into `Uint16` ids, as Phase 0 already does. Chunks store ids,
+with storage that follows content (empty, uniform or palette-packed bricks).
 
 - **The state table is append-only while a project is open.** Ids stay stable, so saved
-  chunks and in-flight commands keep meaning the same thing. Unused states are dropped when
-  the project is compacted (on save or on the server).
-- **Tags stay open-ended** (string, number or boolean values), for things like sign text.
-  They are interned with the state, so a build with 10,000 distinct signs pays for 10,000
-  states. That is fine below the 65,535 limit; a build that needs more would need a side table.
-- **Attachments** (torches and the like) remain a block property in the library, as in
-  Godot. The core only needs placement-validity rules that can ask "what is this attached
-  to?".
+  chunks and in-flight commands keep their meaning. Unused states are dropped when a project is
+  compacted.
+- **Tags stay open-ended** (string, number or boolean), for things like sign text. They are
+  interned with the state. Fine below the 65,535-state limit; a build that needs more would
+  need a side table.
+- **Attachments** (torches and the like) come from the placement profile: "attaches to the
+  clicked face" also tells validity checks what a cell hangs from.
 
-## 4. Regions: one way to say "where"
+## 5. Regions: one way to say "where"
 
-**Godot.** Tools take boxes, plus filters and selection modes that grew one by one:
-`{semantic}` regions that are really bounding boxes, narrowed selections, `structure_find`.
-Agents end up hand-deriving footprints from `region_text`, which is how the walkway edit left
-holes.
-
-**Web.** A single **region expression**, used by every tool, the selection, and the editor:
+**Decided.** One **region expression** language is shared by every command, by the selection
+and by the editor:
 
 ```jsonc
-{ "box": [x0, y0, z0, x1, y1, z1] }               // a box
-{ "selection": true }                             // the current selection
-{ "named": "East patio" }                         // a region saved in the project
-{ "structure": { "seed": [x, y, z], "semantics": ["Deck", "Rail"] } }  // connected cells
-{ "semantic": "Trim", "within": { "box": [...] } }  // exact cells, not their bounds
-{ "all": [ ... ] } / { "any": [ ... ] } / { "not": ... }               // set algebra
-{ "grow": 1, "of": ... } / { "shrink": 1, "of": ... }
+{ "box": [x0, y0, z0, x1, y1, z1] }
+{ "selection": true }
+{ "palette": "Walkway" }                               // the cells of a group
+{ "semantic": "Trim", "within": { "box": [...] } }     // exact cells, never their bounds
+{ "structure": { "seed": [x, y, z], "semantics": ["Deck", "Rail"] } }   // connected cells
+{ "all": [...] }  { "any": [...] }  { "not": ... }     // set algebra
+{ "grow": 1, "of": ... }  { "shrink": 1, "of": ... }
 ```
 
-- **It evaluates to exact cells.** The result is a sparse bitset over 8³ bricks (empty, full
-  or a 64-byte mask), so even a 1M-cell region costs a few KB and set operations are word-wise.
-- **The selection is a region value.** The editor and agents share it. Narrowing, growing
+- **It evaluates to exact cells:** a sparse bitset over 8³ bricks (empty, full or a 64-byte
+  mask). A 1M-cell region costs a few KB, and set operations work a word at a time.
+- **The selection is a region value**, shared by the editor and agents. Narrowing, growing
   and combining are the same algebra.
-- **Named regions** ("East patio", "Hub walkway") are stored with the project as their
-  expressions. An agent can then say "clear the East patio rail" instead of reciting
-  coordinates. This was the first idea when `structure_find` was chosen (see the MCP
-  notes), and it costs little once regions are values.
-
-## 5. Edits are commands; deltas stay local
-
-This is the biggest change, and it is what makes bandwidth and agents cheap.
-
-**Godot.** An edit records per-cell before and after states (`EditOperation`). The history
-is saved with the project. A 1M-cell fill is a million entries.
-
-**Web.** An edit is a **command**: a small, deterministic description of intent.
-
-```jsonc
-{ "id": "c7f2…", "kind": "fill", "where": { "box": [...] }, "state": { "semantic": "Floor" },
-  "source": "Claude", "label": "Pour the hall floor" }
-```
-
-- **Commands are what travels and what is logged.** The tab streams commands to the server.
-  The server appends them to the project's op log, and replaying them produces the same
-  cells. A 1M-cell fill is a hundred bytes on the wire, not megabytes.
-- **The core is deterministic.** Applying a command depends only on the world and the
-  command: no clocks, no randomness without a seed in the command, no dependence on hash-map
-  order. A property test replays every command kind on two worlds and compares them.
-- **Commands carry or pin what they depend on.** Pasting a prefab names the prefab's content
-  hash, so a later edit to the prefab can't change what the old command meant. Clipboard
-  pastes and freehand strokes carry their cells, run-length encoded.
-- **Undo is a command too** (`{ kind: "undo", target: id }`). Both sides can compute the
-  inverse, because both have the same before-state. The before and after deltas live only in
-  the tab's memory for fast undo. Godot saves the history with the project; whether the web
-  version keeps undo across sessions is an open question below.
-- **Ids make commands idempotent.** A command the relay has already applied is acknowledged,
-  not reapplied. This covers ChatGPT's duplicate tool calls and sync retries alike.
-- **Labels and sources** feed the history view ("Claude: Pour the hall floor"). An agent can
-  group several commands into one undo step (the "task grouping" idea from the MCP notes).
-- **Every command reports what it changed**: counts per semantic, bounds, and later
-  anomalies such as newly exposed holes. The delta is already in memory, so this costs
-  nothing and saves the agent a read call.
-
-The command set (first cut): `set` (explicit cells, RLE), `fill`, `clear`, `replace`
-(semantic A to B within a region), `move`, `copy`, `transform` (turn or mirror a region in
-place), `paste` (clipboard or prefab, with turn and mirror), `parts` (add or remove parts),
-`undo`, `redo`. Project changes are commands too: semantic registry edits, palette stack,
-settings, named regions.
+- **No named regions** (the user's call). Groups are palettes (section 2), which can't drift
+  out of date.
 
 ## 6. Scratch worlds for previews and dry runs
 
 Chunks are copy-on-write, so a **fork** of the world is cheap: it shares every chunk until one
-is written.
+is written. Paste ghosts, transform previews and an agent's "show me first" apply the command
+to a fork, render it and throw it away. Dry runs report counts and anomalies without touching
+the project. The headless host can fork, apply and capture without disturbing a tab that holds
+the lease.
 
-- **Previews.** A paste ghost, a transform preview or an agent's "show me before you do it"
-  applies the command to a fork, renders the fork and throws it away.
-- **Dry runs** report counts and anomalies without touching the project.
-- **The headless host** can fork, apply and capture without disturbing a tab that holds the
-  lease.
+## 7. History: one log for undo and sync
 
-## 7. Palettes resolve in one step
+**Decided** (the user asked to collapse the op log and the undo stack into one concept). A
+project's **history** is its command log: append-only, the same list that syncs to the server.
 
-**Godot.** A project has a stack of palettes (last wins). Each palette maps semantic names to
-block-type names and has its own stack of libraries searched in order, with `basic` as the
-fallback. A palette can't pin a block to a particular library.
-
-**Web.** A palette entry maps a semantic name to a **qualified block reference**
-(`library:block`), plus an optional shape and options such as glow. The project keeps its
-palette stack (layering a base palette with an accent palette is useful), but each lookup is
-a direct reference: no library search order, no ambiguity, and no fallback surprise. An
-unmapped semantic is undecided and draws with its hint colour.
-
-Palettes, libraries and textures stay outside the world. Swapping a palette touches no cells
-(principle 3).
+- **Undo and redo are commands** appended to the log (`undo c7f2…`). The undo stack is not a
+  separate structure: it's a walk back through the log that skips commands already undone.
+  Because the log only ever grows, undo syncs like any other edit and never rewrites history
+  another device has seen.
+- **Deltas are a cache.** While a session runs, the tab keeps each command's before and after
+  cells in memory, so undo is instant. They are never sent or stored.
+- **Undo is session-only to start** (decided), without closing the door: undoing past the start
+  of the session needs those deltas, and they can be rebuilt by replaying the log from the last
+  snapshot. Serializing undo later is therefore a feature switch, not a format change. The one
+  limit is compaction: when the server folds old commands into a snapshot, undo can reach back
+  only to the oldest command it keeps. How long the log is kept is a storage-budget setting.
+- **Labels and sources** ("Claude: Pour the hall floor") show in the history view. An agent can
+  group several commands into one undo step, as the MCP notes suggested.
 
 ## 8. The project format
 
@@ -175,72 +259,64 @@ Designed for the 10 MB free limit, for chunk-level sync, and for loading only wh
 
 | Part | Contents | Encoding |
 | --- | --- | --- |
-| `project.json` | Format version, id, name, timestamps, settings (north, grid offset), semantic registry, state table, palette stack, named regions | JSON, compressed |
-| Chunk blobs | One per 32³ storage chunk: bricks as empty, uniform or bit-packed palette indices into the state table | Binary, compressed (`CompressionStream`, no codec dependencies) |
-| `editor.json` | Camera and layout, hotbar, selection, cutaway | JSON; synced lazily, never part of the build's history |
-| Op log (server) | Commands since the last snapshot | JSON lines, compacted into chunk blobs |
+| `project.json` | Format version, id, name, timestamps, settings (north, grid offset), the semantic registry, palettes, the state table | JSON, compressed |
+| Chunk blobs | One per 32³ storage chunk: bricks as empty, uniform or bit-packed indices into the state table | Binary, compressed (`CompressionStream`, no codec dependencies) |
+| History | Commands since the last snapshot | JSON lines, compacted into chunk blobs |
+| `editor.json` | Camera and layout, hotbar, selection, cutaway | JSON, synced lazily and never part of the history |
 
 - **Chunks are content-addressed.** A chunk blob is named by its hash, so sync uploads only
-  chunks that changed, and identical chunks (empty floors of a tower) are stored once.
+  chunks that changed, and identical chunks (the empty floors of a tower) are stored once.
 - **Loading is lazy.** A tab or the headless host fetches the chunks a view or a command
-  needs. That fixes the Godot app's load-everything-at-startup cost for free.
-- **Derived data is never saved:** meshes, light and thumbnails can all be rebuilt.
-- **Prefabs use the same format.** A prefab is a small project with an anchor and a north. Its
-  content hash is what paste commands pin.
-- **Budgets to measure in Phase 1:** bytes per occupied cell on the generated cities
-  (plain and shaped), and command bytes for a typical agent session. The 10 MB limit should
-  hold dozens of normal builds.
+  needs, which removes the Godot app's load-everything-at-startup cost.
+- **Derived data is never saved:** meshes, light and thumbnails are rebuilt.
+- **Prefabs use the same format.** A prefab is a small project with an anchor and a north, and
+  its content hash is what paste commands pin.
+- **Budgets to measure in Phase 1:** bytes per occupied cell on the generated cities (plain and
+  shaped), and command bytes for a typical agent session. The 10 MB limit should hold dozens of
+  normal builds.
 
-## 9. Undo and history
+## 9. What else carries over, mostly as is
 
-The tab keeps an undo stack of commands with their deltas in memory, labelled by source.
-Undo and redo are commands, so they sync like any other edit. A new edit after an undo
-clears the redo branch, as in Godot.
+- **Project settings:** north and the major-grid offset, with "north is north" turns between
+  projects, prefabs, the clipboard and exports.
+- **Shape rules:** which parts can share a cell, and slot validity, in `packages/shapes`, which
+  already holds the geometry.
+- **Read primitives for agents:** region stats, the layered text codec (`region_text`) and
+  structure search, as functions over regions now and as tools in Phase 4.
 
-## 10. What else moves over, mostly as is
+## 10. Sample builds and tests
 
-- **Project settings**: north and the major-grid offset, with "north is north" turns
-  between projects, prefabs, the clipboard and exports.
-- **Shape rules**: which parts can share a cell, and slot validity. Ported from
-  `ShapeRules.gd` into `packages/shapes`, which already holds the geometry.
-- **Read primitives for agents**: region stats, the layered text codec (`region_text`), and
-  `structure_find`. They become functions over regions here, and tools in Phase 4.
-
-## 11. Sample builds
-
-There is no Godot oracle. Seeded generators on the web side supply the test builds: the
-plain and shaped cities from Phase 0, plus smaller ones with prefabs, named regions and every
+There is no Godot oracle. Seeded generators on the web side supply the test builds: the plain
+and shaped cities from Phase 0, plus smaller ones with prefabs, inherited palettes and every
 part family. Property tests check the invariants:
 
 - Apply then undo restores the exact state.
 - Four quarter-turns are the identity, and turning commutes with paste.
 - Save then load is lossless.
-- Replaying the op log gives the same chunks as the live world.
+- Replaying the history gives the same chunks as the live world.
 - A command applied twice by id changes nothing the second time.
+- Renaming a semantic or re-skinning a palette changes no chunk bytes.
 
-## 12. Build order
+## 11. Build order
 
-1. Semantic registry, cell model with rotations, and the transform tables.
-2. Regions: bitsets, the expression evaluator, selection, named regions, structure search.
-3. Commands: deterministic apply, deltas, undo and redo, ids, change reports, forks.
-4. The project format: save and load, content-addressed chunks, size measurements.
-5. Prefabs and the clipboard, paste with turn and mirror, "north is north".
-6. Shape rules and attachments, region stats and the text codec.
+1. The command framework (one file per command, journal, ids, change reports, forks) and the
+   cell model with rotations and transform tables.
+2. Semantics and palettes: the registry, inheritance, derived semantics, looks.
+3. Regions: bitsets, the expression evaluator, the selection, structure search.
+4. The history log: undo and redo as commands, session deltas.
+5. The project format: save and load, content-addressed chunks, size measurements.
+6. Prefabs and the clipboard: paste with turn and mirror, "north is north".
+7. Placement profiles, `rotate`, shape rules, region stats and the text codec.
 
-Each step lands with its tests, and the plan is updated as it goes.
+Each step lands with its tests and updates this document.
 
-## Decisions to review
+## Decision log
 
-1. **Commands, not deltas, as the unit of sync and logging** (section 5). Recommended: this
-   is the bandwidth win, and it makes agents' edits cheap to send and to idempotently retry.
-2. **Orientation as the 24 cube rotations** (section 2). Recommended. The cost: a truly chiral
-   block can't be mirrored exactly, and needs a flag or a mirrored variant later.
-3. **A semantic registry with ids and agent-facing descriptions** (section 1). Recommended.
-4. **One region expression for tools, selection and editor, plus named regions** (section 4).
-   Recommended.
-5. **Qualified block references in palettes, no library search order** (section 7).
-   Recommended. It simplifies the importer's job too.
-6. **Does undo survive closing the project?** Godot keeps 100 steps on disk. The web version
-   could keep the last N commands' inverses in the op log, at the cost of server storage, or
-   start each session with an empty undo stack. Recommendation: keep undo for the session
-   only, but keep the op log itself, which can restore the project to a past point if needed.
+| # | Question | Decision (2026-10-06) |
+| --- | --- | --- |
+| 1 | Commands or deltas as the unit of sync and logging | Commands. Each command kind is one self-contained file; everything else is generic. |
+| 2 | Orientation | The 24 cube rotations. Placement familiar from Minecraft, a "rotate on face" fix, and per-block opt-in rules as data, with no block-specific code. |
+| 3 | Semantics | A per-project registry. Cells hold semantic ids, renames are cheap, and palettes only map. Where each parameter lives: proposal in section 2, to confirm. |
+| 4 | Named regions | No. Groups of a build are palettes, with palette inheritance. |
+| 5 | Palette block references | Qualified `library:block` references; no library search order. |
+| 6 | Undo across sessions | Session-only for now, with the door kept open. The undo stack and the op log are one history log. |
