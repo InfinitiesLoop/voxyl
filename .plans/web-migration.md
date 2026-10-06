@@ -4,7 +4,7 @@ Status: **Plan accepted** (2026-10-03). **Phase 0 done** (2026-10-06): chunked W
 storage by content, a greedy mesher in a worker pool, Minecraft-style lighting read from a
 sparse light volume (see [`web-lighting.md`](web-lighting.md)), shaped parts, and a ChatGPT
 widget that runs relayed tool calls. 5M cells hold 120 fps on an M5 Max. Numbers are under
-"Phase 0 findings" and "Phase 0 status". **Phase 1 in progress** (design accepted 2026-10-06; step 1 of 7 done): the core redesigned from scratch,
+"Phase 0 findings" and "Phase 0 status". **Phase 1 in progress** (design accepted 2026-10-06; steps 1-2 of 7 done): the core redesigned from scratch,
 per the design document [`web-core.md`](web-core.md), which tracks progress.
 Reviewed as a Claude Doc
 (https://claude.ai/code/artifact/98f31d14-989b-4c28-a24c-a3d7b8630a21); this file is now the

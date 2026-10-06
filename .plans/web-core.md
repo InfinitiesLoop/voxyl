@@ -137,7 +137,11 @@ in Godot. An unmapped semantic is undecided and draws as a tinted cube (principl
 2. **Shared palettes are palettes defined at the user level instead of in a project**, and
    identical otherwise. Projects define their own palettes, since needs vary by project. A
    project palette can extend a shared one (a theme), so several projects follow one set of
-   looks without copying changes between them.
+   looks without copying changes between them. **As built:** the project holds a *linked
+   copy* of the shared palette, read-only in the project. A `palette_sync` command, which
+   carries the shared palette's content, creates the copy or re-syncs it, matching semantics by
+   key so ids and cells stay put. A project therefore stays self-contained: it renders for
+   anyone, on the headless host and in exports, without the owner's user-level palettes.
 3. **Palette variants are a future idea**, not Phase 1: keep a stone look and a concrete look of
    the same palette and flip which one is active. Noted under "Future ideas".
 
@@ -348,6 +352,24 @@ Each step lands with its tests and updates this document.
     palette overflow; rename touches no cell.
   - Regions are still boxes only (step 3).
   - The city fixture and the app now take a `Project` and resolve names through its registry.
+- **Step 2 done (2026-10-06).**
+  - `semantics.ts` holds palettes and semantics. Every project starts with palette 1, "Main".
+    Palettes can extend each other, and cycles are refused, as is re-parenting that would orphan
+    a derived semantic.
+  - A semantic lives in one palette. `derive(palette, base)` makes a palette's semantic from an
+    ancestor's, once, through nearer palettes' overrides.
+  - `resolve()` applies inheritance field by field: name, description, form and look.
+  - `offers(palette)` lists own and derivable semantics, and `semanticsIn(palette, withDescendants)`
+    gives the groups that regions will use.
+  - Linked copies of shared palettes come in through `sync()`.
+  - Commands, one file each: `palette_add`, `palette_update`, `palette_sync`,
+    `semantic_add`, `semantic_update`, `resemantic`. Any state argument can name a semantic as
+    `{ palette, base }`, which derives it on first placement.
+  - `Project` snapshots the registry around each command (rolled back on failure, kept for undo)
+    and reports created palettes and semantics, `registryChanged`, and notes such as
+    resemantic's switched and skipped counts.
+  - `resemantic` keeps geometry and skips cells whose shape doesn't fit the target's form unless
+    forced. Fixing disallowed rotations waits for placement profiles (step 7).
 
 ## Future ideas
 

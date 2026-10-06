@@ -16,7 +16,7 @@ const cmd = (kind: string, args: unknown): Command => ({ id: `c${nextId++}`, kin
 
 function project() {
   const p = new Project({ chunkBits: 4 });
-  const floor = p.semantics.add("Floor", "The hall floor");
+  const floor = p.semantics.add("Floor", { description: "The hall floor" });
   const wall = p.semantics.add("Wall");
   return { p, floor, wall };
 }

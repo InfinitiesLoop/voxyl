@@ -15,7 +15,13 @@ export {
   type CommandContext,
   type CommandDef,
   CommandError,
+  type Defined,
   defineCommand,
+  defined,
+  FormArg,
+  IdArg,
+  LookArg,
+  NameArg,
   PartArg,
   SemanticArg,
 } from "./commands/command.ts";
@@ -63,5 +69,20 @@ export {
   upOf,
   type Vec3,
 } from "./rotation.ts";
-export { NO_SEMANTIC, type Semantic, type SemanticId, SemanticRegistry } from "./semantics.ts";
+export {
+  type Form,
+  type Look,
+  NO_SEMANTIC,
+  type Offer,
+  type Palette,
+  type PaletteId,
+  type PalettePatch,
+  type ResolvedSemantic,
+  ROOT_PALETTE,
+  type Semantic,
+  type SemanticId,
+  type SemanticPatch,
+  SemanticRegistry,
+  type SharedPalette,
+} from "./semantics.ts";
 export { type ChangedBox, type Edit, World, type WorldOptions } from "./world.ts";

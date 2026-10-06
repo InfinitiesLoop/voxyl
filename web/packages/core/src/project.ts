@@ -3,7 +3,7 @@
 // command, applies it atomically, remembers its id so a repeat is harmless, and reports what
 // changed. The undo and redo history builds on the recorded edits (step 4).
 
-import { type CellState, EMPTY_ID, semanticsOf } from "./cell-state.ts";
+import { type CellState, type CellStateInput, EMPTY_ID, semanticsOf } from "./cell-state.ts";
 import { Chunk } from "./chunk.ts";
 import {
   type CellStateArg,
@@ -11,12 +11,12 @@ import {
   type CommandContext,
   type CommandDef,
   CommandError,
-  toStateInput,
+  type SemanticArg,
 } from "./commands/command.ts";
 import { COMMANDS } from "./commands/index.ts";
 import { chunkKeyToCoords } from "./coords.ts";
 import { type Box, unionBox } from "./region.ts";
-import { type SemanticId, SemanticRegistry } from "./semantics.ts";
+import { type PaletteId, type SemanticId, SemanticRegistry } from "./semantics.ts";
 import { type Edit, World, type WorldOptions } from "./world.ts";
 
 /** How many recent command ids a project remembers to drop repeats. */
@@ -30,6 +30,15 @@ export interface ChangeReport {
   readonly bounds: Box | null;
   /** Per semantic: how many changed cells held it before and after (parts count each). */
   readonly semantics: readonly SemanticChange[];
+  /** Palettes and semantics the command created (registry ids only grow). */
+  readonly created: {
+    readonly palettes: readonly PaletteId[];
+    readonly semantics: readonly SemanticId[];
+  };
+  /** Whether the semantics or palettes changed. */
+  readonly registryChanged: boolean;
+  /** Figures the command added ("skipped": 12). */
+  readonly notes: Readonly<Record<string, number | string>>;
 }
 
 export interface SemanticChange {
@@ -46,10 +55,12 @@ export interface RunResult {
   readonly report: ChangeReport;
 }
 
-/** One applied command with the edit it made (kept for undo during the session). */
+/** One applied command with what it changed (kept for undo during the session). */
 export interface Applied {
   readonly command: Command;
   readonly edit: Edit;
+  /** The registry before and after, when the command changed it. */
+  readonly registry: { readonly before: SemanticRegistry; readonly after: SemanticRegistry } | null;
   readonly report: ChangeReport;
 }
 
@@ -107,36 +118,90 @@ export class Project {
       throw new CommandError(`Bad arguments for ${command.kind}: ${parsed.error.message}`);
     }
     const world = this.world;
+    const registryBefore = this.semantics.clone();
+    const notes: Record<string, number | string> = {};
     world.beginEdit();
     try {
-      def.apply(this.#context(), parsed.data);
+      def.apply(this.#context(notes), parsed.data);
     } catch (error) {
       world.restore(world.endEdit().before);
+      this.semantics.restore(registryBefore);
       throw error;
     }
     const edit = world.endEdit();
-    return { command, edit, report: this.#report(edit) };
+    const changed = this.semantics.revision !== registryBefore.revision;
+    const registry = changed ? { before: registryBefore, after: this.semantics.clone() } : null;
+    const created = {
+      palettes: newIds(registryBefore.palettes().length, this.semantics.palettes().length),
+      semantics: newIds(registryBefore.size, this.semantics.size),
+    };
+    const report = { ...this.#report(edit), created, registryChanged: changed, notes };
+    return { command, edit, registry, report };
   }
 
-  #context(): CommandContext {
+  #context(notes: Record<string, number | string>): CommandContext {
     const world = this.world;
     const semantics = this.semantics;
+    const semantic = (ref: SemanticArg): SemanticId => {
+      try {
+        if (typeof ref === "number") {
+          if (!semantics.has(ref)) throw new Error(`Unknown semantic id ${ref}`);
+          return ref;
+        }
+        return semantics.derive(ref.palette, ref.base);
+      } catch (error) {
+        throw asCommandError(error);
+      }
+    };
     return {
       world,
       semantics,
+      semantic,
       intern(state: CellStateArg): number {
-        for (const id of [state.semantic, ...(state.parts ?? []).map((p) => p.semantic)]) {
-          if (id !== undefined && !semantics.has(id))
-            throw new CommandError(`Unknown semantic id ${id}`);
-        }
+        const input: CellStateInput = {
+          ...(state.semantic !== undefined && { semantic: semantic(state.semantic) }),
+          ...(state.rotation !== undefined && { rotation: state.rotation }),
+          ...(state.tags !== undefined && { tags: state.tags }),
+          ...(state.parts !== undefined && {
+            parts: state.parts.map((p) => ({ ...p, semantic: semantic(p.semantic) })),
+          }),
+        };
         try {
-          return world.states.intern(toStateInput(state));
+          return world.states.intern(input);
         } catch (error) {
-          throw new CommandError(error instanceof Error ? error.message : String(error));
+          throw asCommandError(error);
         }
       },
       set: (x, y, z, id) => world.setId(x, y, z, id),
       fillBox: (box, id) => world.fillBox(box.x0, box.y0, box.z0, box.x1, box.y1, box.z1, id),
+      forEachInBox(box, visit) {
+        const L = world.layout;
+        for (let cy = L.toChunk(box.y0); cy <= L.toChunk(box.y1); cy++) {
+          for (let cz = L.toChunk(box.z0); cz <= L.toChunk(box.z1); cz++) {
+            for (let cx = L.toChunk(box.x0); cx <= L.toChunk(box.x1); cx++) {
+              const chunk = world.chunk(cx, cy, cz);
+              if (!chunk) continue;
+              const x0 = Math.max(box.x0, cx * L.size);
+              const x1 = Math.min(box.x1, cx * L.size + L.size - 1);
+              const y0 = Math.max(box.y0, cy * L.size);
+              const y1 = Math.min(box.y1, cy * L.size + L.size - 1);
+              const z0 = Math.max(box.z0, cz * L.size);
+              const z1 = Math.min(box.z1, cz * L.size + L.size - 1);
+              for (let y = y0; y <= y1; y++) {
+                for (let z = z0; z <= z1; z++) {
+                  for (let x = x0; x <= x1; x++) {
+                    const id = chunk.get(L.localIndex(L.toLocal(x), L.toLocal(y), L.toLocal(z)));
+                    if (id !== EMPTY_ID) visit(x, y, z, id);
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      note(key, value) {
+        notes[key] = value;
+      },
     };
   }
 
@@ -149,7 +214,7 @@ export class Project {
   }
 
   /** Diffs an edit's snapshots into counts per semantic and the changed box. */
-  #report(edit: Edit): ChangeReport {
+  #report(edit: Edit): Pick<ChangeReport, "cells" | "bounds" | "semantics"> {
     const L = this.world.layout;
     const S = L.size;
     const n = L.bricksPerAxis;
@@ -220,4 +285,15 @@ export class Project {
       }));
     return { cells, bounds, semantics };
   }
+}
+
+/** Ids from `before` + 1 to `after`: what an append-only registry added. */
+function newIds(before: number, after: number): number[] {
+  return Array.from({ length: Math.max(0, after - before) }, (_, i) => before + 1 + i);
+}
+
+function asCommandError(error: unknown): CommandError {
+  return error instanceof CommandError
+    ? error
+    : new CommandError(error instanceof Error ? error.message : String(error));
 }
