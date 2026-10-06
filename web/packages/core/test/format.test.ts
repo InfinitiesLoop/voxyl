@@ -100,12 +100,14 @@ describe("saving and loading", () => {
     "round-trips cells, registry and counts (loaded with %i-bit chunks)",
     async (bits) => {
       const p = build(4);
-      const saved = await saveProject(p, "Test build");
+      p.run(cmd("settings", { name: "Test build", north: "east", grid: [3, 5] }));
+      const saved = await saveProject(p);
       const loaded = await loadProject(saved, { chunkBits: bits });
       expect(describeCells(loaded)).toEqual(describeCells(p));
       expect(loaded.world.cellCount).toBe(p.world.cellCount);
       expect(loaded.semantics.toJSON()).toEqual(p.semantics.toJSON());
-      expect(saved.manifest.name).toBe("Test build");
+      expect(loaded.settings).toEqual({ name: "Test build", north: "east", grid: [3, 5] });
+      expect(loaded.id).toBe(p.id);
     },
   );
 
@@ -116,7 +118,7 @@ describe("saving and loading", () => {
     b.run(cmd("fill", { where: { box: [200, 0, 200, 260, 10, 260] }, state: { semantic: 1 } }));
     b.run(cmd("clear", { where: { box: [200, 0, 200, 260, 10, 260] } }));
     const [sa, sb] = [await saveProject(a), await saveProject(b)];
-    expect(sb.manifest).toEqual(sa.manifest);
+    expect({ ...sb.manifest, id: "" }).toEqual({ ...sa.manifest, id: "" });
     expect([...sb.blobs.keys()].sort()).toEqual([...sa.blobs.keys()].sort());
   });
 
@@ -136,7 +138,7 @@ describe("saving and loading", () => {
 
   it("packs into one bundle and back", async () => {
     const p = build();
-    const bytes = await packBundle(await saveProject(p, "Bundle"));
+    const bytes = await packBundle(await saveProject(p));
     const loaded = await loadProject(await unpackBundle(bytes));
     expect(describeCells(loaded)).toEqual(describeCells(p));
     await expect(unpackBundle(new Uint8Array([1, 2, 3, 4, 5]))).rejects.toThrow(/Voxyl/);

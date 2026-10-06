@@ -433,9 +433,73 @@ Each step lands with its tests and updates this document.
 
     A typical command is about 150 bytes of JSON ("Claude: Pour the hall floor", a 41x31
     fill).
-  - Not yet: the history log on disk (Phase 4 sync), `editor.json`, and settings (step 6). An
-    autosave writes only dirty storage chunks, so saves after an edit are a fraction of these
+  - Not yet: the history log on disk (Phase 4 sync) and `editor.json`. Settings came in step 6.
+    An autosave writes only dirty storage chunks, so saves after an edit are a fraction of these
     times.
+- **Step 6 done (2026-10-06).** Prefabs, the clipboard, turning and mirroring, north, settings:
+  - `transform.ts`: a placement is quarter turns clockwise seen from above, then an optional
+    mirror (x, y or z), as one signed-permutation matrix. A whole block's rotation composes with
+    it (`transformRotation`; a mirror assumes the block is left-right symmetric, as `mirror`
+    already did). `StateMover` moves states, memoized per state id.
+  - Part slots move by geometry, not tables (`packages/shapes`, `transformSlot`). A microblock
+    slot's image is the slot filling the same moved cells of the 8³ grid. An architecture slot
+    is a rotation, so a turn composes exactly; a mirror picks the slot that is the shape
+    mirrored across one of its own axes, checked against a key of its surface that ignores how
+    the polygons were triangulated. Every microblock and all 16 roof and slope shapes have a
+    mirror image. A shape with none (or with unknown geometry) is left out and reported as
+    `rejected`; a move leaves such cells where they were. Core now depends on `@voxyl/shapes`.
+  - Commands, one file each: `copy`, `move` and `transform` (turn or mirror in place) take a
+    region; the corner (lowest x, y, z) of the result lands at `to`, or stays put for
+    `transform`. They read from a copy-on-write fork, so overlapping moves are safe. `air`
+    makes the region's empty cells clear what they land on.
+  - `piece.ts`: a **piece** is cells lifted out of a project, for the clipboard and prefabs: its
+    box, its north, an anchor, the states it uses, and the semantics those use, resolved and
+    flattened (name, palette name, description, form, look, and the source id). Cells are
+    run-length encoded over the box; index 0 is outside the piece, and a null state is air.
+  - `paste` places a piece carried inline (the clipboard) or a prefab named by its content hash.
+    The anchor lands at `at` and the piece turns about it: first by `turnsBetween(piece north,
+    project north)`, then by `turn` and `mirror` ("north is north", the Godot rule). A host
+    passes `Project` a `prefabs` lookup and loads a prefab before running the command; an
+    unknown hash is a clear `CommandError`.
+  - **How a piece's semantics map into a project (my choice, to review):** an explicit `map`
+    wins; in the project the piece came from, the source id (so a rename between copy and
+    paste is harmless); then the semantic of that name in the palette of that name, own or
+    derivable; otherwise it is created there, with the palette if needed, carrying its look,
+    so a prefab looks as authored in a project that has never seen it (Godot asked "add
+    palette?"; here the created palette is the answer, and `map` is the "no"). A linked palette
+    is read-only, so new semantics land in the root palette instead.
+  - `settings` command: the project's name, north (`"north"`, `"east"`, `"south"`, `"west"`:
+    which of its directions is the real north) and major grid offset (0..15 in x and z).
+    Undoable; cells never move when north changes. Saved in the manifest, with the project's
+    `id` (random, 128 bits), which pieces use to map back by id.
+  - Prefabs (`format/prefab.ts`) are small projects in the project format, with `size` and
+    `anchor` in the manifest and north in their settings, so one can be opened and edited like
+    a project. `prefabHash` hashes the manifest (chunk blobs are already named by their hashes)
+    with keys sorted, leaving out the id and name, so renaming a prefab keeps its hash and any
+    cell change gives a new one. `loadPrefab` gives the piece back with the whole box as air
+    where empty.
+  - Tests: turning four times in place and mirroring twice are the identity on random builds
+    of blocks, microblocks and roof parts; turning commutes with paste; north survives a round
+    trip through a project facing another way; pastes map semantics as above; prefabs round-trip
+    through a bundle with a stable hash; settings undo.
+  - Measured (`node packages/fixtures/bench/placement.ts`, 1M-cell city, 64³ chunks, one Node
+    thread):
+
+    | Operation | Plain | Shaped |
+    | --- | --- | --- |
+    | Paste a 128x64x128 piece (68k cells; 86k shaped), turned | 43 ms | 56 ms |
+    | That paste command as JSON / deflated | 187 KB / 4.1 KB | 298 KB / 11.5 KB |
+    | Paste a 64x64x64 piece (20k cells; 25k shaped) as JSON / deflated | 44 KB / 1.0 KB | 66 KB / 2.2 KB |
+    | Copy a 256x64x256 box with a turn | 0.26 s | 0.27 s |
+    | Move it with a mirror | 0.52 s | 0.59 s |
+    | Turn it in place | 0.58 s | 0.56 s |
+
+    Commands carrying a clipboard are big as plain JSON but compress about 40x, so the relay
+    and sync should send them compressed (WebSocket per-message deflate or a deflated body).
+  - Not yet: a plain cube turned gets a new rotation, so a turned build can hold up to 24
+    states per semantic that look the same. Placement profiles (step 7) say which rotations
+    look alike and store the canonical one. Pieces carry no palette inheritance (they flatten
+    looks), and a placed prefab keeps no link to its prefab (as in Godot's v1).
 
 ## Future ideas
 

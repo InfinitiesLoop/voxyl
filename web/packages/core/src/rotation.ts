@@ -133,6 +133,21 @@ export function mirror(r: Rotation, worldAxis: Axis, modelAxis: Axis = 0): Rotat
   );
 }
 
+/**
+ * A block's rotation after its cell is moved by `m`, a signed permutation matrix (row-major)
+ * that may include a mirror. A rotation composes; a mirror goes through `mirror`'s assumption
+ * that the block is left-right symmetric (mirrored across its own X).
+ */
+export function transformRotation(r: Rotation, m: readonly number[]): Rotation {
+  const moved = multiply(m, matrixOf(r));
+  return fromMatrix(det(m) > 0 ? moved : multiply(moved, mirrorMatrix(0)));
+}
+
+/** The determinant of a 3x3 matrix, row-major: -1 for a signed permutation with a mirror. */
+export function determinant(m: readonly number[]): number {
+  return det(m);
+}
+
 /** Where a rotated model's front faces. */
 export function facingOf(r: Rotation): Vec3 {
   return rotate(r, MODEL_FRONT);

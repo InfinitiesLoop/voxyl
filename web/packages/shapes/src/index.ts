@@ -17,3 +17,4 @@ export {
   microSlotCount,
   sideOf,
 } from "./micro.ts";
+export { type CellMatrix, isKnownShape, slotsLookAlike, transformSlot } from "./transform.ts";

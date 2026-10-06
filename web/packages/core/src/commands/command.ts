@@ -7,8 +7,10 @@
 import { z } from "zod";
 import type { Box } from "../box.ts";
 import type { CellSet } from "../cellset.ts";
+import type { Piece } from "../piece.ts";
 import type { Region } from "../region.ts";
 import type { SemanticId, SemanticRegistry } from "../semantics.ts";
+import type { ProjectSettings } from "../settings.ts";
 import type { World } from "../world.ts";
 
 /** A command as it travels: over the relay, into the history, from an agent. */
@@ -47,6 +49,14 @@ export interface CommandContext {
   fill(region: Region, id: number): number;
   /** Visits every occupied cell of a region in a fixed order. */
   forEachIn(region: Region, visit: (x: number, y: number, z: number, id: number) => void): void;
+  /** The project's id (pieces cut from this project map their semantics back by id). */
+  readonly projectId: string;
+  /** The project's settings as they are now. */
+  readonly settings: ProjectSettings;
+  /** Replaces the project's settings. */
+  setSettings(settings: ProjectSettings): void;
+  /** A prefab's content by hash; throws a CommandError if the host hasn't loaded it. */
+  prefab(hash: string): Piece;
   /** Replaces the project's selection (null clears it). */
   setSelection(cells: CellSet | null): void;
   /** Undoes the latest undo step, which must end with command `target` (see Project.undoTarget). */

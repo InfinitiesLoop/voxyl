@@ -17,9 +17,18 @@ import {
 } from "./commands/command.ts";
 import { COMMANDS } from "./commands/index.ts";
 import { chunkKeyToCoords } from "./coords.ts";
-import { evaluate, plainBox, RegionError, type RegionScope } from "./region.ts";
+import type { Piece } from "./piece.ts";
+import { evaluate, plainBox, type Region, RegionError, type RegionScope } from "./region.ts";
 import { type PaletteId, type SemanticId, SemanticRegistry } from "./semantics.ts";
+import { DEFAULT_SETTINGS, type ProjectSettings } from "./settings.ts";
 import { type Edit, World, type WorldOptions } from "./world.ts";
+
+export interface ProjectOptions extends WorldOptions {
+  /** The project's id (pieces cut from it map their semantics back by id). Default: random. */
+  readonly id?: string;
+  /** Prefab content by hash, for paste commands that name one (the host loads it first). */
+  readonly prefabs?: (hash: string) => Piece | undefined;
+}
 
 /** How many recent command ids a project remembers to drop repeats. */
 const RECENT_IDS = 64;
@@ -65,6 +74,8 @@ export interface Applied {
   readonly edit: Edit;
   /** The registry before and after, when the command changed it. */
   readonly registry: { readonly before: SemanticRegistry; readonly after: SemanticRegistry } | null;
+  /** The settings before and after, when the command changed them. */
+  readonly settings: { readonly before: ProjectSettings; readonly after: ProjectSettings } | null;
   /** The selection before and after, when the command changed it. */
   readonly selection: { readonly before: CellSet | null; readonly after: CellSet | null } | null;
   readonly report: ChangeReport;
@@ -91,8 +102,11 @@ interface Entry {
 }
 
 export class Project {
+  readonly id: string;
   readonly world: World;
   readonly semantics: SemanticRegistry;
+  readonly #prefabs: ((hash: string) => Piece | undefined) | undefined;
+  #settings: ProjectSettings;
   readonly #commands: ReadonlyMap<string, CommandDef>;
   readonly #recent = new Map<string, ChangeReport>();
   readonly #history: Entry[] = [];
@@ -103,15 +117,35 @@ export class Project {
   // Never mutated once set: commands replace it, so undo can keep the old one.
   #selection: CellSet | null = null;
 
-  constructor(options: WorldOptions = {}, from?: { world: World; semantics: SemanticRegistry }) {
+  constructor(
+    options: ProjectOptions = {},
+    from?: { world: World; semantics: SemanticRegistry; settings?: ProjectSettings },
+  ) {
+    this.id = options.id ?? randomId();
     this.world = from?.world ?? new World(options);
     this.semantics = from?.semantics ?? new SemanticRegistry();
+    this.#settings = from?.settings ?? DEFAULT_SETTINGS;
+    this.#prefabs = options.prefabs;
     this.#commands = new Map(COMMANDS.map((c) => [c.kind, c]));
   }
 
   /** The selected cells, or null. Part of the project, changed by the select command. */
   get selection(): CellSet | null {
     return this.#selection;
+  }
+
+  /** The project's settings: name, north, grid. Changed by the settings command. */
+  get settings(): ProjectSettings {
+    return this.#settings;
+  }
+
+  /** The exact cells of a region, evaluated against the project as it is now. */
+  cells(region: Region): CellSet {
+    try {
+      return evaluate(region, this.#scope());
+    } catch (error) {
+      throw asCommandError(error);
+    }
   }
 
   /** Puts a selection back (undo). */
@@ -174,7 +208,10 @@ export class Project {
 
   /** A copy that shares chunks until either side writes. */
   fork(): Project {
-    const fork = new Project({}, { world: this.world.fork(), semantics: this.semantics.clone() });
+    const fork = new Project(
+      { id: this.id, ...(this.#prefabs && { prefabs: this.#prefabs }) },
+      { world: this.world.fork(), semantics: this.semantics.clone(), settings: this.#settings },
+    );
     fork.#selection = this.#selection;
     return fork;
   }
@@ -189,6 +226,7 @@ export class Project {
     const world = this.world;
     const registryBefore = this.semantics.clone();
     const selectionBefore = this.#selection;
+    const settingsBefore = this.#settings;
     const notes: Record<string, number | string> = {};
     world.beginEdit();
     try {
@@ -197,6 +235,7 @@ export class Project {
       world.restore(world.endEdit().before);
       this.semantics.restore(registryBefore);
       this.#selection = selectionBefore;
+      this.#settings = settingsBefore;
       throw error instanceof RegionError ? new CommandError(error.message) : error;
     }
     const edit = world.endEdit();
@@ -206,41 +245,38 @@ export class Project {
       this.#selection === selectionBefore
         ? null
         : { before: selectionBefore, after: this.#selection };
+    const settings =
+      this.#settings === settingsBefore ? null : { before: settingsBefore, after: this.#settings };
     const created = {
       palettes: newIds(registryBefore.palettes().length, this.semantics.palettes().length),
       semantics: newIds(registryBefore.size, this.semantics.size),
     };
     const report = { ...this.#report(edit), created, registryChanged: changed, notes };
-    return { command, edit, registry, selection, report };
+    return { command, edit, registry, settings, selection, report };
   }
 
   #context(notes: Record<string, number | string>): CommandContext {
     const world = this.world;
     const semantics = this.semantics;
-    const semantic = (ref: SemanticArg): SemanticId => {
-      try {
-        if (typeof ref === "number") {
-          if (!semantics.has(ref)) throw new Error(`Unknown semantic id ${ref}`);
-          return ref;
-        }
-        return semantics.derive(ref.palette, ref.base);
-      } catch (error) {
-        throw asCommandError(error);
-      }
-    };
-    const selection = () => this.#selection;
-    const scope: RegionScope = {
-      world,
-      semantics,
-      semantic,
-      get selection() {
-        return selection();
-      },
-    };
+    const scope = this.#scope();
+    const semantic = scope.semantic;
+    const settings = () => this.#settings;
     return {
       world,
       semantics,
       semantic,
+      projectId: this.id,
+      get settings() {
+        return settings();
+      },
+      setSettings: (next) => {
+        this.#settings = next;
+      },
+      prefab: (hash) => {
+        const piece = this.#prefabs?.(hash);
+        if (!piece) throw new CommandError(`Prefab ${hash} isn't loaded`);
+        return piece;
+      },
       intern(state: CellStateArg): number {
         const input: CellStateInput = {
           ...(state.semantic !== undefined && { semantic: semantic(state.semantic) }),
@@ -302,6 +338,7 @@ export class Project {
           const a = e.applied as Applied;
           world.restore(a.edit.before);
           if (a.registry) semantics.restore(a.registry.before);
+          if (a.settings) this.#settings = a.settings.before;
           e.state = "undone";
         }
         this.#redo.push(step);
@@ -320,12 +357,36 @@ export class Project {
           const a = e.applied as Applied;
           world.restore(a.edit.after);
           if (a.registry) semantics.restore(a.registry.after);
+          if (a.settings) this.#settings = a.settings.after;
           e.state = "active";
         }
         this.#redo.pop();
       },
       note(key, value) {
         notes[key] = value;
+      },
+    };
+  }
+
+  #scope(): RegionScope {
+    const semantics = this.semantics;
+    const selection = () => this.#selection;
+    return {
+      world: this.world,
+      semantics,
+      semantic(ref: SemanticArg): SemanticId {
+        try {
+          if (typeof ref === "number") {
+            if (!semantics.has(ref)) throw new Error(`Unknown semantic id ${ref}`);
+            return ref;
+          }
+          return semantics.derive(ref.palette, ref.base);
+        } catch (error) {
+          throw asCommandError(error);
+        }
+      },
+      get selection() {
+        return selection();
       },
     };
   }
@@ -441,6 +502,16 @@ export class Project {
       }));
     return { cells, bounds, semantics };
   }
+}
+
+/** A random id for a new project: 128 bits as hex. */
+function randomId(): string {
+  const bytes = new Uint8Array(16);
+  // crypto exists in every runtime core targets; typed locally (no DOM lib).
+  (
+    globalThis as unknown as { crypto: { getRandomValues(b: Uint8Array): void } }
+  ).crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /** Ids from `before` + 1 to `after`: what an append-only registry added. */

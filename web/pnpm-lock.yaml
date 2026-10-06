@@ -233,6 +233,9 @@ importers:
 
   packages/core:
     dependencies:
+      '@voxyl/shapes':
+        specifier: workspace:*
+        version: link:../shapes
       zod:
         specifier: ^4.6.5
         version: 4.6.5

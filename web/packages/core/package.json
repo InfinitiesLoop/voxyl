@@ -12,6 +12,7 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
+    "@voxyl/shapes": "workspace:*",
     "zod": "^4.6.5"
   }
 }

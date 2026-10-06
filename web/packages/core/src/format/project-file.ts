@@ -6,11 +6,12 @@
 // State ids are compacted on save: the states the cells use, renumbered 1..n in the order of
 // their old ids, so the same build saves to the same bytes whatever its history.
 
-import type { CellState, TagValue } from "../cell-state.ts";
+import type { CellState } from "../cell-state.ts";
 import { chunkKey, chunkKeyToCoords } from "../coords.ts";
-import { Project } from "../project.ts";
+import { Project, type ProjectOptions } from "../project.ts";
 import { type RegistryJSON, SemanticRegistry } from "../semantics.ts";
-import { World, type WorldOptions } from "../world.ts";
+import { type ProjectSettings, settingsFrom } from "../settings.ts";
+import { World } from "../world.ts";
 import { ByteReader, ByteWriter, deflate, hash64, inflate } from "./bytes.ts";
 import {
   decodeStorageChunk,
@@ -19,24 +20,24 @@ import {
   STORAGE_SIZE,
   STORAGE_VOLUME,
 } from "./chunk-codec.ts";
+import { type StateJSON, stateInput, stateJSON } from "./state-json.ts";
 
 export const FORMAT_VERSION = 1;
 
-/** A cell state as saved: [semantic, rotation, tags?, parts as [semantic, shape, slot]?]. */
-export type StateJSON =
-  | [number, number]
-  | [number, number, Record<string, TagValue>]
-  | [number, number, Record<string, TagValue>, [number, string, number][]];
-
 export interface Manifest {
   readonly format: typeof FORMAT_VERSION;
-  readonly name: string;
+  readonly id: string;
+  readonly settings: ProjectSettings;
   readonly cells: number;
   readonly registry: RegistryJSON;
   /** State i + 1 of the saved chunks. */
   readonly states: readonly StateJSON[];
   /** Storage chunk coordinates ("x,y,z", in 32-cell units) to blob hash. */
   readonly chunks: Readonly<Record<string, string>>;
+  /** Prefabs only: the cell a paste puts at its target, from the box's corner. */
+  readonly anchor?: readonly [number, number, number];
+  /** Prefabs only: the box the prefab fills, from [0, 0, 0]. */
+  readonly size?: readonly [number, number, number];
 }
 
 export interface SavedProject {
@@ -45,7 +46,10 @@ export interface SavedProject {
   readonly blobs: ReadonlyMap<string, Uint8Array>;
 }
 
-export async function saveProject(project: Project, name = "Untitled"): Promise<SavedProject> {
+export async function saveProject(
+  project: Project,
+  prefab?: { anchor?: readonly [number, number, number]; size: readonly [number, number, number] },
+): Promise<SavedProject> {
   const world = project.world;
   const L = world.layout;
   const keys = [...world.chunkKeys()].sort((a, b) => a - b);
@@ -134,18 +138,21 @@ export async function saveProject(project: Project, name = "Untitled"): Promise<
 
   const manifest: Manifest = {
     format: FORMAT_VERSION,
-    name,
+    id: project.id,
+    settings: project.settings,
     cells: world.cellCount,
     registry: project.semantics.toJSON(),
     states,
     chunks,
+    ...(prefab?.anchor && { anchor: prefab.anchor }),
+    ...(prefab && { size: prefab.size }),
   };
   return { manifest, blobs };
 }
 
 export async function loadProject(
   saved: SavedProject,
-  options: WorldOptions = {},
+  options: ProjectOptions = {},
 ): Promise<Project> {
   const { manifest } = saved;
   if (manifest.format !== FORMAT_VERSION)
@@ -227,7 +234,10 @@ export async function loadProject(
     }
   }
   world.takeDirtyChunks(); // a fresh world: everything is new anyway
-  return new Project({}, { world, semantics });
+  return new Project(
+    { ...options, id: manifest.id },
+    { world, semantics, settings: settingsFrom(manifest.settings) },
+  );
 }
 
 // --- Bundles: one file holding a manifest and its blobs ---
@@ -269,24 +279,6 @@ export async function unpackBundle(bytes: Uint8Array): Promise<SavedProject> {
 }
 
 // --- helpers ---
-
-function stateJSON(s: CellState): StateJSON {
-  const tags = Object.keys(s.tags).length > 0 ? { ...s.tags } : null;
-  if (s.parts.length > 0) {
-    return [s.semantic, s.rotation, tags ?? {}, s.parts.map((p) => [p.semantic, p.shape, p.slot])];
-  }
-  return tags ? [s.semantic, s.rotation, tags] : [s.semantic, s.rotation];
-}
-
-function stateInput(s: StateJSON) {
-  const [semantic, rotation, tags, parts] = s;
-  return {
-    ...(parts ? {} : { semantic }),
-    rotation,
-    ...(tags && { tags }),
-    ...(parts && { parts: parts.map(([semantic, shape, slot]) => ({ semantic, shape, slot })) }),
-  };
-}
 
 interface Utf8 {
   encode(text: string): Uint8Array;

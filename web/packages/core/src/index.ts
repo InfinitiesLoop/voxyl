@@ -39,22 +39,33 @@ export {
   MIN_CHUNK_COORD,
 } from "./coords.ts";
 export { decodeStorageChunk, encodeStorageChunk, STORAGE_SIZE } from "./format/chunk-codec.ts";
+export { canonicalJSON, loadPrefab, prefabHash, savePrefab } from "./format/prefab.ts";
 export {
   FORMAT_VERSION,
   loadProject,
   type Manifest,
   packBundle,
   type SavedProject,
-  type StateJSON,
   saveProject,
   unpackBundle,
 } from "./format/project-file.ts";
+export { type StateJSON, stateInput, stateJSON } from "./format/state-json.ts";
+export {
+  cutPiece,
+  forEachPieceCell,
+  importSemantics,
+  type Piece,
+  PieceArg,
+  type PieceSemantic,
+  pieceCellCount,
+} from "./piece.ts";
 export {
   type Applied,
   type ChangeReport,
   type EntryState,
   type HistoryEntry,
   Project,
+  type ProjectOptions,
   type RunResult,
   type SemanticChange,
   UNDO_LIMIT,
@@ -75,6 +86,7 @@ export {
   type Axis,
   canonical,
   compose,
+  determinant,
   facingOf,
   fromMatrix,
   IDENTITY,
@@ -90,6 +102,7 @@ export {
   rotationFacing,
   SYMMETRY,
   stabilizer,
+  transformRotation,
   turn,
   turnClockwise,
   upOf,
@@ -112,4 +125,23 @@ export {
   SemanticRegistry,
   type SharedPalette,
 } from "./semantics.ts";
+export {
+  DEFAULT_SETTINGS,
+  MAJOR_GRID,
+  type ProjectSettings,
+  SettingsArg,
+  settingsFrom,
+} from "./settings.ts";
+export {
+  applyMatrix,
+  DIRECTIONS,
+  type Direction,
+  DirectionArg,
+  type MirrorAxis,
+  movedBox,
+  PlacementArgs,
+  placementMatrix,
+  StateMover,
+  turnsBetween,
+} from "./transform.ts";
 export { type ChangedBox, type Edit, World, type WorldOptions } from "./world.ts";
