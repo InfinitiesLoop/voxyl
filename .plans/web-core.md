@@ -2,7 +2,8 @@
 
 Status: **Built** (2026-10-06): all seven steps are done. The user reviewed the draft the same
 day, and their answers are folded in (marked **Decided** or **Confirmed**). Progress is under
-"Build order"; step 7 left choices for the user to review (marked "to review").
+"Build order". The four choices step 7 left for review were all confirmed by the user
+(2026-10-06). Phase 2 continues in [`web-viewer.md`](web-viewer.md).
 
 Phase 1 is a greenfield design (the user's decision, 2026-10-06): the web version doesn't
 have to be compatible with the Godot app. Godot's code and formats are inspiration. That app
@@ -556,7 +557,7 @@ Each step lands with its tests and updates this document.
 
     Text past about 32x16x32 is more than a model wants to read; Phase 4 tools should steer
     agents to stats and smaller boxes.
-  - **Choices to review** (mine, made while building):
+  - **Choices made while building, all confirmed by the user (2026-10-06):**
     1. **Profiles are intent only for now.** The plan said a mapped block supplies a profile
        and the form can set or narrow it. Blocks live in libraries, which don't exist on the
        web yet (Phase 5), so only the form has one. When libraries arrive, the order would be:
@@ -591,3 +592,4 @@ Each step lands with its tests and updates this document.
 | 5 | Palette block references | Qualified `library:block` references; no library search order. |
 | 6 | Undo across sessions | Session-only for now, with the door kept open. The undo stack and the op log are one history log. |
 | 7 | Mapping a pasted piece's semantics | As built in step 6: `map`, then the source id in the project it came from, then palette and name, else create with its look. Confirmed. |
+| 8 | Step 7's choices | Confirmed: profiles are intent only until libraries exist (then form, else block, else free); no profile means free; profile edits rewrite no cells; commands refuse unknown shapes. |

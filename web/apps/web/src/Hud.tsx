@@ -1,6 +1,6 @@
+import { CITY_THEMES } from "@voxyl/fixtures";
 import type { Settings } from "./App.tsx";
 import type { BenchResult, Distribution } from "./bench/bench.ts";
-import { PALETTES } from "./palettes.ts";
 import type { Backend, EngineStats } from "./scene/Engine.ts";
 import { CHUNK_SIZES, WORLD_KINDS, type WorldKind } from "./worlds.ts";
 
@@ -85,12 +85,12 @@ export function Hud({
           </select>
         </label>
         <label>
-          Palette
+          Theme
           <select
-            value={settings.palette}
-            onChange={(e) => onSettings({ ...settings, palette: Number(e.target.value) })}
+            value={settings.theme}
+            onChange={(e) => onSettings({ ...settings, theme: Number(e.target.value) })}
           >
-            {PALETTES.map((p, i) => (
+            {CITY_THEMES.map((p, i) => (
               <option key={p.name} value={i}>
                 {p.name}
               </option>

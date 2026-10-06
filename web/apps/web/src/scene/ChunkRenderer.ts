@@ -3,7 +3,6 @@ import { GPU_BRICK_BITS } from "@voxyl/light";
 import { QUAD_BYTES, QUAD_WORDS, TRI_BYTES, TRI_WORDS } from "@voxyl/mesher";
 import type { LightingMode } from "@voxyl/session";
 import * as THREE from "three/webgpu";
-import { type Palette, UNDECIDED_COLOR } from "../palettes.ts";
 import type { WorldOutput } from "../world/WorldClient.ts";
 import { LightVolume } from "./light-volume.ts";
 import {
@@ -52,8 +51,8 @@ export class ChunkRenderer {
   readonly #paletteTexture: THREE.DataTexture;
   readonly #uniforms: LightUniforms = createLightUniforms();
   readonly #flatMaterials: Record<SurfaceKind, THREE.MeshBasicNodeMaterial>;
-  #palette: Palette;
-  #semantics: string[] = [""];
+  /** StateLooks.colors from the world worker. */
+  #looks: Uint8Array = new Uint8Array(0);
   #paletteDirty = true;
   #mode: LightingMode = "off";
   #volume: LightVolume | null = null;
@@ -67,11 +66,10 @@ export class ChunkRenderer {
   #tris = 0;
   readonly #writeTimes: number[] = [];
 
-  constructor(renderer: THREE.WebGPURenderer, chunkSize: number, palette: Palette) {
+  constructor(renderer: THREE.WebGPURenderer, chunkSize: number) {
     this.#renderer = renderer;
     this.#size = chunkSize;
     this.#chunkBits = Math.log2(chunkSize);
-    this.#palette = palette;
     this.#paletteData = new Uint8Array(PALETTE_SIZE * PALETTE_SIZE * 4);
     this.#paletteTexture = new THREE.DataTexture(this.#paletteData, PALETTE_SIZE, PALETTE_SIZE);
     this.#paletteTexture.colorSpace = THREE.SRGBColorSpace;
@@ -149,15 +147,12 @@ export class ChunkRenderer {
     this.#uniforms.brightness.value = brightness;
   }
 
-  /** New colours: only the palette texture changes (the worker relights if light changed). */
-  setPalette(palette: Palette): void {
-    this.#palette = palette;
-    this.#paletteDirty = true;
-  }
-
-  /** The semantic of every cell-state id, as the world worker reports it. */
-  setStates(semantics: string[]): void {
-    this.#semantics = semantics;
+  /**
+   * Every cell state's look, as the world worker resolves it from the project's palettes (see
+   * StateLooks.colors). Only the palette texture changes.
+   */
+  setLooks(colors: Uint8Array): void {
+    this.#looks = colors;
     this.#paletteDirty = true;
   }
 
@@ -235,13 +230,13 @@ export class ChunkRenderer {
   #syncPalette(): void {
     if (!this.#paletteDirty) return;
     const data = this.#paletteData;
-    for (let id = 1; id < this.#semantics.length; id++) {
-      const material = this.#palette.materials[this.#semantics[id] ?? ""];
-      const rgb = Number.parseInt((material?.color ?? UNDECIDED_COLOR).slice(1), 16);
-      data[id * 4] = (rgb >> 16) & 0xff;
-      data[id * 4 + 1] = (rgb >> 8) & 0xff;
-      data[id * 4 + 2] = rgb & 0xff;
-      data[id * 4 + 3] = material?.emits ? EMISSIVE_ALPHA : 0xff;
+    const looks = this.#looks;
+    const count = Math.min(looks.length, data.length);
+    for (let i = 4; i < count; i += 4) {
+      data[i] = looks[i] ?? 0;
+      data[i + 1] = looks[i + 1] ?? 0;
+      data[i + 2] = looks[i + 2] ?? 0;
+      data[i + 3] = looks[i + 3] ? EMISSIVE_ALPHA : 0xff;
     }
     this.#paletteTexture.needsUpdate = true;
     this.#paletteDirty = false;

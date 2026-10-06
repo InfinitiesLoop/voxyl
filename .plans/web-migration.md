@@ -6,8 +6,9 @@ sparse light volume (see [`web-lighting.md`](web-lighting.md)), shaped parts, an
 widget that runs relayed tool calls. 5M cells hold 120 fps on an M5 Max. Numbers are under
 "Phase 0 findings" and "Phase 0 status". **Phase 1 built** (2026-10-06, all seven steps): the
 core redesigned from scratch, per the design document [`web-core.md`](web-core.md), which
-records what was built, the numbers, and four choices from step 7 awaiting the user's review.
-Next is Phase 2, the web viewer.
+records what was built and the numbers; the user confirmed step 7's four choices.
+**Phase 2 started** (2026-10-06): the web viewer, planned and tracked in
+[`web-viewer.md`](web-viewer.md).
 Reviewed as a Claude Doc
 (https://claude.ai/code/artifact/98f31d14-989b-4c28-a24c-a3d7b8630a21); this file is now the
 working copy. **Keep it (and `web-lighting.md`) up to date as we go**, in the same commit as

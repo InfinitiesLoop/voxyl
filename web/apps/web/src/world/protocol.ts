@@ -10,7 +10,6 @@
 
 import type { StateShape } from "@voxyl/mesher";
 import type { LightingMode, LightLayoutUpdate, MeshJob } from "@voxyl/session";
-import type { Palette } from "../palettes.ts";
 import type { WorldInfo, WorldKind } from "../worlds.ts";
 
 export type Vec3 = readonly [number, number, number];
@@ -24,9 +23,10 @@ export interface RayHit {
 
 /** Commands, each answered with a reply of the matching type. */
 export type Command =
-  | { type: "load"; world: number; kind: WorldKind; chunkSize: number }
+  | { type: "load"; world: number; kind: WorldKind; chunkSize: number; theme: number }
   | { type: "lighting"; mode: LightingMode }
-  | { type: "palette"; palette: Palette }
+  /** Re-skins the sample build with another city theme (a palette_sync): looks only. */
+  | { type: "theme"; theme: number }
   /** The id of the whole-block state of a semantic, by name (added if new). */
   | { type: "intern"; semantic: string }
   | { type: "setId"; at: Vec3; id: number }
@@ -45,7 +45,7 @@ export type Command =
 export interface Replies {
   load: WorldInfo;
   lighting: { lightAllMs: number | null };
-  palette: { relit: boolean };
+  theme: { relit: boolean };
   intern: number;
   setId: boolean;
   fillBox: number;
@@ -91,8 +91,8 @@ export type FromWorld =
     }
   /** Writes for the light volume (see LightLayout), applied whole. */
   | { type: "light"; world: number; update: LightLayoutUpdate }
-  /** The semantic of every cell-state id (index 0 is empty), sent when new states appear. */
-  | { type: "states"; world: number; semantics: string[] }
+  /** Every cell state's look (StateLooks.colors), sent when states or looks change. */
+  | { type: "looks"; world: number; colors: Uint8Array }
   | { type: "idle"; world: number; seq: number }
   | { type: "stats"; world: number; stats: WorldStats };
 

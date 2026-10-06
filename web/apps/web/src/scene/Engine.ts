@@ -1,6 +1,5 @@
 import type { LightingMode } from "@voxyl/session";
 import * as THREE from "three/webgpu";
-import type { Palette } from "../palettes.ts";
 import type { Vec3, WorldStats } from "../world/protocol.ts";
 import { WorldClient, type WorldOutput } from "../world/WorldClient.ts";
 import type { WorldInfo, WorldKind } from "../worlds.ts";
@@ -136,7 +135,7 @@ export class Engine {
    * Builds a world in the world worker and shows it, replacing the current one. Resolves to
    * its info, or null if another load replaced it first.
    */
-  async load(kind: WorldKind, chunkSize: number, palette: Palette): Promise<WorldInfo | null> {
+  async load(kind: WorldKind, chunkSize: number, theme: number): Promise<WorldInfo | null> {
     const id = ++this.#worldId;
     if (this.#chunks) {
       this.scene.remove(this.#chunks.group);
@@ -145,11 +144,10 @@ export class Engine {
     this.#chunks = null;
     this.#info = null;
     this.#worldStats = null;
-    void this.world.request({ type: "palette", palette });
-    const info = await this.world.request({ type: "load", world: id, kind, chunkSize });
+    const info = await this.world.request({ type: "load", world: id, kind, chunkSize, theme });
     if (id !== this.#worldId || this.#disposed) return null;
     // The worker sends nothing about this world before its reply, so nothing was missed.
-    const chunks = new ChunkRenderer(this.renderer, chunkSize, palette);
+    const chunks = new ChunkRenderer(this.renderer, chunkSize);
     chunks.setDaylight(this.#daylight);
     chunks.setBrightness(this.#brightness);
     chunks.setLighting(this.#lighting);
@@ -187,10 +185,12 @@ export class Engine {
     }
   }
 
-  /** New colours now; if the palette changes light, the world worker relights. */
-  async setPalette(palette: Palette): Promise<void> {
-    this.#chunks?.setPalette(palette);
-    await this.world.request({ type: "palette", palette });
+  /**
+   * Re-skins the sample build with a city theme: the world worker syncs it into the project's
+   * linked palette and sends new looks; if light changed, it relights.
+   */
+  async setTheme(theme: number): Promise<void> {
+    await this.world.request({ type: "theme", theme });
   }
 
   /**
@@ -308,7 +308,7 @@ export class Engine {
     }
     const chunks = this.#chunks;
     if (!chunks) return;
-    if (message.type === "states") chunks.setStates(message.semantics);
+    if (message.type === "looks") chunks.setLooks(message.colors);
     else chunks.receive(message);
   }
 

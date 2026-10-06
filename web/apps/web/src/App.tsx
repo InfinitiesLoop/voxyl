@@ -1,15 +1,16 @@
+import { CITY_THEMES } from "@voxyl/fixtures";
 import type { LightingMode } from "@voxyl/session";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type BenchResult, runBench } from "./bench/bench.ts";
 import { BenchPanel, Hud } from "./Hud.tsx";
-import { PALETTES, paletteAt } from "./palettes.ts";
 import { type Backend, Engine, type EngineStats } from "./scene/Engine.ts";
 import { CHUNK_SIZES, WORLD_KINDS, type WorldKind } from "./worlds.ts";
 
 export interface Settings {
   world: WorldKind;
   chunk: number;
-  palette: number;
+  /** The sample build's city theme (CITY_THEMES). */
+  theme: number;
   lighting: LightingMode;
   /** Time of day, 0 (midnight) to 100 (noon). */
   daylight: number;
@@ -26,12 +27,14 @@ function readSettings(): Settings {
   const params = new URLSearchParams(location.search);
   const world = WORLD_KINDS.find((w) => w.kind === params.get("world"))?.kind ?? "city-1m";
   const chunk = Number(params.get("chunk"));
-  const palette = PALETTES.findIndex((p) => p.name.toLowerCase() === params.get("palette"));
+  // "palette" is the name earlier versions used.
+  const themeName = params.get("theme") ?? params.get("palette");
+  const theme = CITY_THEMES.findIndex((t) => t.name.toLowerCase() === themeName);
   const lighting = params.get("lighting");
   return {
     world,
     chunk: (CHUNK_SIZES as readonly number[]).includes(chunk) ? chunk : 64,
-    palette: Math.max(0, palette),
+    theme: Math.max(0, theme),
     // "on" and "vertex" are from earlier versions; any lighting now means the light volume.
     lighting: lighting === null || lighting === "off" ? "off" : "volume",
     daylight: percent(params.get("daylight"), 100),
@@ -43,7 +46,7 @@ function writeSettings(s: Settings): void {
   const params = new URLSearchParams({
     world: s.world,
     chunk: String(s.chunk),
-    palette: PALETTES[s.palette]?.name.toLowerCase() ?? "concrete",
+    theme: CITY_THEMES[s.theme]?.name.toLowerCase() ?? "concrete",
     lighting: s.lighting,
     daylight: String(s.daylight),
     brightness: String(s.brightness),
@@ -104,11 +107,11 @@ export function App() {
 
   useEffect(() => writeSettings(settings), [settings]);
 
-  // The palette is read through a ref when a world loads, so switching palettes never
-  // regenerates the world: it only goes to setPalette below.
-  const paletteRef = useRef(settings.palette);
-  paletteRef.current = settings.palette;
-  const { world: worldKind, chunk: chunkSize, palette, lighting, daylight, brightness } = settings;
+  // The theme is read through a ref when a world loads, so switching themes never
+  // regenerates the world: it only goes to setTheme below, a palette_sync of looks.
+  const themeRef = useRef(settings.theme);
+  themeRef.current = settings.theme;
+  const { world: worldKind, chunk: chunkSize, theme, lighting, daylight, brightness } = settings;
 
   // Rebuild the world when its kind or chunk size changes. It is generated (and, with
   // lighting on, lit) in the world worker, so the page stays responsive meanwhile.
@@ -116,12 +119,12 @@ export function App() {
     if (!engine) return;
     const label = WORLD_KINDS.find((w) => w.kind === worldKind)?.label ?? worldKind;
     setBench(null);
-    track(`Generating ${label}`, engine.load(worldKind, chunkSize, paletteAt(paletteRef.current)));
+    track(`Generating ${label}`, engine.load(worldKind, chunkSize, themeRef.current));
   }, [engine, worldKind, chunkSize, track]);
 
   useEffect(() => {
-    if (engine) void engine.setPalette(paletteAt(palette));
-  }, [engine, palette]);
+    if (engine) void engine.setTheme(theme);
+  }, [engine, theme]);
 
   useEffect(() => {
     engine?.setDaylight(daylight / 100);

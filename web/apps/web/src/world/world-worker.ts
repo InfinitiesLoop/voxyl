@@ -4,10 +4,10 @@
 // main thread, together with light, in the order it produced them.
 
 import { type CellStateTable, EMPTY_ID, type Project, raycast } from "@voxyl/core";
+import { cityThemePalette } from "@voxyl/fixtures";
 import type { StateShape } from "@voxyl/mesher";
-import { type LightingMode, WorldSession } from "@voxyl/session";
-import { lightMaterials, type Palette, paletteAt } from "../palettes.ts";
-import { buildWorld } from "../worlds.ts";
+import { type LightingMode, stateLooks, WorldSession } from "@voxyl/session";
+import { buildWorld, themeAt } from "../worlds.ts";
 import type {
   Command,
   FromWorld,
@@ -43,18 +43,21 @@ let session: WorldSession | null = null;
 let project: Project | null = null;
 let worldId = -1;
 let mode: LightingMode = "off";
-let palette: Palette = paletteAt(0);
+/** The city theme's linked palette version: each re-skin syncs a newer one. */
+let themeVersion = 1;
 let meshPorts: MeshPort[] = [];
 let lastSeq = 0;
 let idlePosted = -1;
-let statesPosted = 0;
+/** The state count and registry revision the last looks sent were for. */
+let looksPosted = { states: -1, revision: -1 };
 /** Every state's shape so far, for mesh workers (id - 1 -> shape). */
 let shapes: StateShape[] = [];
 let pumpScheduled = false;
 const meshTimes: number[] = [];
 
 const nameOf = (semantic: number) => project?.semantics.nameOf(semantic) ?? "";
-const materials = (states: CellStateTable) => lightMaterials(palette, states, nameOf);
+const materials = (states: CellStateTable) =>
+  stateLooks(states, (project as Project).semantics).materials;
 const post = (message: FromWorld, transfer: Transferable[] = []) =>
   scope.postMessage(message, transfer);
 
@@ -66,11 +69,12 @@ function world() {
 function handle(command: Command): Replies[Command["type"]] {
   switch (command.type) {
     case "load": {
-      const built = buildWorld(command.kind, command.chunkSize);
+      const built = buildWorld(command.kind, command.chunkSize, themeAt(command.theme));
       project = built.project;
       session = new WorldSession(built.project.world);
       worldId = command.world;
-      statesPosted = 0;
+      looksPosted = { states: -1, revision: -1 };
+      themeVersion = 1;
       shapes = [];
       idlePosted = -1;
       meshTimes.length = 0;
@@ -81,9 +85,13 @@ function handle(command: Command): Replies[Command["type"]] {
       mode = command.mode;
       session?.setLighting(mode, materials);
       return { lightAllMs: session?.stats().lightAllMs ?? null };
-    case "palette":
-      palette = command.palette;
+    case "theme": {
+      if (!project) return { relit: false };
+      // A newer version of the same shared palette: looks change, semantic ids and cells don't.
+      const args = cityThemePalette(themeAt(command.theme), ++themeVersion);
+      project.run({ id: `theme-${themeVersion}`, kind: "palette_sync", args, source: "viewer" });
       return { relit: session?.setMaterials(materials) ?? false };
+    }
     case "intern":
       return world().states.intern({ semantic: project?.semantics.ensure(command.semantic) ?? 0 });
     case "setId": {
@@ -125,7 +133,7 @@ function pump(): void {
     const request: MeshRequest = { world: worldId, ...added };
     for (const p of meshPorts) p.port.postMessage(request);
   }
-  postStates(s);
+  postLooks(s);
   for (;;) {
     let free: MeshPort | undefined;
     for (const p of meshPorts)
@@ -172,14 +180,14 @@ function schedulePump(): void {
   yieldChannel.port2.postMessage(null);
 }
 
-/** Sends the semantic of every state id when new states have appeared (for the palette). */
-function postStates(s: WorldSession): void {
+/** Sends every state's look when new states have appeared or the registry changed. */
+function postLooks(s: WorldSession): void {
   const states = s.world.states;
-  if (states.size === statesPosted) return;
-  const semantics = [""];
-  for (let id = 1; id <= states.size; id++) semantics.push(nameOf(states.get(id)?.semantic ?? 0));
-  post({ type: "states", world: worldId, semantics });
-  statesPosted = states.size;
+  const registry = (project as Project).semantics;
+  if (states.size === looksPosted.states && registry.revision === looksPosted.revision) return;
+  const { colors } = stateLooks(states, registry);
+  post({ type: "looks", world: worldId, colors }, [colors.buffer]);
+  looksPosted = { states: states.size, revision: registry.revision };
 }
 
 function onMeshReply(port: MeshPort, reply: MeshReply): void {

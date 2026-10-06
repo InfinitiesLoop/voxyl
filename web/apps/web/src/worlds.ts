@@ -1,5 +1,5 @@
 import { Project } from "@voxyl/core";
-import { generateCity } from "@voxyl/fixtures";
+import { CITY_THEMES, type CityTheme, generateCity, prepareCityProject } from "@voxyl/fixtures";
 
 export type WorldKind =
   | "pillar"
@@ -47,9 +47,16 @@ const CITY_TARGETS: Record<Exclude<WorldKind, "pillar">, number> = {
   "parts-20m": 20_000_000,
 };
 
-export function buildWorld(kind: WorldKind, chunkSize: number): BuiltWorld {
+/** The theme at `index`, or the first one when out of range. */
+export function themeAt(index: number): CityTheme {
+  return CITY_THEMES[index] ?? (CITY_THEMES[0] as CityTheme);
+}
+
+/** Generates a sample build, its looks coming from a linked city theme (see prepareCityProject). */
+export function buildWorld(kind: WorldKind, chunkSize: number, theme: CityTheme): BuiltWorld {
   const project = new Project({ chunkBits: Math.log2(chunkSize) });
   const start = performance.now();
+  prepareCityProject(project, theme);
   if (kind === "pillar") {
     buildPillar(project);
     const generateMs = performance.now() - start;
