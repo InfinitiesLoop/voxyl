@@ -80,20 +80,23 @@ export function rejectCell(parts: readonly RulePart[]): RejectReason | null {
 
 // --- The mod's tests ---
 
-function micro(part: RulePart): MicroShape | undefined {
+/** What the slot helpers read of a part. */
+type Slotted = Pick<RulePart, "shape" | "slot">;
+
+function micro(part: Slotted): MicroShape | undefined {
   return MICRO_SHAPES[part.shape];
 }
 
-function isPost(part: RulePart): boolean {
+function isPost(part: Slotted): boolean {
   return micro(part)?.family === "edge" && part.slot >= CENTER_SLOT;
 }
 
-function sizeOf(part: RulePart): number {
+function sizeOf(part: Slotted): number {
   return micro(part)?.size ?? 0;
 }
 
 /** The mod's slot index (faces 0-5, corners 7-14, edges 15-26), or -1 for a centered post. */
-function fmpSlot(part: RulePart): number {
+function fmpSlot(part: Slotted): number {
   switch (micro(part)?.family) {
     case "face":
     case "hollow":
@@ -210,4 +213,37 @@ function partialOcclusionOk(parts: readonly RulePart[]): boolean {
   const visible = new Set<number>();
   for (const v of grid) if (v > 0) visible.add(v - 1);
   return parts.every((p, i) => micro(p)?.family === "hollow" || visible.has(i));
+}
+
+// --- Who shows where parts overlap -----------------------------------------------------
+//
+// Parts may legally overlap (a panel's end runs into the panel beside it, a strip lies along
+// a cover). Forge Microblocks trims the part that yields back to where the other begins, so
+// no two faces coincide (MicroOcclusion.recalcBounds, PostMicroblockClient; the Godot app's
+// ShapeRules.render_boxes). A mesher that fills a grid of eighths from every part can't
+// z-fight, so all that is left to decide is whose colour the shared eighths take: paint the
+// parts in this order and the last one wins, as the mod's trim leaves it.
+//
+// Strips yield to corners, corners to faces; between two of a kind the thinner yields; between
+// equals the lower slot yields. Centered posts yield to faces capping them, and between two
+// posts the thinner, then the higher slot, yields (the mod's post rule). Posts never meet
+// strips or corners in a valid cell, so where they sit between those classes doesn't matter.
+
+const RENDER_CLASS = { edge: 0, corner: 1, post: 1.5, face: 2, hollow: 2 } as const;
+
+/**
+ * Sorts parts into painting order: a part that yields where two overlap comes before the one
+ * that shows. Parts that aren't microblocks keep their place at the end.
+ */
+export function renderOrder<T extends Slotted>(parts: readonly T[]): T[] {
+  const key = (p: T): [number, number, number] => {
+    const shape = micro(p);
+    if (!shape) return [3, 0, 0];
+    if (isPost(p)) return [RENDER_CLASS.post, shape.size, -p.slot];
+    return [RENDER_CLASS[shape.family], shape.size, fmpSlot(p)];
+  };
+  return parts
+    .map((part, i) => ({ part, i, k: key(part) }))
+    .sort((a, b) => a.k[0] - b.k[0] || a.k[1] - b.k[1] || a.k[2] - b.k[2] || a.i - b.i)
+    .map((e) => e.part);
 }

@@ -98,3 +98,11 @@ palettes, and every view is a lens on the one world in the world worker.
     (`cell`: "Trim", or each part with its shape and slot name, palette named when not the
     root).
   - Parts draw as their first part's colour; drawing their footprints is editor work.
+- **Step 4 done (2026-10-06).** Overlapping parts. The web mesher fills one 8³ grid of eighths
+  from all of a cell's parts and meshes its faces, so overlapping parts can never z-fight
+  (the reason Forge Microblocks and the Godot app trim boxes). What the trim still decides is
+  whose colour the shared eighths show. `renderOrder` (`packages/shapes/src/rules.ts`) sorts
+  parts into painting order from the mod's rules: strips yield to corners, corners to faces,
+  thinner to thicker, lower slot to higher; centered posts yield to faces capping them, and
+  between posts the thinner, then the higher slot, yields. A test with a slab and a hollow
+  cover (which sorts after the slab in the state) fails without it.

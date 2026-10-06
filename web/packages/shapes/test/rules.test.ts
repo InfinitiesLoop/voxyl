@@ -5,6 +5,7 @@ import {
   type RulePart,
   rejectCell,
   rejectPart,
+  renderOrder,
   slotFromName,
   slotName,
   slotNames,
@@ -101,5 +102,27 @@ describe("slot names", () => {
       expect(new Set(names).size).toBe(names.length);
       for (const [slot, name] of names.entries()) expect(slotFromName(shape, name)).toBe(slot);
     }
+  });
+});
+
+describe("render order", () => {
+  const p = (shape: string, slot: number) => ({ semantic: 1, shape, slot });
+  it("paints strips, then corners, then faces; thinner first; lower slot first", () => {
+    const parts = [p("face2", 1), p("corner1", 0), p("edge1", 3), p("face1", 2), p("face1", 0)];
+    expect(renderOrder(parts).map((x) => `${x.shape}:${x.slot}`)).toEqual([
+      "edge1:3",
+      "corner1:0",
+      "face1:0",
+      "face1:2",
+      "face2:1",
+    ]);
+  });
+  it("lets faces cap posts, and the lower slot win between equal posts", () => {
+    const parts = [p("face1", 0), p("edge2", 12), p("edge2", 13)];
+    expect(renderOrder(parts).map((x) => `${x.shape}:${x.slot}`)).toEqual([
+      "edge2:13",
+      "edge2:12",
+      "face1:0",
+    ]);
   });
 });

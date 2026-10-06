@@ -70,6 +70,25 @@ describe("shaped parts", () => {
     expect(meshOrigin(world).quadCount).toBe(10);
   });
 
+  it("gives overlapping eighths to the part Forge Microblocks shows: the thicker face", () => {
+    const roofState = (world: World) => world.states.intern({ semantic: ROOF });
+    for (const order of [0, 1]) {
+      const world = new World({ chunkBits: 3 });
+      const slab = { semantic: ROOF, shape: "face4", slot: 0 }; // the bottom half
+      // A hollow cover on the north side: its ring's bottom rim runs into the slab, and
+      // (sorted by shape name) comes after it in the state.
+      const ring = { semantic: TRIM, shape: "hollow1", slot: 2 };
+      world.set(0, 0, 0, { parts: order === 0 ? [slab, ring] : [ring, slab] });
+      const roof = roofState(world);
+      const mesh = meshOrigin(world);
+      const bottom = Array.from({ length: mesh.quadCount }, (_, q) => q).filter(
+        // Faces looking down (-Y) at the bottom of the cell; the ring also has some higher up.
+        (q) => mesh.quads[q * QUAD_WORDS + 3] === 3 && mesh.quads[q * QUAD_WORDS + 1] === 0,
+      );
+      expect(bottom.length).toBeGreaterThan(0);
+      for (const q of bottom) expect(mesh.quads[q * QUAD_WORDS + 6]).toBe(roof);
+    }
+  });
   it("keeps a cube's face beside a part that covers only some of it", () => {
     const world = new World({ chunkBits: 3 });
     world.set(1, 0, 1, { semantic: MASS });

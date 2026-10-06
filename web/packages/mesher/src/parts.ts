@@ -3,7 +3,7 @@
 // it, so meshing a part cell is a table lookup plus neighbour culling.
 
 import type { CellStateTable } from "@voxyl/core";
-import { archTriangles, MICRO_SHAPES, microBoxes } from "@voxyl/shapes";
+import { archTriangles, MICRO_SHAPES, microBoxes, renderOrder } from "@voxyl/shapes";
 import { FACES } from "./faces.ts";
 
 /** Triangle corners are stored in 1/TRI_SCALE of a cell: exact for halves, thirds, quarters and sixteenths. */
@@ -172,7 +172,8 @@ function buildGeometry(parts: readonly PartShape[]): PartGeometry {
   // Microblocks: fill an 8 x 8 x 8 grid of colours, then mesh its faces.
   const grid = new Uint16Array(512);
   let anyMicro = false;
-  for (const part of parts) {
+  // Where parts overlap, the one that shows in Forge Microblocks is painted last (renderOrder).
+  for (const part of renderOrder(parts)) {
     for (const [x0, y0, z0, x1, y1, z1] of microBoxes(part.shape, part.slot)) {
       anyMicro = true;
       for (let y = y0; y < y1; y++) {

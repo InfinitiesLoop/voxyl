@@ -25,5 +25,6 @@ export {
   type RulePart,
   rejectCell,
   rejectPart,
+  renderOrder,
 } from "./rules.ts";
 export { type CellMatrix, isKnownShape, slotsLookAlike, transformSlot } from "./transform.ts";
