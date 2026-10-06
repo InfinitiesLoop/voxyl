@@ -227,7 +227,8 @@ fixed per tool.
   opens the editor, the older one drops back to its image.
 - **Mutating tools are idempotent.** ChatGPT's web client currently runs every tool call twice,
   so mutating tools take a model-supplied `op_id`, and the server drops a repeat it has already
-  seen.
+  seen. The duplicates arrive 1-3 s apart, so this is ephemeral: the project's relay keeps the
+  last few dozen ids in memory and stores nothing.
 - **Agents know what the user can see.** While an editor is attached, edit results say "the user
   can see this in the open editor", so the model doesn't show another card after every change.
 
