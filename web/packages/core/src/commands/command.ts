@@ -5,7 +5,9 @@
 // a command never deals with them.
 
 import { z } from "zod";
-import type { Box } from "../region.ts";
+import type { Box } from "../box.ts";
+import type { CellSet } from "../cellset.ts";
+import type { Region } from "../region.ts";
 import type { SemanticId, SemanticRegistry } from "../semantics.ts";
 import type { World } from "../world.ts";
 
@@ -37,8 +39,14 @@ export interface CommandContext {
   set(x: number, y: number, z: number, id: number): boolean;
   /** Sets every cell in a box to a state id. Returns how many changed. */
   fillBox(box: Box, id: number): number;
-  /** Visits every occupied cell in a box, chunk by chunk in a fixed order. */
-  forEachInBox(box: Box, visit: (x: number, y: number, z: number, id: number) => void): void;
+  /** The exact cells of a region (see region.ts). */
+  cells(region: Region): CellSet;
+  /** Sets every cell of a region to a state id; whole bricks and plain boxes go fast. */
+  fill(region: Region, id: number): number;
+  /** Visits every occupied cell of a region in a fixed order. */
+  forEachIn(region: Region, visit: (x: number, y: number, z: number, id: number) => void): void;
+  /** Replaces the project's selection (null clears it). */
+  setSelection(cells: CellSet | null): void;
   /** Adds a figure to the change report ("skipped": 12). */
   note(key: string, value: number | string): void;
 }

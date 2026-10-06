@@ -5,6 +5,7 @@ import { paletteAdd } from "./palette-add.ts";
 import { paletteSync } from "./palette-sync.ts";
 import { paletteUpdate } from "./palette-update.ts";
 import { resemantic } from "./resemantic.ts";
+import { select } from "./select.ts";
 import { semanticAdd } from "./semantic-add.ts";
 import { semanticUpdate } from "./semantic-update.ts";
 import { set } from "./set.ts";
@@ -15,6 +16,7 @@ export const COMMANDS: readonly CommandDef[] = [
   fill,
   clear,
   resemantic,
+  select,
   paletteAdd,
   paletteUpdate,
   paletteSync,

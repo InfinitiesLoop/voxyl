@@ -3,7 +3,9 @@
 // command, applies it atomically, remembers its id so a repeat is harmless, and reports what
 // changed. The undo and redo history builds on the recorded edits (step 4).
 
+import { type Box, unionBox } from "./box.ts";
 import { type CellState, type CellStateInput, EMPTY_ID, semanticsOf } from "./cell-state.ts";
+import type { CellSet } from "./cellset.ts";
 import { Chunk } from "./chunk.ts";
 import {
   type CellStateArg,
@@ -15,7 +17,7 @@ import {
 } from "./commands/command.ts";
 import { COMMANDS } from "./commands/index.ts";
 import { chunkKeyToCoords } from "./coords.ts";
-import { type Box, unionBox } from "./region.ts";
+import { evaluate, plainBox, RegionError, type RegionScope } from "./region.ts";
 import { type PaletteId, type SemanticId, SemanticRegistry } from "./semantics.ts";
 import { type Edit, World, type WorldOptions } from "./world.ts";
 
@@ -61,6 +63,8 @@ export interface Applied {
   readonly edit: Edit;
   /** The registry before and after, when the command changed it. */
   readonly registry: { readonly before: SemanticRegistry; readonly after: SemanticRegistry } | null;
+  /** The selection before and after, when the command changed it. */
+  readonly selection: { readonly before: CellSet | null; readonly after: CellSet | null } | null;
   readonly report: ChangeReport;
 }
 
@@ -70,11 +74,23 @@ export class Project {
   readonly #commands: ReadonlyMap<string, CommandDef>;
   readonly #recent = new Map<string, ChangeReport>();
   readonly #applied: Applied[] = [];
+  // Never mutated once set: commands replace it, so undo can keep the old one.
+  #selection: CellSet | null = null;
 
   constructor(options: WorldOptions = {}, from?: { world: World; semantics: SemanticRegistry }) {
     this.world = from?.world ?? new World(options);
     this.semantics = from?.semantics ?? new SemanticRegistry();
     this.#commands = new Map(COMMANDS.map((c) => [c.kind, c]));
+  }
+
+  /** The selected cells, or null. Part of the project, changed by the select command. */
+  get selection(): CellSet | null {
+    return this.#selection;
+  }
+
+  /** Puts a selection back (undo). */
+  restoreSelection(cells: CellSet | null): void {
+    this.#selection = cells;
   }
 
   /** Commands applied this session, oldest first. */
@@ -107,7 +123,9 @@ export class Project {
 
   /** A copy that shares chunks until either side writes. */
   fork(): Project {
-    return new Project({}, { world: this.world.fork(), semantics: this.semantics.clone() });
+    const fork = new Project({}, { world: this.world.fork(), semantics: this.semantics.clone() });
+    fork.#selection = this.#selection;
+    return fork;
   }
 
   #apply(command: Command): Applied {
@@ -119,6 +137,7 @@ export class Project {
     }
     const world = this.world;
     const registryBefore = this.semantics.clone();
+    const selectionBefore = this.#selection;
     const notes: Record<string, number | string> = {};
     world.beginEdit();
     try {
@@ -126,17 +145,22 @@ export class Project {
     } catch (error) {
       world.restore(world.endEdit().before);
       this.semantics.restore(registryBefore);
-      throw error;
+      this.#selection = selectionBefore;
+      throw error instanceof RegionError ? new CommandError(error.message) : error;
     }
     const edit = world.endEdit();
     const changed = this.semantics.revision !== registryBefore.revision;
     const registry = changed ? { before: registryBefore, after: this.semantics.clone() } : null;
+    const selection =
+      this.#selection === selectionBefore
+        ? null
+        : { before: selectionBefore, after: this.#selection };
     const created = {
       palettes: newIds(registryBefore.palettes().length, this.semantics.palettes().length),
       semantics: newIds(registryBefore.size, this.semantics.size),
     };
     const report = { ...this.#report(edit), created, registryChanged: changed, notes };
-    return { command, edit, registry, report };
+    return { command, edit, registry, selection, report };
   }
 
   #context(notes: Record<string, number | string>): CommandContext {
@@ -152,6 +176,15 @@ export class Project {
       } catch (error) {
         throw asCommandError(error);
       }
+    };
+    const selection = () => this.#selection;
+    const scope: RegionScope = {
+      world,
+      semantics,
+      semantic,
+      get selection() {
+        return selection();
+      },
     };
     return {
       world,
@@ -174,30 +207,37 @@ export class Project {
       },
       set: (x, y, z, id) => world.setId(x, y, z, id),
       fillBox: (box, id) => world.fillBox(box.x0, box.y0, box.z0, box.x1, box.y1, box.z1, id),
-      forEachInBox(box, visit) {
-        const L = world.layout;
-        for (let cy = L.toChunk(box.y0); cy <= L.toChunk(box.y1); cy++) {
-          for (let cz = L.toChunk(box.z0); cz <= L.toChunk(box.z1); cz++) {
-            for (let cx = L.toChunk(box.x0); cx <= L.toChunk(box.x1); cx++) {
-              const chunk = world.chunk(cx, cy, cz);
-              if (!chunk) continue;
-              const x0 = Math.max(box.x0, cx * L.size);
-              const x1 = Math.min(box.x1, cx * L.size + L.size - 1);
-              const y0 = Math.max(box.y0, cy * L.size);
-              const y1 = Math.min(box.y1, cy * L.size + L.size - 1);
-              const z0 = Math.max(box.z0, cz * L.size);
-              const z1 = Math.min(box.z1, cz * L.size + L.size - 1);
-              for (let y = y0; y <= y1; y++) {
-                for (let z = z0; z <= z1; z++) {
-                  for (let x = x0; x <= x1; x++) {
-                    const id = chunk.get(L.localIndex(L.toLocal(x), L.toLocal(y), L.toLocal(z)));
-                    if (id !== EMPTY_ID) visit(x, y, z, id);
-                  }
-                }
-              }
-            }
+      cells: (region) => evaluate(region, scope),
+      fill(region, id) {
+        const box = plainBox(region);
+        if (box) return world.fillBox(box.x0, box.y0, box.z0, box.x1, box.y1, box.z1, id);
+        let changed = 0;
+        for (const b of evaluate(region, scope).bricks()) {
+          if (b.full) {
+            changed += world.fillBox(b.x, b.y, b.z, b.x + 7, b.y + 7, b.z + 7, id);
+            continue;
+          }
+          for (let bit = 0; bit < 512; bit++) {
+            if (!b.has(bit)) continue;
+            if (world.setId(b.x + (bit & 7), b.y + (bit >> 6), b.z + ((bit >> 3) & 7), id))
+              changed++;
           }
         }
+        return changed;
+      },
+      forEachIn(region, visit) {
+        const box = plainBox(region);
+        if (box) {
+          forEachInBox(world, box, visit);
+          return;
+        }
+        evaluate(region, scope).forEach((x, y, z) => {
+          const id = world.getId(x, y, z);
+          if (id !== EMPTY_ID) visit(x, y, z, id);
+        });
+      },
+      setSelection: (cells) => {
+        this.#selection = cells;
       },
       note(key, value) {
         notes[key] = value;
@@ -296,4 +336,35 @@ function asCommandError(error: unknown): CommandError {
   return error instanceof CommandError
     ? error
     : new CommandError(error instanceof Error ? error.message : String(error));
+}
+
+/** Visits every occupied cell in a box, skipping chunks that don't exist, in a fixed order. */
+function forEachInBox(
+  world: World,
+  box: Box,
+  visit: (x: number, y: number, z: number, id: number) => void,
+): void {
+  const L = world.layout;
+  for (let cy = L.toChunk(box.y0); cy <= L.toChunk(box.y1); cy++) {
+    for (let cz = L.toChunk(box.z0); cz <= L.toChunk(box.z1); cz++) {
+      for (let cx = L.toChunk(box.x0); cx <= L.toChunk(box.x1); cx++) {
+        const chunk = world.chunk(cx, cy, cz);
+        if (!chunk) continue;
+        const x0 = Math.max(box.x0, cx * L.size);
+        const x1 = Math.min(box.x1, cx * L.size + L.size - 1);
+        const y0 = Math.max(box.y0, cy * L.size);
+        const y1 = Math.min(box.y1, cy * L.size + L.size - 1);
+        const z0 = Math.max(box.z0, cz * L.size);
+        const z1 = Math.min(box.z1, cz * L.size + L.size - 1);
+        for (let y = y0; y <= y1; y++) {
+          for (let z = z0; z <= z1; z++) {
+            for (let x = x0; x <= x1; x++) {
+              const id = chunk.get(L.localIndex(L.toLocal(x), L.toLocal(y), L.toLocal(z)));
+              if (id !== EMPTY_ID) visit(x, y, z, id);
+            }
+          }
+        }
+      }
+    }
+  }
 }

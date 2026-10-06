@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { CellState } from "../cell-state.ts";
-import { boxOf, Region } from "../region.ts";
+import { Region } from "../region.ts";
 import { defineCommand, SemanticArg } from "./command.ts";
 
 const SKIP = -1;
@@ -48,7 +48,7 @@ export const resemantic = defineCommand({
     const memo = new Map<number, number | null>();
     let switched = 0;
     let skipped = 0;
-    ctx.forEachInBox(boxOf(where), (x, y, z, id) => {
+    ctx.forEachIn(where, (x, y, z, id) => {
       let next = memo.get(id);
       if (next === undefined) {
         const state = ctx.world.states.get(id);

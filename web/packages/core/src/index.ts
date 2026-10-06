@@ -1,3 +1,4 @@
+export { type Box, boxOf, boxVolume, unionBox } from "./box.ts";
 export {
   type CellState,
   type CellStateInput,
@@ -8,6 +9,7 @@ export {
   semanticsOf,
   type TagValue,
 } from "./cell-state.ts";
+export { type BrickView, CellSet } from "./cellset.ts";
 export { Chunk } from "./chunk.ts";
 export {
   CellStateArg,
@@ -44,7 +46,17 @@ export {
   type SemanticChange,
 } from "./project.ts";
 export { type RayHit, raycast } from "./raycast.ts";
-export { type Box, BoxArg, boxOf, Region, unionBox } from "./region.ts";
+export {
+  BoxArg,
+  DEFAULT_REACH,
+  evaluate,
+  MAX_REGION_CELLS,
+  PosArg,
+  plainBox,
+  Region,
+  RegionError,
+  type RegionScope,
+} from "./region.ts";
 export {
   type Axis,
   canonical,

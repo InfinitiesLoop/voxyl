@@ -370,6 +370,33 @@ Each step lands with its tests and updates this document.
     resemantic's switched and skipped counts.
   - `resemantic` keeps geometry and skips cells whose shape doesn't fit the target's form unless
     forced. Fixing disallowed rotations waits for placement profiles (step 7).
+- **Step 3 done (2026-10-06).**
+  - `cellset.ts` is a sparse set of positions: 128³ blocks keyed like chunks, holding 8³
+    bricks that are full or a 512-bit mask. It has union, intersection and difference a brick or
+    word at a time, grow and shrink through faces, exact bounds, and iteration in a fixed order.
+  - `region.ts` holds the expression language as a recursive Zod schema: box, selection,
+    palette (with descendants), semantic, structure (a flood fill from a seed, by semantics,
+    diagonal optional, within a region or 256 cells of the seed), all/any/not, and grow/shrink.
+    A region evaluates to exact cells, and anything over 64M cells is refused.
+  - Context gains `cells`, `fill` (fast for plain boxes and full bricks) and `forEachIn`.
+    `fill`, `clear` and `resemantic` take any region.
+  - The selection is project state, changed by the `select` command. Commands saying
+    `{ selection: true }` therefore replay the same anywhere, and `Applied` keeps the before and
+    after selection for undo.
+  - Measured on the 5M city (one Node thread):
+
+    | Region | Cells | Time |
+    | --- | --- | --- |
+    | 200x60x200 box | 2.4M | 48 ms |
+    | Every cell of the root palette | 5.0M | 0.54 s |
+    | One semantic over the whole world | 548k | 0.29 s |
+    | One semantic within a 200x60x200 box | 24k | 0.14 s |
+    | Structure flood fill | 1.36M | 0.87 s |
+    | Grow a 64³ box by 2 | 312k | 22 ms |
+    | `resemantic` over a 400x100x400 box (cells switched) | 105k | 0.22 s |
+
+    Fine for agent calls in a worker. If needed, the cost is per-cell `CellSet.add` and
+    `getId`; skipping chunks and bricks with no matching state would cut it.
 
 ## Future ideas
 
