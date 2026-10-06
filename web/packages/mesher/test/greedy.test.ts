@@ -3,6 +3,10 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { FACES, meshChunk, paddedVolume, QUAD_WORDS, ShapeTable } from "../src/index.ts";
 
+// Semantic ids (names live in a project's registry; cells hold ids).
+const MASS = 1;
+const TRIM = 2;
+
 interface Quad {
   x: number;
   y: number;
@@ -46,7 +50,7 @@ function meshOrigin(world: World) {
 describe("meshChunk", () => {
   it("covers a solid chunk with one quad per face", () => {
     const world = new World({ chunkBits: 3 });
-    world.fillBox(0, 0, 0, 7, 7, 7, world.states.intern({ semantic: "Mass" }));
+    world.fillBox(0, 0, 0, 7, 7, 7, world.states.intern({ semantic: MASS }));
     const quads = meshOrigin(world);
     expect(quads.length).toBe(6);
     for (const q of quads) expect([q.w, q.h]).toEqual([8, 8]);
@@ -54,22 +58,22 @@ describe("meshChunk", () => {
 
   it("hides faces that touch neighbouring chunks", () => {
     const world = new World({ chunkBits: 3 });
-    world.fillBox(-8, -8, -8, 15, 15, 15, world.states.intern({ semantic: "Mass" }));
+    world.fillBox(-8, -8, -8, 15, 15, 15, world.states.intern({ semantic: MASS }));
     expect(meshOrigin(world).length).toBe(0);
   });
 
   it("does not merge faces of different cell states", () => {
     const world = new World({ chunkBits: 3 });
-    world.set(0, 0, 0, { semantic: "Mass" });
-    world.set(1, 0, 0, { semantic: "Trim" });
+    world.set(0, 0, 0, { semantic: MASS });
+    world.set(1, 0, 0, { semantic: TRIM });
     expect(meshOrigin(world).length).toBe(10);
-    world.set(1, 0, 0, { semantic: "Mass" });
+    world.set(1, 0, 0, { semantic: MASS });
     expect(meshOrigin(world).length).toBe(6);
   });
 
   it("encodes state ids above 255", () => {
     const world = new World({ chunkBits: 3 });
-    for (let i = 0; i < 0x1234; i++) world.states.intern({ semantic: `S${i}` });
+    for (let i = 0; i < 0x1234; i++) world.states.intern({ semantic: i + 10 });
     world.setId(0, 0, 0, 0x1234);
     expect(meshOrigin(world)[0]?.id).toBe(0x1234);
   });
@@ -121,7 +125,7 @@ const coord = fc.integer({ min: -12, max: 12 });
 const boxArb = fc.record({
   a: fc.tuple(coord, coord, coord),
   size: fc.tuple(fc.nat(6), fc.nat(6), fc.nat(6)),
-  s: fc.constantFrom("Mass", "Trim", null),
+  s: fc.constantFrom(MASS, TRIM, null),
 });
 
 type Box = typeof boxArb extends fc.Arbitrary<infer T> ? T : never;

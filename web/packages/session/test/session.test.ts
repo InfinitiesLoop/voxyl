@@ -10,7 +10,13 @@ import {
   WorldSession,
 } from "../src/index.ts";
 
-const SEMANTICS = ["Stone", "Glass", "Lamp", "Crystal"] as const;
+// Semantic ids (names live in a project's registry; cells hold ids).
+const STONE = 1;
+const GLASS = 2;
+const LAMP = 3;
+const CRYSTAL = 4;
+
+const SEMANTICS = [STONE, GLASS, LAMP, CRYSTAL] as const;
 
 /** Stone blocks light; Glass doesn't; Lamp is an opaque red emitter; Crystal a clear cyan one. */
 function materialsWith(lampLevel: number): MaterialsFor {
@@ -19,9 +25,9 @@ function materialsWith(lampLevel: number): MaterialsFor {
     const emission = new Uint16Array(states.size + 1);
     for (let id = 1; id <= states.size; id++) {
       const semantic = states.get(id)?.semantic;
-      opaque[id] = semantic === "Glass" || semantic === "Crystal" ? 0 : 1;
-      if (semantic === "Lamp") emission[id] = packEmission("#ff4000", lampLevel);
-      if (semantic === "Crystal") emission[id] = packEmission("#00ffff", 9);
+      opaque[id] = semantic === GLASS || semantic === CRYSTAL ? 0 : 1;
+      if (semantic === LAMP) emission[id] = packEmission("#ff4000", lampLevel);
+      if (semantic === CRYSTAL) emission[id] = packEmission("#00ffff", 9);
     }
     return { opaque, emission };
   };
@@ -259,7 +265,7 @@ describe("WorldSession", () => {
 
   it("meshes the chunks nearest the camera first", () => {
     const world = new World({ chunkBits: 3 });
-    const stone = world.states.intern({ semantic: "Stone" });
+    const stone = world.states.intern({ semantic: STONE });
     for (let i = 0; i < 6; i++) world.setId(i * 8, 0, 0, stone);
     const session = new WorldSession(world);
     session.setCamera(44, 0, 0);

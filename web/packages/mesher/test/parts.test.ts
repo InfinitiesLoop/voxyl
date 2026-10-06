@@ -11,7 +11,12 @@ import {
   TRI_WORDS,
 } from "../src/index.ts";
 
-const part = (shape: string, slot: number, semantic = "Trim"): CellStateInput => ({
+// Semantic ids (names live in a project's registry; cells hold ids).
+const MASS = 1;
+const TRIM = 2;
+const ROOF = 3;
+
+const part = (shape: string, slot: number, semantic = TRIM): CellStateInput => ({
   parts: [{ semantic, shape, slot }],
 });
 
@@ -51,15 +56,15 @@ describe("shaped parts", () => {
 
   it("colours each part by its own semantic", () => {
     const world = new World({ chunkBits: 3 });
-    world.set(0, 0, 0, part("face1", 0, "Roof"));
-    const roof = world.states.intern({ semantic: "Roof" });
+    world.set(0, 0, 0, part("face1", 0, ROOF));
+    const roof = world.states.intern({ semantic: ROOF });
     const mesh = meshOrigin(world);
     for (let q = 0; q < mesh.quadCount; q++) expect(mesh.quads[q * QUAD_WORDS + 6]).toBe(roof);
   });
 
   it("hides faces between a cover and the cube it lies on", () => {
     const world = new World({ chunkBits: 3 });
-    world.set(1, 0, 1, { semantic: "Mass" });
+    world.set(1, 0, 1, { semantic: MASS });
     world.set(1, 1, 1, part("face1", 0));
     // The cube loses its top, the cover its bottom.
     expect(meshOrigin(world).quadCount).toBe(10);
@@ -67,7 +72,7 @@ describe("shaped parts", () => {
 
   it("keeps a cube's face beside a part that covers only some of it", () => {
     const world = new World({ chunkBits: 3 });
-    world.set(1, 0, 1, { semantic: "Mass" });
+    world.set(1, 0, 1, { semantic: MASS });
     world.set(1, 1, 1, part("edge1", 8)); // a strip along X on the bottom -Z edge
     const area = areaByFace(meshOrigin(world));
     expect(area[2]).toBe(64 + 8); // the cube's whole top, and the strip's top
@@ -98,21 +103,21 @@ describe("shaped parts", () => {
 
   it("culls a roof tile's bottom on a cube and the sides between tiles", () => {
     const world = new World({ chunkBits: 3 });
-    world.set(0, 0, 0, part("roof_tile", archSlot(0, 0), "Roof"));
+    world.set(0, 0, 0, part("roof_tile", archSlot(0, 0), ROOF));
     const alone = meshOrigin(world).triCount;
     expect(alone).toBe(8); // slope 2, side triangles 2, bottom 2, back 2
 
-    world.set(0, -1, 0, { semantic: "Mass" });
+    world.set(0, -1, 0, { semantic: MASS });
     expect(meshOrigin(world).triCount).toBe(6);
 
-    world.set(1, 0, 0, part("roof_tile", archSlot(0, 0), "Roof"));
-    world.set(1, -1, 0, { semantic: "Mass" });
+    world.set(1, 0, 0, part("roof_tile", archSlot(0, 0), ROOF));
+    world.set(1, -1, 0, { semantic: MASS });
     expect(meshOrigin(world).triCount).toBe(10);
   });
 
   it("winds roof triangles to face out of the shape", () => {
     const world = new World({ chunkBits: 3 });
-    world.set(0, 0, 0, part("roof_tile", archSlot(0, 0), "Roof"));
+    world.set(0, 0, 0, part("roof_tile", archSlot(0, 0), ROOF));
     const mesh = meshOrigin(world);
     // A point inside the wedge: under the slope, which rises from the front (-Z) to the back.
     const centre = [TRI_SCALE / 2, TRI_SCALE / 4, (TRI_SCALE * 3) / 4];

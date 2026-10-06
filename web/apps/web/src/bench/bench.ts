@@ -116,7 +116,7 @@ export async function runBench(
   await engine.nextFrame();
   await engine.whenIdle();
   const rand = mulberry32(42);
-  const glow = await world.request({ type: "intern", state: { semantic: "Glow" } });
+  const glow = await world.request({ type: "intern", semantic: "Glow" });
   const latencies: number[] = [];
   let misses = 0;
   const forward = engine.fly.forward();

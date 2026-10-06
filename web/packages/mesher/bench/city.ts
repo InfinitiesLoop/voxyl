@@ -3,7 +3,7 @@
 // --parts decorates the city with shaped parts (microblocks and roof tiles).
 // GPU and frame-time numbers come from the in-app bench; this isolates the mesher.
 
-import { chunkKeyToCoords, World } from "@voxyl/core";
+import { chunkKeyToCoords, Project } from "@voxyl/core";
 import { generateCity } from "@voxyl/fixtures";
 import { meshChunk, paddedVolume, QUAD_BYTES, ShapeTable, TRI_BYTES } from "../src/index.ts";
 
@@ -20,9 +20,10 @@ const pct = (sorted: number[], p: number) =>
 
 for (const target of targets) {
   for (const bits of bitsList) {
-    const world = new World({ chunkBits: bits });
+    const project = new Project({ chunkBits: bits });
+    const { world } = project;
     let t = performance.now();
-    generateCity(world, { targetCells: target, seed: 1, parts });
+    generateCity(project, { targetCells: target, seed: 1, parts });
     const genMs = performance.now() - t;
     const shapes = ShapeTable.of(world.states);
     let shaped = 0;

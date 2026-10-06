@@ -1,4 +1,4 @@
-import { World } from "@voxyl/core";
+import { Project } from "@voxyl/core";
 import { generateCity } from "@voxyl/fixtures";
 
 export type WorldKind =
@@ -34,7 +34,7 @@ export interface WorldInfo {
 }
 
 export interface BuiltWorld {
-  readonly world: World;
+  readonly project: Project;
   readonly info: WorldInfo;
 }
 
@@ -48,15 +48,15 @@ const CITY_TARGETS: Record<Exclude<WorldKind, "pillar">, number> = {
 };
 
 export function buildWorld(kind: WorldKind, chunkSize: number): BuiltWorld {
-  const world = new World({ chunkBits: Math.log2(chunkSize) });
+  const project = new Project({ chunkBits: Math.log2(chunkSize) });
   const start = performance.now();
   if (kind === "pillar") {
-    buildPillar(world);
+    buildPillar(project);
     const generateMs = performance.now() - start;
     const info = { kind, chunkSize, center: [0, 8, 0], extent: 16, top: 17, generateMs } as const;
-    return { world, info };
+    return { project, info };
   }
-  const stats = generateCity(world, {
+  const stats = generateCity(project, {
     targetCells: CITY_TARGETS[kind],
     seed: 1,
     parts: kind.startsWith("parts-"),
@@ -68,18 +68,21 @@ export function buildWorld(kind: WorldKind, chunkSize: number): BuiltWorld {
     (stats.min[2] + stats.max[2] + 1) / 2,
   ] as const;
   const extent = stats.max[0] - stats.min[0] + 1;
-  return { world, info: { kind, chunkSize, center, extent, top: stats.max[1], generateMs } };
+  return { project, info: { kind, chunkSize, center, extent, top: stats.max[1], generateMs } };
 }
 
 /** A small pillar: a hollow dark shaft with light bands every fourth layer and glowing corners. */
-function buildPillar(world: World): void {
+function buildPillar({ world, semantics }: Project): void {
+  const trim = semantics.ensure("Trim");
+  const glow = semantics.ensure("Glow");
+  const mass = semantics.ensure("Mass");
   const half = 4;
   for (let y = 0; y < 17; y++) {
     for (let x = -half; x <= half; x++) {
       for (let z = -half; z <= half; z++) {
         if (Math.abs(x) !== half && Math.abs(z) !== half) continue;
         const corner = Math.abs(x) === half && Math.abs(z) === half;
-        world.set(x, y, z, { semantic: y % 4 === 0 ? "Trim" : corner ? "Glow" : "Mass" });
+        world.set(x, y, z, { semantic: y % 4 === 0 ? trim : corner ? glow : mass });
       }
     }
   }

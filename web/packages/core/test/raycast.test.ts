@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { raycast, World } from "../src/index.ts";
 
+const MASS = 1;
+
 describe("raycast", () => {
   const world = new World();
-  const mass = world.states.intern({ semantic: "Mass" });
+  const mass = world.states.intern({ semantic: MASS });
   world.setId(5, 0, 0, mass);
   world.setId(-3, 2, -7, mass);
 

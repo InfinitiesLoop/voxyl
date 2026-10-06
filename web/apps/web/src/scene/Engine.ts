@@ -167,10 +167,7 @@ export class Engine {
       this.#initialMeshMs = performance.now() - start;
       chunks.revealLight();
     });
-    this.#placeId = await this.world.request({
-      type: "intern",
-      state: { semantic: PLACE_SEMANTIC },
-    });
+    this.#placeId = await this.world.request({ type: "intern", semantic: PLACE_SEMANTIC });
     return info;
   }
 

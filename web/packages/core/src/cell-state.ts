@@ -1,14 +1,19 @@
-// What a cell holds: intent, never materials. `semantic` is a role name such as "Mass" or
-// "Trim". Palettes map semantics to blocks in a separate layer, so swapping a palette never
-// touches cell data (CLAUDE.md principles 1 and 3).
+// What a cell holds: intent, never materials (CLAUDE.md principles 1 and 3). A cell is either
+// one whole block of a semantic, or a list of shaped parts, each with its own semantic. Both
+// refer to semantics by id (see semantics.ts), so renaming a semantic or re-skinning a palette
+// touches no cells.
 //
 // Chunks store cells as Uint16 ids into a CellStateTable, which interns each distinct
-// (semantic, orientation, tags, parts) combination once. A big build uses a few hundred
-// distinct states at most, so cells stay two bytes each even when shaped.
+// (semantic, rotation, tags, parts) combination once. A big build uses a few hundred distinct
+// states at most, so cells stay two bytes each even when shaped. The table is append-only, so
+// ids keep their meaning in saved chunks and in commands already sent.
 
-/** One shaped part in a cell: a semantic placed as `shape` in `slot` (Godot's [semantic, shape, slot]). */
+import { IDENTITY, isRotation, type Rotation } from "./rotation.ts";
+import { NO_SEMANTIC, type SemanticId } from "./semantics.ts";
+
+/** One shaped part in a cell: a semantic placed as `shape` in `slot`. */
 export interface Part {
-  readonly semantic: string;
+  readonly semantic: SemanticId;
   readonly shape: string;
   readonly slot: number;
 }
@@ -16,17 +21,18 @@ export interface Part {
 export type TagValue = string | number | boolean;
 
 export interface CellState {
-  /** For a shaped cell, its first part's semantic, as in the Godot app. */
-  readonly semantic: string;
-  readonly orientation: number;
+  /** The whole block's semantic, or NO_SEMANTIC for a cell of parts. */
+  readonly semantic: SemanticId;
+  /** One of the 24 cube rotations (see rotation.ts). */
+  readonly rotation: Rotation;
   readonly tags: Readonly<Record<string, TagValue>>;
   /** Empty for a whole block. */
   readonly parts: readonly Part[];
 }
 
 export interface CellStateInput {
-  readonly semantic?: string;
-  readonly orientation?: number;
+  readonly semantic?: SemanticId;
+  readonly rotation?: Rotation;
   readonly tags?: Readonly<Record<string, TagValue>>;
   readonly parts?: readonly Part[];
 }
@@ -36,6 +42,11 @@ export const EMPTY_ID = 0;
 
 /** Ids are Uint16 and 0 means empty. */
 export const MAX_STATES = 0xffff;
+
+/** The semantics a state uses: its block's, or each part's (repeats included, in order). */
+export function semanticsOf(state: CellState): SemanticId[] {
+  return state.parts.length > 0 ? state.parts.map((p) => p.semantic) : [state.semantic];
+}
 
 export class CellStateTable {
   // Index 0 is a placeholder for EMPTY_ID, so a state's id is its index.
@@ -80,18 +91,21 @@ export class CellStateTable {
 
 function normalize(input: CellStateInput): CellState {
   const parts = (input.parts ?? []).map((p) => {
-    if (p.semantic === "" || p.shape === "") {
-      throw new TypeError("A part needs a semantic and a shape");
+    if (!isSemanticId(p.semantic) || p.shape === "") {
+      throw new TypeError("A part needs a semantic id and a shape");
     }
     return Object.freeze({ semantic: p.semantic, shape: p.shape, slot: p.slot });
   });
-  const semantic = input.semantic ?? parts[0]?.semantic ?? "";
-  if (semantic === "") {
-    throw new TypeError("A cell needs a semantic; use null to clear a cell");
+  const semantic = input.semantic ?? NO_SEMANTIC;
+  if (parts.length > 0 && semantic !== NO_SEMANTIC) {
+    throw new TypeError("A cell is either a whole block or a list of parts, not both");
   }
-  const orientation = input.orientation ?? 0;
-  if (!Number.isInteger(orientation)) {
-    throw new TypeError(`Orientation must be an integer, got ${orientation}`);
+  if (parts.length === 0 && !isSemanticId(semantic)) {
+    throw new TypeError("A cell needs a semantic id or parts; use EMPTY_ID to clear a cell");
+  }
+  const rotation = input.rotation ?? IDENTITY;
+  if (!isRotation(rotation)) {
+    throw new TypeError(`Rotation must be an integer 0..23, got ${rotation}`);
   }
   const tags: Record<string, TagValue> = {};
   for (const name of Object.keys(input.tags ?? {}).sort()) {
@@ -102,17 +116,21 @@ function normalize(input: CellStateInput): CellState {
   }
   return Object.freeze({
     semantic,
-    orientation,
+    rotation,
     tags: Object.freeze(tags),
     parts: Object.freeze(parts),
   });
+}
+
+function isSemanticId(id: number): boolean {
+  return Number.isInteger(id) && id > NO_SEMANTIC;
 }
 
 function canonicalKey(state: CellState): string {
   // Tags are already sorted by normalize(), so equal states always produce the same key.
   return JSON.stringify([
     state.semantic,
-    state.orientation,
+    state.rotation,
     Object.entries(state.tags),
     state.parts.map((p) => [p.semantic, p.shape, p.slot]),
   ]);

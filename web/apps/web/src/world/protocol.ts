@@ -8,7 +8,6 @@
 // sends about a world is tagged with the world's id, so messages about a world that has since
 // been replaced are dropped.
 
-import type { CellStateInput } from "@voxyl/core";
 import type { StateShape } from "@voxyl/mesher";
 import type { LightingMode, LightLayoutUpdate, MeshJob } from "@voxyl/session";
 import type { Palette } from "../palettes.ts";
@@ -28,7 +27,8 @@ export type Command =
   | { type: "load"; world: number; kind: WorldKind; chunkSize: number }
   | { type: "lighting"; mode: LightingMode }
   | { type: "palette"; palette: Palette }
-  | { type: "intern"; state: CellStateInput }
+  /** The id of the whole-block state of a semantic, by name (added if new). */
+  | { type: "intern"; semantic: string }
   | { type: "setId"; at: Vec3; id: number }
   | { type: "fillBox"; from: Vec3; to: Vec3; id: number }
   | { type: "raycast"; origin: Vec3; dir: Vec3; reach: number }

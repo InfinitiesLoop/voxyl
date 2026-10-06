@@ -1,10 +1,16 @@
-import type { World } from "@voxyl/core";
+import type { SemanticId, SemanticRegistry, World } from "@voxyl/core";
 import { archSlot, edgeBetween } from "@voxyl/shapes";
 import { mulberry32 } from "./random.ts";
 
 /** The semantics a generated city uses. Palettes for benchmarks map these. */
 export const CITY_SEMANTICS = ["Ground", "Road", "Mass", "Glass", "Trim", "Roof", "Glow"] as const;
 export type CitySemantic = (typeof CITY_SEMANTICS)[number];
+
+/** Where a city is generated: a world and the registry its semantics go in (a Project fits). */
+export interface CityTarget {
+  readonly world: World;
+  readonly semantics: SemanticRegistry;
+}
 
 export interface CityOptions {
   /** Stop adding lots once the world holds at least this many cells. */
@@ -32,18 +38,22 @@ export const LOT_PITCH = 32;
 const ROAD = 4;
 
 /**
- * Fills `world` with a deterministic city: lots spiral out from the origin until the target
+ * Fills the target's world with a deterministic city, adding CITY_SEMANTICS to its registry: lots spiral out from the origin until the target
  * cell count is reached, so every size is roughly square and centred on [0, 0]. Buildings are
  * hollow shells with floors every four layers, window bands, trim and a roof, and grow taller
  * toward the centre. Ground sits at y = 0, buildings above it.
  */
-export function generateCity(world: World, options: CityOptions): CityStats {
+export function generateCity(target: CityTarget, options: CityOptions): CityStats {
+  const world = target.world;
   const rand = mulberry32(options.seed ?? 1);
+  const semantics = Object.fromEntries(
+    CITY_SEMANTICS.map((s) => [s, target.semantics.ensure(s)]),
+  ) as Record<CitySemantic, SemanticId>;
   const ids = Object.fromEntries(
-    CITY_SEMANTICS.map((s) => [s, world.states.intern({ semantic: s })]),
+    CITY_SEMANTICS.map((s) => [s, world.states.intern({ semantic: semantics[s] })]),
   ) as Record<CitySemantic, number>;
 
-  const parts = options.parts ? new PartIds(world) : null;
+  const parts = options.parts ? new PartIds(world, semantics) : null;
 
   let lots = 0;
   let ring = 0;
@@ -176,15 +186,19 @@ interface Footprint {
 /** Interned single-part states, by semantic, shape and slot. */
 class PartIds {
   readonly #world: World;
+  readonly #semantics: Record<CitySemantic, SemanticId>;
   readonly #ids = new Map<string, number>();
-  constructor(world: World) {
+  constructor(world: World, semantics: Record<CitySemantic, SemanticId>) {
     this.#world = world;
+    this.#semantics = semantics;
   }
   get(semantic: CitySemantic, shape: string, slot: number): number {
     const key = `${semantic}|${shape}|${slot}`;
     let id = this.#ids.get(key);
     if (id === undefined) {
-      id = this.#world.states.intern({ parts: [{ semantic, shape, slot }] });
+      id = this.#world.states.intern({
+        parts: [{ semantic: this.#semantics[semantic], shape, slot }],
+      });
       this.#ids.set(key, id);
     }
     return id;

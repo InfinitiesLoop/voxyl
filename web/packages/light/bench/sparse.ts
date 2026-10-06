@@ -4,14 +4,15 @@
 // apron, against dense padded chunk slots.
 // Run from web/: node packages/light/bench/sparse.ts [cells]
 
-import { chunkKey, chunkKeyToCoords, World } from "@voxyl/core";
+import { chunkKey, chunkKeyToCoords, Project } from "@voxyl/core";
 import { generateCity } from "@voxyl/fixtures";
 import { meshChunk, paddedVolume, QUAD_WORDS, ShapeTable } from "@voxyl/mesher";
 import { LightEngine, packEmission } from "../src/index.ts";
 
 const target = Number(process.argv[2] ?? 5_000_000);
-const world = new World({ chunkBits: 6 });
-generateCity(world, { targetCells: target, seed: 1 });
+const project = new Project({ chunkBits: 6 });
+const { world, semantics } = project;
+generateCity(project, { targetCells: target, seed: 1 });
 
 const D = [
   [1, 0, 0],
@@ -64,7 +65,7 @@ const size = world.states.size + 1;
 const opaque = new Uint8Array(size);
 const emission = new Uint16Array(size);
 for (let id = 1; id < size; id++) {
-  const semantic = world.states.get(id)?.semantic;
+  const semantic = semantics.nameOf(world.states.get(id)?.semantic ?? 0);
   opaque[id] = semantic === "Glass" ? 0 : 1;
   if (semantic === "Glow") emission[id] = packEmission("#22d3ee", 15);
 }

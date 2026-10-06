@@ -3,7 +3,7 @@
 // It hands mesh jobs to the mesh workers over MessagePorts and forwards their results to the
 // main thread, together with light, in the order it produced them.
 
-import { type CellStateTable, EMPTY_ID, raycast } from "@voxyl/core";
+import { type CellStateTable, EMPTY_ID, type Project, raycast } from "@voxyl/core";
 import type { StateShape } from "@voxyl/mesher";
 import { type LightingMode, WorldSession } from "@voxyl/session";
 import { lightMaterials, type Palette, paletteAt } from "../palettes.ts";
@@ -40,6 +40,7 @@ interface MeshPort {
 }
 
 let session: WorldSession | null = null;
+let project: Project | null = null;
 let worldId = -1;
 let mode: LightingMode = "off";
 let palette: Palette = paletteAt(0);
@@ -52,7 +53,8 @@ let shapes: StateShape[] = [];
 let pumpScheduled = false;
 const meshTimes: number[] = [];
 
-const materials = (states: CellStateTable) => lightMaterials(palette, states);
+const nameOf = (semantic: number) => project?.semantics.nameOf(semantic) ?? "";
+const materials = (states: CellStateTable) => lightMaterials(palette, states, nameOf);
 const post = (message: FromWorld, transfer: Transferable[] = []) =>
   scope.postMessage(message, transfer);
 
@@ -65,7 +67,8 @@ function handle(command: Command): Replies[Command["type"]] {
   switch (command.type) {
     case "load": {
       const built = buildWorld(command.kind, command.chunkSize);
-      session = new WorldSession(built.world);
+      project = built.project;
+      session = new WorldSession(built.project.world);
       worldId = command.world;
       statesPosted = 0;
       shapes = [];
@@ -82,7 +85,7 @@ function handle(command: Command): Replies[Command["type"]] {
       palette = command.palette;
       return { relit: session?.setMaterials(materials) ?? false };
     case "intern":
-      return world().states.intern(command.state);
+      return world().states.intern({ semantic: project?.semantics.ensure(command.semantic) ?? 0 });
     case "setId": {
       const [x, y, z] = command.at;
       return world().setId(x, y, z, command.id);
@@ -95,7 +98,7 @@ function handle(command: Command): Replies[Command["type"]] {
     case "raycast": {
       const hit = raycast(world(), [...command.origin], [...command.dir], command.reach);
       if (!hit) return null;
-      const semantic = world().states.get(hit.id)?.semantic ?? "";
+      const semantic = nameOf(world().states.get(hit.id)?.semantic ?? 0);
       return { cell: hit.cell, normal: hit.normal, id: hit.id, semantic } satisfies RayHit;
     }
     case "rayEdit": {
@@ -174,7 +177,7 @@ function postStates(s: WorldSession): void {
   const states = s.world.states;
   if (states.size === statesPosted) return;
   const semantics = [""];
-  for (let id = 1; id <= states.size; id++) semantics.push(states.get(id)?.semantic ?? "");
+  for (let id = 1; id <= states.size; id++) semantics.push(nameOf(states.get(id)?.semantic ?? 0));
   post({ type: "states", world: worldId, semantics });
   statesPosted = states.size;
 }

@@ -1,7 +1,7 @@
 // Light engine benchmark on the city fixtures, on one thread.
 // Run from web/: pnpm bench:light [cells ...] [--bits=6]
 
-import { chunkKey, chunkKeyToCoords, EMPTY_ID, World } from "@voxyl/core";
+import { chunkKey, chunkKeyToCoords, EMPTY_ID, Project } from "@voxyl/core";
 import { CITY_SEMANTICS, generateCity, mulberry32 } from "@voxyl/fixtures";
 import { meshChunk, paddedVolume, ShapeTable } from "@voxyl/mesher";
 import { GPU_BRICK_BITS, LightEngine, type LightMaterials, packEmission } from "../src/index.ts";
@@ -19,12 +19,12 @@ const pct = (values: number[], p: number) => {
 };
 
 /** Glass lets light through, Glow emits cyan light, everything else blocks it. */
-function cityMaterials(world: World): LightMaterials {
+function cityMaterials({ world, semantics }: Project): LightMaterials {
   const size = world.states.size + 1;
   const opaque = new Uint8Array(size);
   const emission = new Uint16Array(size);
   for (let id = 1; id < size; id++) {
-    const semantic = world.states.get(id)?.semantic;
+    const semantic = semantics.nameOf(world.states.get(id)?.semantic ?? 0);
     opaque[id] = semantic === "Glass" ? 0 : 1;
     if (semantic === "Glow") emission[id] = packEmission("#22d3ee", 15);
   }
@@ -33,10 +33,11 @@ function cityMaterials(world: World): LightMaterials {
 
 for (const target of targets) {
   for (const bits of bitsList) {
-    const world = new World({ chunkBits: bits });
-    const stats = generateCity(world, { targetCells: target, seed: 1 });
-    for (const s of CITY_SEMANTICS) world.states.intern({ semantic: s });
-    const engine = new LightEngine(world, cityMaterials(world));
+    const project = new Project({ chunkBits: bits });
+    const { world, semantics } = project;
+    const stats = generateCity(project, { targetCells: target, seed: 1 });
+    for (const s of CITY_SEMANTICS) world.states.intern({ semantic: semantics.ensure(s) });
+    const engine = new LightEngine(world, cityMaterials(project));
 
     let t = performance.now();
     engine.computeAll();
@@ -82,7 +83,7 @@ for (const target of targets) {
     const copyMs = performance.now() - copyStart;
 
     world.recordChanges(true);
-    const glow = world.states.intern({ semantic: "Glow" });
+    const glow = world.states.intern({ semantic: semantics.ensure("Glow") });
     const rand = mulberry32(7);
     const [x0, , z0] = stats.min;
     const [x1, y1, z1] = stats.max;
@@ -111,7 +112,7 @@ for (const target of targets) {
     for (let dz = -40; dz <= 40 && roofY < 0; dz += 4) {
       for (let dx = -40; dx <= 40 && roofY < 0; dx += 4) {
         for (let y = y1; y > 20; y--) {
-          if (world.get(cx + dx, y, cz + dz)?.semantic === "Roof") {
+          if (world.get(cx + dx, y, cz + dz)?.semantic === semantics.ensure("Roof")) {
             roofY = y;
             roofX = cx + dx;
             roofZ = cz + dz;
@@ -130,7 +131,7 @@ for (const target of targets) {
           roofX + 2,
           roofY,
           roofZ + 2,
-          clear ? EMPTY_ID : world.states.intern({ semantic: "Roof" }),
+          clear ? EMPTY_ID : world.states.intern({ semantic: semantics.ensure("Roof") }),
         );
         t = performance.now();
         engine.update(world.takeChanges());

@@ -3,6 +3,7 @@ export {
   type CityOptions,
   type CitySemantic,
   type CityStats,
+  type CityTarget,
   generateCity,
   LOT_PITCH,
 } from "./city.ts";

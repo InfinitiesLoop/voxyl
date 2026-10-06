@@ -10,7 +10,13 @@ import {
   packEmission,
 } from "../src/index.ts";
 
-const SEMANTICS = ["Stone", "Glass", "Lamp", "Crystal"] as const;
+// Semantic ids (names live in a project's registry; cells hold ids).
+const STONE = 1;
+const GLASS = 2;
+const LAMP = 3;
+const CRYSTAL = 4;
+
+const SEMANTICS = [STONE, GLASS, LAMP, CRYSTAL] as const;
 
 /** Stone blocks light; Glass doesn't; Lamp is an opaque red emitter; Crystal a clear cyan one. */
 function setup(chunkBits = 3) {

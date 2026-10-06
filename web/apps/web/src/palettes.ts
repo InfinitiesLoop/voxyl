@@ -1,4 +1,4 @@
-import type { CellStateTable } from "@voxyl/core";
+import type { CellStateTable, SemanticId } from "@voxyl/core";
 import { type LightMaterials, packEmission } from "@voxyl/light";
 
 // Palettes map semantics to looks: a colour, and for lighting whether the material lets light
@@ -57,13 +57,17 @@ export function paletteAt(index: number): Palette {
 }
 
 /** Per cell-state opacity and emission for the light engine, from the palette. */
-export function lightMaterials(palette: Palette, states: CellStateTable): LightMaterials {
+export function lightMaterials(
+  palette: Palette,
+  states: CellStateTable,
+  nameOf: (semantic: SemanticId) => string,
+): LightMaterials {
   const size = states.size + 1;
   const opaque = new Uint8Array(size);
   const emission = new Uint16Array(size);
   for (let id = 1; id < size; id++) {
     const state = states.get(id);
-    const material = palette.materials[state?.semantic ?? ""];
+    const material = palette.materials[nameOf(state?.semantic ?? 0)];
     // Shaped parts let light through, as Minecraft's slabs and stairs light from their neighbours.
     opaque[id] = material?.transparent || (state?.parts.length ?? 0) > 0 ? 0 : 1;
     if (material?.emits) emission[id] = packEmission(material.emits.color, material.emits.level);

@@ -15,6 +15,18 @@ export interface ChangedBox {
 export interface WorldOptions {
   /** Chunk edge length as a power of two (5 = 32 cells). */
   readonly chunkBits?: number;
+  /** A state table to share (forks share their parent's; it is append-only). */
+  readonly states?: CellStateTable;
+}
+
+/**
+ * The chunks one edit touched, before and after it, keyed by chunk key (null = no chunk).
+ * Snapshots are copy-on-write clones, so an edit costs only the bricks it wrote. Restoring
+ * `before` undoes the edit and restoring `after` redoes it.
+ */
+export interface Edit {
+  readonly before: ReadonlyMap<number, Chunk | null>;
+  readonly after: ReadonlyMap<number, Chunk | null>;
 }
 
 /**
@@ -23,14 +35,76 @@ export interface WorldOptions {
  */
 export class World {
   readonly layout: ChunkLayout;
-  readonly states = new CellStateTable();
+  readonly states: CellStateTable;
   readonly #chunks = new Map<number, Chunk>();
   readonly #dirty = new Set<number>();
   #journal: ChangedBox[] | null = null;
+  // While an edit is open: each touched chunk as it was before its first write.
+  #edit: Map<number, Chunk | null> | null = null;
   #cellCount = 0;
 
   constructor(options: WorldOptions = {}) {
     this.layout = new ChunkLayout(options.chunkBits);
+    this.states = options.states ?? new CellStateTable();
+  }
+
+  /**
+   * A copy of the world that shares every chunk until one side writes to it, and shares the
+   * state table. Cheap whatever the world's size: previews and dry runs apply commands to a
+   * fork and throw it away.
+   */
+  fork(): World {
+    const copy = new World({ chunkBits: this.layout.bits, states: this.states });
+    for (const [key, chunk] of this.#chunks) copy.#chunks.set(key, chunk.clone());
+    copy.#cellCount = this.#cellCount;
+    return copy;
+  }
+
+  /** Starts recording an edit: every chunk is snapshotted before its first write. */
+  beginEdit(): void {
+    if (this.#edit) throw new Error("An edit is already open");
+    this.#edit = new Map();
+  }
+
+  /** Ends the open edit and returns the touched chunks before and after it. */
+  endEdit(): Edit {
+    const before = this.#edit;
+    if (!before) throw new Error("No edit is open");
+    this.#edit = null;
+    const after = new Map<number, Chunk | null>();
+    for (const key of before.keys()) after.set(key, this.#chunks.get(key)?.clone() ?? null);
+    return { before, after };
+  }
+
+  /**
+   * Puts snapshotted chunks back (an Edit's `before` to undo it, `after` to redo it). The
+   * snapshots stay untouched, so they can be restored again. Marks the chunks and their
+   * neighbours dirty and records their boxes as changed, like any edit.
+   */
+  restore(chunks: ReadonlyMap<number, Chunk | null>): void {
+    const L = this.layout;
+    for (const [key, snapshot] of chunks) {
+      const current = this.#chunks.get(key);
+      this.#snapshot(key, current);
+      this.#cellCount += (snapshot?.count ?? 0) - (current?.count ?? 0);
+      if (snapshot && snapshot.count > 0) this.#chunks.set(key, snapshot.clone());
+      else this.#chunks.delete(key);
+      const [cx, cy, cz] = chunkKeyToCoords(key);
+      const last = L.size - 1;
+      this.#markDirty(cx, cy, cz, 0, last, 0, last, 0, last);
+      this.#journal?.push({
+        x0: cx * L.size,
+        y0: cy * L.size,
+        z0: cz * L.size,
+        x1: cx * L.size + last,
+        y1: cy * L.size + last,
+        z1: cz * L.size + last,
+      });
+    }
+  }
+
+  #snapshot(key: number, chunk: Chunk | undefined): void {
+    if (this.#edit && !this.#edit.has(key)) this.#edit.set(key, chunk?.clone() ?? null);
   }
 
   /** Number of occupied cells. */
@@ -64,17 +138,22 @@ export class World {
     const cz = L.toChunk(z);
     const key = chunkKey(cx, cy, cz);
     let chunk = this.#chunks.get(key);
+    const lx = L.toLocal(x);
+    const ly = L.toLocal(y);
+    const lz = L.toLocal(z);
+    const index = L.localIndex(lx, ly, lz);
     if (!chunk) {
       if (id === EMPTY_ID) {
         return false;
       }
+      this.#snapshot(key, undefined);
       chunk = new Chunk(L);
       this.#chunks.set(key, chunk);
+    } else if (this.#edit) {
+      if (chunk.get(index) === id) return false;
+      this.#snapshot(key, chunk);
     }
-    const lx = L.toLocal(x);
-    const ly = L.toLocal(y);
-    const lz = L.toLocal(z);
-    const previous = chunk.set(L.localIndex(lx, ly, lz), id);
+    const previous = chunk.set(index, id);
     if (previous === id) {
       return false;
     }
@@ -125,6 +204,7 @@ export class World {
           const lx1 = cx === L.toChunk(x1) ? L.toLocal(x1) : last;
           const key = chunkKey(cx, cy, cz);
           let chunk = this.#chunks.get(key);
+          this.#snapshot(key, chunk);
           if (!chunk) {
             if (id === EMPTY_ID) {
               continue;

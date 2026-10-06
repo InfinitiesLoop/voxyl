@@ -325,6 +325,30 @@ part family. Property tests check the invariants:
 
 Each step lands with its tests and updates this document.
 
+### Progress
+
+- **Step 1 done (2026-10-06).** All in `packages/core`:
+  - `rotation.ts`: the 24 rotations in a fixed order (identity first, saved in cells), compose,
+    inverse, turns, mirror, facing, and canonical rotations under a symmetry group.
+  - `cell-state.ts`: states hold semantic ids and a rotation. A cell is a whole block or parts,
+    never both, and the first-part mirror is gone.
+  - `semantics.ts`: the registry's first cut (ids, names, descriptions, rename). Palettes,
+    inheritance and forms come in step 2.
+  - Chunks are copy-on-write (`Chunk.clone`, brick arrays shared until written), and
+    `Chunk.diff` skips shared bricks.
+  - `World` has `fork`, `beginEdit`/`endEdit` (an `Edit` is per-chunk before and after
+    snapshots) and `restore`.
+  - The framework is `commands/command.ts`, one file per command (`set`, `fill`, `clear`), and
+    the list in `commands/index.ts`.
+  - `Project.run` validates with Zod, applies atomically (a throw restores the snapshots), drops
+    repeated ids (last 64), and reports changed cells, bounds and per-semantic counts. `preview`
+    runs on a fork.
+  - Tests are property-based: deterministic replay; undo and redo from edits restore every
+    intermediate state exactly; forks stay independent under random writes, including 16-bit
+    palette overflow; rename touches no cell.
+  - Regions are still boxes only (step 3).
+  - The city fixture and the app now take a `Project` and resolve names through its registry.
+
 ## Future ideas
 
 - **Palette variants:** alternative looks for one palette (stone and concrete), with the

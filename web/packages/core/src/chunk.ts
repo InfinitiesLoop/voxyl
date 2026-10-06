@@ -24,6 +24,9 @@ export class Chunk {
   readonly #uniform: Uint16Array;
   readonly #data: (Uint8Array | Uint16Array | null)[];
   readonly #occupied: Uint16Array;
+  // Per brick: 1 while its array is shared with a clone, so a write must copy it first.
+  readonly #shared: Uint8Array;
+  readonly #layout: ChunkLayout;
   #count = 0;
   // 8-bit mode: slot -> id, id -> slot, and how many array cells use each slot.
   #wide = false;
@@ -45,6 +48,87 @@ export class Chunk {
     this.#uniform = new Uint16Array(bricks);
     this.#data = new Array(bricks).fill(null);
     this.#occupied = new Uint16Array(bricks);
+    this.#shared = new Uint8Array(bricks);
+    this.#layout = layout;
+  }
+
+  /**
+   * A copy that shares every brick array with this chunk until either side writes to it
+   * (copy-on-write). Costs a few small arrays, whatever the chunk holds, which makes forks and
+   * undo snapshots cheap.
+   */
+  clone(): Chunk {
+    const copy = new Chunk(this.#layout);
+    copy.#uniform.set(this.#uniform);
+    copy.#occupied.set(this.#occupied);
+    for (let brick = 0; brick < this.#data.length; brick++) {
+      const data = this.#data[brick] ?? null;
+      copy.#data[brick] = data;
+      if (data) {
+        this.#shared[brick] = 1;
+        copy.#shared[brick] = 1;
+      }
+    }
+    copy.#count = this.#count;
+    copy.#wide = this.#wide;
+    copy.#palette.length = 0;
+    copy.#palette.push(...this.#palette);
+    for (const [id, slot] of this.#slots) copy.#slots.set(id, slot);
+    copy.#refs.length = 0;
+    copy.#refs.push(...this.#refs);
+    copy.#freeSlots.push(...this.#freeSlots);
+    return copy;
+  }
+
+  /**
+   * Visits every cell that differs between two chunks of the same layout (null = empty).
+   * Bricks still shared since a clone are skipped without reading them, and a brick that is
+   * uniform on both sides is reported once through `brick` instead of cell by cell, so diffing
+   * an edit against its snapshot costs only what the edit touched.
+   */
+  static diff(
+    a: Chunk | null,
+    b: Chunk | null,
+    visit: {
+      cell(index: number, before: number, after: number): void;
+      brick(brick: number, before: number, after: number, cells: number): void;
+    },
+  ): void {
+    const ref = a ?? b;
+    if (!ref || a === b) return;
+    const L = ref.#layout;
+    const n = L.bricksPerAxis;
+    const bb = L.brickBits;
+    const bs = L.brickSize;
+    const strideZ = 1 << L.bits;
+    const strideY = 1 << (2 * L.bits);
+    for (let brick = 0; brick < n * n * n; brick++) {
+      const da = a ? (a.#data[brick] ?? null) : null;
+      const db = b ? (b.#data[brick] ?? null) : null;
+      const ua = a && !da ? (a.#uniform[brick] ?? EMPTY_ID) : EMPTY_ID;
+      const ub = b && !db ? (b.#uniform[brick] ?? EMPTY_ID) : EMPTY_ID;
+      if (!da && !db) {
+        if (ua !== ub) visit.brick(brick, ua, ub, L.brickVolume);
+        continue;
+      }
+      // Still shared since a clone: the same raw values, and neither side can have remapped
+      // slots its arrays use, so the same ids.
+      if (da && da === db) continue;
+      const bx = brick % n;
+      const bz = Math.floor(brick / n) % n;
+      const by = Math.floor(brick / (n * n));
+      for (let y = 0; y < bs; y++) {
+        for (let z = 0; z < bs; z++) {
+          const start = bx * bs + (bz * bs + z) * strideZ + (by * bs + y) * strideY;
+          const row = (z << bb) + (y << (2 * bb));
+          for (let x = 0; x < bs; x++) {
+            const before = a ? a.#idAt(brick, row + x) : EMPTY_ID;
+            const after = b ? b.#idAt(brick, row + x) : EMPTY_ID;
+            if (before !== after) visit.cell(start + x, before, after);
+          }
+        }
+      }
+    }
   }
 
   /** Number of occupied cells. */
@@ -200,6 +284,13 @@ export class Chunk {
     }
   }
 
+  #idAt(brick: number, inner: number): number {
+    const data = this.#data[brick];
+    if (!data) return this.#uniform[brick] ?? EMPTY_ID;
+    const raw = data[inner] ?? 0;
+    return this.#wide ? raw : (this.#palette[raw] ?? EMPTY_ID);
+  }
+
   #setInBrick(brick: number, inner: number, id: number): number {
     let data = this.#data[brick];
     if (!data) {
@@ -210,6 +301,11 @@ export class Chunk {
     const raw = data[inner] ?? 0;
     const previous = this.#wide ? raw : (this.#palette[raw] ?? EMPTY_ID);
     if (previous === id) return previous;
+    if (this.#shared[brick]) {
+      data = data.slice();
+      this.#data[brick] = data;
+      this.#shared[brick] = 0;
+    }
 
     if (this.#wide) {
       data[inner] = id;
@@ -234,6 +330,7 @@ export class Chunk {
       this.#count--;
       if (this.#occupied[brick] === 0) {
         this.#data[brick] = null;
+        this.#shared[brick] = 0;
         this.#uniform[brick] = EMPTY_ID;
       }
     }
@@ -261,6 +358,7 @@ export class Chunk {
     this.#count += after - before;
     this.#occupied[brick] = after;
     this.#data[brick] = null;
+    this.#shared[brick] = 0;
     this.#uniform[brick] = id;
     return changed;
   }
@@ -277,12 +375,14 @@ export class Chunk {
           this.#refs[slot] = (this.#refs[slot] ?? 0) + volume;
         }
         this.#data[brick] = data;
+        this.#shared[brick] = 0;
         return data;
       }
     }
     const data = new Uint16Array(volume);
     if (uniform !== EMPTY_ID) data.fill(uniform);
     this.#data[brick] = data;
+    this.#shared[brick] = 0;
     return data;
   }
 
@@ -326,6 +426,7 @@ export class Chunk {
       this.#data[brick] = wide;
     }
     this.#wide = true;
+    this.#shared.fill(0);
     this.#palette.length = 1;
     this.#refs.length = 1;
     this.#slots.clear();
