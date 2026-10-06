@@ -1,11 +1,11 @@
 # Voxyl Web — Migration Plan
 
-Status: **Plan accepted** (2026-10-03). **Phase 0 in progress**: chunked World with storage
-by content, greedy mesher in a worker pool, packed-quad GPU format, city fixtures, the in-app
-benchmark, and Minecraft-style lighting with two renderers, baked into quads or read from a
-light volume (see [`web-lighting.md`](web-lighting.md)), are built. Numbers are under
-"Phase 0 findings" and in the lighting plan; what is left and what comes next is under
-"Phase 0 status". Default chunk size is 64³; draw batching is deferred.
+Status: **Plan accepted** (2026-10-03). **Phase 0 done** (2026-10-06): chunked World with
+storage by content, a greedy mesher in a worker pool, Minecraft-style lighting read from a
+sparse light volume (see [`web-lighting.md`](web-lighting.md)), shaped parts, and a ChatGPT
+widget that runs relayed tool calls. 5M cells hold 120 fps on an M5 Max. Numbers are under
+"Phase 0 findings" and "Phase 0 status". **Phase 1 is next**: the core redesigned from scratch,
+starting with the design document [`web-core.md`](web-core.md).
 Reviewed as a Claude Doc
 (https://claude.ai/code/artifact/98f31d14-989b-4c28-a24c-a3d7b8630a21); this file is now the
 working copy. **Keep it (and `web-lighting.md`) up to date as we go**, in the same commit as
@@ -112,7 +112,7 @@ hosts.
 | Package | Contents | Runs in |
 | --- | --- | --- |
 | `core` | World, chunks, cell-state table, palettes, shape rules, attachments, selection, region ops, undo, prefabs | Everywhere: no DOM or Node APIs |
-| `formats` | Interchange format, NBT, Schematica, Godot project import | Everywhere |
+| `formats` | Project format, NBT, Schematica | Everywhere |
 | `tools` | MCP tool definitions: Zod schemas plus handlers over `core` | Both tool hosts |
 | `raster` | CPU capture renderer for tiers 1 and 2 | Worker, server |
 | `mesher` | Chunk meshing, part and model geometry cache | Worker pool |
@@ -324,11 +324,11 @@ gate means fixing or rethinking that phase, not starting the next one.
 | Phase | Scope in brief | Gate to pass before moving on |
 | --- | --- | --- |
 | 0 · Spike: prove the bets | Chunked core, worker mesher, renderer, relay test | 5M cells at 60 fps p95 on the reference laptop; widget relay works, or fallback chosen |
-| 1 · Core parity | Headless world, ops, undo, prefabs, Godot exporter | Parity suite green on every saved project; schematic export byte-identical to Godot |
-| 2 · Web viewer | Textured 3D, palette swaps, 2D grid, OPFS storage | Perf targets met with textures on; golden images match Godot captures |
+| 1 · Core, redesigned | Headless world, ops, undo, selection, prefabs, project format, designed fresh | Design reviewed with the user; property and unit tests green; generated sample builds round-trip through the format; format size and op bandwidth measured |
+| 2 · Web viewer | Textured 3D, palette swaps, 2D grid, OPFS storage | Perf targets met with textures on; golden images stable |
 | 3 · Editor | New web UX, placement, selection, paste, lighting | A real hand-build session done on the web; perf targets hold while editing |
 | 4 · Agents on the web | Relay, headless host, ~70 tools, capture tiers, export | Agent eval builds as well as in Godot; Godot retired; private ChatGPT test |
-| 5 · Minecraft import | Jar and modpack import in browser, schematic import | Full GTNH library imports in the browser; output matches the Godot import |
+| 5 · Minecraft import | Jar and modpack import in browser, schematic import | Full GTNH library imports in the browser; spot checks match the game |
 | 6 · Public launch | Accounts, sync, sharing, quotas, ChatGPT app listing | ChatGPT app approved and listed; hosting cost tracked per active user |
 
 **Scope by phase**
@@ -337,10 +337,17 @@ gate means fixing or rethinking that phase, not starting the next one.
    with the palette lookup texture. Add a Godot exporter for Conduit Factory, seeded synthetic
    1M, 5M and 20M-cell fixtures, a dense shaped-parts fixture, and a tier 1 CPU rasterizer
    prototype. Test whether a ChatGPT widget can hold a WebSocket to our relay.
-1. **Core parity.** The full headless `core`: cells, parts, attachments, palette stack, shape
-   rules, orientation and transforms, region ops, selection set ops, `structure_find`, undo,
-   prefabs, project settings (north, grid offset) and the interchange format. Port the Godot
-   exporter for every project and the library. Port `SmokeTest`.
+1. **Core, redesigned (greenfield).** The user's decision (2026-10-06): the web version doesn't
+   need to be compatible with the Godot app. Godot's code and formats are inspiration, not a
+   spec. That app grew slowly and organically, and it was designed before MCP support existed
+   and with local-only storage in mind. This one starts knowing what is coming and optimizes
+   for performance and bandwidth: ops small enough to stream, a compact project format, tools
+   designed around agents. Ending up 90% the same is fine; the point is to look again. No
+   Godot exporter and no parity suite: sample builds are generated on the web side. Scope: the
+   full headless `core` (cells, parts, attachments, palette stack, shape rules, orientation and
+   transforms, region ops, selection, `structure_find`, undo, prefabs, project settings) and
+   the project format. It starts with a design document,
+   [`web-core.md`](web-core.md), reviewed with the user before building.
 2. **Web viewer.** Open any exported project read-only, with textured 3D, palette swaps, shaped
    parts and models, panes, sky, a read-only 2D grid, a basic multi-view shell and OPFS storage.
 3. **Editor.** A UX designed fresh for the web rather than a copy of the Godot layout. It covers
@@ -361,8 +368,10 @@ gate means fixing or rethinking that phase, not starting the next one.
    set, ChatGPT app submission and the donation link (see "Storage, limits and funding").
    Local-only projects need no server, so they can ship as early as Phase 3.
 
-**While the port runs.** Godot gets fixes and keeps being used for builds, but no large new
-features from Phase 1 until the Phase 4 gate. Otherwise the parity target keeps moving.
+**While the web version is built.** Godot stays the daily driver and gets fixes. With no
+parity target, Godot features no longer need freezing, but large new ones are better spent on
+the web version. Existing Godot builds don't migrate automatically. If a few are worth keeping,
+a one-off importer can come later.
 
 ### Phase 0 findings
 
@@ -428,12 +437,28 @@ Done and proven, all on the B580 (headless Edge plus the user's Chrome at 3840x1
   below). The user dropped the Godot exporter for Phase 0: microblocks and ArchitectureCraft
   roofs on the city fixture test the same thing.
 
-Still open for the Phase 0 gate:
+The Phase 0 gate (closed 2026-10-06):
 
-- [ ] Run the benchmark on the MacBook M4 (the reference laptop for the gate). On hold.
+- [x] Laptop run, on the user's MacBook (Apple M5 Max, not the M4 first named), below. The
+  user judged the performance good enough not to test weaker hardware for now: older machines
+  will be slower but usable, and most builds are far smaller than 5M cells.
 - [x] ChatGPT widget relay test (2026-10-05, "ChatGPT widget live probe" below): a ChatGPT
   tool call ran inside the widget and returned an image the widget rendered.
-- [ ] Tier 1 CPU rasterizer prototype (agent screenshots). On hold.
+- [x] Tier 1 CPU rasterizer: moved to Phase 4, where agent screenshots and ChatGPT preview
+  cards need it. Nothing in Phases 1 to 3 does, and the bet is low risk.
+
+**MacBook run** (2026-10-06, Chrome, WebGPU, 3456x1746 viewport, 120 Hz, lighting on,
+64³ chunks, 8 mesh workers). Locked at 120 fps on both cities:
+
+| City (5M cells) | Frame p50 / p95 | GPU p50 / p95 | Main thread p50 | Single edit p50 | 100k fill | 1M fill / clear | Full relight | Initial mesh |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Plain | 8.3 / 9.3 ms | 5.3 / 5.8 ms | 1.2 ms | 8.3 ms (1 frame) | 168 ms | 0.86 / 1.18 s | 0.89 s | 1.37 s |
+| Shaped | 8.3 / 9.2 ms | 4.1 / 5.9 ms | 1.7 ms | 15.9 ms (2 frames) | 152 ms | 0.84 / 1.20 s | 0.74 s | 0.47 s |
+
+Fills and relights are about 3x faster than on the B580 desktop (1M fills took 2.6-3.4 s
+there, held up by the light engine).
+
+**Phase 0 is done.** Phase 1 starts as a greenfield design (see "Scope by phase").
 
 **Next steps, in order** (updated 2026-10-05, when the user called lighting done for now):
 
@@ -445,10 +470,11 @@ Still open for the Phase 0 gate:
    than adequate (2026-10-05): perf work waits until it comes up again.
 5. ~~The ChatGPT widget live probe~~ (done, two rounds, below). Left for later: the phone
    apps.
-6. Later: the rasterizer and the M4 run. Perf backlog, for when it matters: faster cube
-   meshing (binary greedy meshing, for one-frame edits on decorated builds; see "Shaped
-   parts") and light engine speed (1M-cell fills relight in 2.6-3.4 s; see
-   [`web-lighting.md`](web-lighting.md), "Next steps").
+6. ~~The laptop run~~ (done, M5 Max, above). The rasterizer moved to Phase 4. Perf backlog,
+   for when it matters: faster cube meshing (binary greedy meshing, for one-frame edits on
+   decorated builds; see "Shaped parts") and light engine speed (1M-cell fills relight in
+   2.6-3.4 s on the B580, 0.9-1.2 s on the M5 Max; see [`web-lighting.md`](web-lighting.md),
+   "Next steps").
 
 ### Shaped parts (2026-10-05)
 
@@ -624,23 +650,25 @@ With that, an idle widget answered a relay after 150 s (21 ms over WebSocket).
 
 ## Testing and verification
 
-The Godot app is the oracle. The web core has to match it on the same inputs before anything is
-built on top. Most tests run headless in Node in seconds, and only rendering and interaction
-need a browser.
+The web version is designed fresh (Phase 1), so there is no oracle app to match. Correctness
+comes from properties (an op and its undo restore the exact state; a rotation applied four
+times is the identity; save then load is lossless) and from generated sample builds. Most
+tests run headless in Node in seconds, and only rendering and interaction need a browser.
 
 | Layer | Tool | What it proves | Runs |
 | --- | --- | --- | --- |
 | Unit and property | Vitest, fast-check | Region ops, transforms, rotation round-trips, undo restoring exact state, shape slot rules | Every commit |
-| Godot parity | Vitest plus fixtures exported from Godot | Same op script gives the same cells, `region_stats` and Schematica bytes in both apps | Every commit |
-| MCP contract | Vitest against the tool registry | Each tool's schema, arguments and error codes match the ported `McpTest` cases | Every commit |
+| Format round-trip | Vitest plus generated sample builds | Save and load are lossless; format size and op bandwidth stay within budget | Every commit |
+| Schematic export | Vitest, and loading exports in Minecraft at each gate | Exports are valid Schematica files that Minecraft and mods load | Every commit, plus a manual check at each gate |
+| MCP contract | Vitest against the tool registry | Each tool's schema, arguments and error codes; ChatGPT's duplicate calls change nothing | Every commit |
 | Golden images | Vitest (CPU rasterizer); Playwright with SwiftShader (GPU renderer) | Renders match committed images within a pixel tolerance | Every PR |
 | Performance | Vitest bench (CPU); scripted Playwright runs on the reference machine (GPU) | Targets above, regression budget 10% | CPU every PR, GPU at each gate |
 | End to end | Playwright | Open, edit, undo, save, reload, export through the real UI | Every PR |
 | Agent eval | A fixed set of build prompts and reference images, run through the real MCP surface | Agents still build well after tool changes, scored against reference renders | At each gate |
 
-**Parity harness.** A small Godot exporter writes projects, palettes and the library to the new
-interchange format, and records op scripts (the same tool calls replayed in both apps).
-Byte-equal schematic export is the strictest check and the cheapest to automate.
+**Sample builds.** Seeded generators on the web side (the city, the shaped-parts city, and more
+as needed) stand in for real projects. A few real builds can be rebuilt by agents through the
+tools, which doubles as the agent eval.
 
 **Type safety.** `strict` TypeScript with `noUncheckedIndexedAccess`. Tool argument schemas are
 written once with Zod, which generates both the MCP JSON schema and the runtime validation.
@@ -654,7 +682,7 @@ host tool execution. Both are checked in Phase 0, before any port work.
 | --- | --- | --- |
 | Minecraft and mod textures can't be hosted | The current 85 MB library is imported from Mojang and mod jars. A public site can't serve it. | Imports run in the browser from the user's own jar or modpack and stay in their OPFS, never uploaded. Hosted users get an original or openly licensed default set and tier 1 and 2 colours. Block ids still map for schematic export. |
 | ChatGPT widget sandbox | Client-side tool execution needs the widget iframe to hold a live connection to our relay. The Apps SDK's network rules may not allow it. | Proved in Phase 0 (2026-10-05): a WebSocket from the widget works, relayed tool calls take 20-70 ms, and WebGPU, workers and OPFS all work. The socket survives 15 minutes in a hidden tab. Phones are still untested; the headless host covers a widget that has gone away. ChatGPT currently runs each tool call twice, so mutating tools are idempotent. |
-| Port drift | Godot keeps gaining features while the port chases it, so the target keeps moving. | Freeze large Godot features from Phase 1 until the Phase 4 gate. Fixes and builds continue. |
+| Redesign scope creep | With no parity target, "reimagine everything" can sprawl. | Each Phase 1 area gets a short design pass in `web-core.md`, reviewed before building. The Godot app's feature list is the scope, not its implementation. |
 | Renderer misses targets | The whole case for the move rests on big builds staying smooth. | Phase 0 measures the renderer on 5M cells before anything else is ported. If it misses, the fallback is a Rust or WASM mesher behind the same worker interface. |
 | Shaped-part and model meshing cost | Parts and custom models can't be greedy-merged, and dense microblock builds may blow the triangle budget. | Include a dense parts fixture in the Phase 0 bench, and cache per-chunk part geometry. Measured in Phase 0: the GPU copes; mesh time is the cost (see "Shaped parts"). |
 | Agent quality differs by host model | ChatGPT's model may use the tools less well than Claude does. | The agent eval set runs against several models at each gate. Tool descriptions are tuned for the weakest one that matters. |
