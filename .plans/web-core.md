@@ -1,9 +1,8 @@
 # Voxyl Web — Core Design (Phase 1)
 
-Status: **In review.** First draft 2026-10-06. The user's answers are folded in the same day
-(marked **Decided**); one model is still to confirm (section 2, "Questions"). Nothing here is
-built yet beyond what Phase 0 left in `packages/core` (chunks, storage by content, interned
-cell states, raycast).
+Status: **Accepted, being built** (2026-10-06). The user reviewed the draft the same day, and
+their answers are folded in (marked **Decided** or **Confirmed**). Progress is under "Build
+order".
 
 Phase 1 is a greenfield design (the user's decision, 2026-10-06): the web version doesn't
 have to be compatible with the Godot app. Godot's code and formats are inspiration. That app
@@ -130,18 +129,34 @@ an optional override. The proposal splits them by what they are instead:
 Whole-block geometry (stairs, slab, full cube) still comes from the block the look maps to, as
 in Godot. An unmapped semantic is undecided and draws as a tinted cube (principle 5).
 
-### Questions for the user
+### Confirmed (2026-10-06)
 
-1. **Does this model match what you meant by palette inheritance?** In particular: derived
-   semantics are created the first time they are placed, and a child palette's own semantics
-   are what make up its region.
-2. **Shared palettes.** Godot's palettes are global and reused across projects. Here a palette
-   owns semantics, which are per project. Proposal: a project's palettes live in the project;
-   a reusable "theme" is a palette from a shared library that a project's root palette extends,
-   so a project gets its looks and keeps its own groups.
-3. **Alternative looks side by side** (keep a stone version and a concrete version and flip
-   between them). Inheritance doesn't give this by itself. It could come later as "variants" of a
-   palette, with the project choosing which variant is active. Not needed for Phase 1.
+1. **The model above is confirmed**: derived semantics are created the first time they are
+   placed, and a palette's own semantics make up its region. Parameters split as proposed:
+   intent on the semantic, material on the look.
+2. **Shared palettes are palettes defined at the user level instead of in a project**, and
+   identical otherwise. Projects define their own palettes, since needs vary by project. A
+   project palette can extend a shared one (a theme), so several projects follow one set of
+   looks without copying changes between them.
+3. **Palette variants are a future idea**, not Phase 1: keep a stone look and a concrete look of
+   the same palette and flip which one is active. Noted under "Future ideas".
+
+### Re-semantic: moving cells to another semantic
+
+The user wants to select cells and switch them to a different semantic ("this area should
+have used a more specific semantic"). That is the `resemantic` command: every cell in a region
+whose semantic is A becomes B, and parts keep their shapes and slots. Conflicts are sorted by
+whether they can be fixed without guessing:
+
+| Conflict | Example | Handling |
+| --- | --- | --- |
+| None | Same form, rotation allowed | Switch |
+| Rotation not allowed by B's placement profile | A log on its side becomes a block that only stands upright | Fixable: snap to the nearest allowed rotation, or reset it, and report how many cells changed |
+| Whole block versus part, or a different shape | A full block to a strip semantic | Not fixable automatically: those cells are skipped and reported, unless the command asks to force it |
+
+The command reports how many cells it switched, fixed and skipped, so an agent or the editor
+can show what didn't fit. Which forced conversions make sense (a full block to a full-cover
+part, say) is left for when it comes up.
 
 ## 3. Orientation and placement
 
@@ -310,13 +325,18 @@ part family. Property tests check the invariants:
 
 Each step lands with its tests and updates this document.
 
+## Future ideas
+
+- **Palette variants:** alternative looks for one palette (stone and concrete), with the
+  project choosing which is active. Not planned yet; for later ideation.
+
 ## Decision log
 
 | # | Question | Decision (2026-10-06) |
 | --- | --- | --- |
 | 1 | Commands or deltas as the unit of sync and logging | Commands. Each command kind is one self-contained file; everything else is generic. |
 | 2 | Orientation | The 24 cube rotations. Placement familiar from Minecraft, a "rotate on face" fix, and per-block opt-in rules as data, with no block-specific code. |
-| 3 | Semantics | A per-project registry. Cells hold semantic ids, renames are cheap, and palettes only map. Where each parameter lives: proposal in section 2, to confirm. |
+| 3 | Semantics | A per-project registry. Cells hold semantic ids, renames are cheap, and palettes only map. Each semantic belongs to one palette, its group. Derived semantics come from palette inheritance. Intent sits on the semantic, material on the look. Shared palettes are defined at the user level. A `resemantic` command switches cells to another semantic. |
 | 4 | Named regions | No. Groups of a build are palettes, with palette inheritance. |
 | 5 | Palette block references | Qualified `library:block` references; no library search order. |
 | 6 | Undo across sessions | Session-only for now, with the door kept open. The undo stack and the op log are one history log. |
