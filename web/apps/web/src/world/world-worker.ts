@@ -7,7 +7,14 @@
 import { type CellStateTable, EMPTY_ID, type Project, raycast } from "@voxyl/core";
 import { CITY_THEME_KEY, cityThemeOf, cityThemePalette } from "@voxyl/fixtures";
 import type { StateShape } from "@voxyl/mesher";
-import { type LightingMode, ProjectStore, stateLooks, WorldSession } from "@voxyl/session";
+import {
+  describeState,
+  type LightingMode,
+  ProjectStore,
+  stateLooks,
+  WorldSession,
+} from "@voxyl/session";
+import { planeToWorld } from "../views/plane.ts";
 import {
   buildSample,
   type Framing,
@@ -18,14 +25,15 @@ import {
   type WorldInfo,
 } from "../worlds.ts";
 import { OpfsFolder } from "./opfs-folder.ts";
-import type {
-  Command,
-  FromWorld,
-  MeshReply,
-  MeshRequest,
-  RayHit,
-  Replies,
-  ToWorld,
+import {
+  type Command,
+  type FromWorld,
+  MAX_SLICE_CELLS,
+  type MeshReply,
+  type MeshRequest,
+  type RayHit,
+  type Replies,
+  type ToWorld,
 } from "./protocol.ts";
 
 // The app compiles with DOM types, so describe the worker scope we use rather than pulling
@@ -134,6 +142,8 @@ async function open(command: Extract<Command, { type: "load" }>): Promise<WorldI
     name: project.settings.name,
     saved,
     theme: cityThemeOf(next.semantics),
+    north: next.settings.north,
+    grid: next.settings.grid,
     chunkSize: command.chunkSize,
     ...framing,
     loadMs: performance.now() - start,
@@ -193,6 +203,26 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       if (!hit) return null;
       const semantic = nameOf(world().states.get(hit.id)?.semantic ?? 0);
       return { cell: hit.cell, normal: hit.normal, id: hit.id, semantic } satisfies RayHit;
+    }
+    case "slice": {
+      const { axis, depth, u0, v0, width, height } = command;
+      if (width < 0 || height < 0 || width * height > MAX_SLICE_CELLS)
+        throw new Error(`A slice of ${width} x ${height} cells is too big`);
+      const w = world();
+      const ids = new Uint16Array(width * height);
+      const below = new Uint16Array(width * height);
+      for (let j = 0; j < height; j++)
+        for (let i = 0; i < width; i++) {
+          const [x, y, z] = planeToWorld(axis, depth, u0 + i, v0 + j);
+          const [bx, by, bz] = planeToWorld(axis, depth - 1, u0 + i, v0 + j);
+          ids[i + j * width] = w.getId(x, y, z);
+          below[i + j * width] = w.getId(bx, by, bz);
+        }
+      return { ids, below };
+    }
+    case "cell": {
+      const state = world().get(...command.at);
+      return state && project ? describeState(state, project.semantics) : null;
     }
     case "rayEdit": {
       const hit = raycast(world(), [...command.origin], [...command.dir], command.reach);
@@ -327,7 +357,7 @@ async function run(message: Extract<ToWorld, { seq: number }>): Promise<void> {
   const { seq } = message;
   try {
     const value = await handle(message);
-    post({ type: "reply", seq, value }, value instanceof Uint8Array ? [value.buffer] : []);
+    post({ type: "reply", seq, value }, transfersOf(value));
   } catch (error) {
     post({ type: "error", seq, message: error instanceof Error ? error.message : String(error) });
   }
@@ -357,3 +387,12 @@ setInterval(() => {
     },
   });
 }, STATS_INTERVAL_MS);
+
+/** The buffers of typed arrays in a reply, moved rather than copied. */
+function transfersOf(value: unknown): Transferable[] {
+  if (ArrayBuffer.isView(value)) return [value.buffer as ArrayBuffer];
+  if (value === null || typeof value !== "object") return [];
+  return Object.values(value)
+    .filter((v): v is ArrayBufferView => ArrayBuffer.isView(v))
+    .map((v) => v.buffer as ArrayBuffer);
+}

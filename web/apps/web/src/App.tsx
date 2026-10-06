@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { type BenchResult, runBench } from "./bench/bench.ts";
 import { BenchPanel, Hud } from "./Hud.tsx";
 import { type Backend, Engine, type EngineStats } from "./scene/Engine.ts";
+import { GridPane } from "./views/GridPane.tsx";
 import {
   CHUNK_SIZES,
   sampleKind,
@@ -25,6 +26,8 @@ export interface Settings {
   daylight: number;
   /** Minecraft's Brightness, 0 (Moody) to 100 (Bright); 50 is its default. */
   brightness: number;
+  /** The 3D view alone, or beside a 2D view of one slice. */
+  views: "3d" | "split";
 }
 
 function percent(value: string | null, fallback: number): number {
@@ -49,6 +52,7 @@ function readSettings(): Settings {
     lighting: lighting === null || lighting === "off" ? "off" : "volume",
     daylight: percent(params.get("daylight"), 100),
     brightness: percent(params.get("brightness"), 50),
+    views: params.get("views") === "split" ? "split" : "3d",
   };
 }
 
@@ -60,6 +64,7 @@ function writeSettings(s: Settings): void {
     lighting: s.lighting,
     daylight: String(s.daylight),
     brightness: String(s.brightness),
+    views: s.views,
   });
   history.replaceState(null, "", `?${params}`);
 }
@@ -239,8 +244,20 @@ export function App() {
   const loading = tasks.at(-1) ?? null;
   return (
     <div className="app">
-      <div ref={hostRef} className="viewport" />
-      {locked && <div className="crosshair" />}
+      <div className="panes">
+        <div className="pane-3d">
+          <div ref={hostRef} className="viewport" />
+          {locked && <div className="crosshair" />}
+          {!locked && !loading && !benchStep && (
+            <div className="hint">
+              Click the view to fly · WASD / arrows move · Space, right Ctrl or right Alt up · Shift
+              or / down · \ sprint · wheel sets speed · left click erases · right click places ·
+              middle click picks · Esc releases
+            </div>
+          )}
+        </div>
+        {settings.views === "split" && engine && <GridPane engine={engine} info={info} />}
+      </div>
       <Hud
         backend={backend}
         stats={stats}
@@ -256,13 +273,6 @@ export function App() {
       />
       {(loading || benchStep) && <div className="banner">{benchStep ?? loading}…</div>}
       {bench && <BenchPanel result={bench} onClose={() => setBench(null)} />}
-      {!locked && !loading && !benchStep && (
-        <div className="hint">
-          Click the view to fly · WASD / arrows move · Space, right Ctrl or right Alt up · Shift or
-          / down · \ sprint · wheel sets speed · left click erases · right click places · middle
-          click picks · Esc releases
-        </div>
-      )}
     </div>
   );
 }

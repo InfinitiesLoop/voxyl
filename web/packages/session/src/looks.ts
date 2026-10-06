@@ -1,8 +1,16 @@
 // What each cell state looks like, from the project's registry: semantics resolve their looks
 // through palette inheritance, so re-skinning a palette changes this table and never a cell.
 
-import type { CellStateTable, Look, SemanticId, SemanticRegistry } from "@voxyl/core";
+import {
+  type CellState,
+  type CellStateTable,
+  type Look,
+  ROOT_PALETTE,
+  type SemanticId,
+  type SemanticRegistry,
+} from "@voxyl/core";
 import { type LightMaterials, packEmission } from "@voxyl/light";
+import { slotName } from "@voxyl/shapes";
 
 /** How an undecided semantic with no hint colour draws. */
 export const UNDECIDED_COLOR = "#8a8f98";
@@ -60,4 +68,19 @@ export function stateLooks(states: CellStateTable, registry: SemanticRegistry): 
     if (look.glow) emission[id] = packEmission(color, GLOW_LEVEL);
   }
   return { colors, materials: { opaque, emission } };
+}
+
+/** A cell state in words: "Trim", or its parts, "Trim strip down, Glass post center-y". */
+export function describeState(state: CellState, registry: SemanticRegistry): string {
+  const name = (semantic: SemanticId) => {
+    if (!registry.has(semantic)) return "unknown";
+    const resolved = registry.resolve(semantic);
+    const palette =
+      resolved.palette === ROOT_PALETTE ? "" : ` (${registry.palette(resolved.palette).name})`;
+    return `${resolved.name}${palette}`;
+  };
+  if (state.parts.length === 0) return name(state.semantic);
+  return state.parts
+    .map((p) => `${name(p.semantic)} ${p.shape} ${slotName(p.shape, p.slot)}`)
+    .join(", ");
 }

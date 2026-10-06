@@ -306,6 +306,9 @@ importers:
       '@voxyl/mesher':
         specifier: workspace:*
         version: link:../mesher
+      '@voxyl/shapes':
+        specifier: workspace:*
+        version: link:../shapes
     devDependencies:
       '@voxyl/fixtures':
         specifier: workspace:*

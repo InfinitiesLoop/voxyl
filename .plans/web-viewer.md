@@ -81,3 +81,20 @@ palettes, and every view is a lens on the one world in the world worker.
     Saving again still encodes, hashes and deflates every storage chunk; the editor's autosave
     (Phase 3) should encode only chunks edited since the last save, and skip deflating blobs
     the folder already has.
+- **Step 3 done (2026-10-06).** The 2D view, beside the 3D one ("2D view" button,
+  `?views=split`).
+  - `apps/web/src/views/plane.ts`: slices and screen orientation. A plan puts the project's
+    real north at the top with east to the right (`settings.north`); cuts across x or z show
+    up as up. Tested both ways round for every north.
+  - `GridView` draws a slice on a 2D canvas, one pixel per cell into an offscreen image
+    scaled up without smoothing, with the layer below showing faintly through empty cells,
+    grid lines (major every 16 from the project's grid offset), the 3D camera as a dot, and
+    the hovered cell outlined. It asks the world worker for the cells it shows (`slice`: the
+    ids of a rectangle and the layer below, up to 1M cells) and colours them from the same
+    looks table as the 3D view, so it owns nothing and follows edits and re-skins (it
+    refetches when the Engine's revision moves, at most every 120 ms). Pan by dragging, zoom
+    about the pointer with the wheel, step layers with `[` `]` or Page Up and Page Down
+    (Shift for 4). The toolbar has the slice axis, the layer and what the hovered cell holds
+    (`cell`: "Trim", or each part with its shape and slot name, palette named when not the
+    root).
+  - Parts draw as their first part's colour; drawing their footprints is editor work.

@@ -218,6 +218,15 @@ export function Hud({
         <button type="button" onClick={onHome} disabled={busy}>
           Overview
         </button>
+        <button
+          type="button"
+          aria-pressed={settings.views === "split"}
+          onClick={() =>
+            onSettings({ ...settings, views: settings.views === "split" ? "3d" : "split" })
+          }
+        >
+          2D view
+        </button>
         <button type="button" onClick={onBench} disabled={busy}>
           Run benchmark
         </button>

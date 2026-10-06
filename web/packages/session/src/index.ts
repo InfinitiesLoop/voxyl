@@ -4,7 +4,13 @@ export {
   type LightLayoutOptions,
   type LightLayoutUpdate,
 } from "./light-layout.ts";
-export { lookColor, type StateLooks, stateLooks, UNDECIDED_COLOR } from "./looks.ts";
+export {
+  describeState,
+  lookColor,
+  type StateLooks,
+  stateLooks,
+  UNDECIDED_COLOR,
+} from "./looks.ts";
 export {
   type LightingMode,
   type MaterialsFor,

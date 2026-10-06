@@ -166,7 +166,9 @@ dd {
   left: 50%;
   transform: translateX(-50%);
   padding: 6px 12px;
-  white-space: nowrap;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  text-align: center;
 }
 
 .crosshair {
@@ -204,4 +206,82 @@ dd {
 .project-name em {
   color: var(--text-quiet);
   font-style: normal;
+}
+
+.panes {
+  position: absolute;
+  inset: 0;
+  display: flex;
+}
+
+.pane-3d {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.grid-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  font-size: 12.5px;
+  color: var(--text-quiet);
+}
+
+.grid-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.grid-depth {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.grid-depth input {
+  width: 64px;
+  font: inherit;
+  color: var(--text);
+  background: #23272d;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 6px;
+}
+
+.grid-hover {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.grid-host {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.grid-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  outline: none;
+  cursor: grab;
+}
+
+button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
 }

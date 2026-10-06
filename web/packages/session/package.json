@@ -11,7 +11,8 @@
   "dependencies": {
     "@voxyl/core": "workspace:*",
     "@voxyl/light": "workspace:*",
-    "@voxyl/mesher": "workspace:*"
+    "@voxyl/mesher": "workspace:*",
+    "@voxyl/shapes": "workspace:*"
   },
   "devDependencies": {
     "@voxyl/fixtures": "workspace:*",

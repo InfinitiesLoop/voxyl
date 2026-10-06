@@ -10,7 +10,11 @@
 
 import type { StateShape } from "@voxyl/mesher";
 import type { LightingMode, LightLayoutUpdate, MeshJob, ProjectEntry } from "@voxyl/session";
+import type { SliceAxis } from "../views/plane.ts";
 import type { WorldInfo, WorldSource } from "../worlds.ts";
+
+/** The most cells one slice request may ask for. */
+export const MAX_SLICE_CELLS = 1 << 20;
 
 export type Vec3 = readonly [number, number, number];
 
@@ -42,6 +46,21 @@ export type Command =
   | { type: "setId"; at: Vec3; id: number }
   | { type: "fillBox"; from: Vec3; to: Vec3; id: number }
   | { type: "raycast"; origin: Vec3; dir: Vec3; reach: number }
+  /**
+   * The state ids of a rectangle of a slice (see views/plane.ts), and of the layer just below
+   * or behind it (depth - 1), row by row along u. At most MAX_SLICE_CELLS.
+   */
+  | {
+      type: "slice";
+      axis: SliceAxis;
+      depth: number;
+      u0: number;
+      v0: number;
+      width: number;
+      height: number;
+    }
+  /** What a cell holds, in words, or null if it is empty. */
+  | { type: "cell"; at: Vec3 }
   /** Raycast and edit what it hits: erase it, or place `id` against it. */
   | {
       type: "rayEdit";
@@ -66,6 +85,8 @@ export interface Replies {
   setId: boolean;
   fillBox: number;
   raycast: RayHit | null;
+  slice: { ids: Uint16Array; below: Uint16Array };
+  cell: string | null;
   rayEdit: boolean;
 }
 

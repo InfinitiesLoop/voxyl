@@ -1,4 +1,4 @@
-import { chunkKeyToCoords, Project } from "@voxyl/core";
+import { chunkKeyToCoords, type Direction, Project } from "@voxyl/core";
 import { CITY_THEMES, type CityTheme, generateCity, prepareCityProject } from "@voxyl/fixtures";
 
 export type WorldKind =
@@ -51,6 +51,9 @@ export interface WorldInfo {
   readonly center: readonly [number, number, number];
   readonly extent: number;
   readonly top: number;
+  /** Which of its directions is real north, and its major grid offset (project settings). */
+  readonly north: Direction;
+  readonly grid: readonly [number, number];
   /** Which city theme it shows (CITY_THEMES), or null for a project without one. */
   readonly theme: number | null;
   /** Time to generate or open it. */

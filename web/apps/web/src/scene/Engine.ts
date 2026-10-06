@@ -76,6 +76,10 @@ export class Engine {
   #chunks: ChunkRenderer | null = null;
   #worldStats: WorldStats | null = null;
   #placeId = 0;
+  /** StateLooks.colors for the world on screen. */
+  #looks: Uint8Array = new Uint8Array(0);
+  /** Counts world changes seen (meshes, light, looks), so other views know to refresh. */
+  #revision = 0;
   #lighting: LightingMode = "off";
   #daylight = 1;
   #brightness = 0.5;
@@ -167,6 +171,16 @@ export class Engine {
     });
     this.#placeId = await this.world.request({ type: "intern", semantic: PLACE_SEMANTIC });
     return info;
+  }
+
+  /** Every cell state's look (StateLooks.colors) for the world on screen. */
+  get looks(): Uint8Array {
+    return this.#looks;
+  }
+
+  /** Grows whenever the world worker reports a change, for views that copy what they show. */
+  get revision(): number {
+    return this.#revision;
   }
 
   /** Moves the camera to the world's overview position. */
@@ -306,6 +320,8 @@ export class Engine {
       this.#worldStats = message.stats;
       return;
     }
+    if (message.type === "looks") this.#looks = message.colors;
+    if (message.type !== "idle") this.#revision++;
     const chunks = this.#chunks;
     if (!chunks) return;
     if (message.type === "looks") chunks.setLooks(message.colors);
