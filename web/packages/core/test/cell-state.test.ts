@@ -34,15 +34,14 @@ describe("CellStateTable", () => {
 
   it("keeps a cell of parts free of a block semantic, and lists each part's", () => {
     const table = new CellStateTable();
-    const id = table.intern({
-      parts: [
-        { semantic: TRIM, shape: "strip", slot: 3 },
-        { semantic: MASS, shape: "slab", slot: 0 },
-      ],
-    });
+    const strip = { semantic: TRIM, shape: "strip", slot: 3 };
+    const slab = { semantic: MASS, shape: "slab", slot: 0 };
+    const id = table.intern({ parts: [strip, slab] });
     const state = table.get(id);
     expect(state?.semantic).toBe(NO_SEMANTIC);
-    expect(state && semanticsOf(state)).toEqual([TRIM, MASS]);
+    // Parts are a set, kept in one order (by shape, slot, semantic).
+    expect(state && semanticsOf(state)).toEqual([MASS, TRIM]);
+    expect(table.intern({ parts: [slab, strip] })).toBe(id);
   });
 
   it("rejects a cell with no semantic, both a semantic and parts, or a bad rotation", () => {

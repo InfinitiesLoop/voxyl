@@ -64,7 +64,7 @@ function build(north: Direction = "north") {
         {
           parts: [
             { semantic: trim, shape: "edge1", slot: 0 },
-            { semantic: wall, shape: "face1", slot: 2 },
+            { semantic: wall, shape: "face1", slot: 3 },
           ],
         },
         { parts: [{ semantic: trim, shape: "roof_tile", slot: 1 }] },
@@ -108,8 +108,8 @@ describe("copy, move and transform", () => {
     p.world.forEachCell((x, _y, z, id) => {
       const s = p.world.states.get(id);
       if (x >= 10 && z >= 10 && s?.parts.some((q) => q.shape === "face1")) {
-        // The cover on the north side (slot 2) is now on the east side (slot 5).
-        expect(s.parts.find((q) => q.shape === "face1")?.slot).toBe(5);
+        // The cover on the south side (slot 3) is now on the west side (slot 4).
+        expect(s.parts.find((q) => q.shape === "face1")?.slot).toBe(4);
       }
     });
     // The stair at (2, 0, 0) faced west; turned clockwise it faces north, at (13, 0, 12).
@@ -185,12 +185,8 @@ describe("copy, move and transform", () => {
   it("leaves parts with no image out and says so", () => {
     const p = new Project({ chunkBits: 4 });
     const s = p.semantics.add("Odd");
-    p.run(
-      cmd("set", {
-        states: [{ parts: [{ semantic: s, shape: "mystery", slot: 0 }] }],
-        cells: [0, 0, 0, 0],
-      }),
-    );
+    // Commands refuse unknown shapes, but a file can still hold one.
+    p.world.set(0, 0, 0, { parts: [{ semantic: s, shape: "mystery", slot: 0 }] });
     const r = p.run(cmd("move", { where: { box: [0, 0, 0, 0, 0, 0] }, to: [5, 0, 0], turn: 1 }));
     expect(r.report.notes.rejected).toBe(1);
     expect(p.world.getId(0, 0, 0)).not.toBe(0); // a move leaves it where it was

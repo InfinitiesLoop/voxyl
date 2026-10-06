@@ -96,6 +96,10 @@ function normalize(input: CellStateInput): CellState {
     }
     return Object.freeze({ semantic: p.semantic, shape: p.shape, slot: p.slot });
   });
+  // Parts are a set: kept in one order so the same parts are always the same state.
+  parts.sort((a, b) =>
+    a.shape !== b.shape ? (a.shape < b.shape ? -1 : 1) : a.slot - b.slot || a.semantic - b.semantic,
+  );
   const semantic = input.semantic ?? NO_SEMANTIC;
   if (parts.length > 0 && semantic !== NO_SEMANTIC) {
     throw new TypeError("A cell is either a whole block or a list of parts, not both");

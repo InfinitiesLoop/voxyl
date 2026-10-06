@@ -3,6 +3,7 @@
 // command, applies it atomically, remembers its id so a repeat is harmless, and reports what
 // changed. The undo and redo history builds on the recorded edits (step 4).
 
+import { rejectCell } from "@voxyl/shapes";
 import { type Box, unionBox } from "./box.ts";
 import { type CellState, type CellStateInput, EMPTY_ID, semanticsOf } from "./cell-state.ts";
 import type { CellSet } from "./cellset.ts";
@@ -18,9 +19,11 @@ import {
 import { COMMANDS } from "./commands/index.ts";
 import { chunkKeyToCoords } from "./coords.ts";
 import type { Piece } from "./piece.ts";
+import { type CompiledPlacement, compilePlacement } from "./placement-profile.ts";
 import { evaluate, plainBox, type Region, RegionError, type RegionScope } from "./region.ts";
 import { type PaletteId, type SemanticId, SemanticRegistry } from "./semantics.ts";
 import { DEFAULT_SETTINGS, type ProjectSettings } from "./settings.ts";
+import { StateMover } from "./transform.ts";
 import { type Edit, World, type WorldOptions } from "./world.ts";
 
 export interface ProjectOptions extends WorldOptions {
@@ -116,6 +119,9 @@ export class Project {
   readonly #withDeltas: Entry[] = [];
   // Never mutated once set: commands replace it, so undo can keep the old one.
   #selection: CellSet | null = null;
+  // Compiled placement profiles by semantic, valid for one registry revision.
+  readonly #placements = new Map<SemanticId, CompiledPlacement>();
+  #placementsRevision = -1;
 
   constructor(
     options: ProjectOptions = {},
@@ -146,6 +152,49 @@ export class Project {
     } catch (error) {
       throw asCommandError(error);
     }
+  }
+
+  /**
+   * How a semantic's whole blocks may be oriented: its form's placement profile, or anything
+   * goes when it has none. The editor picks rotations for clicks with it.
+   */
+  placement(semantic: SemanticId): CompiledPlacement {
+    if (this.#placementsRevision !== this.semantics.revision) {
+      this.#placements.clear();
+      this.#placementsRevision = this.semantics.revision;
+    }
+    let compiled = this.#placements.get(semantic);
+    if (!compiled) {
+      const profile = this.semantics.has(semantic)
+        ? this.semantics.resolve(semantic).form.placement
+        : undefined;
+      compiled = compilePlacement(profile);
+      this.#placements.set(semantic, compiled);
+    }
+    return compiled;
+  }
+
+  /**
+   * Visits every occupied cell of a region (default: the whole build) with its state id: in a
+   * fixed order for a region, chunk by chunk for the whole build.
+   */
+  forEachIn(
+    region: Region | undefined,
+    visit: (x: number, y: number, z: number, id: number) => void,
+  ) {
+    if (region === undefined) {
+      this.world.forEachCell(visit);
+      return;
+    }
+    const box = plainBox(region);
+    if (box) {
+      forEachInBox(this.world, box, visit);
+      return;
+    }
+    this.cells(region).forEach((x, y, z) => {
+      const id = this.world.getId(x, y, z);
+      if (id !== EMPTY_ID) visit(x, y, z, id);
+    });
   }
 
   /** Puts a selection back (undo). */
@@ -261,6 +310,7 @@ export class Project {
     const scope = this.#scope();
     const semantic = scope.semantic;
     const settings = () => this.#settings;
+    const placement = (s: SemanticId) => this.placement(s);
     return {
       world,
       semantics,
@@ -278,13 +328,25 @@ export class Project {
         return piece;
       },
       intern(state: CellStateArg): number {
+        const block = state.semantic === undefined ? undefined : semantic(state.semantic);
+        const parts = state.parts?.map((p) => ({ ...p, semantic: semantic(p.semantic) }));
+        // A whole block's rotation is stored fixed to its profile: allowed and canonical.
+        const rotation =
+          block !== undefined && parts === undefined
+            ? placement(block).fix(state.rotation ?? 0)
+            : state.rotation;
+        if (parts) {
+          const why = rejectCell(parts);
+          if (why) {
+            const list = parts.map((p) => `${p.shape}/${p.slot}`).join(", ");
+            throw new CommandError(`Those parts can't share a cell (${why}): ${list}`);
+          }
+        }
         const input: CellStateInput = {
-          ...(state.semantic !== undefined && { semantic: semantic(state.semantic) }),
-          ...(state.rotation !== undefined && { rotation: state.rotation }),
+          ...(block !== undefined && { semantic: block }),
+          ...(rotation !== undefined && { rotation }),
           ...(state.tags !== undefined && { tags: state.tags }),
-          ...(state.parts !== undefined && {
-            parts: state.parts.map((p) => ({ ...p, semantic: semantic(p.semantic) })),
-          }),
+          ...(parts !== undefined && { parts }),
         };
         try {
           return world.states.intern(input);
@@ -292,6 +354,8 @@ export class Project {
           throw asCommandError(error);
         }
       },
+      placement,
+      mover: (m) => new StateMover(world.states, m, (s, r) => placement(s).fix(r)),
       set: (x, y, z, id) => world.setId(x, y, z, id),
       fillBox: (box, id) => world.fillBox(box.x0, box.y0, box.z0, box.x1, box.y1, box.z1, id),
       cells: (region) => evaluate(region, scope),
@@ -312,17 +376,7 @@ export class Project {
         }
         return changed;
       },
-      forEachIn(region, visit) {
-        const box = plainBox(region);
-        if (box) {
-          forEachInBox(world, box, visit);
-          return;
-        }
-        evaluate(region, scope).forEach((x, y, z) => {
-          const id = world.getId(x, y, z);
-          if (id !== EMPTY_ID) visit(x, y, z, id);
-        });
-      },
+      forEachIn: (region, visit) => this.forEachIn(region, visit),
       setSelection: (cells) => {
         this.#selection = cells;
       },

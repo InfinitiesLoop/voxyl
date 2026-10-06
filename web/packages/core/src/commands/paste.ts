@@ -3,7 +3,7 @@ import { EMPTY_ID } from "../cell-state.ts";
 import { stateInput } from "../format/state-json.ts";
 import { forEachPieceCell, importSemantics, type Piece, PieceArg } from "../piece.ts";
 import { PosArg } from "../region.ts";
-import { PlacementArgs, placementMatrix, StateMover, turnsBetween } from "../transform.ts";
+import { PlacementArgs, placementMatrix, turnsBetween } from "../transform.ts";
 import { CommandError, defineCommand, SemanticArg } from "./command.ts";
 
 /** A prefab's content hash (see prefabHash). */
@@ -46,7 +46,7 @@ export const paste = defineCommand({
     };
     const north = turnsBetween(piece.north, ctx.settings.north);
     const m = placementMatrix((args.turn ?? 0) + north, args.mirror);
-    const mover = new StateMover(ctx.world.states, m);
+    const mover = ctx.mover(m);
     const ids = piece.states.map((s) =>
       s === null ? EMPTY_ID : mover.move(ctx.intern(stateInput(s, semanticOf))),
     );

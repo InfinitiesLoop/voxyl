@@ -55,7 +55,7 @@ function build(chunkBits = 4) {
         {
           parts: [
             { semantic: rail, shape: "edge1", slot: 4 },
-            { semantic: deck, shape: "face1", slot: 0 },
+            { semantic: deck, shape: "face1", slot: 1 },
           ],
         },
       ],

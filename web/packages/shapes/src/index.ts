@@ -17,4 +17,13 @@ export {
   microSlotCount,
   sideOf,
 } from "./micro.ts";
+export { SIDE_NAMES, slotFromName, slotName, slotNames } from "./names.ts";
+export {
+  isExclusive,
+  isValidSlot,
+  type RejectReason,
+  type RulePart,
+  rejectCell,
+  rejectPart,
+} from "./rules.ts";
 export { type CellMatrix, isKnownShape, slotsLookAlike, transformSlot } from "./transform.ts";

@@ -4,8 +4,10 @@ Status: **Plan accepted** (2026-10-03). **Phase 0 done** (2026-10-06): chunked W
 storage by content, a greedy mesher in a worker pool, Minecraft-style lighting read from a
 sparse light volume (see [`web-lighting.md`](web-lighting.md)), shaped parts, and a ChatGPT
 widget that runs relayed tool calls. 5M cells hold 120 fps on an M5 Max. Numbers are under
-"Phase 0 findings" and "Phase 0 status". **Phase 1 in progress** (design accepted 2026-10-06; steps 1-6 of 7 done): the core redesigned from scratch,
-per the design document [`web-core.md`](web-core.md), which tracks progress.
+"Phase 0 findings" and "Phase 0 status". **Phase 1 built** (2026-10-06, all seven steps): the
+core redesigned from scratch, per the design document [`web-core.md`](web-core.md), which
+records what was built, the numbers, and four choices from step 7 awaiting the user's review.
+Next is Phase 2, the web viewer.
 Reviewed as a Claude Doc
 (https://claude.ai/code/artifact/98f31d14-989b-4c28-a24c-a3d7b8630a21); this file is now the
 working copy. **Keep it (and `web-lighting.md`) up to date as we go**, in the same commit as
@@ -459,6 +461,13 @@ Fills and relights are about 3x faster than on the B580 desktop (1M fills took 2
 there, held up by the light engine).
 
 **Phase 0 is done.** Phase 1 starts as a greenfield design (see "Scope by phase").
+
+**Phase 1 is built** (2026-10-06): `packages/core` holds commands, semantics and palettes,
+regions, the history log, the project format, prefabs and the clipboard, placement profiles,
+shape rules, region stats and the text codec, all in [`web-core.md`](web-core.md). The app
+still renders the city fixtures; Phase 2 puts it on real projects. Carried into Phase 2: the
+mesher's trimming of overlapping parts (Godot's `render_boxes`), and loading saved projects
+and prefabs in the viewer. Carried into Phase 4: the history log on disk and `editor.json`.
 
 **Next steps, in order** (updated 2026-10-05, when the user called lighting done for now):
 

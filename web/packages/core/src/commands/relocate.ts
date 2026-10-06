@@ -3,7 +3,7 @@
 
 import { EMPTY_ID } from "../cell-state.ts";
 import type { Region } from "../region.ts";
-import { type MirrorAxis, movedBox, placementMatrix, StateMover } from "../transform.ts";
+import { type MirrorAxis, movedBox, placementMatrix } from "../transform.ts";
 import type { CommandContext } from "./command.ts";
 
 export interface RelocateArgs {
@@ -38,7 +38,7 @@ export function relocate(ctx: CommandContext, args: RelocateArgs, move: boolean)
   const oz = tz - moved.z0;
   // Read from a snapshot (a copy-on-write fork), so overlapping targets read the original.
   const source = ctx.world.fork();
-  const mover = new StateMover(ctx.world.states, m);
+  const mover = ctx.mover(m);
   const air = args.air ?? false;
   const rejected: number[] = [];
   if (move) cells.forEach((x, y, z) => void ctx.set(x, y, z, EMPTY_ID));

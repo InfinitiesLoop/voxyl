@@ -1,8 +1,8 @@
 # Voxyl Web — Core Design (Phase 1)
 
-Status: **Accepted, being built** (2026-10-06). The user reviewed the draft the same day, and
-their answers are folded in (marked **Decided** or **Confirmed**). Progress is under "Build
-order".
+Status: **Built** (2026-10-06): all seven steps are done. The user reviewed the draft the same
+day, and their answers are folded in (marked **Decided** or **Confirmed**). Progress is under
+"Build order"; step 7 left choices for the user to review (marked "to review").
 
 Phase 1 is a greenfield design (the user's decision, 2026-10-06): the web version doesn't
 have to be compatible with the Godot app. Godot's code and formats are inspiration. That app
@@ -369,7 +369,7 @@ Each step lands with its tests and updates this document.
     and reports created palettes and semantics, `registryChanged`, and notes such as
     resemantic's switched and skipped counts.
   - `resemantic` keeps geometry and skips cells whose shape doesn't fit the target's form unless
-    forced. Fixing disallowed rotations waits for placement profiles (step 7).
+    forced. Disallowed rotations are snapped to the target's placement profile (step 7).
 - **Step 3 done (2026-10-06).**
   - `cellset.ts` is a sparse set of positions: 128³ blocks keyed like chunks, holding 8³
     bricks that are full or a 512-bit mask. It has union, intersection and difference a brick or
@@ -461,8 +461,8 @@ Each step lands with its tests and updates this document.
     project north)`, then by `turn` and `mirror` ("north is north", the Godot rule). A host
     passes `Project` a `prefabs` lookup and loads a prefab before running the command; an
     unknown hash is a clear `CommandError`.
-  - **How a piece's semantics map into a project (my choice, to review):** an explicit `map`
-    wins; in the project the piece came from, the source id (so a rename between copy and
+  - **How a piece's semantics map into a project (confirmed by the user, 2026-10-06):** an
+    explicit `map` wins; in the project the piece came from, the source id (so a rename between copy and
     paste is harmless); then the semantic of that name in the palette of that name, own or
     derivable; otherwise it is created there, with the palette if needed, carrying its look,
     so a prefab looks as authored in a project that has never seen it (Godot asked "add
@@ -496,10 +496,84 @@ Each step lands with its tests and updates this document.
 
     Commands carrying a clipboard are big as plain JSON but compress about 40x, so the relay
     and sync should send them compressed (WebSocket per-message deflate or a deflated body).
-  - Not yet: a plain cube turned gets a new rotation, so a turned build can hold up to 24
-    states per semantic that look the same. Placement profiles (step 7) say which rotations
-    look alike and store the canonical one. Pieces carry no palette inheritance (they flatten
-    looks), and a placed prefab keeps no link to its prefab (as in Godot's v1).
+  - Not yet: pieces carry no palette inheritance (they flatten looks), and a placed prefab
+    keeps no link to its prefab (as in Godot's v1). (A turned plain cube no longer adds states
+    once its semantic has the `cube` profile: step 7.)
+- **Step 7 done (2026-10-06).** Placement profiles, `rotate`, shape rules, stats, text:
+  - `placement-profile.ts`: a **placement profile** is data on the semantic's form
+    (`form.placement`), inherited like the rest of the form:
+    - `front` and `up`: the sides the model's front (-Z) and top (+Y) may point to (default:
+      any). A rotation is allowed when it, or one that looks the same, meets both.
+    - `symmetry`, which rotations look the same: `none` (stairs), `all` (a plain cube), `spin`
+      about the top (torches, slabs), `spin_front` about the front (dispensers, hoppers), or
+      `axis` (logs).
+    - `pick`, how a click picks one: `fixed`, `face_player`, `face_look`, `away_from_face`,
+      `into_face` or `attach`. `flip` turns it upside down on a block's underside or the upper
+      half of its side.
+    - `PLACEMENTS` holds starting points (cube, horizontal, stairs, slab, log, facing, torch,
+      hopper), allowing 1, 4, 8, 2, 3, 6, 5 and 5 rotations. Cells never refer to a preset by
+      name: the form holds the profile itself, so editing the table changes no build.
+  - `compilePlacement` turns a profile into a 24-entry `fix` table (any rotation to the nearest
+    allowed one, in canonical form), `allows`, `pick(click)` (face normal, look direction and
+    hit height, scored lexicographically over the allowed rotations) and `attachedTo` (the side
+    an `attach` block hangs from). `Project.placement(semantic)` caches it per registry
+    revision, and the editor picks with it.
+  - **Rotations are stored fixed.** Interning a whole block (every command, and turns and
+    mirrors through `ctx.mover`) puts its rotation through its semantic's `fix`. So a turned
+    cube stays one state, and a stair can't be stored lying on its back. `resemantic` snaps
+    to the target's profile and reports `fixed`.
+  - `rotate` command: turns each cell of a region about the axis through a face, clockwise as
+    seen looking at it. A block steps on to the next rotation its profile allows that looks
+    different (a stair turned about a side axis lands upside down; a cube stays put). A cell
+    of parts turns slot by slot. Reports `rotated` and `unchanged`.
+  - Shape rules (`packages/shapes/src/rules.ts`): Godot's ShapeRules port of Forge
+    Microblocks' occlusion rules (one part per slot, opposite thick faces, posts and hollow
+    frames, nothing left fully hidden, architecture shapes alone in a cell). Commands refuse a
+    cell of parts that breaks them, or that uses an unknown shape or slot; `resemantic` skips
+    such cells. A property test checks that a valid pair stays valid under turns and mirrors.
+    Parts in a state are kept sorted, so the same parts are always the same state.
+  - Slot names (`packages/shapes/src/names.ts`): "down", "up-north-west", "center-y", and
+    "up=north turn=1" for architecture shapes; read back in any word order.
+  - `regionStats(project, region?)`: occupied cells, bounds, whole blocks by semantic, parts by
+    semantic and shape, and `materials` (the same grouped by the looked-up block and shape,
+    merging semantics that share a block; undecided ones stay apart).
+  - `regionText` and `parseRegionText`: Godot's layered text codec (plan or elevation views,
+    a legend of semantic names, `.` untouched or air, `_` clear). A name shared by palettes
+    carries its palette; a turned block says `facing` and `up`; parts give slot names. Parsing
+    gives `set` command arguments, deriving `{ palette, base }` for names a palette can derive
+    but hasn't yet, and lists every problem at once. Text is capped at 262,144 cells.
+  - Measured (`node packages/fixtures/bench/reads.ts`, 5M-cell city, 64³ chunks, one Node
+    thread; shaped city in brackets):
+
+    | Operation | Time |
+    | --- | --- |
+    | Stats, whole build | 0.28 s (0.31 s) |
+    | Stats, 200x60x200 box | 41 ms (44 ms) |
+    | Stats, one semantic over the whole build | 0.72 s (0.70 s) |
+    | Text of 32x16x32: write / parse / apply | 7 / 4 / 6 ms (18 KB of JSON) |
+    | Text of 64x32x64: write / parse / apply | 20 / 6 / 9 ms (134 KB of JSON) |
+    | `rotate` a 256x64x256 box (368k cells; 459k shaped) | 0.18 s (0.20 s) |
+
+    Text past about 32x16x32 is more than a model wants to read; Phase 4 tools should steer
+    agents to stats and smaller boxes.
+  - **Choices to review** (mine, made while building):
+    1. **Profiles are intent only for now.** The plan said a mapped block supplies a profile
+       and the form can set or narrow it. Blocks live in libraries, which don't exist on the
+       web yet (Phase 5), so only the form has one. When libraries arrive, the order would be:
+       the form's profile, else the block's, else free.
+    2. **No profile means free:** all 24 rotations, none alike. Defaulting to `cube` would
+       silently drop rotations an agent gives an undecided semantic, against principle 5. The
+       cost is that a turned build of profile-less semantics holds up to 24 look-alike states
+       per semantic until they get a profile.
+    3. **Editing a profile rewrites no cells** (principle 3: registry edits touch no cells).
+       Cells keep the rotations fixed under the old profile until they are next written.
+    4. **Commands refuse unknown shapes.** A new shape family has to be added to
+       `packages/shapes` (geometry, slots) before builds can use it. Loaded files aren't
+       checked.
+  - Not done here: Forge Microblocks' render-time trimming of overlapping parts (Godot's
+    `render_boxes`) belongs to the mesher, and comes with the viewer (Phase 2). The rules'
+    same-semantic exception can't trigger with today's sizes (up to 4 eighths, so no pair sums
+    past a cell); it is kept for thicker parts.
 
 ## Future ideas
 
@@ -516,3 +590,4 @@ Each step lands with its tests and updates this document.
 | 4 | Named regions | No. Groups of a build are palettes, with palette inheritance. |
 | 5 | Palette block references | Qualified `library:block` references; no library search order. |
 | 6 | Undo across sessions | Session-only for now, with the door kept open. The undo stack and the op log are one history log. |
+| 7 | Mapping a pasted piece's semantics | As built in step 6: `map`, then the source id in the project it came from, then palette and name, else create with its look. Confirmed. |

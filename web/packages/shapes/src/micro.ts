@@ -72,7 +72,7 @@ export function edgeBetween(s1: number, s2: number): number {
 }
 
 /** Axis bits (x 4, y 1, z 2) of the positive sides edge `e` (0..11) touches. */
-function unpackEdgeBits(e: number): number {
+export function unpackEdgeBits(e: number): number {
   switch (e >> 2) {
     case 0:
       return (e & 3) << 1;
@@ -103,7 +103,7 @@ export function microBoxes(shape: string, slot: number): Box8[] {
     case "face":
       return [faceBox(slot, d)];
     case "hollow":
-      return ringBoxes(slot, d);
+      return ringBoxes(slot, d, 0, 8, 2, 6);
     case "corner":
       return [cornerBox(slot, d)];
     case "edge":
@@ -125,17 +125,27 @@ function faceBox(side: number, d: number): Box8 {
   return box(lo, hi);
 }
 
-/** A face slab with a centered half-cell hole, as four boxes. */
-function ringBoxes(side: number, d: number): Box8[] {
+/**
+ * A face slab `d` thick against `side`, as the four boxes of a square ring: outer edge o0..o1,
+ * hole i0..i1 (a hollow face is 0..8 with a 2..6 hole).
+ */
+export function ringBoxes(
+  side: number,
+  d: number,
+  o0: number,
+  o1: number,
+  i0: number,
+  i1: number,
+): Box8[] {
   const slab = faceBox(side, d);
   const c = AXIS_COMPONENT[side >> 1] ?? 0;
   const p = (c + 1) % 3;
   const q = (c + 2) % 3;
   const bands = [
-    [0, 8, 0, 2],
-    [0, 8, 6, 8],
-    [0, 2, 2, 6],
-    [6, 8, 2, 6],
+    [o0, o1, o0, i0],
+    [o0, o1, i1, o1],
+    [o0, i0, i0, i1],
+    [i1, o1, i0, i1],
   ] as const;
   return bands.map(([p0, p1, q0, q1]) => {
     const lo = [slab[0], slab[1], slab[2]];

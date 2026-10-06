@@ -9,6 +9,7 @@ import { paletteUpdate } from "./palette-update.ts";
 import { paste } from "./paste.ts";
 import { redo } from "./redo.ts";
 import { resemantic } from "./resemantic.ts";
+import { rotate } from "./rotate.ts";
 import { select } from "./select.ts";
 import { semanticAdd } from "./semantic-add.ts";
 import { semanticUpdate } from "./semantic-update.ts";
@@ -23,6 +24,7 @@ export const COMMANDS: readonly CommandDef[] = [
   fill,
   clear,
   resemantic,
+  rotate,
   copy,
   move,
   transform,

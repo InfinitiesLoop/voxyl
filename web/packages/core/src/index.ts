@@ -60,6 +60,24 @@ export {
   pieceCellCount,
 } from "./piece.ts";
 export {
+  type Click,
+  type CompiledPlacement,
+  compilePlacement,
+  PICKS,
+  type PickRule,
+  PLACEMENTS,
+  PlacementArg,
+  type PlacementProfile,
+  rotationOf,
+  SIDE_VECTORS,
+  SIDES,
+  type Side,
+  SideArg,
+  SYMMETRIES,
+  type SymmetryName,
+  sideOf,
+} from "./placement-profile.ts";
+export {
   type Applied,
   type ChangeReport,
   type EntryState,
@@ -82,6 +100,17 @@ export {
   RegionError,
   type RegionScope,
 } from "./region.ts";
+export {
+  LegendValue,
+  MAX_TEXT_CELLS,
+  parseRegionText,
+  type RegionText,
+  RegionTextArg,
+  RegionTextError,
+  regionText,
+  type TextAxis,
+  textToWorld,
+} from "./region-text.ts";
 export {
   type Axis,
   canonical,
@@ -132,6 +161,7 @@ export {
   SettingsArg,
   settingsFrom,
 } from "./settings.ts";
+export { type RegionStats, regionStats } from "./stats.ts";
 export {
   applyMatrix,
   DIRECTIONS,

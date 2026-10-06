@@ -10,6 +10,8 @@
 // Intent sits on the semantic (form: shape, placement), material on its look (block, glow,
 // tint). Each semantic belongs to exactly one palette, so its look is that palette's look for it.
 
+import type { PlacementProfile } from "./placement-profile.ts";
+
 /** A semantic's id. 0 is never used, so it can mean "no semantic". */
 export type SemanticId = number;
 export type PaletteId = number;
@@ -19,10 +21,12 @@ export const NO_SEMANTIC: SemanticId = 0;
 export const ROOT_PALETTE: PaletteId = 1;
 const NO_PALETTE: PaletteId = 0;
 
-/** Intent: what a semantic is and how it is placed. Placement profiles join in step 7. */
+/** Intent: what a semantic is and how it is placed. */
 export interface Form {
   /** A part shape ("edge1", "roof_tile") the semantic places by default, or none for blocks. */
   readonly shape?: string;
+  /** How a whole block of it may be oriented (see placement-profile.ts). Default: freely. */
+  readonly placement?: PlacementProfile;
 }
 
 /** Material: what a semantic looks like. Never stored in cells. */

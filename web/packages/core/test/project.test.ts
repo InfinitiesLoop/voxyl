@@ -193,5 +193,5 @@ describe("commands", () => {
       }),
       { numRuns: 60 },
     );
-  });
+  }, 30_000); // 60 random runs: about 4 s alone, more under a parallel suite
 });

@@ -73,19 +73,26 @@ export function movedBox(box: Box, m: readonly number[]): Box {
 }
 
 /**
- * Moves cell states by a placement matrix, interning what they become. Memoized per state id,
- * so a million cells of a dozen states cost a dozen lookups.
+ * Moves cell states by a placement matrix, interning what they become. A whole block's new
+ * rotation goes through `fix` (its semantic's placement profile, see Project.placement).
+ * Memoized per state id, so a million cells of a dozen states cost a dozen lookups.
  */
 export class StateMover {
   readonly #table: CellStateTable;
   readonly #m: CellMatrix;
   readonly #identity: boolean;
   readonly #memo = new Map<number, number | null>();
+  readonly #fix: (semantic: number, rotation: number) => number;
 
-  constructor(table: CellStateTable, m: readonly number[]) {
+  constructor(
+    table: CellStateTable,
+    m: readonly number[],
+    fix: (semantic: number, rotation: number) => number = (_, r) => r,
+  ) {
     this.#table = table;
     this.#m = m;
     this.#identity = isIdentityMatrix(m);
+    this.#fix = fix;
     if (Math.abs(determinant(m)) !== 1) throw new RangeError("Not a placement matrix");
   }
 
@@ -109,7 +116,7 @@ export class StateMover {
     if (state.parts.length === 0) {
       return this.#table.intern({
         semantic: state.semantic,
-        rotation: transformRotation(state.rotation, this.#m),
+        rotation: this.#fix(state.semantic, transformRotation(state.rotation, this.#m)),
         tags: state.tags,
       });
     }

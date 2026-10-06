@@ -8,9 +8,11 @@ import { z } from "zod";
 import type { Box } from "../box.ts";
 import type { CellSet } from "../cellset.ts";
 import type { Piece } from "../piece.ts";
+import { type CompiledPlacement, PlacementArg } from "../placement-profile.ts";
 import type { Region } from "../region.ts";
 import type { SemanticId, SemanticRegistry } from "../semantics.ts";
 import type { ProjectSettings } from "../settings.ts";
+import type { StateMover } from "../transform.ts";
 import type { World } from "../world.ts";
 
 /** A command as it travels: over the relay, into the history, from an agent. */
@@ -37,8 +39,15 @@ export interface CommandContext {
   readonly semantics: SemanticRegistry;
   /** A semantic reference's id, deriving it into its palette on first use. */
   semantic(ref: SemanticArg): SemanticId;
-  /** The cell-state id for a state, resolving its semantic references. */
+  /**
+   * The cell-state id for a state, resolving its semantic references. A whole block's rotation
+   * is fixed to its semantic's placement profile; parts that can't share a cell throw.
+   */
   intern(state: CellStateArg): number;
+  /** How a semantic's whole blocks may be oriented (see Project.placement). */
+  placement(semantic: SemanticId): CompiledPlacement;
+  /** Moves states by a placement matrix, fixing rotations to their profiles. */
+  mover(m: readonly number[]): StateMover;
   /** Sets one cell to a state id (EMPTY_ID clears it). Returns whether it changed. */
   set(x: number, y: number, z: number, id: number): boolean;
   /** Sets every cell in a box to a state id. Returns how many changed. */
@@ -114,7 +123,10 @@ export type CellStateArg = z.output<typeof CellStateArg>;
 
 export const NameArg = z.string().trim().min(1).max(80);
 
-export const FormArg = z.strictObject({ shape: z.string().min(1).optional() });
+export const FormArg = z.strictObject({
+  shape: z.string().min(1).optional(),
+  placement: PlacementArg.optional(),
+});
 
 export const LookArg = z.strictObject({
   block: z
