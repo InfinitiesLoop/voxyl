@@ -216,12 +216,18 @@ fixed per tool.
   visual result gets a new card, so the chat becomes a visual history of the build. Old cards
   stay cheap, because they are only images.
 - **Editing sessions happen in one live widget.** Open in 3D loads the engine into that card and
-  asks for fullscreen (desktop) or picture-in-picture (the "beside the chat" option). The editing
-  tools have no template, so later edits create no new widgets: they reach the open widget over
-  the relay and show up in place. The widget must offer its own fullscreen and
-  picture-in-picture buttons, because ChatGPT has none.
-- **Only one live 3D widget at a time.** Each one costs a GPU context and a worker pool. When a
-  newer card opens the editor, the older one drops back to its still image.
+  asks for fullscreen. In a wide desktop window, fullscreen opens as a panel with the chat
+  beside it, the layout we wanted. Picture-in-picture isn't offered on desktop web (probed
+  2026-10-06); phones are untested. The editing tools have no template, so later edits create no
+  new widgets: they reach the open widget over the relay and show up in place. The widget must
+  offer its own fullscreen button, because ChatGPT has none.
+- **Only one live 3D widget at a time.** Each one costs a GPU context and a worker pool. A
+  reload remounts every widget in the chat at once, so each card mounts as its still image and
+  loads the engine only if it holds the project's lease or the user clicks. When a newer card
+  opens the editor, the older one drops back to its image.
+- **Mutating tools are idempotent.** ChatGPT's web client currently runs every tool call twice,
+  so mutating tools take a model-supplied `op_id`, and the server drops a repeat it has already
+  seen.
 - **Agents know what the user can see.** While an editor is attached, edit results say "the user
   can see this in the open editor", so the model doesn't show another card after every change.
 
@@ -436,8 +442,8 @@ Still open for the Phase 0 gate:
 3. ~~ChatGPT widget research~~ (done, below).
 4. ~~Shaped parts in the city fixture~~ (done, below). The user judged the performance more
    than adequate (2026-10-05): perf work waits until it comes up again.
-5. ~~The ChatGPT widget live probe~~ (done, below). Left for later: a hidden tab for more
-   than 5 minutes, picture-in-picture, and the phone apps.
+5. ~~The ChatGPT widget live probe~~ (done, two rounds, below). Left for later: the phone
+   apps.
 6. Later: the rasterizer and the M4 run. Perf backlog, for when it matters: faster cube
    meshing (binary greedy meshing, for one-frame edits on decorated builds; see "Shaped
    parts") and light engine speed (1M-cell fills relight in 2.6-3.4 s; see
@@ -572,10 +578,48 @@ the same:
 
 With that, an idle widget answered a relay after 150 s (21 ms over WebSocket).
 
-**Still untested:** a tab hidden for more than 5 minutes (Chrome then runs timers once a
-minute, but socket messages should still be delivered), picture-in-picture, and the phone
-apps. They are cheap to rerun with `pnpm probe` and a tunnel. The free ChatGPT plan ran out
-of image allowance during the test (the snapshots), so the next run may need a paid account.
+**Second round (2026-10-06, desktop web, fresh app registration).**
+
+- **ChatGPT runs every tool call twice.** Every call in the log arrived as a pair, 1-3 s apart:
+  open, echo, count and snapshot. It's a known web-client bug: it opens two MCP connections
+  ([openai-apps-sdk-examples#171](https://github.com/openai/openai-apps-sdk-examples/issues/171)).
+  **Every mutating tool must be idempotent.** Mutating tools take an `op_id` the model makes
+  up for each change, and the server drops a repeat it has already seen. Retrying "count
+  again" deliberately gets a new id. This is why the counters jumped by 2.
+- **Relay routing must be explicit.** The probe sends each call to whichever widget sent a
+  heartbeat most recently, so the pairs alternated between two open widgets. The real relay
+  routes to the widget holding the project's lease, which it identifies by the session token
+  in its own tool result. That pairing works: after a reload each widget got its own tool
+  result back.
+- **Picture-in-picture isn't available on desktop web.** `requestDisplayMode("pip")` returned
+  the current mode every time, although `availableDisplayModes` lists pip. Fullscreen works,
+  and in a wide window it opens as a panel with the chat beside it (887x820 here), which is the
+  side-by-side layout we wanted. Fullscreen is the editing mode on desktop.
+- **A reload remounts every widget in the chat, all live.** Two widgets meant two live
+  instances, each opening sockets. "Only one live 3D widget" has to be enforced by the widget:
+  on mount it shows its still image and loads the engine only if it holds the lease or the user
+  clicks.
+- **Widget storage is per app registration and shared.** OPFS, IndexedDB and localStorage are
+  keyed to the app's sandbox origin (`mcp-app-<hash>.web-sandbox.oaiusercontent.com`). All
+  widgets of the app share them (the visit counter went 1, 2, then 3 and 4 after the reload,
+  one per mount), and they survive reloads. Recreating the app changed the origin and started
+  storage empty. More reason for server storage.
+- **15 minutes in a hidden tab: the socket survives.** After about 5 minutes Chrome ran the
+  widget's timers once a minute, but the socket stayed open (the browser answers server pings
+  itself), and a relay right after coming back took 24 ms.
+- **When the machine sleeps or the network drops, the widget reconnects.** Once, every
+  channel of both widgets failed at the same moment and the page froze for 2 minutes (no
+  timers at all, so most likely the Mac slept). The server declared the sockets dead after
+  75 s. The widgets reconnected within about 7 s of being shown again, and the next relay
+  worked.
+- **Images in tool results don't show to the user.** A snapshot returned as MCP image content
+  reached the model only. The user saw the text summary and no image. That confirms the
+  preview-card plan.
+- **Relay times are small next to the model.** Relays took 20-55 ms. Each answer took seconds,
+  and that time is ChatGPT's.
+
+**Still untested:** the phone apps (display modes, backgrounding, WebGPU). Rerun with
+`pnpm probe` and a tunnel; the steps are in the web README.
 
 ## Testing and verification
 
@@ -608,7 +652,7 @@ host tool execution. Both are checked in Phase 0, before any port work.
 | Risk | Why it matters | Mitigation |
 | --- | --- | --- |
 | Minecraft and mod textures can't be hosted | The current 85 MB library is imported from Mojang and mod jars. A public site can't serve it. | Imports run in the browser from the user's own jar or modpack and stay in their OPFS, never uploaded. Hosted users get an original or openly licensed default set and tier 1 and 2 colours. Block ids still map for schematic export. |
-| ChatGPT widget sandbox | Client-side tool execution needs the widget iframe to hold a live connection to our relay. The Apps SDK's network rules may not allow it. | Proved in Phase 0 (2026-10-05): a WebSocket from the widget works, relayed tool calls take 20-70 ms, and WebGPU, workers and OPFS all work. Long-hidden tabs and phones are still untested; the headless host covers a widget that has gone away. |
+| ChatGPT widget sandbox | Client-side tool execution needs the widget iframe to hold a live connection to our relay. The Apps SDK's network rules may not allow it. | Proved in Phase 0 (2026-10-05): a WebSocket from the widget works, relayed tool calls take 20-70 ms, and WebGPU, workers and OPFS all work. The socket survives 15 minutes in a hidden tab. Phones are still untested; the headless host covers a widget that has gone away. ChatGPT currently runs each tool call twice, so mutating tools are idempotent. |
 | Port drift | Godot keeps gaining features while the port chases it, so the target keeps moving. | Freeze large Godot features from Phase 1 until the Phase 4 gate. Fixes and builds continue. |
 | Renderer misses targets | The whole case for the move rests on big builds staying smooth. | Phase 0 measures the renderer on 5M cells before anything else is ported. If it misses, the fallback is a Rust or WASM mesher behind the same worker interface. |
 | Shaped-part and model meshing cost | Parts and custom models can't be greedy-merged, and dense microblock builds may blow the triangle budget. | Include a dense parts fixture in the Phase 0 bench, and cache per-chunk part geometry. Measured in Phase 0: the GPU copes; mesh time is the cost (see "Shaped parts"). |
