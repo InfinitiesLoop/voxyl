@@ -410,6 +410,32 @@ Each step lands with its tests and updates this document.
     commands, and undo stops at the oldest. Registry revisions only move forward, even on undo.
   - A property test undoes and redoes random fills, clears and renames back through every
     state.
+- **Step 5 done (2026-10-06).** In `packages/core/src/format/`:
+  - `saveProject` writes a manifest (registry, compacted state table, storage chunk hashes) and
+    blobs. `loadProject` reads them into any runtime chunk size (3 to 7 bits).
+  - Storage chunks are a fixed 32³, encoded as 8³ bricks (empty, uniform, or bit-packed indices
+    into the chunk's own palette), named by a 64-bit hash of the uncompressed bytes, then
+    deflated with `CompressionStream`. Identical chunks are stored once.
+  - `packBundle` and `unpackBundle` make one file for export.
+  - Saving is canonical: states are compacted in old-id order, so a build saves to the same bytes
+    whatever its history or chunk size (tested).
+  - Measured (generated cities, one Node thread). The city is very regular, so real builds will
+    be larger, but even a few times larger leaves the 10 MB free limit holding dozens of big
+    builds and hundreds of normal ones.
+
+    | Build | Bundle | Per cell | Save | Load |
+    | --- | --- | --- | --- | --- |
+    | 120k cells, plain | 11 KB | 0.09 B | 107 ms | 58 ms |
+    | 120k cells, shaped parts | 16 KB | 0.13 B | 43 ms | 43 ms |
+    | 1M cells, plain | 90 KB | 0.09 B | 0.31 s | 0.21 s |
+    | 5M cells, plain | 473 KB | 0.10 B | 1.3 s | 0.93 s |
+    | 5M cells, shaped parts | 682 KB | 0.14 B | 1.3 s | 0.90 s |
+
+    A typical command is about 150 bytes of JSON ("Claude: Pour the hall floor", a 41x31
+    fill).
+  - Not yet: the history log on disk (Phase 4 sync), `editor.json`, and settings (step 6). An
+    autosave writes only dirty storage chunks, so saves after an edit are a fraction of these
+    times.
 
 ## Future ideas
 

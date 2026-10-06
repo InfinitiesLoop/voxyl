@@ -111,6 +111,12 @@ export interface Offer {
   readonly base?: SemanticId;
 }
 
+/** The registry as saved: entries exactly as stored, by id. */
+export interface RegistryJSON {
+  readonly palettes: readonly Palette[];
+  readonly semantics: readonly Semantic[];
+}
+
 export class SemanticRegistry {
   // Index = id; index 0 is unused for both.
   #semantics: (Semantic | null)[] = [null];
@@ -417,6 +423,32 @@ export class SemanticRegistry {
   /** Every semantic as stored, by id. */
   *[Symbol.iterator](): IterableIterator<Semantic> {
     for (const s of this.#semantics) if (s) yield s;
+  }
+
+  toJSON(): RegistryJSON {
+    return { palettes: this.palettes(), semantics: [...this] };
+  }
+
+  /** A registry from its saved form. Ids are kept, so cells and commands keep meaning. */
+  static fromJSON(json: RegistryJSON): SemanticRegistry {
+    const r = new SemanticRegistry();
+    r.#palettes = [null];
+    r.#semantics = [null];
+    for (const p of json.palettes) {
+      if (!Number.isInteger(p.id) || p.id < 1 || r.#palettes[p.id])
+        throw new Error(`Bad palette id ${p.id}`);
+      r.#palettes[p.id] = freezePalette({ ...p });
+    }
+    for (const s of json.semantics) {
+      if (!Number.isInteger(s.id) || s.id < 1 || r.#semantics[s.id])
+        throw new Error(`Bad semantic id ${s.id}`);
+      if (!r.#palettes[s.palette]) throw new Error(`Semantic ${s.id} is in an unknown palette`);
+      r.#semantics[s.id] = freezeSemantic({ ...s });
+    }
+    for (let i = 0; i < r.#palettes.length; i++) r.#palettes[i] ??= null;
+    for (let i = 0; i < r.#semantics.length; i++) r.#semantics[i] ??= null;
+    if (!r.#palettes[ROOT_PALETTE]) throw new Error("A saved registry needs the root palette");
+    return r;
   }
 
   /** An independent copy (for forks and undo snapshots). Entries are frozen, so this is shallow. */

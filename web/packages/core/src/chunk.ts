@@ -81,6 +81,68 @@ export class Chunk {
   }
 
   /**
+   * A chunk from a dense array of ids in ChunkLayout index order (loading a saved project).
+   * Uniform bricks are stored as uniform without writing their cells.
+   */
+  static fromDense(layout: ChunkLayout, dense: Uint16Array): Chunk {
+    const chunk = new Chunk(layout);
+    const n = layout.bricksPerAxis;
+    const bs = layout.brickSize;
+    const bb = layout.brickBits;
+    for (let brick = 0; brick < n * n * n; brick++) {
+      const bx = (brick % n) * bs;
+      const bz = (Math.floor(brick / n) % n) * bs;
+      const by = Math.floor(brick / (n * n)) * bs;
+      const first = dense[layout.localIndex(bx, by, bz)] ?? EMPTY_ID;
+      let uniform = true;
+      for (let y = 0; y < bs && uniform; y++)
+        for (let z = 0; z < bs && uniform; z++)
+          for (let x = 0; x < bs; x++) {
+            if ((dense[layout.localIndex(bx + x, by + y, bz + z)] ?? EMPTY_ID) !== first) {
+              uniform = false;
+              break;
+            }
+          }
+      if (uniform) {
+        if (first !== EMPTY_ID) chunk.#fillBrick(brick, first);
+        continue;
+      }
+      for (let y = 0; y < bs; y++)
+        for (let z = 0; z < bs; z++)
+          for (let x = 0; x < bs; x++) {
+            const id = dense[layout.localIndex(bx + x, by + y, bz + z)] ?? EMPTY_ID;
+            if (id !== EMPTY_ID) chunk.#setInBrick(brick, x + (z << bb) + (y << (2 * bb)), id);
+          }
+    }
+    return chunk;
+  }
+
+  /** Visits each state id the chunk holds (once, in no particular order). */
+  forEachUsedId(visit: (id: number) => void): void {
+    const seen = new Set<number>();
+    const see = (id: number) => {
+      if (id !== EMPTY_ID && !seen.has(id)) {
+        seen.add(id);
+        visit(id);
+      }
+    };
+    for (let brick = 0; brick < this.#data.length; brick++) {
+      const data = this.#data[brick];
+      if (!data) {
+        see(this.#uniform[brick] ?? EMPTY_ID);
+        continue;
+      }
+      if (!this.#wide) continue;
+      for (const id of data) see(id);
+    }
+    if (!this.#wide) {
+      for (let slot = 1; slot < this.#palette.length; slot++) {
+        if ((this.#refs[slot] ?? 0) > 0) see(this.#palette[slot] ?? EMPTY_ID);
+      }
+    }
+  }
+
+  /**
    * Visits every cell that differs between two chunks of the same layout (null = empty).
    * Bricks still shared since a clone are skipped without reading them, and a brick that is
    * uniform on both sides is reported once through `brick` instead of cell by cell, so diffing

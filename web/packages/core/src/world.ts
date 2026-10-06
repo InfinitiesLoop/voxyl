@@ -229,6 +229,25 @@ export class World {
     return changed;
   }
 
+  /**
+   * Replaces a chunk wholesale from a dense array of state ids in ChunkLayout index order
+   * (loading a saved project). Not an edit: it isn't snapshotted, but marks the chunk dirty.
+   */
+  loadDense(cx: number, cy: number, cz: number, dense: Uint16Array): void {
+    const key = chunkKey(cx, cy, cz);
+    const chunk = Chunk.fromDense(this.layout, dense);
+    this.#cellCount += chunk.count - (this.#chunks.get(key)?.count ?? 0);
+    if (chunk.count > 0) this.#chunks.set(key, chunk);
+    else this.#chunks.delete(key);
+    const last = this.layout.size - 1;
+    this.#markDirty(cx, cy, cz, 0, last, 0, last, 0, last);
+  }
+
+  /** The chunk with this key (see chunkKey), if it holds any cells. */
+  chunkByKey(key: number): Chunk | undefined {
+    return this.#chunks.get(key);
+  }
+
   /** The chunk at chunk coordinates, if it holds any cells. */
   chunk(cx: number, cy: number, cz: number): Chunk | undefined {
     return this.#chunks.get(chunkKey(cx, cy, cz));

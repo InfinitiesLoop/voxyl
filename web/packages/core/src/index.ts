@@ -38,6 +38,17 @@ export {
   MIN_CHUNK_BITS,
   MIN_CHUNK_COORD,
 } from "./coords.ts";
+export { decodeStorageChunk, encodeStorageChunk, STORAGE_SIZE } from "./format/chunk-codec.ts";
+export {
+  FORMAT_VERSION,
+  loadProject,
+  type Manifest,
+  packBundle,
+  type SavedProject,
+  type StateJSON,
+  saveProject,
+  unpackBundle,
+} from "./format/project-file.ts";
 export {
   type Applied,
   type ChangeReport,
@@ -92,6 +103,7 @@ export {
   type Palette,
   type PaletteId,
   type PalettePatch,
+  type RegistryJSON,
   type ResolvedSemantic,
   ROOT_PALETTE,
   type Semantic,
