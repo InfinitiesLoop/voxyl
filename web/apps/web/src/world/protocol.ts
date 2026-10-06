@@ -9,8 +9,8 @@
 // been replaced are dropped.
 
 import type { StateShape } from "@voxyl/mesher";
-import type { LightingMode, LightLayoutUpdate, MeshJob } from "@voxyl/session";
-import type { WorldInfo, WorldKind } from "../worlds.ts";
+import type { LightingMode, LightLayoutUpdate, MeshJob, ProjectEntry } from "@voxyl/session";
+import type { WorldInfo, WorldSource } from "../worlds.ts";
 
 export type Vec3 = readonly [number, number, number];
 
@@ -23,9 +23,19 @@ export interface RayHit {
 
 /** Commands, each answered with a reply of the matching type. */
 export type Command =
-  | { type: "load"; world: number; kind: WorldKind; chunkSize: number; theme: number }
+  /** Generates a sample (with a city theme) or opens a saved project. */
+  | { type: "load"; world: number; source: WorldSource; chunkSize: number; theme: number }
+  /** Saves the open project (a sample becomes a saved project); later changes autosave. */
+  | { type: "save" }
+  /** Saved projects, most recent first. */
+  | { type: "projects" }
+  | { type: "deleteProject"; id: string }
+  /** Stores a bundle file as a saved project. */
+  | { type: "importProject"; bytes: Uint8Array }
+  /** A saved project as a bundle file. */
+  | { type: "exportProject"; id: string }
   | { type: "lighting"; mode: LightingMode }
-  /** Re-skins the sample build with another city theme (a palette_sync): looks only. */
+  /** Re-skins a city with another city theme (a palette_sync): looks only. */
   | { type: "theme"; theme: number }
   /** The id of the whole-block state of a semantic, by name (added if new). */
   | { type: "intern"; semantic: string }
@@ -45,7 +55,13 @@ export type Command =
 export interface Replies {
   load: WorldInfo;
   lighting: { lightAllMs: number | null };
-  theme: { relit: boolean };
+  /** applied is false for a project without the city theme. */
+  theme: { applied: boolean; relit: boolean };
+  save: ProjectEntry;
+  projects: ProjectEntry[];
+  deleteProject: null;
+  importProject: ProjectEntry;
+  exportProject: Uint8Array;
   intern: number;
   setId: boolean;
   fillBox: number;

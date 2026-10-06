@@ -182,3 +182,26 @@ dd {
     linear-gradient(var(--text), var(--text)) center / 14px 2px no-repeat;
   mix-blend-mode: difference;
 }
+
+.project {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.project-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.project-name em {
+  color: var(--text-quiet);
+  font-style: normal;
+}

@@ -12,6 +12,7 @@ export {
   CITY_THEME_KEY,
   CITY_THEMES,
   type CityTheme,
+  cityThemeOf,
   cityThemePalette,
   prepareCityProject,
 } from "./themes.ts";

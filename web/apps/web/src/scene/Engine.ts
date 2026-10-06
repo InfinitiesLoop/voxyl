@@ -2,7 +2,7 @@ import type { LightingMode } from "@voxyl/session";
 import * as THREE from "three/webgpu";
 import type { Vec3, WorldStats } from "../world/protocol.ts";
 import { WorldClient, type WorldOutput } from "../world/WorldClient.ts";
-import type { WorldInfo, WorldKind } from "../worlds.ts";
+import type { WorldInfo, WorldSource } from "../worlds.ts";
 import { ChunkRenderer, type ChunkRendererStats } from "./ChunkRenderer.ts";
 import { FlyCamera } from "./FlyCamera.ts";
 import { LightVolume } from "./light-volume.ts";
@@ -135,7 +135,7 @@ export class Engine {
    * Builds a world in the world worker and shows it, replacing the current one. Resolves to
    * its info, or null if another load replaced it first.
    */
-  async load(kind: WorldKind, chunkSize: number, theme: number): Promise<WorldInfo | null> {
+  async load(source: WorldSource, chunkSize: number, theme: number): Promise<WorldInfo | null> {
     const id = ++this.#worldId;
     if (this.#chunks) {
       this.scene.remove(this.#chunks.group);
@@ -144,7 +144,7 @@ export class Engine {
     this.#chunks = null;
     this.#info = null;
     this.#worldStats = null;
-    const info = await this.world.request({ type: "load", world: id, kind, chunkSize, theme });
+    const info = await this.world.request({ type: "load", world: id, source, chunkSize, theme });
     if (id !== this.#worldId || this.#disposed) return null;
     // The worker sends nothing about this world before its reply, so nothing was missed.
     const chunks = new ChunkRenderer(this.renderer, chunkSize);

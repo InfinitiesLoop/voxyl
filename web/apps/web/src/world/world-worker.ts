@@ -1,13 +1,23 @@
-// The world worker: owns the World, the light engine and mesh scheduling (a WorldSession),
-// so generating worlds, lighting them and preparing work never block the thread that draws.
+// The world worker: owns the open project (its World), the light engine and mesh scheduling
+// (a WorldSession), so generating, opening and lighting never block the thread that draws.
 // It hands mesh jobs to the mesh workers over MessagePorts and forwards their results to the
-// main thread, together with light, in the order it produced them.
+// main thread, together with light, in the order it produced them. Saved projects live in
+// OPFS (a ProjectStore), read and written here.
 
 import { type CellStateTable, EMPTY_ID, type Project, raycast } from "@voxyl/core";
-import { cityThemePalette } from "@voxyl/fixtures";
+import { CITY_THEME_KEY, cityThemeOf, cityThemePalette } from "@voxyl/fixtures";
 import type { StateShape } from "@voxyl/mesher";
-import { type LightingMode, stateLooks, WorldSession } from "@voxyl/session";
-import { buildWorld, themeAt } from "../worlds.ts";
+import { type LightingMode, ProjectStore, stateLooks, WorldSession } from "@voxyl/session";
+import {
+  buildSample,
+  type Framing,
+  frameProject,
+  sampleKind,
+  savedId,
+  themeAt,
+  type WorldInfo,
+} from "../worlds.ts";
+import { OpfsFolder } from "./opfs-folder.ts";
 import type {
   Command,
   FromWorld,
@@ -33,18 +43,22 @@ const LIGHT_SLICE_MS = 8;
 /** Bricks of light per message: 4096 is 512 KB. */
 const LIGHT_BATCH = 4096;
 const STATS_INTERVAL_MS = 250;
+/** A saved project is saved this long after its last change. */
+const AUTOSAVE_MS = 1500;
 
 interface MeshPort {
   readonly port: MessagePort;
   load: number;
 }
 
+const store = new ProjectStore(new OpfsFolder("voxyl"));
 let session: WorldSession | null = null;
 let project: Project | null = null;
+/** The id the open project is saved under, or null for an unsaved sample. */
+let saved: string | null = null;
+let autosave: ReturnType<typeof setTimeout> | null = null;
 let worldId = -1;
 let mode: LightingMode = "off";
-/** The city theme's linked palette version: each re-skin syncs a newer one. */
-let themeVersion = 1;
 let meshPorts: MeshPort[] = [];
 let lastSeq = 0;
 let idlePosted = -1;
@@ -66,42 +80,113 @@ function world() {
   return session.world;
 }
 
-function handle(command: Command): Replies[Command["type"]] {
+/** The open project changed: a saved one is saved again shortly. */
+function changed(): void {
+  if (saved === null) return;
+  if (autosave !== null) clearTimeout(autosave);
+  autosave = setTimeout(() => {
+    autosave = null;
+    if (project && saved !== null) void store.save(project).catch(reportSaveError);
+  }, AUTOSAVE_MS);
+}
+
+function reportSaveError(error: unknown): void {
+  console.error("Saving the project failed", error);
+}
+
+/** Saves now if an autosave is waiting (before another project replaces this one). */
+async function flushAutosave(): Promise<void> {
+  if (autosave === null) return;
+  clearTimeout(autosave);
+  autosave = null;
+  if (project && saved !== null) await store.save(project).catch(reportSaveError);
+}
+
+async function open(command: Extract<Command, { type: "load" }>): Promise<WorldInfo> {
+  await flushAutosave();
+  const start = performance.now();
+  const kind = sampleKind(command.source);
+  const id = savedId(command.source);
+  let framing: Framing;
+  let next: Project;
+  if (kind) {
+    const built = buildSample(kind, command.chunkSize, themeAt(command.theme));
+    next = built.project;
+    framing = built.framing;
+    saved = null;
+  } else if (id !== null) {
+    next = await store.open(id, { chunkBits: Math.log2(command.chunkSize) });
+    framing = frameProject(next);
+    saved = id;
+  } else {
+    throw new Error(`Nothing to open called ${command.source}`);
+  }
+  // The project and its session change together, after the last await.
+  project = next;
+  session = new WorldSession(next.world);
+  worldId = command.world;
+  looksPosted = { states: -1, revision: -1 };
+  shapes = [];
+  idlePosted = -1;
+  meshTimes.length = 0;
+  if (mode !== "off") session.setLighting(mode, materials);
+  return {
+    name: project.settings.name,
+    saved,
+    theme: cityThemeOf(next.semantics),
+    chunkSize: command.chunkSize,
+    ...framing,
+    loadMs: performance.now() - start,
+  };
+}
+
+async function handle(command: Command): Promise<Replies[Command["type"]]> {
   switch (command.type) {
-    case "load": {
-      const built = buildWorld(command.kind, command.chunkSize, themeAt(command.theme));
-      project = built.project;
-      session = new WorldSession(built.project.world);
-      worldId = command.world;
-      looksPosted = { states: -1, revision: -1 };
-      themeVersion = 1;
-      shapes = [];
-      idlePosted = -1;
-      meshTimes.length = 0;
-      if (mode !== "off") session.setLighting(mode, materials);
-      return built.info;
+    case "load":
+      return open(command);
+    case "save": {
+      if (!project) throw new Error("no project open");
+      const entry = await store.save(project);
+      saved = entry.id;
+      return entry;
     }
+    case "projects":
+      return store.list();
+    case "deleteProject":
+      if (command.id === saved) saved = null; // it stays on screen, no longer saved
+      await store.delete(command.id);
+      return null;
+    case "importProject":
+      return store.importBundle(command.bytes);
+    case "exportProject":
+      await flushAutosave();
+      return store.exportBundle(command.id);
     case "lighting":
       mode = command.mode;
       session?.setLighting(mode, materials);
       return { lightAllMs: session?.stats().lightAllMs ?? null };
     case "theme": {
-      if (!project) return { relit: false };
+      const linked = project?.semantics.palettes().find((p) => p.linked?.key === CITY_THEME_KEY);
+      if (!project || !linked?.linked) return { applied: false, relit: false };
       // A newer version of the same shared palette: looks change, semantic ids and cells don't.
-      const args = cityThemePalette(themeAt(command.theme), ++themeVersion);
-      project.run({ id: `theme-${themeVersion}`, kind: "palette_sync", args, source: "viewer" });
-      return { relit: session?.setMaterials(materials) ?? false };
+      const version = linked.linked.version + 1;
+      const args = cityThemePalette(themeAt(command.theme), version);
+      const result = project.run({ id: `theme-${version}`, kind: "palette_sync", args });
+      if (result.report.registryChanged) changed();
+      return { applied: true, relit: session?.setMaterials(materials) ?? false };
     }
     case "intern":
       return world().states.intern({ semantic: project?.semantics.ensure(command.semantic) ?? 0 });
     case "setId": {
       const [x, y, z] = command.at;
-      return world().setId(x, y, z, command.id);
+      return edited(world().setId(x, y, z, command.id));
     }
     case "fillBox": {
       const [x0, y0, z0] = command.from;
       const [x1, y1, z1] = command.to;
-      return world().fillBox(x0, y0, z0, x1, y1, z1, command.id);
+      const count = world().fillBox(x0, y0, z0, x1, y1, z1, command.id);
+      edited(count > 0);
+      return count;
     }
     case "raycast": {
       const hit = raycast(world(), [...command.origin], [...command.dir], command.reach);
@@ -113,12 +198,18 @@ function handle(command: Command): Replies[Command["type"]] {
       const hit = raycast(world(), [...command.origin], [...command.dir], command.reach);
       if (!hit) return false;
       const [x, y, z] = hit.cell;
-      if (command.action === "erase") return world().setId(x, y, z, EMPTY_ID);
+      if (command.action === "erase") return edited(world().setId(x, y, z, EMPTY_ID));
       const [nx, ny, nz] = hit.normal;
       if (nx === 0 && ny === 0 && nz === 0) return false; // the ray started inside a cell
-      return world().setId(x + nx, y + ny, z + nz, command.id);
+      return edited(world().setId(x + nx, y + ny, z + nz, command.id));
     }
   }
+}
+
+/** Marks the project changed if an edit changed anything, and passes the result on. */
+function edited(didChange: boolean): boolean {
+  if (didChange) changed();
+  return didChange;
 }
 
 /** Hands out whatever work the session has: mesh jobs, emptied chunks, light. */
@@ -226,15 +317,23 @@ scope.addEventListener("message", (event) => {
     session?.setCamera(...message.at);
     return;
   }
+  // Commands run one at a time, in order, even those that wait on storage.
+  queue = queue.then(() => run(message));
+});
+
+let queue: Promise<void> = Promise.resolve();
+
+async function run(message: Extract<ToWorld, { seq: number }>): Promise<void> {
   const { seq } = message;
   try {
-    post({ type: "reply", seq, value: handle(message) });
+    const value = await handle(message);
+    post({ type: "reply", seq, value }, value instanceof Uint8Array ? [value.buffer] : []);
   } catch (error) {
     post({ type: "error", seq, message: error instanceof Error ? error.message : String(error) });
   }
   lastSeq = seq;
   pump();
-});
+}
 
 setInterval(() => {
   const s = session;

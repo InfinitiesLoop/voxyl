@@ -1,8 +1,10 @@
 import { CITY_THEMES } from "@voxyl/fixtures";
+import type { ProjectEntry } from "@voxyl/session";
+import { useRef } from "react";
 import type { Settings } from "./App.tsx";
 import type { BenchResult, Distribution } from "./bench/bench.ts";
 import type { Backend, EngineStats } from "./scene/Engine.ts";
-import { CHUNK_SIZES, WORLD_KINDS, type WorldKind } from "./worlds.ts";
+import { CHUNK_SIZES, savedSource, WORLD_KINDS, type WorldInfo } from "./worlds.ts";
 
 const ms = (v: number | null | undefined, digits = 1) =>
   v === null || v === undefined ? "–" : `${v.toFixed(digits)} ms`;
@@ -34,6 +36,10 @@ interface HudProps {
   volumeLighting: boolean;
   onBench: () => void;
   onHome: () => void;
+  /** What is open, once loaded. */
+  info: WorldInfo | null;
+  projects: readonly ProjectEntry[];
+  project: ProjectActions;
 }
 
 export function Hud({
@@ -45,6 +51,9 @@ export function Hud({
   volumeLighting,
   onBench,
   onHome,
+  info,
+  projects,
+  project,
 }: HudProps) {
   const f = stats?.frame;
   const c = stats?.chunks;
@@ -61,13 +70,29 @@ export function Hud({
           <select
             value={settings.world}
             disabled={busy}
-            onChange={(e) => onSettings({ ...settings, world: e.target.value as WorldKind })}
+            onChange={(e) => onSettings({ ...settings, world: e.target.value })}
           >
-            {WORLD_KINDS.map((w) => (
-              <option key={w.kind} value={w.kind}>
-                {w.label}
-              </option>
-            ))}
+            <optgroup label="Samples">
+              {WORLD_KINDS.map((w) => (
+                <option key={w.kind} value={w.kind}>
+                  {w.label}
+                </option>
+              ))}
+            </optgroup>
+            {projects.length > 0 && (
+              <optgroup label="My projects">
+                {projects.map((p) => (
+                  <option key={p.id} value={savedSource(p.id)}>
+                    {p.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {/* A project saved just now, before the list catches up. */}
+            {settings.world.startsWith("saved:") &&
+              !projects.some((p) => savedSource(p.id) === settings.world) && (
+                <option value={settings.world}>{info?.name ?? "Project"}</option>
+              )}
           </select>
         </label>
         <label>
@@ -88,6 +113,7 @@ export function Hud({
           Theme
           <select
             value={settings.theme}
+            disabled={busy || info?.theme === null}
             onChange={(e) => onSettings({ ...settings, theme: Number(e.target.value) })}
           >
             {CITY_THEMES.map((p, i) => (
@@ -187,6 +213,7 @@ export function Hud({
         <dt>Speed</dt>
         <dd>{stats ? `${stats.speed.toFixed(0)} cells/s` : "–"}</dd>
       </dl>
+      <ProjectRow info={info} project={project} busy={busy} />
       <div className="actions">
         <button type="button" onClick={onHome} disabled={busy}>
           Overview
@@ -200,6 +227,66 @@ export function Hud({
 }
 
 const dist = (d: Distribution) => `p50 ${ms(d.p50)} · p95 ${ms(d.p95)} · max ${ms(d.max)}`;
+
+export interface ProjectActions {
+  /** Saves the open project; a sample becomes one of "My projects". */
+  save(): Promise<void>;
+  export(id: string, name: string): Promise<void>;
+  import(file: File): Promise<void>;
+  delete(id: string, name: string): Promise<void>;
+}
+
+/** The open project's name, and saving, exporting, importing and deleting. */
+function ProjectRow({
+  info,
+  project,
+  busy,
+}: {
+  info: WorldInfo | null;
+  project: ProjectActions;
+  busy: boolean;
+}) {
+  const file = useRef<HTMLInputElement>(null);
+  const saved = info?.saved ?? null;
+  const name = info?.name ?? "";
+  return (
+    <div className="project">
+      <span className="project-name" title={saved ? "Saved in this browser" : "Not saved"}>
+        {info ? name : "–"}
+        {info && !saved && <em> · not saved</em>}
+      </span>
+      {!saved && (
+        <button type="button" disabled={busy || !info} onClick={() => void project.save()}>
+          Save
+        </button>
+      )}
+      {saved && (
+        <>
+          <button type="button" disabled={busy} onClick={() => void project.export(saved, name)}>
+            Export
+          </button>
+          <button type="button" disabled={busy} onClick={() => void project.delete(saved, name)}>
+            Delete
+          </button>
+        </>
+      )}
+      <button type="button" disabled={busy} onClick={() => file.current?.click()}>
+        Import…
+      </button>
+      <input
+        ref={file}
+        type="file"
+        accept=".voxyl"
+        hidden
+        onChange={(e) => {
+          const chosen = e.target.files?.[0];
+          e.target.value = "";
+          if (chosen) void project.import(chosen);
+        }}
+      />
+    </div>
+  );
+}
 
 export function BenchPanel({ result, onClose }: { result: BenchResult; onClose: () => void }) {
   const copy = () => navigator.clipboard.writeText(JSON.stringify(result, null, 2));

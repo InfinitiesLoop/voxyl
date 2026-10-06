@@ -215,7 +215,7 @@ export async function runBench(
     tris: stats.chunks?.tris ?? 0,
     quadMb: stats.quadMb,
     workers: stats.meshWorkers,
-    generateMs: info.generateMs,
+    generateMs: info.loadMs,
     initialMeshMs: stats.initialMeshMs,
     flight: {
       seconds: FLIGHT_SECONDS,

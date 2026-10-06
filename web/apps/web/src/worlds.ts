@@ -1,4 +1,4 @@
-import { Project } from "@voxyl/core";
+import { chunkKeyToCoords, Project } from "@voxyl/core";
 import { CITY_THEMES, type CityTheme, generateCity, prepareCityProject } from "@voxyl/fixtures";
 
 export type WorldKind =
@@ -22,20 +22,45 @@ export const WORLD_KINDS: readonly { kind: WorldKind; label: string }[] = [
 
 export const CHUNK_SIZES = [16, 32, 64, 128] as const;
 
+/**
+ * What to show: a generated sample (its WorldKind) or a saved project, written "saved:<id>".
+ * Kept as one string so it fits a select and the URL.
+ */
+export type WorldSource = string;
+
+const SAVED = "saved:";
+
+export const savedSource = (id: string): WorldSource => `${SAVED}${id}`;
+
+/** The saved project's id, or null for a sample. */
+export function savedId(source: WorldSource): string | null {
+  return source.startsWith(SAVED) ? source.slice(SAVED.length) : null;
+}
+
+export function sampleKind(source: WorldSource): WorldKind | null {
+  return WORLD_KINDS.find((w) => w.kind === source)?.kind ?? null;
+}
+
 /** What the main thread knows about a world built in the world worker. */
 export interface WorldInfo {
-  readonly kind: WorldKind;
+  readonly name: string;
+  /** The id it is saved under, or null for a sample not saved yet. */
+  readonly saved: string | null;
   readonly chunkSize: number;
   /** Horizontal centre and size, for framing the camera and the bench's flight path. */
   readonly center: readonly [number, number, number];
   readonly extent: number;
   readonly top: number;
-  readonly generateMs: number;
+  /** Which city theme it shows (CITY_THEMES), or null for a project without one. */
+  readonly theme: number | null;
+  /** Time to generate or open it. */
+  readonly loadMs: number;
 }
 
-export interface BuiltWorld {
-  readonly project: Project;
-  readonly info: WorldInfo;
+export interface Framing {
+  readonly center: readonly [number, number, number];
+  readonly extent: number;
+  readonly top: number;
 }
 
 const CITY_TARGETS: Record<Exclude<WorldKind, "pillar">, number> = {
@@ -52,30 +77,72 @@ export function themeAt(index: number): CityTheme {
   return CITY_THEMES[index] ?? (CITY_THEMES[0] as CityTheme);
 }
 
-/** Generates a sample build, its looks coming from a linked city theme (see prepareCityProject). */
-export function buildWorld(kind: WorldKind, chunkSize: number, theme: CityTheme): BuiltWorld {
+/**
+ * Generates a sample build, its looks coming from a linked city theme (see
+ * prepareCityProject), and how to frame it.
+ */
+export function buildSample(
+  kind: WorldKind,
+  chunkSize: number,
+  theme: CityTheme,
+): { project: Project; framing: Framing } {
   const project = new Project({ chunkBits: Math.log2(chunkSize) });
-  const start = performance.now();
   prepareCityProject(project, theme);
+  const label = WORLD_KINDS.find((w) => w.kind === kind)?.label ?? kind;
+  project.run({ id: "name", kind: "settings", args: { ...project.settings, name: label } });
   if (kind === "pillar") {
     buildPillar(project);
-    const generateMs = performance.now() - start;
-    const info = { kind, chunkSize, center: [0, 8, 0], extent: 16, top: 17, generateMs } as const;
-    return { project, info };
+    return { project, framing: { center: [0, 8, 0], extent: 16, top: 17 } };
   }
   const stats = generateCity(project, {
     targetCells: CITY_TARGETS[kind],
     seed: 1,
     parts: kind.startsWith("parts-"),
   });
-  const generateMs = performance.now() - start;
   const center = [
     (stats.min[0] + stats.max[0] + 1) / 2,
     0,
     (stats.min[2] + stats.max[2] + 1) / 2,
   ] as const;
   const extent = stats.max[0] - stats.min[0] + 1;
-  return { project, info: { kind, chunkSize, center, extent, top: stats.max[1], generateMs } };
+  return { project, framing: { center, extent, top: stats.max[1] } };
+}
+
+/** Above this many cells, framing uses whole chunks rather than visiting every cell. */
+const EXACT_FRAMING_CELLS = 4_000_000;
+
+/** Framing for any project: its exact bounds, or the chunks it occupies when it is huge. */
+export function frameProject(project: Project): Framing {
+  const world = project.world;
+  const size = world.layout.size;
+  const lo = [Infinity, Infinity, Infinity];
+  const hi = [-Infinity, -Infinity, -Infinity];
+  if (world.cellCount <= EXACT_FRAMING_CELLS) {
+    world.forEachCell((x, y, z) => {
+      if (x < (lo[0] as number)) lo[0] = x;
+      if (y < (lo[1] as number)) lo[1] = y;
+      if (z < (lo[2] as number)) lo[2] = z;
+      if (x + 1 > (hi[0] as number)) hi[0] = x + 1;
+      if (y + 1 > (hi[1] as number)) hi[1] = y + 1;
+      if (z + 1 > (hi[2] as number)) hi[2] = z + 1;
+    });
+  } else {
+    for (const key of world.chunkKeys()) {
+      const c = chunkKeyToCoords(key);
+      for (let a = 0; a < 3; a++) {
+        lo[a] = Math.min(lo[a] as number, (c[a] as number) * size);
+        hi[a] = Math.max(hi[a] as number, ((c[a] as number) + 1) * size);
+      }
+    }
+  }
+  if (lo[0] === Infinity) return { center: [0, 0, 0], extent: 16, top: 0 };
+  const [x0, y0, z0] = lo as [number, number, number];
+  const [x1, y1, z1] = hi as [number, number, number];
+  return {
+    center: [(x0 + x1) / 2, Math.max(0, y0), (z0 + z1) / 2],
+    extent: Math.max(x1 - x0, z1 - z0),
+    top: y1,
+  };
 }
 
 /** A small pillar: a hollow dark shaft with light bands every fourth layer and glowing corners. */

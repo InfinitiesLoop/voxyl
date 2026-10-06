@@ -1,15 +1,24 @@
 import { CITY_THEMES } from "@voxyl/fixtures";
-import type { LightingMode } from "@voxyl/session";
+import type { LightingMode, ProjectEntry } from "@voxyl/session";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type BenchResult, runBench } from "./bench/bench.ts";
 import { BenchPanel, Hud } from "./Hud.tsx";
 import { type Backend, Engine, type EngineStats } from "./scene/Engine.ts";
-import { CHUNK_SIZES, WORLD_KINDS, type WorldKind } from "./worlds.ts";
+import {
+  CHUNK_SIZES,
+  sampleKind,
+  savedId,
+  savedSource,
+  WORLD_KINDS,
+  type WorldInfo,
+  type WorldSource,
+} from "./worlds.ts";
 
 export interface Settings {
-  world: WorldKind;
+  /** A sample's kind, or a saved project as "saved:<id>". */
+  world: WorldSource;
   chunk: number;
-  /** The sample build's city theme (CITY_THEMES). */
+  /** The city theme of the sample builds (CITY_THEMES). */
   theme: number;
   lighting: LightingMode;
   /** Time of day, 0 (midnight) to 100 (noon). */
@@ -25,7 +34,8 @@ function percent(value: string | null, fallback: number): number {
 
 function readSettings(): Settings {
   const params = new URLSearchParams(location.search);
-  const world = WORLD_KINDS.find((w) => w.kind === params.get("world"))?.kind ?? "city-1m";
+  const requested = params.get("world") ?? "";
+  const world = sampleKind(requested) || savedId(requested) ? requested : "city-1m";
   const chunk = Number(params.get("chunk"));
   // "palette" is the name earlier versions used.
   const themeName = params.get("theme") ?? params.get("palette");
@@ -65,6 +75,9 @@ export function App() {
   const [locked, setLocked] = useState(false);
   const [benchStep, setBenchStep] = useState<string | null>(null);
   const [bench, setBench] = useState<BenchResult | null>(null);
+  /** What is open, once loaded. */
+  const [info, setInfo] = useState<WorldInfo | null>(null);
+  const [projects, setProjects] = useState<ProjectEntry[]>([]);
 
   const track = useCallback((label: string, work: Promise<unknown>) => {
     setTasks((t) => [...t, label]);
@@ -107,24 +120,83 @@ export function App() {
 
   useEffect(() => writeSettings(settings), [settings]);
 
-  // The theme is read through a ref when a world loads, so switching themes never
+  // The theme is read through a ref when a sample is generated, so switching themes never
   // regenerates the world: it only goes to setTheme below, a palette_sync of looks.
   const themeRef = useRef(settings.theme);
   themeRef.current = settings.theme;
-  const { world: worldKind, chunk: chunkSize, theme, lighting, daylight, brightness } = settings;
+  const { world: source, chunk: chunkSize, theme, lighting, daylight, brightness } = settings;
 
-  // Rebuild the world when its kind or chunk size changes. It is generated (and, with
-  // lighting on, lit) in the world worker, so the page stays responsive meanwhile.
+  const refreshProjects = useCallback(async () => {
+    if (engine) setProjects(await engine.world.request({ type: "projects" }));
+  }, [engine]);
+
+  useEffect(() => {
+    void refreshProjects();
+  }, [refreshProjects]);
+
+  // Generate a sample or open a saved project when the source or chunk size changes. Both
+  // happen (and, with lighting on, light) in the world worker, so the page stays responsive.
+  // A sample that was just saved is already on screen: only the source changed.
+  const justSaved = useRef<string | null>(null);
+  // Only a theme the user picks is applied (as a palette_sync); opening a saved project keeps
+  // the looks it was saved with, and the picker follows them.
+  const appliedTheme = useRef(settings.theme);
   useEffect(() => {
     if (!engine) return;
-    const label = WORLD_KINDS.find((w) => w.kind === worldKind)?.label ?? worldKind;
+    const id = savedId(source);
+    if (id !== null && id === justSaved.current) return;
+    justSaved.current = null;
     setBench(null);
-    track(`Generating ${label}`, engine.load(worldKind, chunkSize, themeRef.current));
-  }, [engine, worldKind, chunkSize, track]);
+    const sample = WORLD_KINDS.find((w) => w.kind === sampleKind(source));
+    const label = sample ? `Generating ${sample.label}` : "Opening the project";
+    const work = engine.load(source, chunkSize, themeRef.current).then((loaded) => {
+      if (!loaded) return;
+      setInfo(loaded);
+      // The theme picker shows what the project looks like; picking another re-skins it.
+      const shown = loaded.theme;
+      if (shown === null) return;
+      appliedTheme.current = shown;
+      setSettings((s) => (s.theme === shown ? s : { ...s, theme: shown }));
+    });
+    work.catch((error: unknown) => console.error(`Couldn't open ${source}`, error));
+    track(label, work);
+  }, [engine, source, chunkSize, track]);
 
   useEffect(() => {
-    if (engine) void engine.setTheme(theme);
+    if (!engine || theme === appliedTheme.current) return;
+    appliedTheme.current = theme;
+    void engine.setTheme(theme);
   }, [engine, theme]);
+
+  const project = {
+    save: async () => {
+      if (!engine) return;
+      const entry = await engine.world.request({ type: "save" });
+      justSaved.current = entry.id;
+      setInfo((i) => i && { ...i, saved: entry.id });
+      setSettings((s) => ({ ...s, world: savedSource(entry.id) }));
+      await refreshProjects();
+    },
+    export: async (id: string, name: string) => {
+      if (!engine) return;
+      const bytes = await engine.world.request({ type: "exportProject", id });
+      download(new Blob([bytes as Uint8Array<ArrayBuffer>]), `${name}.voxyl`);
+    },
+    import: async (file: File) => {
+      if (!engine) return;
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const entry = await engine.world.request({ type: "importProject", bytes });
+      await refreshProjects();
+      setSettings((s) => ({ ...s, world: savedSource(entry.id) }));
+    },
+    delete: async (id: string, name: string) => {
+      if (!engine || !confirm(`Delete ${name}? This can't be undone.`)) return;
+      await engine.world.request({ type: "deleteProject", id });
+      await refreshProjects();
+      // The open project is gone: show a sample instead.
+      if (savedId(settings.world) === id) setSettings((s) => ({ ...s, world: "city-1m" }));
+    },
+  };
 
   useEffect(() => {
     engine?.setDaylight(daylight / 100);
@@ -149,7 +221,7 @@ export function App() {
   const startBench = useCallback(async () => {
     if (!engine || !backend) return;
     setBench(null);
-    const world = WORLD_KINDS.find((w) => w.kind === settings.world)?.label ?? settings.world;
+    const world = info?.name ?? settings.world;
     try {
       const result = await runBench(
         engine,
@@ -162,7 +234,7 @@ export function App() {
     } finally {
       setBenchStep(null);
     }
-  }, [engine, backend, settings.world]);
+  }, [engine, backend, info, settings.world]);
 
   const loading = tasks.at(-1) ?? null;
   return (
@@ -178,6 +250,9 @@ export function App() {
         volumeLighting={engine?.volumeLighting ?? true}
         onBench={startBench}
         onHome={() => engine?.home()}
+        info={info}
+        projects={projects}
+        project={project}
       />
       {(loading || benchStep) && <div className="banner">{benchStep ?? loading}…</div>}
       {bench && <BenchPanel result={bench} onClose={() => setBench(null)} />}
@@ -190,4 +265,14 @@ export function App() {
       )}
     </div>
   );
+}
+
+/** Saves a file through the browser's download. */
+function download(blob: Blob, name: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

@@ -13,3 +13,4 @@ export {
   sameMaterials,
   WorldSession,
 } from "./session.ts";
+export { type Folder, MemoryFolder, type ProjectEntry, ProjectStore } from "./store.ts";

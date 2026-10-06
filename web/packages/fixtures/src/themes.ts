@@ -1,4 +1,4 @@
-import { type Project, ROOT_PALETTE, type SharedPalette } from "@voxyl/core";
+import { type Project, ROOT_PALETTE, type SemanticRegistry, type SharedPalette } from "@voxyl/core";
 import { CITY_SEMANTICS, type CitySemantic } from "./city.ts";
 
 /** The key every city theme shares, so syncing another theme re-skins the same linked palette. */
@@ -80,4 +80,22 @@ export function prepareCityProject(
     const base = registry.byName(name, linked.id);
     if (base !== undefined) registry.derive(ROOT_PALETTE, base);
   }
+}
+
+/**
+ * Which of CITY_THEMES a project's linked city palette currently shows, by comparing looks; null
+ * when it has no city palette or its looks match none.
+ */
+export function cityThemeOf(registry: SemanticRegistry): number | null {
+  const linked = registry.palettes().find((p) => p.linked?.key === CITY_THEME_KEY);
+  if (!linked) return null;
+  const index = CITY_THEMES.findIndex((theme) =>
+    CITY_SEMANTICS.every((name) => {
+      const id = registry.byName(name, linked.id);
+      const look = id === undefined ? {} : registry.resolve(id).look;
+      const want = theme.looks[name];
+      return look.tint === want?.tint && !!look.glow === !!want?.glow;
+    }),
+  );
+  return index < 0 ? null : index;
 }
