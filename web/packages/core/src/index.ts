@@ -41,9 +41,12 @@ export {
 export {
   type Applied,
   type ChangeReport,
+  type EntryState,
+  type HistoryEntry,
   Project,
   type RunResult,
   type SemanticChange,
+  UNDO_LIMIT,
 } from "./project.ts";
 export { type RayHit, raycast } from "./raycast.ts";
 export {

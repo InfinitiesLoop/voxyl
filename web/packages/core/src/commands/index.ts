@@ -4,11 +4,13 @@ import { fill } from "./fill.ts";
 import { paletteAdd } from "./palette-add.ts";
 import { paletteSync } from "./palette-sync.ts";
 import { paletteUpdate } from "./palette-update.ts";
+import { redo } from "./redo.ts";
 import { resemantic } from "./resemantic.ts";
 import { select } from "./select.ts";
 import { semanticAdd } from "./semantic-add.ts";
 import { semanticUpdate } from "./semantic-update.ts";
 import { set } from "./set.ts";
+import { undo } from "./undo.ts";
 
 /** Every command kind. To add one, write its file and add one line here. */
 export const COMMANDS: readonly CommandDef[] = [
@@ -17,6 +19,8 @@ export const COMMANDS: readonly CommandDef[] = [
   clear,
   resemantic,
   select,
+  undo,
+  redo,
   paletteAdd,
   paletteUpdate,
   paletteSync,

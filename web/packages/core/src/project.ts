@@ -23,6 +23,8 @@ import { type Edit, World, type WorldOptions } from "./world.ts";
 
 /** How many recent command ids a project remembers to drop repeats. */
 const RECENT_IDS = 64;
+/** How many undoable commands keep their deltas in memory; undo stops at the oldest. */
+export const UNDO_LIMIT = 500;
 
 /** What a command changed. */
 export interface ChangeReport {
@@ -68,12 +70,36 @@ export interface Applied {
   readonly report: ChangeReport;
 }
 
+/** Where a history entry stands: applied, undone (redoable), or undone for good. */
+export type EntryState = "active" | "undone" | "dead";
+
+/** One command in the project's history (web-core.md, section 7). */
+export interface HistoryEntry {
+  readonly command: Command;
+  /** False for the selection, undo and redo: they are logged but aren't undo steps. */
+  readonly undoable: boolean;
+  readonly state: EntryState;
+  /** What it changed, kept in memory for undo; null for entries from before this session. */
+  readonly applied: Applied | null;
+}
+
+interface Entry {
+  readonly command: Command;
+  readonly undoable: boolean;
+  state: EntryState;
+  applied: Applied | null;
+}
+
 export class Project {
   readonly world: World;
   readonly semantics: SemanticRegistry;
   readonly #commands: ReadonlyMap<string, CommandDef>;
   readonly #recent = new Map<string, ChangeReport>();
-  readonly #applied: Applied[] = [];
+  readonly #history: Entry[] = [];
+  // Undone steps, most recent last; each step lists its entries latest first.
+  readonly #redo: Entry[][] = [];
+  // Undoable entries still holding deltas, oldest first (at most UNDO_LIMIT).
+  readonly #withDeltas: Entry[] = [];
   // Never mutated once set: commands replace it, so undo can keep the old one.
   #selection: CellSet | null = null;
 
@@ -93,9 +119,27 @@ export class Project {
     this.#selection = cells;
   }
 
-  /** Commands applied this session, oldest first. */
+  /**
+   * The history: every command, oldest first, the same list that syncs. Undo and redo are
+   * commands in it too, and the undo stack is a walk back through it.
+   */
+  get history(): readonly HistoryEntry[] {
+    return this.#history;
+  }
+
+  /** What each command applied this session changed, oldest first. */
   get applied(): readonly Applied[] {
-    return this.#applied;
+    return this.#history.flatMap((e) => (e.applied ? [e.applied] : []));
+  }
+
+  /** The id an undo command must name to undo the latest step, or null if nothing can be. */
+  undoTarget(): string | null {
+    return this.#undoStep()?.[0]?.command.id ?? null;
+  }
+
+  /** The id a redo command must name to redo the latest undone step, or null. */
+  redoTarget(): string | null {
+    return this.#redo.at(-1)?.[0]?.command.id ?? null;
   }
 
   /**
@@ -108,7 +152,14 @@ export class Project {
     if (seen) return { status: "duplicate", id: command.id, report: seen };
     const applied = this.#apply(command);
     this.#remember(command.id, applied.report);
-    this.#applied.push(applied);
+    const undoable = this.#commands.get(command.kind)?.undoable !== false;
+    if (undoable) {
+      // A new edit after undoing: the undone steps can't be redone any more.
+      for (const step of this.#redo) for (const e of step) e.state = "dead";
+      this.#redo.length = 0;
+    }
+    this.#history.push({ command, undoable, state: "active", applied });
+    if (undoable) this.#trim(this.#history.at(-1) as Entry);
     return { status: "applied", id: command.id, report: applied.report };
   }
 
@@ -239,10 +290,75 @@ export class Project {
       setSelection: (cells) => {
         this.#selection = cells;
       },
+      undo: (target) => {
+        const step = this.#undoStep();
+        const latest = step?.[0]?.command.id;
+        if (!step || latest !== target) {
+          throw new CommandError(
+            latest ? `The latest undo step ends with ${latest}, not ${target}` : "Nothing to undo",
+          );
+        }
+        for (const e of step) {
+          const a = e.applied as Applied;
+          world.restore(a.edit.before);
+          if (a.registry) semantics.restore(a.registry.before);
+          e.state = "undone";
+        }
+        this.#redo.push(step);
+      },
+      redo: (target) => {
+        const step = this.#redo.at(-1);
+        const latest = step?.[0]?.command.id;
+        if (!step || latest !== target) {
+          throw new CommandError(
+            latest
+              ? `The latest undone step ends with ${latest}, not ${target}`
+              : "Nothing to redo",
+          );
+        }
+        for (const e of [...step].reverse()) {
+          const a = e.applied as Applied;
+          world.restore(a.edit.after);
+          if (a.registry) semantics.restore(a.registry.after);
+          e.state = "active";
+        }
+        this.#redo.pop();
+      },
       note(key, value) {
         notes[key] = value;
       },
     };
+  }
+
+  /**
+   * The latest undo step, latest entry first: the newest active undoable command, plus the
+   * active undoable commands before it in the same group (others in between are skipped).
+   * Null if there is none, or it is from before this session (no deltas in memory).
+   */
+  #undoStep(): Entry[] | null {
+    const step: Entry[] = [];
+    for (let i = this.#history.length - 1; i >= 0; i--) {
+      const e = this.#history[i] as Entry;
+      if (!e.undoable || e.state !== "active") continue;
+      if (step.length === 0) {
+        if (!e.applied) return null;
+        step.push(e);
+        if (e.command.group === undefined) break;
+        continue;
+      }
+      if (e.command.group !== step[0]?.command.group || !e.applied) break;
+      step.push(e);
+    }
+    return step.length > 0 ? step : null;
+  }
+
+  /** Drops the deltas of undoable commands beyond UNDO_LIMIT, oldest first. */
+  #trim(entry: Entry): void {
+    this.#withDeltas.push(entry);
+    while (this.#withDeltas.length > UNDO_LIMIT) {
+      const oldest = this.#withDeltas.shift();
+      if (oldest) oldest.applied = null;
+    }
   }
 
   #remember(id: string, report: ChangeReport): void {

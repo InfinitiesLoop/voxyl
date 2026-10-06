@@ -422,15 +422,20 @@ export class SemanticRegistry {
   /** An independent copy (for forks and undo snapshots). Entries are frozen, so this is shallow. */
   clone(): SemanticRegistry {
     const copy = new SemanticRegistry();
-    copy.restore(this);
+    copy.#semantics = [...this.#semantics];
+    copy.#palettes = [...this.#palettes];
+    copy.#revision = this.#revision;
     return copy;
   }
 
-  /** Makes this registry a copy of another (to undo a change). */
+  /**
+   * Makes this registry's contents a copy of another's (to undo a change). The revision still
+   * moves forward, so anything caching by revision sees a change.
+   */
   restore(from: SemanticRegistry): void {
     this.#semantics = [...from.#semantics];
     this.#palettes = [...from.#palettes];
-    this.#revision = from.#revision;
+    this.#revision = Math.max(this.#revision, from.#revision) + 1;
   }
 
   #ids(): SemanticId[] {

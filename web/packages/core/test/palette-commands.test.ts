@@ -65,7 +65,8 @@ describe("palette and semantic commands", () => {
 
   it("roll registry changes back when a command fails", () => {
     const { p, walkway, deck } = factory();
-    const revision = p.semantics.revision;
+    const palettes = p.semantics.palettes().length;
+    const size = p.semantics.size;
     expect(() => p.run(cmd("palette_add", { name: "Bad", extends: 99 }))).toThrow(CommandError);
     expect(() => p.run(cmd("semantic_add", { name: "Deck" }))).toThrow(CommandError);
     // Derives a semantic, then fails on a bad state index: the derived semantic goes too.
@@ -77,7 +78,8 @@ describe("palette and semantic commands", () => {
         }),
       ),
     ).toThrow(CommandError);
-    expect(p.semantics.revision).toBe(revision);
+    expect(p.semantics.palettes().length).toBe(palettes);
+    expect(p.semantics.size).toBe(size);
     expect(p.semantics.semanticsIn(walkway)).toEqual([]);
   });
 

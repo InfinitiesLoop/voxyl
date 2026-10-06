@@ -397,6 +397,19 @@ Each step lands with its tests and updates this document.
 
     Fine for agent calls in a worker. If needed, the cost is per-cell `CellSet.add` and
     `getId`; skipping chunks and bricks with no matching state would cut it.
+- **Step 4 done (2026-10-06).**
+  - `Project.history` is the log: every command, oldest first, each marked active, undone or
+    dead.
+  - `undo` and `redo` are commands naming the step they act on (`Project.undoTarget()`,
+    `redoTarget()`), so replaying the log anywhere does the same. Naming the wrong step is
+    refused, and a repeated undo id is acknowledged, not applied again (ChatGPT's double calls).
+  - Consecutive commands sharing a `group` undo as one step. The selection, undo and redo are
+    logged but aren't steps (`undoable: false` on the command).
+  - A new edit after an undo kills the redo branch.
+  - Deltas (chunk and registry snapshots) stay in memory for the last `UNDO_LIMIT` (500)
+    commands, and undo stops at the oldest. Registry revisions only move forward, even on undo.
+  - A property test undoes and redoes random fills, clears and renames back through every
+    state.
 
 ## Future ideas
 

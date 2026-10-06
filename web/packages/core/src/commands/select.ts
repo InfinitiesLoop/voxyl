@@ -10,6 +10,7 @@ import { defineCommand } from "./command.ts";
  */
 export const select = defineCommand({
   kind: "select",
+  undoable: false,
   args: z.strictObject({ where: Region.nullable() }),
   apply(ctx, { where }) {
     const cells = where === null ? null : ctx.cells(where);

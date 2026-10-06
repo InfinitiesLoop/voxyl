@@ -21,6 +21,8 @@ export interface Command {
   readonly source?: string;
   /** What it was for ("Pour the hall floor"), for the history view. */
   readonly label?: string;
+  /** Consecutive commands sharing a group undo and redo as one step (an agent's task). */
+  readonly group?: string;
 }
 
 /**
@@ -47,12 +49,18 @@ export interface CommandContext {
   forEachIn(region: Region, visit: (x: number, y: number, z: number, id: number) => void): void;
   /** Replaces the project's selection (null clears it). */
   setSelection(cells: CellSet | null): void;
+  /** Undoes the latest undo step, which must end with command `target` (see Project.undoTarget). */
+  undo(target: string): void;
+  /** Redoes the latest undone step, which must end with command `target`. */
+  redo(target: string): void;
   /** Adds a figure to the change report ("skipped": 12). */
   note(key: string, value: number | string): void;
 }
 
 export interface CommandDef<S extends z.ZodType = z.ZodType> {
   readonly kind: string;
+  /** False for commands that aren't undo steps (the selection, undo and redo themselves). */
+  readonly undoable?: boolean;
   /** Validates the arguments; later also the MCP tool's input schema. */
   readonly args: S;
   apply(ctx: CommandContext, args: z.output<S>): void;

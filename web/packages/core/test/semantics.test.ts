@@ -101,6 +101,6 @@ describe("SemanticRegistry", () => {
     const revision = r.revision;
     r.restore(copy);
     expect(r.nameOf(deck)).toBe("Deck");
-    expect(r.revision).toBeLessThan(revision);
+    expect(r.revision).toBeGreaterThan(revision); // revisions only move forward
   });
 });
