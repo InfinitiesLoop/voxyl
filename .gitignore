@@ -1,6 +1,9 @@
 # Voxy stuff
 exports/
 
+# vscode
+.vscode/
+
 # Godot 4+ specific ignores
 .godot/
 .nomedia
