@@ -25,7 +25,7 @@ export class FlyCamera {
   yaw = 0;
   pitch = 0;
   /** Base speed in cells per second. */
-  speed = 30;
+  speed = 15;
   #sprint = 0;
   readonly #keys = new Set<string>();
   readonly #element: HTMLElement;

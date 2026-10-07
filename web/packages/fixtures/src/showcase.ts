@@ -4,14 +4,7 @@
 // must get right: glass in front of a wall, glass against glass, and a lamp in a dark room.
 
 import type { Library } from "@voxyl/blocks";
-import {
-  compose,
-  type Project,
-  type Rotation,
-  rotationFacing,
-  turn,
-  turnClockwise,
-} from "@voxyl/core";
+import { type Project, type Rotation, rotationFacing, turn, turnClockwise } from "@voxyl/core";
 
 /** The step between blocks. */
 const STEP = 3;
@@ -51,16 +44,15 @@ export function buildShowcase(project: Project, library: Library): ShowcaseStats
   });
   let z = Math.ceil(names.length / ROW) * STEP + 1;
 
-  // Orientations: logs lying along x and z (each spun both ways), stairs facing each way,
-  // and upside down.
-  const lyingX = (spin: number) => compose(turn(2, 1), turn(1, spin));
-  const lyingZ = (spin: number) => compose(turn(0, 1), turn(1, spin));
+  // Orientations: logs upright, lying along x and lying along z (all a log can show), stairs
+  // facing each way, and upside down.
   let x = 1;
   for (const log of names.filter((n) => n.endsWith("_log")).slice(0, 2)) {
-    for (const r of [lyingX(0), lyingX(1), lyingZ(0), lyingZ(1)]) {
+    for (const r of [0, turn(2, 1), turn(0, 1)]) {
       place(x, 1, z, log, r);
       x += 2;
     }
+    x += 2;
   }
   z += STEP;
   x = 1;
