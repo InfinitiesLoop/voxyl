@@ -8,10 +8,12 @@
 // sends about a world is tagged with the world's id, so messages about a world that has since
 // been replaced are dropped.
 
+import type { SemanticArg } from "@voxyl/core";
 import type { ModelShape, StateShape } from "@voxyl/mesher";
 import type { LightingMode, LightLayoutUpdate, MeshJob, ProjectEntry } from "@voxyl/session";
 import type { SliceAxis } from "../views/plane.ts";
 import type { WorldInfo, WorldSource } from "../worlds.ts";
+import type { Aim, HistoryState, PaletteInfo } from "./editing.ts";
 
 /** The most cells one slice request may ask for. */
 export const MAX_SLICE_CELLS = 1 << 20;
@@ -22,7 +24,16 @@ export interface RayHit {
   readonly cell: Vec3;
   readonly normal: Vec3;
   readonly id: number;
+  /** The semantic of the cell hit (its block's, or its first part's), and its name. */
+  readonly semanticId: number;
   readonly semantic: string;
+}
+
+/** A ray from the camera, for aiming: where it starts, which way, and how far it reaches. */
+export interface Ray {
+  readonly origin: Vec3;
+  readonly dir: Vec3;
+  readonly reach: number;
 }
 
 /** Commands, each answered with a reply of the matching type. */
@@ -33,6 +44,10 @@ export type Command =
   | { type: "save" }
   /** Saved projects, most recent first. */
   | { type: "projects" }
+  /** Creates and saves a new, empty project with the starter semantics. */
+  | { type: "createProject"; name: string }
+  /** Renames the open project (a settings command, so it undoes). */
+  | { type: "rename"; name: string }
   | { type: "deleteProject"; id: string }
   /** Stores a bundle file as a saved project. */
   | { type: "importProject"; bytes: Uint8Array }
@@ -48,8 +63,18 @@ export type Command =
   | { type: "theme"; theme: number }
   /** The id of the whole-block state of a semantic, by name (added if new). */
   | { type: "intern"; semantic: string }
+  /** Writes a state into one cell or a box (EMPTY_ID clears), as commands: scripted edits. */
   | { type: "setId"; at: Vec3; id: number }
   | { type: "fillBox"; from: Vec3; to: Vec3; id: number }
+  /** Where a ray from the crosshair aims (see editing.ts). */
+  | ({ type: "aim" } & Ray)
+  /** Places a semantic where the ray aims, turned as its placement profile picks. */
+  | ({ type: "place"; semantic: SemanticArg } & Ray)
+  /** Empties the cell the ray aims at. */
+  | ({ type: "erase" } & Ray)
+  /** Undoes the latest step, or redoes the latest undone one. */
+  | { type: "undo" }
+  | { type: "redo" }
   | { type: "raycast"; origin: Vec3; dir: Vec3; reach: number }
   /**
    * The state ids of a rectangle of a slice (see views/plane.ts), and of the layer just below
@@ -66,7 +91,7 @@ export type Command =
     }
   /** What a cell holds, in words, or null if it is empty. */
   | { type: "cell"; at: Vec3 }
-  /** Raycast and edit what it hits: erase it, or place `id` against it. */
+  /** Raycast and edit what it hits: erase it, or place state `id` against it (the bench). */
   | {
       type: "rayEdit";
       origin: Vec3;
@@ -86,12 +111,20 @@ export interface Replies {
   theme: { applied: boolean; relit: boolean };
   save: ProjectEntry;
   projects: ProjectEntry[];
+  createProject: ProjectEntry;
+  /** True when the name changed. */
+  rename: boolean;
   deleteProject: null;
   importProject: ProjectEntry;
   exportProject: Uint8Array;
   intern: number;
   setId: boolean;
   fillBox: number;
+  aim: Aim | null;
+  place: boolean;
+  erase: boolean;
+  undo: boolean;
+  redo: boolean;
   raycast: RayHit | null;
   slice: { ids: Uint16Array; below: Uint16Array };
   cell: string | null;
@@ -146,6 +179,15 @@ export type FromWorld =
   /** Every cell state's look, sent when states or looks change. */
   | ({ type: "looks"; world: number } & LooksUpdate)
   | { type: "idle"; world: number; seq: number }
+  /** Every palette and what it can place, sent when the registry or the libraries change. */
+  | { type: "palettes"; world: number; palettes: PaletteInfo[] }
+  /** What undo and redo would do, plus the name and grid, sent when any of them change. */
+  | ({
+      type: "history";
+      world: number;
+      name: string;
+      grid: readonly [number, number];
+    } & HistoryState)
   | { type: "stats"; world: number; stats: WorldStats };
 
 /** Cell states' looks for the renderer (see StateLooks and BlockMaterials). */

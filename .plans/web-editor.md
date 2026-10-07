@@ -91,3 +91,27 @@ there is a point worth orbiting.
 
 - **Phase 2 gate (2026-10-07)**, the last viewer step, done first; see
   [`web-viewer.md`](web-viewer.md) step 8.
+- **Step 1 done (2026-10-07).** The edit loop, in the browser with no server.
+  - Every edit is a core command from the world worker (`apps/web/src/world/editing.ts`):
+    place, erase, undo, redo, rename, and the scripted set and fill the benchmark still uses.
+    Place turns the block with the semantic's placement profile. A full cell is left alone.
+    The crosshair ray rests on the ground plane (the top of layer -1) when it hits nothing,
+    so an empty world has somewhere to build. Commands are labelled ("Place Wall") and that
+    label is what undo and redo show.
+  - A new project (`New project`) is empty, saved at once, with nine undecided starter
+    semantics in the root palette (Base, Wall, Floor, Roof, Trim, Accent, Glass, Light,
+    Detail). Light glows. No block is chosen yet.
+  - The hotbar holds nine semantics, filled from the root palette, chosen with 1–9, the
+    numpad, the wheel while flying, or a click. Middle click picks the aimed cell's semantic
+    into its slot, or into the chosen slot. A re-skin updates colours and names; the slots
+    stay. Editor state, not project state.
+  - Fly mode (pointer locked): left click removes, right click places, the aimed cell is
+    outlined, and the ground shows the cell a block would fill. Esc releases the pointer. A
+    short click on the view flies again; dragging turns the camera; the wheel moves forward
+    and back. Speed is `=` and `-`. A faint ground grid follows the camera, its major lines
+    on the project's grid offset.
+  - The shell: a top bar (name, saved or not, undo, redo, new project, 2D view, the View
+    menu for lighting, time of day and brightness) and the hotbar. The old HUD is the Dev
+    panel, closed until opened, and still in the page so `pnpm shot` can read it. Rename is
+    a settings command, so it undoes, and a saved project autosaves it.
+  - Next is step 2, the palette drawer.

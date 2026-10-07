@@ -1,19 +1,31 @@
 import type { LightingMode } from "@voxyl/session";
 import * as THREE from "three/webgpu";
-import type { Vec3, WorldStats } from "../world/protocol.ts";
+import { Hotbar } from "../editor/hotbar.ts";
+import { Store } from "../editor/store.ts";
+import type { HistoryState, PaletteInfo } from "../world/editing.ts";
+import type { Ray, WorldStats } from "../world/protocol.ts";
 import { WorldClient, type WorldOutput } from "../world/WorldClient.ts";
 import type { WorldInfo, WorldSource } from "../worlds.ts";
 import { ChunkRenderer, type ChunkRendererStats } from "./ChunkRenderer.ts";
 import { FlyCamera } from "./FlyCamera.ts";
+import { GroundGrid } from "./ground-grid.ts";
 import { LightVolume } from "./light-volume.ts";
 import { Sky } from "./sky.ts";
 import { NOON, skyAt } from "./sky-model.ts";
+import { TargetOutline } from "./target.ts";
 
 export type Backend = "WebGPU" | "WebGL2";
 
 const FRAME_WINDOW = 240;
+/** How far the crosshair reaches, in cells. */
 const REACH = 400;
-const PLACE_SEMANTIC = "Glow";
+/** A press that moves the cursor less than this many pixels is a click, not a drag. */
+const CLICK_SLOP = 4;
+/** Wheel travel per hotbar slot (a mouse notch is about 100; trackpads send small steps). */
+const WHEEL_PER_SLOT = 50;
+/** Cells moved per unit of wheel travel with a free cursor, at the base speed of 15. */
+const DOLLY_PER_WHEEL = 0.02;
+const HOTBAR_KEYS = /^(?:Digit|Numpad)([1-9])$/;
 /** How far the camera moves before the world worker is told (it orders meshing by distance). */
 const CAMERA_STEP = 4;
 
@@ -76,7 +88,22 @@ export class Engine {
   #info: WorldInfo | null = null;
   #chunks: ChunkRenderer | null = null;
   #worldStats: WorldStats | null = null;
-  #placeId = 0;
+  /** The nine semantic slots along the bottom. */
+  readonly hotbar = new Hotbar();
+  /** Every palette of the open project and what it can place. */
+  readonly palettes = new Store<readonly PaletteInfo[]>([]);
+  /** What undo and redo would do now. */
+  readonly history = new Store<HistoryState>({ undo: null, redo: null });
+  /** The open project's name, as it is now (renames undo). */
+  readonly projectName = new Store("");
+  readonly #target = new TargetOutline();
+  readonly #grid = new GroundGrid();
+  /** An aim request in flight, and the camera pose and world revision last aimed for. */
+  #aiming = false;
+  #aimedFor = "";
+  /** A drag of the view with a free cursor. */
+  #drag: { x: number; y: number; moved: boolean } | null = null;
+  #wheel = 0;
   /** StateLooks.colors for the world on screen. */
   #looks: Uint8Array = new Uint8Array(0);
   /** Counts world changes seen (meshes, light, looks), so other views know to refresh. */
@@ -107,6 +134,8 @@ export class Engine {
   constructor(host: HTMLElement) {
     this.#host = host;
     this.scene.add(this.#sky.mesh);
+    this.scene.add(this.#grid.group);
+    this.scene.add(this.#target.object);
     this.scene.fogNode = this.#sky.fog;
     this.#sky.set(skyAt(this.#hours, "north"));
     this.fly = new FlyCamera(this.camera, this.renderer.domElement);
@@ -114,7 +143,12 @@ export class Engine {
     const canvas = this.renderer.domElement;
     const signal = this.#abort.signal;
     canvas.addEventListener("mousedown", (e) => this.#onMouseDown(e), { signal });
+    canvas.addEventListener("pointerdown", (e) => this.#onPointerDown(e), { signal });
+    canvas.addEventListener("pointermove", (e) => this.#onPointerMove(e), { signal });
+    canvas.addEventListener("pointerup", (e) => this.#onPointerUp(e), { signal });
+    canvas.addEventListener("wheel", (e) => this.#onWheel(e), { signal, passive: false });
     canvas.addEventListener("contextmenu", (e) => e.preventDefault(), { signal });
+    document.addEventListener("keydown", (e) => this.#onKey(e), { signal });
     // One core for this thread, one for the world worker, the rest mesh.
     const meshWorkers = Math.min(8, Math.max(2, (navigator.hardwareConcurrency || 4) - 2));
     this.world = new WorldClient(meshWorkers, (message) => this.#onWorld(message));
@@ -152,6 +186,11 @@ export class Engine {
     this.#chunks = null;
     this.#info = null;
     this.#worldStats = null;
+    this.hotbar.clear();
+    this.palettes.set([]);
+    this.history.set({ undo: null, redo: null });
+    this.projectName.set("");
+    this.#target.show(null);
     const info = await this.world.request({ type: "load", world: id, source, chunkSize, theme });
     if (id !== this.#worldId || this.#disposed) return null;
     // The worker sends nothing about this world before its reply, so nothing was missed.
@@ -161,6 +200,7 @@ export class Engine {
     this.#chunks = chunks;
     this.#info = info;
     this.scene.add(chunks.group);
+    this.#grid.setOffset(info.grid);
     this.#updateSky();
     const fogFar = Math.max(500, info.extent * 1.4);
     this.#sky.setFogRange(fogFar * 0.35, fogFar);
@@ -173,8 +213,17 @@ export class Engine {
       this.#initialMeshMs = performance.now() - start;
       chunks.revealLight();
     });
-    this.#placeId = await this.world.request({ type: "intern", semantic: PLACE_SEMANTIC });
     return info;
+  }
+
+  /** Undoes the latest step, if there is one. */
+  undo(): void {
+    void this.world.request({ type: "undo" });
+  }
+
+  /** Redoes the latest undone step, if there is one. */
+  redo(): void {
+    void this.world.request({ type: "redo" });
   }
 
   /** Every cell state's look (StateLooks.colors) for the world on screen. */
@@ -321,6 +370,8 @@ export class Engine {
     this.#abort.abort();
     this.#observer.disconnect();
     this.fly.dispose();
+    this.#target.dispose();
+    this.#grid.dispose();
     this.#chunks?.dispose();
     this.#sky.dispose();
     this.world.dispose();
@@ -332,6 +383,17 @@ export class Engine {
     if (message.world !== this.#worldId) return; // about a world since replaced
     if (message.type === "stats") {
       this.#worldStats = message.stats;
+      return;
+    }
+    if (message.type === "palettes") {
+      this.palettes.set(message.palettes);
+      this.hotbar.update(message.palettes);
+      return;
+    }
+    if (message.type === "history") {
+      this.history.set({ undo: message.undo, redo: message.redo });
+      this.projectName.set(message.name);
+      this.#grid.setOffset(message.grid);
       return;
     }
     if (message.type === "looks") this.#looks = message.colors;
@@ -366,6 +428,8 @@ export class Engine {
       this.#sentCamera.copy(p);
       this.world.camera([p.x, p.y, p.z]);
     }
+    this.#grid.follow(p);
+    this.#updateAim();
     this.#chunks?.update();
     this.renderer.render(this.scene, this.camera);
     this.#resolveGpuTime();
@@ -425,35 +489,140 @@ export class Engine {
     this.camera.updateProjectionMatrix();
   }
 
-  #onMouseDown(event: MouseEvent): void {
-    if (this.#autopilot) return;
-    if (!this.fly.locked) {
-      this.fly.lock();
-      return;
-    }
-    event.preventDefault();
-    if (!this.#info) return;
+  /** The crosshair's ray. */
+  #ray(): Ray {
     const p = this.camera.position;
     const d = this.fly.forward();
-    const origin: Vec3 = [p.x, p.y, p.z];
-    const dir: Vec3 = [d.x, d.y, d.z];
+    return { origin: [p.x, p.y, p.z], dir: [d.x, d.y, d.z], reach: REACH };
+  }
+
+  /**
+   * Keeps the outline on what the crosshair aims at while flying: asks the world worker
+   * again whenever the camera or the world has moved on, one request at a time.
+   */
+  #updateAim(): void {
+    if (!this.fly.locked || !this.#info || this.#autopilot) {
+      this.#target.show(null);
+      this.#aimedFor = "";
+      return;
+    }
+    if (this.#aiming) return;
+    const ray = this.#ray();
+    const at = ray.origin.map((v) => v.toFixed(3)).join();
+    const toward = ray.dir.map((v) => v.toFixed(4)).join();
+    const key = `${at} ${toward} ${this.#revision}`;
+    if (key === this.#aimedFor) return;
+    this.#aiming = true;
+    this.#aimedFor = key;
+    const world = this.#worldId;
+    const done = () => {
+      this.#aiming = false;
+    };
+    void this.world.request({ type: "aim", ...ray }).then((aim) => {
+      done();
+      if (world === this.#worldId && this.fly.locked) this.#target.show(aim);
+    }, done);
+  }
+
+  /** While flying: left click removes, right click places, middle click picks. */
+  #onMouseDown(event: MouseEvent): void {
+    if (this.#autopilot || !this.fly.locked) return;
+    event.preventDefault();
+    if (!this.#info) return;
+    const ray = this.#ray();
     if (event.button === 1) {
-      void this.world.request({ type: "raycast", origin, dir, reach: REACH }).then((hit) => {
-        if (hit) this.#placeId = hit.id;
+      void this.world.request({ type: "raycast", ...ray }).then((hit) => {
+        if (!hit) return;
+        const info = this.palettes
+          .get()
+          .flatMap((p) => p.semantics)
+          .find((s) => s.ref === hit.semanticId);
+        if (info) this.hotbar.pick(info);
       });
       return;
     }
-    const action = event.button === 0 ? "erase" : event.button === 2 ? "place" : null;
-    if (!action) return;
     const start = performance.now();
-    void this.world
-      .request({ type: "rayEdit", origin, dir, reach: REACH, action, id: this.#placeId })
-      .then(async (changed) => {
-        if (!changed) return;
-        await this.whenIdle();
-        this.#lastEditMs = performance.now() - start;
-      });
+    const timed = async (changed: boolean) => {
+      if (!changed) return;
+      await this.whenIdle();
+      this.#lastEditMs = performance.now() - start;
+    };
+    if (event.button === 0) {
+      void this.world.request({ type: "erase", ...ray }).then(timed);
+    } else if (event.button === 2) {
+      const semantic = this.hotbar.current?.ref;
+      if (semantic === undefined) return;
+      void this.world.request({ type: "place", semantic, ...ray }).then(timed);
+    }
   }
+
+  /** With a free cursor: drag the view to turn the camera, click it to fly. */
+  #onPointerDown(event: PointerEvent): void {
+    if (this.fly.locked || this.#autopilot || event.button !== 0) return;
+    this.#drag = { x: event.clientX, y: event.clientY, moved: false };
+    this.renderer.domElement.setPointerCapture(event.pointerId);
+  }
+
+  #onPointerMove(event: PointerEvent): void {
+    const drag = this.#drag;
+    if (!drag || this.fly.locked) return;
+    const distance = Math.hypot(event.clientX - drag.x, event.clientY - drag.y);
+    if (!drag.moved && distance < CLICK_SLOP) return;
+    drag.moved = true;
+    this.fly.drag(event.movementX, event.movementY);
+  }
+
+  #onPointerUp(event: PointerEvent): void {
+    const drag = this.#drag;
+    this.#drag = null;
+    if (drag && event.button === 0 && !drag.moved) this.fly.lock();
+  }
+
+  /** The wheel: hotbar slots while flying, forward and back with a free cursor. */
+  #onWheel(event: WheelEvent): void {
+    event.preventDefault();
+    if (this.#autopilot) return;
+    if (!this.fly.locked) {
+      this.fly.dolly(-event.deltaY * DOLLY_PER_WHEEL * (this.fly.speed / 15));
+      return;
+    }
+    this.#wheel += event.deltaY;
+    while (Math.abs(this.#wheel) >= WHEEL_PER_SLOT) {
+      const step = Math.sign(this.#wheel);
+      this.hotbar.cycle(step);
+      this.#wheel -= step * WHEEL_PER_SLOT;
+    }
+  }
+
+  /** Hotbar slots (1-9, numpad too), undo and redo, wherever the cursor is. */
+  #onKey(event: KeyboardEvent): void {
+    if (isTyping(event.target)) return;
+    const ctrl = event.ctrlKey || event.metaKey;
+    if (ctrl && (event.code === "KeyZ" || event.code === "KeyY")) {
+      event.preventDefault();
+      if (event.code === "KeyY" || event.shiftKey) this.redo();
+      else this.undo();
+      return;
+    }
+    const slot = HOTBAR_KEYS.exec(event.code);
+    if (!slot) return;
+    // Right Ctrl and right Alt fly up, so a slot key may come with them while flying; keep
+    // the browser from taking Ctrl+digit as a tab switch then.
+    if (ctrl && !this.fly.locked) return;
+    if (ctrl) event.preventDefault();
+    this.hotbar.select(Number(slot[1]) - 1);
+  }
+}
+
+/** True for keys typed into a text field or menu, which the editor leaves alone. */
+function isTyping(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return (
+    target.isContentEditable ||
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement
+  );
 }
 
 function sortedWindow(values: Float64Array, count: number): number[] {

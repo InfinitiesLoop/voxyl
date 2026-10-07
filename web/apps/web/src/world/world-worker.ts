@@ -5,7 +5,12 @@
 // OPFS (a ProjectStore), read and written here.
 
 import { DEFAULT_LIBRARY_ID, defaultLibrary, type Library } from "@voxyl/blocks";
-import { type CellStateTable, EMPTY_ID, type Project, raycast } from "@voxyl/core";
+import {
+  type CellStateTable,
+  type Command as EditCommand,
+  type Project,
+  raycast,
+} from "@voxyl/core";
 import { CITY_THEME_KEY, cityThemeOf, cityThemePalette } from "@voxyl/fixtures";
 import { importJar } from "@voxyl/mc-import";
 import type { ModelShape, StateShape } from "@voxyl/mesher";
@@ -28,6 +33,19 @@ import {
   themeAt,
   type WorldInfo,
 } from "../worlds.ts";
+import {
+  aim,
+  eraseCommand,
+  fillBoxCommand,
+  historyState,
+  newProject,
+  paletteInfo,
+  placeCommand,
+  renameCommand,
+  semanticOfState,
+  setCellCommand,
+  stepCommand,
+} from "./editing.ts";
 import { OpfsFolder } from "./opfs-folder.ts";
 import {
   type Command,
@@ -78,6 +96,9 @@ let lastSeq = 0;
 let idlePosted = -1;
 /** The state count and registry revision the last looks sent were for. */
 let looksPosted = { states: -1, revision: -1 };
+/** The registry revision the last palettes sent were for, and the last history state sent. */
+let palettesPosted = -1;
+let historyPosted = "";
 /** Every state's shape so far, for mesh workers (id - 1 -> shape). */
 let shapes: StateShape[] = [];
 /** The libraries looks draw blocks from: the default set, and any imported ones. */
@@ -166,6 +187,8 @@ async function open(command: Extract<Command, { type: "load" }>): Promise<WorldI
   session = new WorldSession(next.world);
   worldId = command.world;
   looksPosted = { states: -1, revision: -1 };
+  palettesPosted = -1;
+  historyPosted = "";
   shapes = [];
   blocks = new BlockMaterials(libraries);
   lookShapesSent = NO_LOOK_SHAPES;
@@ -196,6 +219,12 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
     }
     case "projects":
       return store.list();
+    case "createProject":
+      // Saved at once, then opened from storage like any saved project (so its history
+      // starts empty: the starter semantics aren't steps to undo).
+      return store.save(newProject(command.name, 5));
+    case "rename":
+      return runEdit(renameCommand(openProject(), command.name)) >= 0;
     case "deleteProject":
       if (command.id === saved) saved = null; // it stays on screen, no longer saved
       await store.delete(command.id);
@@ -238,22 +267,38 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
     }
     case "intern":
       return world().states.intern({ semantic: project?.semantics.ensure(command.semantic) ?? 0 });
-    case "setId": {
-      const [x, y, z] = command.at;
-      return edited(world().setId(x, y, z, command.id));
+    case "setId":
+      return runEdit(setCellCommand(openProject(), command.at, command.id, "Set cell")) > 0;
+    case "fillBox":
+      return runEdit(
+        fillBoxCommand(openProject(), command.from, command.to, command.id, "Fill box"),
+      );
+    case "aim":
+      return aim(world(), command.origin, command.dir, command.reach);
+    case "place": {
+      const target = aim(world(), command.origin, command.dir, command.reach);
+      if (!target) return false;
+      return runEdit(placeCommand(openProject(), target, command.semantic, command.dir)) > 0;
     }
-    case "fillBox": {
-      const [x0, y0, z0] = command.from;
-      const [x1, y1, z1] = command.to;
-      const count = world().fillBox(x0, y0, z0, x1, y1, z1, command.id);
-      edited(count > 0);
-      return count;
+    case "erase": {
+      const target = aim(world(), command.origin, command.dir, command.reach);
+      return target ? runEdit(eraseCommand(openProject(), target)) > 0 : false;
     }
+    case "undo":
+    case "redo":
+      return runEdit(stepCommand(openProject(), command.type)) >= 0;
     case "raycast": {
       const hit = raycast(world(), [...command.origin], [...command.dir], command.reach);
       if (!hit) return null;
-      const semantic = nameOf(world().states.get(hit.id)?.semantic ?? 0);
-      return { cell: hit.cell, normal: hit.normal, id: hit.id, semantic } satisfies RayHit;
+      const state = world().states.get(hit.id);
+      const semanticId = state ? semanticOfState(state) : 0;
+      return {
+        cell: hit.cell,
+        normal: hit.normal,
+        id: hit.id,
+        semanticId,
+        semantic: nameOf(semanticId),
+      } satisfies RayHit;
     }
     case "slice": {
       const { axis, depth, u0, v0, width, height } = command;
@@ -279,18 +324,54 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       const hit = raycast(world(), [...command.origin], [...command.dir], command.reach);
       if (!hit) return false;
       const [x, y, z] = hit.cell;
-      if (command.action === "erase") return edited(world().setId(x, y, z, EMPTY_ID));
+      const project = openProject();
+      if (command.action === "erase")
+        return runEdit(setCellCommand(project, [x, y, z], 0, "Remove")) > 0;
       const [nx, ny, nz] = hit.normal;
       if (nx === 0 && ny === 0 && nz === 0) return false; // the ray started inside a cell
-      return edited(world().setId(x + nx, y + ny, z + nz, command.id));
+      const at = [x + nx, y + ny, z + nz] as const;
+      return runEdit(setCellCommand(project, at, command.id, "Place")) > 0;
     }
   }
 }
 
-/** Marks the project changed if an edit changed anything, and passes the result on. */
-function edited(didChange: boolean): boolean {
-  if (didChange) changed();
-  return didChange;
+function openProject(): Project {
+  if (!project) throw new Error("no project open");
+  return project;
+}
+
+/**
+ * Runs an edit command on the open project (every edit goes through Project.run, so it is
+ * in the history and undoes). Returns the cells it changed, or -1 if there was nothing to do.
+ */
+function runEdit(command: EditCommand | null): number {
+  if (!command) return -1;
+  const open = openProject();
+  const before = open.settings;
+  const { report } = open.run(command);
+  const after = open.settings;
+  // A rename (or any settings change) touches no cells, but a saved project still stores it.
+  const settingsChanged =
+    after.name !== before.name ||
+    after.north !== before.north ||
+    after.grid[0] !== before.grid[0] ||
+    after.grid[1] !== before.grid[1];
+  if (report.cells > 0 || report.registryChanged || settingsChanged) changed();
+  return report.cells;
+}
+
+/** Tells the main thread what undo and redo would do, and the name and grid, if that changed. */
+function postHistory(): void {
+  if (!project) return;
+  const state = {
+    ...historyState(project),
+    name: project.settings.name,
+    grid: project.settings.grid,
+  };
+  const key = JSON.stringify(state);
+  if (key === historyPosted) return;
+  historyPosted = key;
+  post({ type: "history", world: worldId, ...state });
 }
 
 /** Hands out whatever work the session has: mesh jobs, emptied chunks, light. */
@@ -356,6 +437,10 @@ function schedulePump(): void {
 function postLooks(s: WorldSession): void {
   const states = s.world.states;
   const registry = (project as Project).semantics;
+  if (registry.revision !== palettesPosted) {
+    palettesPosted = registry.revision;
+    post({ type: "palettes", world: worldId, palettes: paletteInfo(project as Project, blocks) });
+  }
   if (states.size === looksPosted.states && registry.revision === looksPosted.revision) return;
   const { colors, faces, modelSlots, clear, models } = stateLooks(states, registry, blocks);
   const materials = blocks.data;
@@ -452,6 +537,7 @@ async function run(message: Extract<ToWorld, { seq: number }>): Promise<void> {
     post({ type: "error", seq, message: error instanceof Error ? error.message : String(error) });
   }
   lastSeq = seq;
+  postHistory();
   pump();
 }
 
@@ -494,5 +580,6 @@ function infoOf(library: Library): LibraryInfo {
 /** Looks that name the library's blocks change: resend looks, and relight if light did. */
 function librariesChanged(): void {
   looksPosted = { states: -1, revision: -1 };
+  palettesPosted = -1; // block colours may have changed
   session?.setMaterials(materials);
 }

@@ -2,6 +2,8 @@ import { CITY_THEMES } from "@voxyl/fixtures";
 import type { LightingMode, ProjectEntry } from "@voxyl/session";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type BenchResult, runBench } from "./bench/bench.ts";
+import { HotbarBar } from "./editor/HotbarBar.tsx";
+import { TopBar } from "./editor/TopBar.tsx";
 import { BenchPanel, Hud } from "./Hud.tsx";
 import { type Backend, Engine, type EngineStats } from "./scene/Engine.ts";
 import { NOON, wrapHours } from "./scene/sky-model.ts";
@@ -66,6 +68,8 @@ function readSettings(): Settings {
   };
 }
 
+const DEV_KEY = "voxyl.dev";
+
 function writeSettings(s: Settings): void {
   const params = new URLSearchParams({
     world: s.world,
@@ -96,6 +100,14 @@ export function App() {
   const [libraries, setLibraries] = useState<LibraryInfo[]>([]);
   /** Bumped to open the same source again (a sample whose library just arrived). */
   const [reloads, setReloads] = useState(0);
+  /** The dev panel (samples, stats, benchmark), remembered across visits. */
+  const [devOpen, setDevOpen] = useState(() => localStorage.getItem(DEV_KEY) === "1");
+  const toggleDev = useCallback(() => {
+    setDevOpen((open) => {
+      localStorage.setItem(DEV_KEY, open ? "0" : "1");
+      return !open;
+    });
+  }, []);
 
   const track = useCallback((label: string, work: Promise<unknown>) => {
     setTasks((t) => [...t, label]);
@@ -217,6 +229,26 @@ export function App() {
       await refreshProjects();
       setSettings((s) => ({ ...s, world: savedSource(entry.id) }));
     },
+    create: async () => {
+      if (!engine) return;
+      const entry = await engine.world.request({ type: "createProject", name: "New build" });
+      await refreshProjects();
+      setSettings((s) => ({ ...s, world: savedSource(entry.id) }));
+    },
+    rename: async (name: string) => {
+      if (!engine) return;
+      try {
+        const applied = await engine.world.request({ type: "rename", name });
+        if (!applied) return;
+        const savedId = info?.saved ?? null;
+        setInfo((current) => (current ? { ...current, name } : current));
+        if (savedId !== null) {
+          setProjects((list) => list.map((p) => (p.id === savedId ? { ...p, name } : p)));
+        }
+      } catch (error) {
+        alert(`Couldn't rename: ${error instanceof Error ? error.message : error}`);
+      }
+    },
     delete: async (id: string, name: string) => {
       if (!engine || !confirm(`Delete ${name}? This can't be undone.`)) return;
       await engine.world.request({ type: "deleteProject", id });
@@ -296,25 +328,42 @@ export function App() {
         <div className="pane-3d">
           <div ref={hostRef} className="viewport" />
           {locked && <div className="crosshair" />}
+          {engine && <HotbarBar hotbar={engine.hotbar} />}
           {!locked && !loading && !benchStep && (
             <div className="hint">
-              Click the view to fly · WASD / arrows move · Space, right Ctrl or right Alt up · Shift
-              or / down · \ sprint · wheel sets speed · left click erases · right click places ·
-              middle click picks · Esc releases
+              Click to fly · drag to look · wheel moves forward and back · WASD or arrows move ·
+              Space, right Ctrl or right Alt up · Shift or / down · \ sprint · = and - set speed ·
+              left click removes · right click places · middle click picks · 1–9 or the wheel (while
+              flying) chooses a slot · Ctrl+Z undoes · Esc releases
             </div>
           )}
         </div>
         {settings.views === "split" && engine && <GridPane engine={engine} info={info} />}
       </div>
+      {engine && (
+        <TopBar
+          engine={engine}
+          info={info}
+          settings={settings}
+          onSettings={setSettings}
+          busy={loading !== null || benchStep !== null}
+          volumeLighting={engine.volumeLighting}
+          onSave={() => void project.save()}
+          onNew={() => void project.create()}
+          onRename={(name) => void project.rename(name)}
+          devOpen={devOpen}
+          onDev={toggleDev}
+        />
+      )}
       <Hud
         backend={backend}
         stats={stats}
         settings={settings}
         onSettings={setSettings}
         busy={loading !== null || benchStep !== null}
-        volumeLighting={engine?.volumeLighting ?? true}
         onBench={startBench}
         onHome={() => engine?.home()}
+        open={devOpen}
         info={info}
         projects={projects}
         project={project}

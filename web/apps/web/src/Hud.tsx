@@ -4,7 +4,6 @@ import { useRef } from "react";
 import type { Settings } from "./App.tsx";
 import type { BenchResult, Distribution } from "./bench/bench.ts";
 import type { Backend, EngineStats } from "./scene/Engine.ts";
-import { clockLabel } from "./scene/sky-model.ts";
 import type { LibraryInfo } from "./world/protocol.ts";
 import { CHUNK_SIZES, savedSource, WORLD_KINDS, type WorldInfo } from "./worlds.ts";
 
@@ -13,31 +12,16 @@ const ms = (v: number | null | undefined, digits = 1) =>
 const count = (v: number) =>
   v >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : String(v);
 
-/** The time of day as a clock, with midnight and noon named. */
-function timeLabel(hours: number): string {
-  if (hours === 0 || hours === 24) return "midnight";
-  if (hours === 12) return "noon";
-  return clockLabel(hours);
-}
-
-/** Minecraft's names for the ends and middle of its Brightness slider. */
-function brightnessLabel(brightness: number): string {
-  if (brightness === 0) return "Moody";
-  if (brightness === 50) return "default";
-  if (brightness === 100) return "Bright";
-  return `${brightness}%`;
-}
-
 interface HudProps {
   backend: Backend | null;
   stats: EngineStats | null;
   settings: Settings;
   onSettings: (s: Settings) => void;
   busy: boolean;
-  /** False when the renderer fell back to WebGL, which has no light volumes. */
-  volumeLighting: boolean;
   onBench: () => void;
   onHome: () => void;
+  /** Shown, or kept hidden (still rendered: dev tools read its text). */
+  open: boolean;
   /** What is open, once loaded. */
   info: WorldInfo | null;
   projects: readonly ProjectEntry[];
@@ -53,9 +37,9 @@ export function Hud({
   settings,
   onSettings,
   busy,
-  volumeLighting,
   onBench,
   onHome,
+  open,
   info,
   projects,
   project,
@@ -66,9 +50,9 @@ export function Hud({
   const c = stats?.chunks;
   const w = stats?.world;
   return (
-    <aside className="hud">
+    <aside className={open ? "hud" : "hud closed"}>
       <header>
-        <strong>Voxyl</strong>
+        <strong>Dev</strong>
         <span>{backend ?? "starting"}</span>
       </header>
       <div className="controls">
@@ -131,45 +115,6 @@ export function Hud({
           </select>
         </label>
       </div>
-      <div className="controls">
-        <label>
-          Lighting
-          <select
-            value={settings.lighting}
-            disabled={busy}
-            onChange={(e) =>
-              onSettings({ ...settings, lighting: e.target.value as Settings["lighting"] })
-            }
-          >
-            <option value="off">Off</option>
-            <option value="volume" disabled={!volumeLighting}>
-              On
-            </option>
-          </select>
-        </label>
-        <label className="wide">
-          Time of day {timeLabel(settings.time)}
-          <input
-            type="range"
-            min={0}
-            max={24}
-            step={0.25}
-            value={settings.time}
-            onChange={(e) => onSettings({ ...settings, time: Number(e.target.value) })}
-          />
-        </label>
-        <label className="wide">
-          Brightness {brightnessLabel(settings.brightness)}
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={settings.brightness}
-            disabled={settings.lighting === "off"}
-            onChange={(e) => onSettings({ ...settings, brightness: Number(e.target.value) })}
-          />
-        </label>
-      </div>
       <dl>
         <dt>Frame</dt>
         <dd>
@@ -225,15 +170,6 @@ export function Hud({
       <div className="actions">
         <button type="button" onClick={onHome} disabled={busy}>
           Overview
-        </button>
-        <button
-          type="button"
-          aria-pressed={settings.views === "split"}
-          onClick={() =>
-            onSettings({ ...settings, views: settings.views === "split" ? "3d" : "split" })
-          }
-        >
-          2D view
         </button>
         <button type="button" onClick={onBench} disabled={busy}>
           Run benchmark
