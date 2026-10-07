@@ -231,6 +231,16 @@ importers:
         specifier: ^8.3.2
         version: 8.3.2(@types/node@24.19.1)
 
+  packages/blocks:
+    dependencies:
+      '@voxyl/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+
   packages/core:
     dependencies:
       '@voxyl/shapes':

@@ -24,20 +24,51 @@ palettes, and every view is a lens on the one world in the world worker.
    from the world worker), beside or instead of the 3D view.
 4. **Trimming overlapping parts in the mesher** (Godot's `render_boxes`, Forge Microblocks'
    render-time trim), carried over from Phase 1.
-5. **Block libraries and textures.** A library format (blocks, models, textures, average
-   colours), GPU texture arrays, and a per-state face table so a look's `block` draws
-   textured. Depends on where Phase 2 gets its textures (open question below).
+5. **Block libraries and textures** (see "Block libraries" below). 5a: the library format, the
+   original default set with its texture generator, and textured cubes in the renderer.
+   5b: importing a vanilla Minecraft jar into an OPFS library.
 6. **Block models.** Non-cube blocks (slabs, stairs, fences, custom element models) as cached
-   per-state geometry, like parts; panes that join their neighbours.
+   per-state geometry, like parts; panes and fences that join their neighbours.
 7. **Sky.** A sky with the time of day, replacing the flat background.
 8. **The gate.** Performance with textures on; golden images (Playwright with SwiftShader).
 
-## Open questions
+## Textures: the user's decision (2026-10-06)
 
-- **Where do Phase 2's textures come from?** Minecraft and mod textures can't be hosted, and
-  in-browser import is Phase 5. Options: a dev-only converter from the Godot app's
-  `library/` (the user's own imports, never served); bringing the vanilla-jar part of Phase 5
-  forward; or an original procedural set (the eventual hosted default).
+Minecraft textures can't be hosted, so Phase 2 gets textures two ways:
+
+- **Vanilla jar import, brought forward from Phase 5.** The user picks their own Minecraft
+  client `.jar` in the browser; its blockstates, models and textures become a library in
+  OPFS. GTNH and mod jars stay in Phase 5.
+- **An original default set, shipped with the app.** 16x16 textures that look original but
+  that a Minecraft player recognises at a glance: a first pass at the basic building blocks,
+  with the obvious shapes (stairs, slabs, fences, glass, glass panes). It can grow later.
+
+## Block libraries (design, step 5 on)
+
+- **A library is blocks, models and textures**, the same shape whether imported or built in:
+  `voxyl` (the default set, always there) and `minecraft` (imported, in OPFS). A look's
+  `block` names one as `library:block`. A block a viewer lacks draws as the look's tint, so a
+  project still renders anywhere.
+- **Models are axis-aligned boxes with per-face textures and UVs** (Minecraft's element
+  format, parents resolved at import). The default set writes its stairs, slabs, fences and
+  panes in the same format, so both kinds go through one path. Elements rotated by angles
+  other than quarter turns (plants, torches) are left for later.
+- **A cell's rotation picks the variant.** Each block's variant with front north, up up and
+  defaults otherwise is its identity; a cell turned by R shows the variant whose model
+  rotation is R times the identity's. The importer derives the block's placement profile
+  from its blockstate properties (facing, half, axis, type), so placement stays data.
+- **Neighbour-aware shapes** (fences, panes, walls; later stair corners) come from multipart
+  conditions evaluated against the neighbouring cells' blocks at mesh time.
+- **Rendering.** Quads gain a material id (the unused word 7): a texture layer plus how face
+  coordinates map to UVs, so greedy merging still tiles. Textures go into a texture array that
+  holds only what the current looks use. Cutout textures (glass, leaves) alpha-test;
+  translucent ones draw in a second pass, unsorted at first.
+- **Light** takes opacity from the block (glass and leaves let light through) and emission
+  from a small table of known light sources, or the look's `glow`.
+- **Packages.** `packages/blocks` (no DOM): the library format, variant and profile
+  resolution, the default set and its texture generator. `packages/mc-import` (no DOM): zip
+  reading (DecompressionStream), a small PNG decoder, and the jar importer, testable in Node.
+  Textures are stored as raw RGBA, so nothing encodes PNG.
 
 ## Progress
 
