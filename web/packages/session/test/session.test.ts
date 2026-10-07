@@ -263,6 +263,25 @@ describe("WorldSession", () => {
     );
   }, 120_000);
 
+  it("starts a new mesh at once when a chunk changes while one is in flight", () => {
+    const world = new World({ chunkBits: 3 });
+    const stone = world.states.intern({ semantic: STONE });
+    world.setId(1, 1, 1, stone);
+    const session = new WorldSession(world);
+    session.sync();
+    const first = session.takeJob();
+    expect(first).not.toBeNull();
+    world.setId(2, 1, 1, stone);
+    session.sync();
+    const second = session.takeJob();
+    expect(second?.key).toBe(first?.key);
+    expect(second?.jobId).not.toBe(first?.jobId);
+    const none = new Uint16Array(0);
+    expect(session.finishJob(first?.key ?? 0, first?.jobId ?? 0, none)).toBe(false);
+    expect(session.finishJob(second?.key ?? 0, second?.jobId ?? 0, none)).toBe(true);
+    expect(session.idle).toBe(true);
+  });
+
   it("meshes the chunks nearest the camera first", () => {
     const world = new World({ chunkBits: 3 });
     const stone = world.states.intern({ semantic: STONE });

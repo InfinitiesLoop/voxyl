@@ -8,7 +8,7 @@
 //   { semantic: ref, within? }                         cells holding a semantic (block or part)
 //   { structure: { seed, semantics?, diagonal? }, within? }   connected cells from a seed
 //   { all: [...] }  { any: [...] }  { not: r }         intersection, union; not only inside all
-//   { grow: n, of: r }  { shrink: n, of: r }           through faces, n steps
+//   { grow: n, of: r, corners? }  { shrink: n, of: r }  faces, or all 26 neighbours; n steps
 
 import { z } from "zod";
 import { type Box, boxOf, boxVolume } from "./box.ts";
@@ -47,7 +47,7 @@ export type Region =
   | { all: Region[] }
   | { any: Region[] }
   | { not: Region }
-  | { grow: number; of: Region }
+  | { grow: number; of: Region; corners?: boolean | undefined }
   | { shrink: number; of: Region };
 type SemanticRef = number | { palette: number; base: number };
 
@@ -68,7 +68,7 @@ export const Region: z.ZodType<Region> = z.lazy(() =>
     z.strictObject({ all: z.array(Region).min(1) }),
     z.strictObject({ any: z.array(Region).min(1) }),
     z.strictObject({ not: Region }),
-    z.strictObject({ grow: Steps, of: Region }),
+    z.strictObject({ grow: Steps, of: Region, corners: z.boolean().optional() }),
     z.strictObject({ shrink: Steps, of: Region }),
   ]),
 );
@@ -137,7 +137,8 @@ function evaluateInner(region: Region, scope: RegionScope): CellSet {
     return set;
   }
   if ("not" in region) throw new RegionError("not only works inside all, to subtract");
-  if ("grow" in region) return evaluateInner(region.of, scope).grown(region.grow);
+  if ("grow" in region)
+    return evaluateInner(region.of, scope).grown(region.grow, region.corners === true);
   return evaluateInner(region.of, scope).shrunk(region.shrink);
 }
 

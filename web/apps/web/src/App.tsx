@@ -3,8 +3,19 @@ import type { LightingMode, ProjectEntry } from "@voxyl/session";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type BenchResult, runBench } from "./bench/bench.ts";
 import { HotbarBar } from "./editor/HotbarBar.tsx";
+import { Inventory } from "./editor/Inventory.tsx";
+import {
+  focusedPane,
+  type LayoutPreset,
+  type LayoutState,
+  presetFromParams,
+  readLayout,
+  saveLayout,
+} from "./editor/layout.ts";
 import { PaletteDrawer } from "./editor/PaletteDrawer.tsx";
+import { Panes } from "./editor/Panes.tsx";
 import { SelectionPanel } from "./editor/SelectionPanel.tsx";
+import { SelectionActions } from "./editor/selection-actions.tsx";
 import { ToolRail } from "./editor/ToolRail.tsx";
 import { TopBar } from "./editor/TopBar.tsx";
 import type { EditorTool } from "./editor/tool.ts";
@@ -12,7 +23,6 @@ import { useStore } from "./editor/useStore.ts";
 import { BenchPanel, Hud } from "./Hud.tsx";
 import { type Backend, Engine, type EngineStats } from "./scene/Engine.ts";
 import { NOON, wrapHours } from "./scene/sky-model.ts";
-import { GridPane } from "./views/GridPane.tsx";
 import type { LibraryInfo } from "./world/protocol.ts";
 import {
   CHUNK_SIZES,
@@ -35,8 +45,8 @@ export interface Settings {
   time: number;
   /** Minecraft's Brightness, 0 (Moody) to 100 (Bright); 50 is its default. */
   brightness: number;
-  /** The 3D view alone, or beside a 2D view of one slice. */
-  views: "3d" | "split";
+  /** Which arrangement of panes is showing. Each pane's kind and time live with the layout. */
+  layout: LayoutPreset;
 }
 
 function percent(value: string | null, fallback: number): number {
@@ -69,7 +79,7 @@ function readSettings(): Settings {
     lighting: lighting === null || lighting === "off" ? "off" : "volume",
     time: readTime(params),
     brightness: percent(params.get("brightness"), 50),
-    views: params.get("views") === "split" ? "split" : "3d",
+    layout: presetFromParams(params) ?? "single",
   };
 }
 
@@ -84,7 +94,7 @@ function writeSettings(s: Settings): void {
     lighting: s.lighting,
     time: String(s.time),
     brightness: String(s.brightness),
-    views: s.views,
+    layout: s.layout,
   });
   history.replaceState(null, "", `?${params}`);
 }
@@ -94,6 +104,9 @@ export function App() {
   const [engine, setEngine] = useState<Engine | null>(null);
   const [backend, setBackend] = useState<Backend | null>(null);
   const [settings, setSettings] = useState(readSettings);
+  const [layout, setLayout] = useState<LayoutState>(() =>
+    readLayout(readSettings().time, new URLSearchParams(location.search)),
+  );
   /** Work in progress, shown in the banner (latest last); the controls wait for it. */
   const [tasks, setTasks] = useState<string[]>(["Starting renderer"]);
   const [stats, setStats] = useState<EngineStats | null>(null);
@@ -166,11 +179,22 @@ export function App() {
 
   useEffect(() => writeSettings(settings), [settings]);
 
+  // The focused 3D pane's time is the one a link records. The other panes stay in storage.
+  useEffect(() => {
+    saveLayout(layout);
+    const pane = focusedPane(layout);
+    setSettings((current) => {
+      const time = pane.kind === "3d" ? pane.time : current.time;
+      if (current.layout === layout.preset && current.time === time) return current;
+      return { ...current, layout: layout.preset, time };
+    });
+  }, [layout]);
+
   // The theme is read through a ref when a sample is generated, so switching themes never
   // regenerates the world: it only goes to setTheme below, a palette_sync of looks.
   const themeRef = useRef(settings.theme);
   themeRef.current = settings.theme;
-  const { world: source, chunk: chunkSize, theme, lighting, time, brightness } = settings;
+  const { world: source, chunk: chunkSize, theme, lighting, brightness } = settings;
 
   const refreshProjects = useCallback(async () => {
     if (engine) setProjects(await engine.world.request({ type: "projects" }));
@@ -300,9 +324,8 @@ export function App() {
   };
 
   useEffect(() => {
-    engine?.setTime(time);
     engine?.setBrightness(brightness / 100);
-  }, [engine, time, brightness]);
+  }, [engine, brightness]);
 
   // Turning lighting on lights the whole world in the worker: the world stays on screen,
   // unlit, until each chunk's light arrives.
@@ -341,19 +364,20 @@ export function App() {
   return (
     <div className={palettesOpen ? "app palettes-open" : "app"}>
       <div className="panes">
-        <div className="pane-3d">
-          <div ref={hostRef} className="viewport" />
-          {locked && <div className="crosshair" />}
-          {engine && <HotbarBar hotbar={engine.hotbar} />}
-          {engine && !loading && !benchStep && <FlyHint engine={engine} locked={locked} />}
-        </div>
-        {settings.views === "split" && engine && <GridPane engine={engine} info={info} />}
+        <div ref={hostRef} className="viewport" />
+        {engine && (
+          <Panes engine={engine} info={info} layout={layout} onLayout={setLayout} locked={locked} />
+        )}
+        {engine && <HotbarBar hotbar={engine.hotbar} />}
+        {engine && !loading && !benchStep && <FlyHint engine={engine} locked={locked} />}
       </div>
       {engine && (
         <TopBar
           engine={engine}
           info={info}
           settings={settings}
+          layout={layout}
+          onLayout={setLayout}
           onSettings={setSettings}
           busy={loading !== null || benchStep !== null}
           volumeLighting={engine.volumeLighting}
@@ -367,6 +391,7 @@ export function App() {
         />
       )}
       {engine && <EditorTools engine={engine} />}
+      {engine && <Inventory engine={engine} />}
       {engine && palettesOpen && <PaletteDrawer engine={engine} />}
       <Hud
         backend={backend}
@@ -396,12 +421,13 @@ function EditorTools({ engine }: { engine: Engine }) {
     <>
       <ToolRail engine={engine} tool={tool} />
       <SelectionPanel engine={engine} tool={tool} />
+      <SelectionActions engine={engine} />
     </>
   );
 }
 
 const BUILD_HINT =
-  "Click to fly · drag to look · wheel moves forward and back · WASD or arrows move · Space, right Ctrl or right Alt up · Shift or / down · \\ sprint · = and - set speed · left click removes · right click places · middle click picks · 1–9 or the wheel (while flying) chooses a slot · Ctrl+Z undoes · Esc releases";
+  "Click to fly · drag to look · wheel moves forward and back · WASD or arrows move · Space, right Ctrl or right Alt up · Shift or / down · \\ sprint · = and - set speed · left click removes · right click places · middle click picks · 1–9 or the wheel (while flying) chooses a slot · E opens the inventory · Ctrl+Z undoes · Esc releases";
 
 /** What the view is telling the user to do, for the tool they have. */
 function FlyHint({ engine, locked }: { engine: Engine; locked: boolean }) {

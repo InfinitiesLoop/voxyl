@@ -231,7 +231,100 @@ dd {
   right: 0;
   bottom: 0;
   left: 0;
+}
+
+.layout {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  pointer-events: none;
+}
+
+.layout-single {
+  grid-template: 1fr / 1fr;
+}
+
+.layout-columns {
+  grid-template: 1fr / 1fr 1fr;
+}
+
+.layout-rows {
+  grid-template: 1fr 1fr / 1fr;
+}
+
+.layout-grid {
+  grid-template: 1fr 1fr / 1fr 1fr;
+}
+
+.layout-presets {
   display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.pane {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.pane.focused {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.pane-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  height: 32px;
+  padding: 0 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  pointer-events: auto;
+}
+
+.pane-time {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--text-quiet);
+}
+
+.pane-time input[type="range"] {
+  width: 110px;
+}
+
+.pane-note {
+  color: var(--text-quiet);
+}
+
+.pane-body,
+.pane-fill {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Clicks fall through to the canvas. The bar and a 2D pane keep their own. */
+.pane-body,
+.pane-body .crosshair {
+  pointer-events: none;
+}
+
+.pane-fill {
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+}
+
+.pane-body .crosshair {
+  z-index: 2;
 }
 
 .topbar {
@@ -397,7 +490,6 @@ dd {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid var(--line);
   font-size: 12.5px;
   color: var(--text-quiet);
 }
@@ -674,7 +766,8 @@ button[aria-pressed="true"] {
 .tool-rail {
   position: absolute;
   z-index: 5;
-  top: 50%;
+  /* Under the top bar and the first pane's own bar, so a split doesn't lay it across a divider. */
+  top: 80px;
   left: 12px;
   display: flex;
   flex-direction: column;
@@ -683,7 +776,6 @@ button[aria-pressed="true"] {
   padding: 4px;
   border-radius: 8px;
   background: var(--panel);
-  transform: translateY(-50%);
 }
 
 .tool-rail button {
@@ -849,4 +941,135 @@ button[aria-pressed="true"] {
 .resemantic-to select {
   flex: 1;
   min-width: 0;
+}
+
+.actions-menu {
+  position: absolute;
+  z-index: 5;
+  left: 12px;
+  bottom: 16px;
+}
+
+.actions-panel {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 240px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.actions-panel > button {
+  text-align: left;
+}
+
+.inventory {
+  position: absolute;
+  z-index: 8;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 48px;
+}
+
+.inventory-backdrop {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: rgb(0 0 0 / 0.62);
+  cursor: default;
+}
+
+.inventory-card {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(880px, 100%);
+  height: min(640px, 100%);
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #21242a;
+}
+
+.inventory-card > header {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.inventory-card > header strong {
+  color: var(--accent);
+  font-size: 16px;
+}
+
+.inventory-card > header span {
+  flex: 1;
+  color: var(--text-quiet);
+  font-size: 12px;
+}
+
+.inventory-body {
+  display: flex;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+.inventory-palettes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 160px;
+  overflow: auto;
+}
+
+.inventory-palettes button {
+  text-align: left;
+}
+
+.inventory-palettes button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.inventory-grid {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 8px;
+  overflow: auto;
+}
+
+.inventory-swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 72px;
+  padding: 6px 4px;
+  font-size: 11px;
+}
+
+.inventory-swatch span:last-child {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inventory-card .hotbar {
+  position: static;
+  transform: none;
+  align-self: center;
 }

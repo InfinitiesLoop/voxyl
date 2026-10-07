@@ -166,20 +166,33 @@ export class ChunkRenderer {
     this.#updates.push(update);
   }
 
-  /** Call once per frame before rendering. */
+  /**
+   * Call once per frame before rendering. Meshes go first: a light upload must not hold
+   * back the blocks an undo just changed, or two quick undos land in the same later frame.
+   */
   update(): void {
     this.#syncPalette();
+    const meshes: Update[] = [];
+    const rest: Update[] = [];
+    for (const update of this.#updates) {
+      if (update.type === "mesh") meshes.push(update);
+      else rest.push(update);
+    }
+    // Two meshes of one chunk in the same batch: only the latest is worth uploading.
+    const latest = new Map<number, Update>();
+    for (const mesh of meshes) if (mesh.type === "mesh") latest.set(mesh.key, mesh);
+    const ordered = [...latest.values(), ...rest];
     const start = performance.now();
     let i = 0;
-    for (; i < this.#updates.length && performance.now() - start < APPLY_BUDGET_MS; i++) {
-      const update = this.#updates[i];
+    for (; i < ordered.length && performance.now() - start < APPLY_BUDGET_MS; i++) {
+      const update = ordered[i];
       if (!update) continue;
       if (update.type === "idle") this.#appliedSeq = update.seq;
       else if (update.type === "light") this.#applyLight(update.update);
       else if (update.quadCount === 0 && update.triCount === 0) this.#removeMesh(update.key);
       else this.#setMesh(update.key, update.quads, update.tris);
     }
-    this.#updates.splice(0, i);
+    this.#updates.splice(0, this.#updates.length, ...ordered.slice(i));
   }
 
   stats(): ChunkRendererStats {

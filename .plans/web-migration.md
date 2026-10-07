@@ -13,7 +13,9 @@ with textures and a vanilla jar import, block models, the sky, and the gate (gol
 SwiftShader, performance with textures on; the 100k fill misses on the B580 desktop only, held
 up by the deferred light engine). **Phase 3 started** (2026-10-07): the editor, planned and
 tracked in [`web-editor.md`](web-editor.md). Steps 1 to 3 are in: the edit loop, the
-palette drawer, and selection (box, wand, region commands, orbit).
+palette drawer, and selection (box, wand, region commands, orbit). A feedback pass before
+step 4 added multi-pane layouts with per-view time of day, an inventory for loading the
+hotbar, and selection actions kept apart from the selection panel.
 Reviewed as a Claude Doc
 (https://claude.ai/code/artifact/98f31d14-989b-4c28-a24c-a3d7b8630a21); this file is now the
 working copy. **Keep it (and `web-lighting.md`) up to date as we go**, in the same commit as

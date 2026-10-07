@@ -93,6 +93,15 @@ describe("CellSet", () => {
           for (const [dx, dy, dz] of FACES) grown.add(key(x + dx, y + dy, z + dz));
         }
         expect(model(set.grown(1))).toEqual(grown);
+        const withCorners = new Set(m);
+        for (const k of m) {
+          const [x, y, z] = parse(k);
+          for (let dz = -1; dz <= 1; dz++)
+            for (let dy = -1; dy <= 1; dy++)
+              for (let dx = -1; dx <= 1; dx++)
+                if (dx !== 0 || dy !== 0 || dz !== 0) withCorners.add(key(x + dx, y + dy, z + dz));
+        }
+        expect(model(set.grown(1, true))).toEqual(withCorners);
         const shrunk = [...m].filter((k) => {
           const [x, y, z] = parse(k);
           return FACES.every(([dx, dy, dz]) => m.has(key(x + dx, y + dy, z + dz)));
@@ -101,6 +110,18 @@ describe("CellSet", () => {
       }),
       { numRuns: 40 },
     );
+  });
+
+  it("grows a box through corners into a bigger box, and through faces into a cross", () => {
+    const box = CellSet.ofBox({ x0: 0, y0: 0, z0: 0, x1: 1, y1: 1, z1: 1 });
+    const corners = box.grown(1, true);
+    expect(corners.size).toBe(4 * 4 * 4);
+    expect(corners.bounds()).toEqual({ x0: -1, y0: -1, z0: -1, x1: 2, y1: 2, z1: 2 });
+    expect(corners.has(-1, -1, -1)).toBe(true);
+    const faces = box.grown(1);
+    expect(faces.has(0, -1, 0)).toBe(true);
+    expect(faces.has(-1, -1, -1)).toBe(false);
+    expect(faces.size).toBeLessThan(corners.size);
   });
 
   it("keeps a big box as full bricks and reports exact bounds", () => {

@@ -17,7 +17,7 @@ import {
 import { WorldClient, type WorldOutput } from "../world/WorldClient.ts";
 import type { WorldInfo, WorldSource } from "../worlds.ts";
 import { ChunkRenderer, type ChunkRendererStats } from "./ChunkRenderer.ts";
-import { FlyCamera } from "./FlyCamera.ts";
+import { applyPose, FlyCamera, type FlyPose } from "./FlyCamera.ts";
 import { GroundGrid } from "./ground-grid.ts";
 import { LightVolume } from "./light-volume.ts";
 import { SelectionOutline } from "./SelectionOutline.ts";
@@ -27,13 +27,28 @@ import { TargetOutline } from "./target.ts";
 
 export type Backend = "WebGPU" | "WebGL2";
 
+/** One 3D pane's rectangle, in CSS pixels from the canvas's top left, and its time of day. */
+export interface ViewFrame {
+  readonly id: string;
+  readonly time: number;
+  readonly focused: boolean;
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
 const FRAME_WINDOW = 240;
 /** How far the crosshair reaches, in cells. */
 const REACH = 400;
 /** A press that moves the cursor less than this many pixels is a click, not a drag. */
 const CLICK_SLOP = 4;
-/** Wheel travel per hotbar slot (a mouse notch is about 100; trackpads send small steps). */
-const WHEEL_PER_SLOT = 50;
+/**
+ * Wheel travel per hotbar slot. A mouse notch is about 100 pixels (and a line-mode event
+ * is one notch); half of that stepped two slots a notch. Trackpads send small steps that
+ * add up to a notch.
+ */
+const WHEEL_PER_SLOT = 100;
 /** Cells moved per unit of wheel travel with a free cursor, at the base speed of 15. */
 const DOLLY_PER_WHEEL = 0.02;
 const HOTBAR_KEYS = /^(?:Digit|Numpad)([1-9])$/;
@@ -88,7 +103,7 @@ export type Autopilot = (seconds: number) => {
 export class Engine {
   readonly renderer = new THREE.WebGPURenderer({ antialias: true, trackTimestamp: true });
   readonly scene = new THREE.Scene();
-  readonly camera = new THREE.PerspectiveCamera(60, 1, 0.1, 6000);
+  camera = new THREE.PerspectiveCamera(60, 1, 0.1, 6000);
   readonly fly: FlyCamera;
   /** The world worker: send commands through this. */
   readonly world: WorldClient;
@@ -115,6 +130,17 @@ export class Engine {
   readonly anchor = new Store<Vec3 | null>(null);
   /** A command the selection panel should say failed, or "". */
   readonly notice = new Store("");
+  /** The inventory overlay. E toggles it; opening releases the pointer. */
+  readonly inventoryOpen = new Store(false);
+  /** Called when a click chooses a different 3D pane, so the chrome can follow. */
+  onFocusView: ((id: string) => void) | null = null;
+  readonly #views = new Map<string, { camera: THREE.PerspectiveCamera; pose: FlyPose }>();
+  #viewFrames: ViewFrame[] = [];
+  /** False until the panes have reported their rectangles, so the first frames fill the canvas. */
+  #framesSet = false;
+  #focusedId = "";
+  #width = 1;
+  #height = 1;
   readonly #target = new TargetOutline();
   readonly #selectionOutline = new SelectionOutline();
   readonly #grid = new GroundGrid();
@@ -184,6 +210,7 @@ export class Engine {
   /** Starts the renderer. Resolves to null if the engine was disposed while it started. */
   async init(): Promise<Backend | null> {
     await this.renderer.init();
+    this.renderer.setClearColor(0x15171b, 1);
     // React's development mode mounts, disposes and remounts: an engine disposed during this
     // await must not attach its canvas, or that dead canvas covers the live one.
     if (this.#disposed) return null;
@@ -282,6 +309,12 @@ export class Engine {
         { x: cx, y: 10, z: cz },
       );
     }
+    // Every 3D pane starts on the same overview. Each one flies on its own after that.
+    const pose = this.fly.capture();
+    for (const view of this.#views.values()) {
+      view.pose = pose;
+      if (view.camera !== this.camera) applyPose(view.camera, pose);
+    }
   }
 
   /**
@@ -313,18 +346,62 @@ export class Engine {
   }
 
   /**
-   * Time of day in hours (0 midnight, 12 noon): the sky, where the sun and moon stand (rising
-   * in the project's real east), and how far the light shader darkens sky light.
+   * The 3D panes to draw, each with its own camera and time of day. An empty list draws the
+   * focused camera across the whole canvas (before the panes have been measured).
+   */
+  setFrames(frames: readonly ViewFrame[]): void {
+    this.#framesSet = true;
+    this.#viewFrames = [...frames];
+    for (const frame of frames) this.#ensureView(frame.id);
+    const focused = frames.find((frame) => frame.focused);
+    if (focused) this.#switchFocus(focused.id);
+    else if (this.fly.locked) this.fly.unlock();
+  }
+
+  /** Opens or closes the inventory, releasing the pointer so its controls can be used. */
+  toggleInventory(): void {
+    const open = !this.inventoryOpen.get();
+    this.inventoryOpen.set(open);
+    if (open) this.fly.unlock();
+  }
+
+  /**
+   * Time of day in hours for the sky right now. Each 3D pane supplies its own when it draws;
+   * this is the fallback before any pane is measured.
    */
   setTime(hours: number): void {
     this.#hours = hours;
-    this.#updateSky();
+    this.#updateSky(hours);
   }
 
-  #updateSky(): void {
-    const sky = skyAt(this.#hours, this.#info?.north ?? "north");
+  #updateSky(hours = this.#hours): void {
+    const sky = skyAt(hours, this.#info?.north ?? "north");
     this.#sky.set(sky);
     this.#chunks?.setDaylight(sky.daylight);
+  }
+
+  #ensureView(id: string): { camera: THREE.PerspectiveCamera; pose: FlyPose } {
+    const existing = this.#views.get(id);
+    if (existing) return existing;
+    const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 6000);
+    const pose = this.fly.capture();
+    applyPose(camera, pose);
+    const view = { camera, pose };
+    this.#views.set(id, view);
+    return view;
+  }
+
+  #switchFocus(id: string): void {
+    if (this.#focusedId === id && this.camera === this.#views.get(id)?.camera) return;
+    if (this.#focusedId !== "") {
+      const prev = this.#views.get(this.#focusedId);
+      if (prev) prev.pose = this.fly.capture();
+    }
+    this.#focusedId = id;
+    const next = this.#ensureView(id);
+    this.camera = next.camera;
+    this.fly.bind(next.camera);
+    this.fly.restore(next.pose);
   }
 
   /** Minecraft's Brightness setting, 0 (Moody) to 1 (Bright); 0.5 is its default. */
@@ -433,7 +510,7 @@ export class Engine {
       this.selection.set(message.view);
       this.#setOrbit(message.view.bounds);
       // A pending first corner draws its own cell; the worker's empty selection must not clear it.
-      if (this.#anchor === null) this.#selectionOutline.show(message.view.lines);
+      if (this.#anchor === null) this.#showOutline(message.view.lines);
       return;
     }
     if (message.type === "looks") this.#looks = message.colors;
@@ -468,10 +545,9 @@ export class Engine {
       this.#sentCamera.copy(p);
       this.world.camera([p.x, p.y, p.z]);
     }
-    this.#grid.follow(p);
     this.#updateAim();
     this.#chunks?.update();
-    this.renderer.render(this.scene, this.camera);
+    this.#renderViews();
     this.#resolveGpuTime();
     if (this.#idleWaiters.length > 0 && this.#settled) {
       const waiters = this.#idleWaiters;
@@ -521,12 +597,76 @@ export class Engine {
   }
 
   #resize(): void {
-    const w = this.#host.clientWidth;
-    const h = Math.max(this.#host.clientHeight, 1);
+    this.#width = this.#host.clientWidth;
+    this.#height = Math.max(this.#host.clientHeight, 1);
     this.renderer.setPixelRatio(window.devicePixelRatio);
-    this.renderer.setSize(w, h, false);
-    this.camera.aspect = w / h;
+    this.renderer.setSize(this.#width, this.#height, false);
+    this.camera.aspect = this.#width / this.#height;
     this.camera.updateProjectionMatrix();
+  }
+
+  /**
+   * Draws each 3D pane into its rectangle. One pane that fills the canvas takes the simple
+   * path. Several panes clear once, then draw with a scissor, so a later pane does not wipe
+   * an earlier one (a WebGPU clear ignores the scissor).
+   */
+  #renderViews(): void {
+    const frames = this.#viewFrames.filter((frame) => frame.width >= 2 && frame.height >= 2);
+    const only = frames[0];
+    const full =
+      frames.length === 1 &&
+      only !== undefined &&
+      only.x <= 1 &&
+      only.y <= 1 &&
+      only.width >= this.#width - 2 &&
+      only.height >= this.#height - 2;
+    if (!this.#framesSet || full) {
+      this.renderer.autoClear = true;
+      this.renderer.setScissorTest(false);
+      this.renderer.setViewport(0, 0, this.#width, this.#height);
+      if (only) this.#updateSky(only.time);
+      this.#grid.follow(this.camera.position);
+      this.camera.aspect = this.#width / this.#height;
+      this.camera.updateProjectionMatrix();
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
+    if (frames.length === 0) {
+      this.renderer.autoClear = true;
+      this.renderer.setScissorTest(false);
+      this.renderer.clear();
+      return;
+    }
+    this.renderer.autoClear = false;
+    this.renderer.setScissorTest(false);
+    this.renderer.setViewport(0, 0, this.#width, this.#height);
+    this.renderer.clear();
+    this.renderer.setScissorTest(true);
+    for (const frame of frames) {
+      const view = this.#views.get(frame.id);
+      const cam = frame.focused ? this.camera : view?.camera;
+      if (!cam) continue;
+      cam.aspect = frame.width / frame.height;
+      cam.updateProjectionMatrix();
+      this.#updateSky(frame.time);
+      this.#grid.follow(cam.position);
+      this.renderer.setViewport(frame.x, frame.y, frame.width, frame.height);
+      this.renderer.setScissor(frame.x, frame.y, frame.width, frame.height);
+      this.renderer.render(this.scene, cam);
+    }
+    this.renderer.setScissorTest(false);
+  }
+
+  #frameAt(event: { clientX: number; clientY: number }): ViewFrame | null {
+    const rect = this.#host.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    return (
+      this.#viewFrames.find(
+        (frame) =>
+          x >= frame.x && y >= frame.y && x < frame.x + frame.width && y < frame.y + frame.height,
+      ) ?? null
+    );
   }
 
   /** The crosshair's ray. */
@@ -607,6 +747,11 @@ export class Engine {
   /** With a free cursor: drag the view to turn the camera, click it to fly. */
   #onPointerDown(event: PointerEvent): void {
     if (this.fly.locked || this.#autopilot || event.button !== 0) return;
+    const frame = this.#frameAt(event);
+    if (frame && !frame.focused) {
+      this.#switchFocus(frame.id);
+      this.onFocusView?.(frame.id);
+    }
     this.#drag = { x: event.clientX, y: event.clientY, moved: false };
     this.renderer.domElement.setPointerCapture(event.pointerId);
   }
@@ -631,11 +776,16 @@ export class Engine {
   #onWheel(event: WheelEvent): void {
     event.preventDefault();
     if (this.#autopilot) return;
+    const frame = this.#frameAt(event);
+    if (frame && !frame.focused && !this.fly.locked) {
+      this.#switchFocus(frame.id);
+      this.onFocusView?.(frame.id);
+    }
     if (!this.fly.locked) {
       this.fly.dolly(-event.deltaY * DOLLY_PER_WHEEL * (this.fly.speed / 15));
       return;
     }
-    this.#wheel += event.deltaY;
+    this.#wheel += wheelPixels(event);
     while (Math.abs(this.#wheel) >= WHEEL_PER_SLOT) {
       const step = Math.sign(this.#wheel);
       this.hotbar.cycle(step);
@@ -645,7 +795,17 @@ export class Engine {
 
   /** Hotbar slots (1-9, numpad too), undo and redo, wherever the cursor is. */
   #onKey(event: KeyboardEvent): void {
+    if (event.code === "Escape" && this.inventoryOpen.get()) {
+      event.preventDefault();
+      this.inventoryOpen.set(false);
+      return;
+    }
     if (isTyping(event.target)) return;
+    if (event.code === "KeyE" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      event.preventDefault();
+      this.toggleInventory();
+      return;
+    }
     if (event.code === "Delete" && this.selection.get().cells > 0) {
       event.preventDefault();
       this.clearSelection();
@@ -671,13 +831,22 @@ export class Engine {
   setTool(tool: EditorTool): void {
     this.tool.set(tool);
     rememberTool(tool);
-    this.#dropAnchor();
+    this.#clearAnchor();
+    // The outline is part of the selection tools. The selection itself stays, for actions.
+    this.#showOutline(this.selection.get().lines);
   }
 
-  /** Grows the selection `steps` cells through every face. */
-  growSelection(steps: number): void {
+  /**
+   * Grows the selection `steps` cells. With `corners`, every direction including diagonals,
+   * so a box stays a box. Without, through faces only.
+   */
+  growSelection(steps: number, corners: boolean): void {
     const n = clampSteps(steps);
-    void this.#select({ grow: n, of: { selection: true } });
+    void this.#select(
+      corners
+        ? { grow: n, of: { selection: true }, corners: true }
+        : { grow: n, of: { selection: true } },
+    );
   }
 
   /** Shrinks the selection `steps` cells through every face. */
@@ -746,7 +915,7 @@ export class Engine {
     if (!this.#anchor) {
       this.#anchor = cell;
       this.anchor.set(cell);
-      this.#selectionOutline.show(boxLines(cellBox(cell)));
+      this.#showOutline(boxLines(cellBox(cell)));
       return;
     }
     const first = this.#anchor;
@@ -770,14 +939,14 @@ export class Engine {
   /** Runs a select. `preview` is drawn at once; a failure puts the previous outline back. */
   async #select(where: Region | null, preview?: Float32Array): Promise<void> {
     const previous = this.selection.get().lines;
-    if (preview) this.#selectionOutline.show(preview);
-    else if (where === null) this.#selectionOutline.show(new Float32Array(0));
+    if (preview) this.#showOutline(preview);
+    else if (where === null) this.#showOutline(new Float32Array(0));
     try {
       await this.world.request({ type: "select", where });
       this.notice.set("");
     } catch (error) {
       this.notice.set(error instanceof Error ? error.message : String(error));
-      if (this.#anchor === null) this.#selectionOutline.show(previous);
+      if (this.#anchor === null) this.#showOutline(previous);
     }
   }
 
@@ -793,7 +962,13 @@ export class Engine {
     if (this.#anchor === null) return;
     this.#anchor = null;
     this.anchor.set(null);
-    this.#selectionOutline.show(this.selection.get().lines);
+    this.#showOutline(this.selection.get().lines);
+  }
+
+  /** The selection outline while a selection tool is on, and nothing while Build is. */
+  #showOutline(lines: Float32Array): void {
+    const tool = this.tool.get();
+    this.#selectionOutline.show(tool === "select" || tool === "wand" ? lines : new Float32Array(0));
   }
 
   #setOrbit(bounds: SelectionView["bounds"]): void {
@@ -833,6 +1008,13 @@ function clampSteps(steps: number): number {
 }
 
 /** True for keys typed into a text field or menu, which the editor leaves alone. */
+/** A notch in pixels. Line and page modes report notches, not pixels. */
+function wheelPixels(event: WheelEvent): number {
+  if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) return event.deltaY * WHEEL_PER_SLOT;
+  if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) return event.deltaY * WHEEL_PER_SLOT;
+  return event.deltaY;
+}
+
 function isTyping(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return (

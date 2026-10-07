@@ -3,12 +3,15 @@ import type { Settings } from "../App.tsx";
 import type { Engine } from "../scene/Engine.ts";
 import { clockLabel } from "../scene/sky-model.ts";
 import type { WorldInfo } from "../worlds.ts";
+import { type LayoutPreset, type LayoutState, withPreset } from "./layout.ts";
 import { useStore } from "./useStore.ts";
 
 interface TopBarProps {
   engine: Engine;
   info: WorldInfo | null;
   settings: Settings;
+  layout: LayoutState;
+  onLayout: (layout: LayoutState) => void;
   onSettings: (s: Settings) => void;
   busy: boolean;
   /** False when the renderer fell back to WebGL, which has no light volumes. */
@@ -27,10 +30,19 @@ interface TopBarProps {
  * The editor's top bar: the project (its name, which renames on click, and whether it is
  * saved), undo and redo, a new project, and how the view looks.
  */
+const PRESETS: readonly { preset: LayoutPreset; label: string; title: string }[] = [
+  { preset: "single", label: "1", title: "One view" },
+  { preset: "columns", label: "Side", title: "Two views side by side" },
+  { preset: "rows", label: "Stack", title: "Two views, one above the other" },
+  { preset: "grid", label: "Grid", title: "Four views" },
+];
+
 export function TopBar({
   engine,
   info,
   settings,
+  layout,
+  onLayout,
   onSettings,
   busy,
   volumeLighting,
@@ -103,15 +115,19 @@ export function TopBar({
         New project
       </button>
       <span className="topbar-gap wide" />
-      <button
-        type="button"
-        aria-pressed={settings.views === "split"}
-        onClick={click(() =>
-          onSettings({ ...settings, views: settings.views === "split" ? "3d" : "split" }),
-        )}
-      >
-        2D view
-      </button>
+      <span className="layout-presets">
+        {PRESETS.map((item) => (
+          <button
+            key={item.preset}
+            type="button"
+            aria-pressed={layout.preset === item.preset}
+            title={item.title}
+            onClick={click(() => onLayout(withPreset(layout, item.preset)))}
+          >
+            {item.label}
+          </button>
+        ))}
+      </span>
       <button type="button" aria-pressed={palettesOpen} onClick={click(onPalettes)}>
         Palettes
       </button>
@@ -143,7 +159,7 @@ function brightnessLabel(brightness: number): string {
   return `${brightness}%`;
 }
 
-/** Lighting, the time of day and brightness, in a menu under the View button. */
+/** Lighting and brightness. Time of day is each 3D pane's own slider; a 2D pane has neither. */
 function ViewMenu({
   settings,
   onSettings,
@@ -170,7 +186,7 @@ function ViewMenu({
           e.currentTarget.blur();
         }}
       >
-        View · {timeLabel(settings.time)}
+        Light
       </button>
       {open && (
         <div className="menu-panel">
@@ -188,17 +204,6 @@ function ViewMenu({
                 On
               </option>
             </select>
-          </label>
-          <label>
-            Time of day {timeLabel(settings.time)}
-            <input
-              type="range"
-              min={0}
-              max={24}
-              step={0.25}
-              value={settings.time}
-              onChange={(e) => onSettings({ ...settings, time: Number(e.target.value) })}
-            />
           </label>
           <label>
             Brightness {brightnessLabel(settings.brightness)}

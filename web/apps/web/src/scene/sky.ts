@@ -148,19 +148,30 @@ const MOON_CRATERS = (() => {
   return words as [number, number];
 })();
 
-/** The moon: a pale grey square of 8 x 8 pixels with a few craters and a darker rim. */
-function moonColor(d: V3, u: SkyUniforms): V3 {
-  const { p, inside } = squareAt(d, u.sun.negate(), u.pole, MOON_SIZE);
+/**
+ * The moon: a disc (not the square the sun keeps), with the same 8 x 8 craters and a darker
+ * rim. `cover` is 1 inside the disc, so stars drawn afterwards do not show through its edge.
+ */
+function moonAt(d: V3, u: SkyUniforms) {
+  const axis = u.sun.negate();
+  const x = dot(d, axis);
+  const side = cross(axis, u.pole);
+  const scale = max(x, 1e-4).mul(MOON_SIZE);
+  const p = vec2(dot(d, u.pole).div(scale), dot(d, side).div(scale));
+  const r = length(p);
+  const aa = max(fwidth(r), float(1e-4));
+  const cover = smoothstep(float(1).add(aa), float(1).sub(aa), r).mul(
+    select(x.greaterThan(0), float(1), float(0)),
+  );
   const cell = clamp(floor(p.mul(4)).add(4), 0, 7);
-  const rim = max(abs(cell.x.sub(3.5)), abs(cell.y.sub(3.5))).greaterThan(3);
   const index = uint(cell.y.mul(8).add(cell.x));
   const row = select(index.lessThan(uint(32)), uint(MOON_CRATERS[0]), uint(MOON_CRATERS[1]));
   const crater = row
     .shiftRight(index.bitAnd(uint(31)))
     .bitAnd(uint(1))
     .equal(uint(1));
-  const tone = select(rim, float(0.72), select(crater, float(0.76), float(0.92)));
-  return select(inside, vec3(0.8, 0.82, 0.86).mul(tone), vec3(0, 0, 0));
+  const tone = select(r.greaterThan(0.78), float(0.72), select(crater, float(0.76), float(0.92)));
+  return { color: vec3(0.8, 0.82, 0.86).mul(tone).mul(cover), cover };
 }
 
 /**
@@ -309,10 +320,13 @@ export class Sky {
       const base = skyBase(d, u);
       const fade = float(1).sub(clamp(float(SKY_FOG).div(max(d.y, 1e-4)), 0, 1));
       const rings = ringsAt(d, u);
-      const stars = starColor(d, u).mul(float(1).sub(rings.cover.mul(0.9)));
+      const moon = moonAt(d, u);
+      const stars = starColor(d, u)
+        .mul(float(1).sub(rings.cover.mul(0.9)))
+        .mul(float(1).sub(moon.cover));
       // The rings fade into the haze where they meet the horizon, like the stars.
       const lights = sunColor(d, u)
-        .add(moonColor(d, u))
+        .add(moon.color)
         .mul(shown)
         .add(stars.add(rings.color).mul(fade));
       return vec4(toLinear(base.add(lights)), 1);

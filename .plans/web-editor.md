@@ -48,8 +48,9 @@ Godot's model is proven with this user, so the web starts from it:
 
 The 3D view fills the window. Around it, all overlays:
 
-- **Top bar**: the project's name, undo and redo, whether it is saved, the views (3D or 3D
-  beside 2D), and a View menu (lighting, time of day, brightness).
+- **Top bar**: the project's name, undo and redo, whether it is saved, the arrangement (one
+  view, side by side, stacked, or a grid of four), palettes, and lighting and brightness.
+  Time of day is each 3D pane's own control. A 2D pane has no lighting and no time of day.
 - **Hotbar** at the bottom centre.
 - **Palette drawer** on the right (later step): semantics grouped by palette, their looks,
   adding and editing.
@@ -164,4 +165,37 @@ there is a point worth orbiting.
     a gap.
   - With a selection, dragging the view with a free cursor **orbits** the selection's centre
     instead of turning in place. The wheel still moves in and out. Flying stays first person.
+- **Feedback, before step 4 (2026-10-07).** The user asked to settle the shell before the
+  clipboard, because where the panes go decides where the toolbars go.
+  - **Panes.** The workspace is one, two (side by side or stacked) or four views. Each pane is
+    a 3D view or a flat 2D slice, and one pane is focused (click it to fly that one). A 3D
+    pane has its own camera and its own time of day, so one can be noon and
+    another night; the light volume is still computed once and the time of day is the shader's
+    darkening. A 2D pane is always flat: no lighting, no time of day. The hotbar, tool rail and
+    actions sit on the workspace, not inside a pane. Each pane's bar is only that pane (3D or
+    2D, and the clock when it is 3D). Lighting and brightness stay global, in the Light menu.
+  - **The wheel** while flying moves one hotbar slot a notch. It had been half a notch, so it
+    skipped every other slot.
+  - **Undo** of a chunk that is already being meshed starts the new mesh at once and drops the
+    picture of the older world, and a mesh is drawn before that frame's light upload. Two quick
+    undos no longer wait out a stale mesh and then both appear together.
+  - **Selection.** The panel is the shape of the region: counts (empty cells are not a row, and
+    have no stack count), Grow, Faces, Shrink, nudging a face, deselect. **Grow** adds every
+    neighbour including diagonals, so a box stays a box. **Faces** is the old grow, through the
+    six faces only (`{ grow }` without `corners`); it is a different thing from pushing the
+    bounding box out by one, and it stays because a cross-shaped shell is still useful. The
+    outline and the panel show while Select or Wand is the tool and something is selected, as
+    in the Godot app: leaving the tool hides them, and the selection itself remains. **Actions**
+    (a menu, whenever something is selected) is where operations on the cells live, and where
+    new ones get added: fill, replace, clear, re-semantic. They are not part of the selection
+    panel.
+  - **The ground grid** is a shader on a quad that follows the camera. Lines stay about a pixel
+    wide, fade out before they alias, and the fade reaches farther as you climb (about 25 cells
+    of fade per cell of height), so it does not end in a square when you leave the ground. It
+    is quieter than the old line mesh.
+  - **The moon** is a disc. Stars are hidden where it covers them. The sun stays a square.
+  - **Inventory** (E, or Esc to close) loads the hotbar: pick a palette, click a semantic, it
+    fills the chosen slot and advances. The palette drawer is still where a look is edited.
+    The migration plan listed an inventory and the editor plan never gave it a step; the drawer
+    was the editing half, and this is the picking half.
   - Next is step 4, the clipboard and prefabs.

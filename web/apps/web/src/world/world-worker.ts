@@ -611,11 +611,13 @@ function onMeshReply(port: MeshPort, reply: MeshReply): void {
     const { key, jobId, quads, quadCount, tris, triCount, lightBricks, ms } = reply.result;
     meshTimes.push(ms);
     if (meshTimes.length > 256) meshTimes.shift();
-    post({ type: "mesh", world: worldId, key, quads, quadCount, tris, triCount }, [
-      quads.buffer,
-      tris.buffer,
-    ]);
-    s.finishJob(key, jobId, lightBricks);
+    // A chunk edited again while this mesh ran: the picture is of the older world.
+    if (s.finishJob(key, jobId, lightBricks)) {
+      post({ type: "mesh", world: worldId, key, quads, quadCount, tris, triCount }, [
+        quads.buffer,
+        tris.buffer,
+      ]);
+    }
   }
   pump();
 }

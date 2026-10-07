@@ -60,8 +60,8 @@ export function sameMaterials(a: LightMaterials, b: LightMaterials): boolean {
  *
  * It is a plain state machine, with no workers or timers: edit `world`, call sync(), then
  * hand out work with takeJob() and takeLightUpdate() and report finished meshes with
- * finishJob(). At most one job per chunk is in flight, so a chunk's meshes finish in the
- * order they started; a chunk edited while it is being meshed is meshed again afterwards.
+ * finishJob(). A chunk edited while it is being meshed starts a new job at once; the mesh
+ * already running is stale and finishJob says so, so the latest edit is not stuck behind it.
  */
 export class WorldSession {
   readonly world: World;
@@ -77,7 +77,8 @@ export class WorldSession {
   #order: number[] = [];
   #orderStale = false;
   readonly #inFlight = new Map<number, number>(); // chunk key -> job id
-  readonly #again = new Set<number>();
+  /** Job ids superseded by a later edit of the same chunk. Their meshes are dropped. */
+  readonly #stale = new Set<number>();
   readonly #removed: number[] = [];
   #nextJob = 1;
   /** The light bricks each meshed chunk's faces read, kept with lighting off too. */
@@ -224,11 +225,15 @@ export class WorldSession {
     return null;
   }
 
-  /** Reports a finished mesh job: its quad count and the light bricks its faces read. */
-  finishJob(key: number, jobId: number, lightBricks: Uint16Array): void {
+  /**
+   * Reports a finished mesh job. False when a later edit of the same chunk already started
+   * another mesh: this result is stale and must not be drawn or update the light bricks.
+   */
+  finishJob(key: number, jobId: number, lightBricks: Uint16Array): boolean {
+    if (this.#stale.delete(jobId)) return false;
     if (this.#inFlight.get(key) === jobId) this.#inFlight.delete(key);
-    if (this.#again.delete(key)) this.#enqueue(key);
     this.#setMeshBricks(key, lightBricks);
+    return true;
   }
 
   /** Chunks that became empty since the last call: the renderer drops their meshes. */
@@ -262,7 +267,7 @@ export class WorldSession {
       this.world.dirtyCount === 0 &&
       this.#queue.size === 0 &&
       this.#inFlight.size === 0 &&
-      this.#again.size === 0 &&
+      this.#stale.size === 0 &&
       this.#removed.length === 0 &&
       !this.#layout?.pending
     );
@@ -272,7 +277,7 @@ export class WorldSession {
     const times = this.#copyTimes;
     return {
       lighting: this.#mode,
-      queued: this.#queue.size + this.#again.size,
+      queued: this.#queue.size,
       inFlight: this.#inFlight.size,
       lightBricks: this.#layout?.brickCount ?? 0,
       lightTables: this.#layout?.tableCount ?? 0,
@@ -299,9 +304,14 @@ export class WorldSession {
   }
 
   #enqueue(key: number): void {
-    if (this.#inFlight.has(key)) {
-      this.#again.add(key);
-    } else if (!this.#queue.has(key)) {
+    const flight = this.#inFlight.get(key);
+    // The mesh already running copied the cells before this edit. Drop it and mesh now,
+    // so a second undo is not waiting on a picture of the first.
+    if (flight !== undefined) {
+      this.#stale.add(flight);
+      this.#inFlight.delete(key);
+    }
+    if (!this.#queue.has(key)) {
       this.#queue.add(key);
       this.#orderStale = true;
     }

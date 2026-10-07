@@ -261,17 +261,26 @@ export class CellSet {
     return this;
   }
 
-  /** A new set grown by `steps` cells through faces (each step adds the 6 neighbours). */
-  grown(steps: number): CellSet {
+  /**
+   * A new set grown by `steps` cells. Through faces (the default) each step adds the 6
+   * neighbours, so a solid box grows a cross and stops being a box. With `corners`, each step
+   * adds every cell a king could move to (all 26), and a solid box stays a box. That is the
+   * neighbourhood of the cells, not the bounding box pushed out by one: a hole stays a hole.
+   */
+  grown(steps: number, corners = false): CellSet {
     let current: CellSet = this.clone();
     for (let s = 0; s < steps; s++) {
       const next = current.clone();
       for (const b of current.bricks()) {
         if (b.full) {
           const { x, y, z } = b;
-          next.addBox({ x0: x - 1, y0: y, z0: z, x1: x + 8, y1: y + 7, z1: z + 7 });
-          next.addBox({ x0: x, y0: y - 1, z0: z, x1: x + 7, y1: y + 8, z1: z + 7 });
-          next.addBox({ x0: x, y0: y, z0: z - 1, x1: x + 7, y1: y + 7, z1: z + 8 });
+          if (corners) {
+            next.addBox({ x0: x - 1, y0: y - 1, z0: z - 1, x1: x + 8, y1: y + 8, z1: z + 8 });
+          } else {
+            next.addBox({ x0: x - 1, y0: y, z0: z, x1: x + 8, y1: y + 7, z1: z + 7 });
+            next.addBox({ x0: x, y0: y - 1, z0: z, x1: x + 7, y1: y + 8, z1: z + 7 });
+            next.addBox({ x0: x, y0: y, z0: z - 1, x1: x + 7, y1: y + 7, z1: z + 8 });
+          }
           continue;
         }
         for (let bit = 0; bit < 512; bit++) {
@@ -279,12 +288,19 @@ export class CellSet {
           const x = b.x + (bit & 7);
           const y = b.y + (bit >> 6);
           const z = b.z + ((bit >> 3) & 7);
-          next.add(x - 1, y, z);
-          next.add(x + 1, y, z);
-          next.add(x, y - 1, z);
-          next.add(x, y + 1, z);
-          next.add(x, y, z - 1);
-          next.add(x, y, z + 1);
+          if (corners) {
+            for (let dz = -1; dz <= 1; dz++)
+              for (let dy = -1; dy <= 1; dy++)
+                for (let dx = -1; dx <= 1; dx++)
+                  if (dx !== 0 || dy !== 0 || dz !== 0) next.add(x + dx, y + dy, z + dz);
+          } else {
+            next.add(x - 1, y, z);
+            next.add(x + 1, y, z);
+            next.add(x, y - 1, z);
+            next.add(x, y + 1, z);
+            next.add(x, y, z - 1);
+            next.add(x, y, z + 1);
+          }
         }
       }
       current = next;

@@ -37,9 +37,23 @@ const MIN_SPEED = 2;
 const MAX_SPEED = 400;
 const MAX_PITCH = Math.PI / 2 - 0.01;
 
+export interface FlyPose {
+  readonly position: readonly [number, number, number];
+  readonly yaw: number;
+  readonly pitch: number;
+  readonly speed: number;
+}
+
+/** Puts a stored pose on a camera that is not the one being flown. */
+export function applyPose(camera: THREE.PerspectiveCamera, pose: FlyPose): void {
+  camera.position.set(pose.position[0], pose.position[1], pose.position[2]);
+  camera.rotation.set(pose.pitch, pose.yaw, 0, "YXZ");
+  camera.updateMatrixWorld();
+}
+
 /** First-person fly controls. Active while the pointer is locked to the canvas. */
 export class FlyCamera {
-  readonly camera: THREE.PerspectiveCamera;
+  camera: THREE.PerspectiveCamera;
   readonly position = new THREE.Vector3();
   yaw = 0;
   pitch = 0;
@@ -72,6 +86,29 @@ export class FlyCamera {
 
   unlock(): void {
     if (this.locked) document.exitPointerLock();
+  }
+
+  /** Drives a different camera, keeping the pose restore or update last set. */
+  bind(camera: THREE.PerspectiveCamera): void {
+    this.camera = camera;
+    this.#apply();
+  }
+
+  capture(): FlyPose {
+    return {
+      position: [this.position.x, this.position.y, this.position.z],
+      yaw: this.yaw,
+      pitch: this.pitch,
+      speed: this.speed,
+    };
+  }
+
+  restore(pose: FlyPose): void {
+    this.position.set(pose.position[0], pose.position[1], pose.position[2]);
+    this.yaw = pose.yaw;
+    this.pitch = pose.pitch;
+    this.speed = pose.speed;
+    this.#apply();
   }
 
   /** Puts the camera at `position`, facing `target`. */

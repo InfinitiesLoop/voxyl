@@ -236,7 +236,8 @@ and by the editor:
 { "semantic": "Trim", "within": { "box": [...] } }     // exact cells, never their bounds
 { "structure": { "seed": [x, y, z], "semantics": ["Deck", "Rail"] } }   // connected cells
 { "all": [...] }  { "any": [...] }  { "not": ... }     // set algebra
-{ "grow": 1, "of": ... }  { "shrink": 1, "of": ... }
+{ "grow": 1, "of": ... }                    // through faces; "corners": true adds the diagonals too
+{ "shrink": 1, "of": ... }
 ```
 
 - **It evaluates to exact cells:** a sparse bitset over 8³ bricks (empty, full or a 64-byte
@@ -374,7 +375,8 @@ Each step lands with its tests and updates this document.
 - **Step 3 done (2026-10-06).**
   - `cellset.ts` is a sparse set of positions: 128³ blocks keyed like chunks, holding 8³
     bricks that are full or a 512-bit mask. It has union, intersection and difference a brick or
-    word at a time, grow and shrink through faces, exact bounds, and iteration in a fixed order.
+    word at a time, grow through faces or through all 26 neighbours (`corners`), shrink through
+    faces, exact bounds, and iteration in a fixed order.
   - `region.ts` holds the expression language as a recursive Zod schema: box, selection,
     palette (with descendants), semantic, structure (a flood fill from a seed, by semantics,
     diagonal optional, within a region or 256 cells of the seed), all/any/not, and grow/shrink.
