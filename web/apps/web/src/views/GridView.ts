@@ -29,6 +29,9 @@ const ORIGIN_LINE = "rgb(34 211 238 / 0.35)";
 /** The focused 3D view's camera, and the other 3D views'. */
 const CAMERA = [34, 211, 238] as const;
 const OTHER_CAMERA = [148, 163, 184] as const;
+/** Another 2D view's slice across this one: amber, as the slice guide is in 3D. */
+const GUIDE_FILL = "rgb(251 191 36 / 0.08)";
+const GUIDE_LINE = "rgb(251 191 36 / 0.7)";
 /** How far a camera's view cone reaches on screen, in CSS pixels, when it looks along the slice. */
 const CONE_PX = 46;
 /** How strongly the layer below shows through empty cells. */
@@ -162,6 +165,21 @@ export class GridView {
     this.#changed();
   }
 
+  /**
+   * Slices through a world cell and centres on it, keeping the zoom; with `axis`, turns the
+   * slice to that axis first.
+   */
+  sliceThrough(cell: readonly [number, number, number], axis?: SliceAxis): void {
+    if (axis !== undefined && axis !== this.#axis) {
+      this.#axis = axis;
+      this.#setOrientation();
+    }
+    const [u, v, depth] = worldToPlane(this.#axis, cell);
+    this.#depth = Math.floor(depth);
+    this.#centerOn(u, v);
+    this.#changed();
+  }
+
   setDepth(depth: number): void {
     this.#depth = Math.round(depth);
     this.#changed();
@@ -185,6 +203,7 @@ export class GridView {
 
   dispose(): void {
     this.#engine.clearSliceGuide(this);
+    this.#engine.setFlatSlice(this, null);
     cancelAnimationFrame(this.#frame);
     this.#abort.abort();
     this.#observer.disconnect();
@@ -256,7 +275,7 @@ export class GridView {
     const stale = !covered || f.revision !== revision;
     if (stale && !this.#fetching && performance.now() - this.#lastFetch > REFRESH_MS)
       void this.#fetch(revision);
-    const cameraKey = this.#cameras ? cameraKeyOf(this.#engine) : "";
+    const cameraKey = `${this.#cameras ? cameraKeyOf(this.#engine) : ""}|${this.#engine.flatRevision}`;
     if (cameraKey !== this.#cameraKey) {
       this.#cameraKey = cameraKey;
       this.#dirty = true;
@@ -373,7 +392,8 @@ export class GridView {
 
     this.#drawGrid(s0, t0, s1, t1, sx, ty, px);
     if (this.#cameras) this.#drawCameras(sx, ty, px);
-    if (this.#active) this.#publishGuide(s0, t0, s1, t1);
+    this.#drawOtherSlices(sx, ty, px);
+    this.#publishGuide(s0, t0, s1, t1);
     if (this.#hover) {
       const [u, v] = worldToPlane(this.#axis, this.#hover.at);
       const [s, t] = planeToScreen(this.#orientation, u, v);
@@ -508,10 +528,46 @@ export class GridView {
       u1: Math.max(ua, ub) + 1,
       v1: Math.max(va, vb) + 1,
     };
-    const key = Object.values(window).join();
+    const key = `${this.#active}:${Object.values(window).join()}`;
     if (key === this.#guideKey) return;
     this.#guideKey = key;
-    this.#engine.setSliceGuide(this, window);
+    this.#engine.setFlatSlice(this, window);
+    if (this.#active) this.#engine.setSliceGuide(this, window);
+  }
+
+  /**
+   * Where the other 2D views cut this one: each slice across this one's plane is a one-cell
+   * band (amber, as the slice guide is in 3D). A slice parallel to this one draws nothing.
+   */
+  #drawOtherSlices(sx: (s: number) => number, ty: (t: number) => number, px: number): void {
+    const others = this.#engine.flatSlices(this);
+    if (others.length === 0) return;
+    const ctx = this.#ctx;
+    const { width: W, height: H } = this.canvas;
+    const o = this.#orientation;
+    for (const other of others) {
+      if (other.axis === this.#axis) continue;
+      // The other slice fixes one world axis; find which of this plane's u and v it is.
+      const unit: [number, number, number] = [0, 0, 0];
+      unit[other.axis] = 1;
+      const [du] = worldToPlane(this.#axis, unit);
+      const onU = du !== 0;
+      // Plane cell n along that axis on screen: its screen cell, and which screen axis.
+      const along = o.right.onU === onU ? o.right : o.down;
+      const vertical = along === o.right;
+      const [s, t] = onU ? planeToScreen(o, other.depth, 0) : planeToScreen(o, 0, other.depth);
+      const at = vertical ? sx(s) : ty(t);
+      ctx.fillStyle = GUIDE_FILL;
+      ctx.strokeStyle = GUIDE_LINE;
+      ctx.lineWidth = Math.max(1, window.devicePixelRatio || 1);
+      if (vertical) {
+        ctx.fillRect(at, 0, px, H);
+        ctx.strokeRect(Math.round(at) + 0.5, -1, Math.round(px) - 1, H + 2);
+      } else {
+        ctx.fillRect(0, at, W, px);
+        ctx.strokeRect(-1, Math.round(at) + 0.5, W + 2, Math.round(px) - 1);
+      }
+    }
   }
 
   #toScreenCell(event: PointerEvent | WheelEvent): [number, number] {

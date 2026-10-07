@@ -315,8 +315,15 @@ there is a point worth orbiting.
      line-drawing mode and stops sending them when none does. Shaped parts and block models
      outline as their cell. Faces now sit back by polygon offset (1, 1) so lines win; the
      ground grid moved to (2, 4).
-  4. slicing from 3D, 5. Home and shared palettes, 6. inventory and block chooser, 7. 2D
-     editing: in progress.
+  4. **Slicing from 3D.** While flying, **Tab** (alternate Enter) points the active 2D view
+     at the aimed cell: same kind of slice, through that cell, centred on it, zoom kept.
+     **Shift+Tab** also turns the slice (plan, cut across x, cut across z). With no 2D pane on
+     screen, the next pane over becomes one (Full becomes Side). The 2D bar's **3D aim** does
+     the same from the middle of the focused 3D view, so the key has a UI. This is lighter
+     than Godot's modal slice-select (a plane to steer and confirm): the 2D view itself is the
+     preview. Every 2D view now records what it shows, and each draws the **other 2D views'
+     slices** across it as amber one-cell bands (a slice parallel to it draws nothing).
+  5. Home and shared palettes, 6. inventory and block chooser, 7. 2D editing: in progress.
 
 ## Cross-project resources (what is planned, and what is not)
 

@@ -192,6 +192,11 @@ export class Engine {
   readonly #sliceGuide = new SliceGuide();
   /** Which 2D view the slice guide belongs to. */
   #sliceOwner: object | null = null;
+  /** What every 2D view shows, so each can draw where the others cut it. */
+  readonly #flatSlices = new Map<object, SliceWindow>();
+  #flatRevision = 0;
+  /** A request for the 2D view to slice through a cell (Tab while flying, or 3D aim). */
+  readonly sliceRequest = new Store<SliceRequest | null>(null);
   #anchor: Vec3 | null = null;
   /** Where a free-cursor drag orbits, when a selection has a box around it. */
   readonly #orbitTarget = new THREE.Vector3();
@@ -785,6 +790,36 @@ export class Engine {
     this.#sliceGuide.show(null);
   }
 
+  /** Records what a 2D view shows (null when it closes), for the other 2D views' guides. */
+  setFlatSlice(owner: object, window: SliceWindow | null): void {
+    if (window) this.#flatSlices.set(owner, window);
+    else if (!this.#flatSlices.delete(owner)) return;
+    this.#flatRevision++;
+  }
+
+  /** What the other 2D views show. */
+  flatSlices(except: object): SliceWindow[] {
+    return [...this.#flatSlices].filter(([owner]) => owner !== except).map(([, w]) => w);
+  }
+
+  /** Grows when a 2D view's slice changes. */
+  get flatRevision(): number {
+    return this.#flatRevision;
+  }
+
+  /**
+   * Asks the 2D view to slice through the cell the focused 3D view aims at (the crosshair,
+   * or the middle of the view when not flying). `turn`: also step to the next slice axis.
+   */
+  async sliceAtAim(turn: boolean): Promise<void> {
+    if (!this.#info) return;
+    const aimed = await this.world.request({ type: "aim", ...this.#ray() });
+    const cell = aimed?.hit ?? aimed?.place ?? null;
+    if (!cell) return;
+    const n = (this.sliceRequest.get()?.n ?? 0) + 1;
+    this.sliceRequest.set({ cell, turn, n });
+  }
+
   /** Every 3D pane's camera, for the 2D view's markers. The focused one is flown. */
   viewCameras(): { readonly camera: THREE.PerspectiveCamera; readonly focused: boolean }[] {
     if (!this.#framesSet) return [{ camera: this.camera, focused: true }];
@@ -992,6 +1027,11 @@ export class Engine {
         this.rotateAimed(event.shiftKey);
         return;
       }
+    }
+    if (flying && isKey("sliceHere", event.code) && !event.repeat) {
+      event.preventDefault();
+      void this.sliceAtAim(event.shiftKey);
+      return;
     }
     // Backspace empties the selection, only while Select is in hand, so a selection left
     // behind never takes the key from building.
@@ -1347,6 +1387,13 @@ interface ViewCamera {
   readonly ortho: THREE.OrthographicCamera;
   /** Half the orthographic view's height in cells; set the first time it draws orthographic. */
   orthoHalf: number | null;
+}
+
+/** Slice the 2D view through `cell`; `turn` steps its axis first. `n` tells requests apart. */
+export interface SliceRequest {
+  readonly cell: Vec3;
+  readonly turn: boolean;
+  readonly n: number;
 }
 
 /** The camera presets of a 3D pane's Camera menu. */

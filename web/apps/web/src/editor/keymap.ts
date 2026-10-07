@@ -22,6 +22,7 @@ export const KEY_ACTIONS = [
   "clearSelection",
   "layerUp",
   "layerDown",
+  "sliceHere",
 ] as const;
 
 export type KeyAction = (typeof KEY_ACTIONS)[number];
@@ -50,6 +51,8 @@ export const KEYMAP: Readonly<Record<KeyAction, KeyBinding>> = {
   clearSelection: { binding: ["Backspace"], alternate: [] },
   layerUp: { binding: ["BracketRight"], alternate: ["PageUp"] },
   layerDown: { binding: ["BracketLeft"], alternate: ["PageDown"] },
+  /** While flying: the 2D view slices through the aimed cell. Shift turns the slice. */
+  sliceHere: { binding: ["Tab"], alternate: ["Enter", "NumpadEnter"] },
 };
 
 /** Whether a key code is bound to an action. */

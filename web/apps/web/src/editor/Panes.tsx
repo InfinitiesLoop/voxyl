@@ -11,6 +11,7 @@ import {
   visiblePanes,
   withFocus,
   withPane,
+  withPreset,
   withShow,
   withView,
 } from "./layout.ts";
@@ -71,6 +72,19 @@ export function Panes({
   if (focused?.kind === "2d") last2d.current = focused.id;
   const flat = panes.filter((pane) => pane.kind === "2d");
   const active2d = flat.find((pane) => pane.id === last2d.current)?.id ?? flat[0]?.id ?? null;
+
+  // A slice request with no 2D view on screen: the next pane over becomes one.
+  const request = useStore(engine.sliceRequest);
+  const handled = useRef(0);
+  useEffect(() => {
+    if (!request || request.n === handled.current) return;
+    handled.current = request.n;
+    if (visiblePanes(layout).some((pane) => pane.kind === "2d")) return;
+    let next = layout.preset === "single" ? withPreset(layout, "columns") : layout;
+    const target = visiblePanes(next).findIndex((_, i) => i !== focusedIndex(next));
+    if (target >= 0) next = withPane(next, target, { kind: "2d" });
+    onLayout(next);
+  }, [request, layout, onLayout]);
 
   useEffect(() => {
     engine.onFocusView = (id) => {

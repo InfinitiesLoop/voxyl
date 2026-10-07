@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Compass } from "../editor/Compass.tsx";
 import { compassPoint } from "../editor/compass.ts";
+import { useStore } from "../editor/useStore.ts";
 import { BarSpacer, blurAfter, ShowMenu, ViewBar } from "../editor/ViewBar.tsx";
 import type { ShowId, ShowState } from "../editor/view-options.ts";
 import type { Engine } from "../scene/Engine.ts";
@@ -42,11 +43,15 @@ export function GridPane({
   const viewRef = useRef<GridView | null>(null);
   const [state, setState] = useState<GridViewState | null>(null);
 
+  /** The last slice request this view carried out (a new view has carried out none). */
+  const applied = useRef(0);
+
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
     const view = new GridView(host, engine, setState);
     viewRef.current = view;
+    applied.current = 0;
     return () => {
       view.dispose();
       viewRef.current = null;
@@ -67,6 +72,15 @@ export function GridPane({
   useEffect(() => {
     viewRef.current?.setCameras(show.cameras);
   }, [show.cameras]);
+
+  // Tab while flying (or 3D aim): the active 2D view slices through the aimed cell.
+  const request = useStore(engine.sliceRequest);
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!active || !request || !view || request.n === applied.current) return;
+    applied.current = request.n;
+    view.sliceThrough(request.cell, request.turn ? nextAxis(view.state.axis) : undefined);
+  }, [active, request]);
 
   const axis = AXES.find((a) => a.axis === state?.axis) ?? AXES[0];
   const hover = state?.hover;
@@ -110,6 +124,13 @@ export function GridPane({
             +
           </button>
         </span>
+        <button
+          type="button"
+          title="Slice through the cell the 3D view aims at (Tab or Enter while flying; Shift turns the slice)"
+          onClick={blurAfter(() => void engine.sliceAtAim(false))}
+        >
+          3D aim
+        </button>
         <ShowMenu kind="2d" show={show} onShow={onShow} />
         <BarSpacer />
         <span className="bar-readout">
@@ -131,6 +152,11 @@ export function GridPane({
       </div>
     </>
   );
+}
+
+/** Plan, then a cut across x, then across z, and round again. */
+function nextAxis(axis: SliceAxis): SliceAxis {
+  return axis === 1 ? 0 : axis === 0 ? 2 : 1;
 }
 
 /** A cut stands up, so a disc means nothing: it names the directions to the left and right. */
