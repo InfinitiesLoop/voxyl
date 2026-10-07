@@ -1,7 +1,8 @@
 // The sky at a time of day, after Minecraft's (ClientLevel.getSkyColor, FogRenderer,
 // DimensionSpecialEffects.getSunriseColor): plain numbers the sky shader takes as uniforms.
 // The sun rises in the project's real east (settings.north), crosses straight overhead at
-// noon and sets in the west; the moon is opposite it, and the stars turn with them.
+// noon and sets in the west; the moon is opposite it, and the stars turn with them. Unlike
+// Minecraft's, this world has rings: an arc across the real southern sky (see sky.ts).
 
 import type { Direction } from "@voxyl/core";
 
@@ -33,7 +34,13 @@ export interface SkyState {
   readonly glowSide: Vec3;
   /** How bright the stars are, 0 by day. */
   readonly stars: number;
+  /** How bright the world's rings are: bright at night, faint against the day sky. */
+  readonly rings: number;
 }
+
+/** Ring brightness at night and at noon. */
+const RINGS_NIGHT = 0.7;
+const RINGS_DAY = 0.16;
 
 /** The project's real east, in its own axes (x, z), for each choice of settings.north. */
 const REAL_EAST: Record<Direction, readonly [number, number]> = {
@@ -99,6 +106,7 @@ export function skyAt(hours: number, north: Direction): SkyState {
     glowAlpha,
     glowSide,
     stars: starLevel * starLevel * 0.5,
+    rings: RINGS_NIGHT + (RINGS_DAY - RINGS_NIGHT) * brightness,
   };
 }
 

@@ -36,6 +36,13 @@ describe("skyAt", () => {
     expect(midnight.horizon[2]).toBeGreaterThan(midnight.horizon[0]);
   });
 
+  it("shows the rings brightly at night and faintly by day", () => {
+    const night = skyAt(0, "north").rings;
+    const day = skyAt(12, "north").rings;
+    expect(day).toBeGreaterThan(0);
+    expect(night).toBeGreaterThan(day * 3);
+  });
+
   it("glows at sunrise and sunset on the sun's side, never at noon or midnight", () => {
     expect(skyAt(12, "north").glowAlpha).toBe(0);
     expect(skyAt(0, "north").glowAlpha).toBe(0);

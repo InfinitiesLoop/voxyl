@@ -261,7 +261,7 @@ Minecraft textures can't be hosted, so Phase 2 gets textures two ways:
     mesher on the shaped 5M city (`pnpm bench:mesh --parts`, 64³): 10.24 ms p50 a chunk
     before, 10.66 ms after, same 2.40M quads and 1.46M triangles. City-5m Blocks theme: 1.24M
     quads (unchanged), initial mesh 2.9 s.
-  - **Choices to review:** (1) join rules as above (fence gates don't join yet; walls are
+  - **Choices, confirmed by the user (2026-10-07, "good on all the choices made"):** (1) join rules as above (fence gates don't join yet; walls are
     never "tall"); (2) faces meeting the same face of the neighbour hide when it is opaque or
     of the same state, so two glass panes hide their touching edges but a pane against a
     different glass block shows; (3) a re-skin that changes a block's shape remeshes every
@@ -305,9 +305,25 @@ Minecraft textures can't be hosted, so Phase 2 gets textures two ways:
     view into the fog 1.95 vs 1.93 ms, open sky 0.29 vs 0.24 ms, so about 0.05 ms for a
     screen of sky. The full benchmark flight swings between two GPU modes run to run (about
     3.4 and 1.7 ms p50) on both versions, so it can't resolve a difference this small.
-  - **Choices to review:** (1) a 24-hour clock replaces the 0-100 daylight slider; (2) the sky
-    shows the chosen time even with lighting off (blocks stay fully lit under a night sky);
-    (3) the sun passes straight overhead as in Minecraft (no latitude tilt); (4) the moon has
-    no phases; (5) fog fades to the sky along each ray rather than one horizon colour.
-  - Not yet: clouds, weather, a time that runs by itself.
+  - **Choices, confirmed by the user (2026-10-07):** (1) a 24-hour clock replaces the 0-100
+    daylight slider; (2) the sky shows the chosen time even with lighting off (blocks stay
+    fully lit under a night sky); (3) the sun passes straight overhead as in Minecraft (no
+    latitude tilt); (4) the moon has no phases; (5) fog fades to the sky along each ray
+    rather than one horizon colour.
+  - **Rings (the user's idea, 2026-10-07)**, to set the sky apart from Minecraft's: the world
+    has a ring system, seen from its surface as a wide banded arc across the real southern
+    sky (about 26 to 43 degrees up at its highest, down to the east and west horizons). Bright at
+    night, faint pale arcs by day, lit over the dawn and dusk colours. The shader casts each
+    sky ray onto the rings' plane (the eye on a planet of radius 1, the rings' axis leaning
+    30 degrees from up toward real north) and reads bands by distance from the planet's centre:
+    a faint inner ring, a dense main ring, a dark division and an outer ring with a thin gap,
+    plus ringlets that fade out where they'd be finer than a pixel. The planet's shadow
+    crosses them: in the evening it slides in from the east, and at midnight it takes a dark
+    bite out of the middle of the arc while the outer rings stay lit. The rings turn with the
+    ground, not the stars, dim the stars behind them and fade into the horizon haze. At 20
+    degrees the arc stood higher, but at midnight it sat wholly in the shadow and vanished, so
+    30 it is. Cost: about 0.09 ms for a screen that is all sky and rings (0.11 vs 0.02 ms
+    with a flat background), nothing measurable on city views.
+  - **Punted (the user, 2026-10-07):** clouds, weather and a time that runs by itself are
+    future polish; editor features come first.
   - **Next:** step 8, the gate (performance with textures on, golden images).

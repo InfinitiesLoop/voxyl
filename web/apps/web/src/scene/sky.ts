@@ -63,6 +63,7 @@ interface SkyUniforms {
   readonly glowAlpha: FloatUniform;
   readonly glowSide: Vec3Uniform;
   readonly stars: FloatUniform;
+  readonly rings: FloatUniform;
   readonly fogNear: FloatUniform;
   readonly fogFar: FloatUniform;
 }
@@ -197,6 +198,66 @@ function starColor(d: V3, u: SkyUniforms): V3 {
 }
 
 /**
+ * The world's rings, in planet radii from its centre: a faint inner ring, a dense main ring,
+ * a dark division, then an outer ring split by a thin gap. Each band is [inner, outer, density].
+ */
+const RING_BANDS = [
+  [1.55, 1.75, 0.25],
+  [1.75, 2.12, 0.85],
+  [2.2, 2.41, 0.6],
+  [2.43, 2.5, 0.5],
+] as const;
+/**
+ * How far the eye stands from the rings' plane, as a latitude. At 20 degrees the rings arc
+ * across the real southern sky between about 43 and 58 degrees up, down to the east and west
+ * horizons. (The sun still passes overhead: the eye is in its tropic, at midsummer.)
+ */
+const RING_LATITUDE = (30 * Math.PI) / 180;
+/** Fine ringlets across the bands, and how much they vary the density. */
+const RINGLETS = 90;
+const RINGLET_DEPTH = 0.36;
+const RING_COLOR = [0.95, 0.88, 0.78] as const;
+/** What the planet's shadow leaves of the rings' light. */
+const RING_SHADOW = 0.1;
+
+/**
+ * The rings along unit direction `d` (sRGB, to add) and how much of what is behind them they
+ * cover. The eye stands on a planet of radius 1 whose centre is 1 below it; the rings lie in
+ * the plane through the centre whose axis leans RING_LATITUDE from up toward real north.
+ * They turn with the ground, not the stars, and the planet's shadow crosses them at night.
+ */
+function ringsAt(d: V3, u: SkyUniforms) {
+  const up = vec3(0, 1, 0);
+  const axis = up.mul(Math.sin(RING_LATITUDE)).add(u.pole.mul(Math.cos(RING_LATITUDE)));
+  const toward = dot(d, axis);
+  const hit = toward.lessThan(-1e-4);
+  const t = float(-Math.sin(RING_LATITUDE)).div(select(hit, toward, float(-1)));
+  const p = up.add(d.mul(t)).toVar();
+  const r = length(p).toVar();
+  const w = fwidth(r).mul(0.75).add(1e-4);
+  let density: THREE.Node<"float"> = float(0);
+  for (const [inner, outer, amount] of RING_BANDS) {
+    const band = smoothstep(w.negate(), w, r.sub(inner)).mul(
+      float(1).sub(smoothstep(w.negate(), w, r.sub(outer))),
+    );
+    density = density.add(band.mul(amount));
+  }
+  // Ringlets fade out where they'd be finer than a pixel, so the far rings don't shimmer.
+  const ringlet = hash(vec2(floor(r.mul(RINGLETS)), 1))
+    .sub(0.5)
+    .mul(RINGLET_DEPTH);
+  const sharp = clamp(float(1).sub(w.mul(RINGLETS * 2)), 0, 1);
+  density = clamp(density.mul(ringlet.mul(sharp).add(1)), 0, 1).mul(select(hit, 1, 0));
+  // In the planet's shadow when the line toward the sun passes through the planet.
+  const along = dot(p, u.sun);
+  const off = length(p.sub(u.sun.mul(along)));
+  const shade = select(along.lessThan(0), smoothstep(0.96, 1.04, off), float(1));
+  const light = mix(float(RING_SHADOW), float(1), shade);
+  const color = vec3(...RING_COLOR).mul(density.mul(light).mul(u.rings));
+  return { color, cover: density };
+}
+
+/**
  * The sky behind the world and the distance fog in front of it, both following a SkyState
  * (see sky-model.ts). The fog takes the sky's colour along each view ray, so faraway terrain
  * fades into whatever sky is behind it.
@@ -215,6 +276,7 @@ export class Sky {
     glowAlpha: makeFloat(0),
     glowSide: makeVec3(),
     stars: makeFloat(0),
+    rings: makeFloat(0),
     fogNear: makeFloat(175),
     fogFar: makeFloat(500),
   };
@@ -239,7 +301,13 @@ export class Sky {
       const shown = smoothstep(-0.004, 0.004, d.y);
       const base = skyBase(d, u);
       const fade = float(1).sub(clamp(float(SKY_FOG).div(max(d.y, 1e-4)), 0, 1));
-      const lights = sunColor(d, u).add(moonColor(d, u)).mul(shown).add(starColor(d, u).mul(fade));
+      const rings = ringsAt(d, u);
+      const stars = starColor(d, u).mul(float(1).sub(rings.cover.mul(0.9)));
+      // The rings fade into the haze where they meet the horizon, like the stars.
+      const lights = sunColor(d, u)
+        .add(moonColor(d, u))
+        .mul(shown)
+        .add(stars.add(rings.color).mul(fade));
       return vec4(toLinear(base.add(lights)), 1);
     })();
     this.mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 16), material);
@@ -272,6 +340,7 @@ export class Sky {
     setVec(u.glowSide, state.glowSide);
     u.glowAlpha.value = state.glowAlpha;
     u.stars.value = state.stars;
+    u.rings.value = state.rings;
   }
 
   /** Terrain is clear up to `near` and fully fogged from `far`, in cells from the eye. */
