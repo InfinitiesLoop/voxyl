@@ -8,6 +8,7 @@ export {
   LOT_PITCH,
 } from "./city.ts";
 export { mulberry32 } from "./random.ts";
+export { buildShowcase, type ShowcaseStats } from "./showcase.ts";
 export {
   CITY_THEME_KEY,
   CITY_THEMES,

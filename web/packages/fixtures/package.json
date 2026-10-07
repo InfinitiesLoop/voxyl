@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
+    "@voxyl/blocks": "workspace:*",
     "@voxyl/core": "workspace:*",
     "@voxyl/shapes": "workspace:*"
   },

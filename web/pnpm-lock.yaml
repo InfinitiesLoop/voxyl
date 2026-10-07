@@ -259,6 +259,9 @@ importers:
 
   packages/fixtures:
     dependencies:
+      '@voxyl/blocks':
+        specifier: workspace:*
+        version: link:../blocks
       '@voxyl/core':
         specifier: workspace:*
         version: link:../core

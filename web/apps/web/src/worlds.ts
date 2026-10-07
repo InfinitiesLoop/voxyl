@@ -1,8 +1,16 @@
+import { defaultLibrary } from "@voxyl/blocks";
 import { chunkKeyToCoords, type Direction, Project } from "@voxyl/core";
-import { CITY_THEMES, type CityTheme, generateCity, prepareCityProject } from "@voxyl/fixtures";
+import {
+  buildShowcase,
+  CITY_THEMES,
+  type CityTheme,
+  generateCity,
+  prepareCityProject,
+} from "@voxyl/fixtures";
 
 export type WorldKind =
   | "pillar"
+  | "blocks"
   | "city-1m"
   | "city-5m"
   | "city-20m"
@@ -12,6 +20,7 @@ export type WorldKind =
 
 export const WORLD_KINDS: readonly { kind: WorldKind; label: string }[] = [
   { kind: "pillar", label: "Demo pillar" },
+  { kind: "blocks", label: "Block showcase" },
   { kind: "city-1m", label: "City, 1M cells" },
   { kind: "city-5m", label: "City, 5M cells" },
   { kind: "city-20m", label: "City, 20M cells" },
@@ -66,7 +75,7 @@ export interface Framing {
   readonly top: number;
 }
 
-const CITY_TARGETS: Record<Exclude<WorldKind, "pillar">, number> = {
+const CITY_TARGETS: Record<Exclude<WorldKind, "pillar" | "blocks">, number> = {
   "city-1m": 1_000_000,
   "city-5m": 5_000_000,
   "city-20m": 20_000_000,
@@ -90,9 +99,16 @@ export function buildSample(
   theme: CityTheme,
 ): { project: Project; framing: Framing } {
   const project = new Project({ chunkBits: Math.log2(chunkSize) });
-  prepareCityProject(project, theme);
   const label = WORLD_KINDS.find((w) => w.kind === kind)?.label ?? kind;
   project.run({ id: "name", kind: "settings", args: { ...project.settings, name: label } });
+  if (kind === "blocks") {
+    // Looks of its own, one per block: no city theme.
+    const { min, max } = buildShowcase(project, defaultLibrary());
+    const center = [(min[0] + max[0] + 1) / 2, 0, (min[2] + max[2] + 1) / 2] as const;
+    const extent = Math.min(32, Math.max(max[0] - min[0], max[2] - min[2]) + 1);
+    return { project, framing: { center, extent, top: max[1] } };
+  }
+  prepareCityProject(project, theme);
   if (kind === "pillar") {
     buildPillar(project);
     return { project, framing: { center: [0, 8, 0], extent: 16, top: 17 } };

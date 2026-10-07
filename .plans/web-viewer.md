@@ -167,13 +167,21 @@ Minecraft textures can't be hosted, so Phase 2 gets textures two ways:
     concrete roads, stone brick walls, glass, quartz trim, spruce roofs, glowstone lights.
   - Seen: `world=city-1m&theme=blocks` in headless Edge on the dev server renders textured,
     no console problems, initial mesh 283 ms, GPU p50 1.5 ms (B580).
-  - **Choices to review:** (1) with a block that resolves, the look's `tint` is only the
-    fallback colour, not multiplied in; (2) slabs, stairs, fences and panes draw as coloured
-    whole cubes until step 6; (3) blended textures are treated as cut-out until a translucent
-    pass exists; (4) only 16×16 textures go in the array (others draw in their colour).
-  - **Next:** close-up checks (glass from inside and out, logs on their side, stairs/slab
-    colours, texture orientation on all six sides, distant mips, microblocks and slopes with
-    textures, lit at night with a lamp), a benchmark with textures on (`?theme=blocks
-    --bench` on city-5m) against the Concrete theme, then 5b (the vanilla jar importer).
-    The close-up script is `web/shots/blocks-close.ts` (gitignored): it raycasts from the
-    home view and shoots from 3, 10 and 40 cells.
+  - **Choices, confirmed by the user (2026-10-06):** (1) with a block that resolves, the look's
+    `tint` is only the fallback colour, not multiplied in; (2) slabs, stairs, fences and panes
+    draw as coloured whole cubes until step 6; (3) blended textures are treated as cut-out
+    until a translucent pass exists; (4) only 16×16 textures go in the array (others draw in
+    their colour). Vanilla block textures are all 16×16 (animated ones are 16-wide strips,
+    first frame kept); other sizes come from resource packs and some mods, a Phase 5 matter.
+  - **Block showcase** sample (`?world=blocks`, `packages/fixtures/src/showcase.ts`): one
+    semantic per block of a library, on a grass lawn, plus logs lying both ways, stairs in
+    each facing and upside down, glass in front of a wall, and a lamp in a dark room.
+    Checked in close-ups: textures right way up on every side (grass sides green at the top,
+    log rings on the ends whichever way they lie), no seams between cells, glass shows what
+    is behind it, the glowstone lights the closed room at night, distance looks clean.
+  - Benchmark, city-5m with lighting on, headless Edge on the B580 (Concrete -> Blocks):
+    GPU p50 2.99 -> 3.28 ms, p95 5.05 -> 5.70 ms; CPU frame p50 3.4 -> 3.3 ms. Quads 682k ->
+    1.24M, full relight 0.77 -> 1.84 s, light CPU 22 -> 53 MB, initial mesh 1.7 -> 3.2 s,
+    meshing 5.3 -> 9.1 ms a chunk. Not a texture cost: the Blocks theme's glass is clear, so
+    every room behind a window is now meshed and lit (Concrete's tinted glass hides them).
+  - **Next:** 5b, the vanilla jar importer (`packages/mc-import`).
