@@ -25,7 +25,14 @@ import {
   ShowMenu,
   ViewBar,
 } from "./ViewBar.tsx";
-import { ORBITS, PROJECTIONS, type ViewSettings } from "./view-options.ts";
+import {
+  BACKGROUNDS,
+  ORBITS,
+  PROJECTIONS,
+  RENDER_MODES,
+  SHADINGS,
+  type ViewSettings,
+} from "./view-options.ts";
 
 /** Times of day a click away, as in Minecraft's /time set. */
 const TIMES: readonly { label: string; hours: number }[] = [
@@ -144,6 +151,10 @@ export function Panes({
                   <TimeMenu
                     pane={pane}
                     onTime={(time) => onLayout(withPane(layout, index, { time }))}
+                  />
+                  <RenderMenu
+                    view={pane.view}
+                    onView={(patch) => onLayout(withView(layout, index, patch))}
                   />
                   <CameraMenu
                     engine={engine}
@@ -285,6 +296,39 @@ function CameraMenu({
           onChange={(e) => engine.setSpeed(Math.exp(Number(e.target.value)))}
         />
       </label>
+    </BarMenu>
+  );
+}
+
+/** How the pane draws: render mode, shading and background. */
+function RenderMenu({
+  view,
+  onView,
+}: {
+  view: ViewSettings;
+  onView: (patch: Partial<ViewSettings>) => void;
+}) {
+  const mode = RENDER_MODES.find((m) => m.value === view.mode);
+  return (
+    <BarMenu label={mode?.label ?? "Render"} title="How this view draws the build">
+      <ChoiceRow
+        label="Render"
+        choices={RENDER_MODES}
+        value={view.mode}
+        onChange={(m) => onView({ mode: m })}
+      />
+      <ChoiceRow
+        label="Shading"
+        choices={SHADINGS}
+        value={view.shading}
+        onChange={(shading) => onView({ shading })}
+      />
+      <ChoiceRow
+        label="Background"
+        choices={BACKGROUNDS}
+        value={view.background}
+        onChange={(background) => onView({ background })}
+      />
     </BarMenu>
   );
 }

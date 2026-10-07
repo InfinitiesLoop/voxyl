@@ -1,21 +1,44 @@
 import { chunkKeyToCoords } from "@voxyl/core";
 import { GPU_BRICK_BITS } from "@voxyl/light";
-import { QUAD_BYTES, QUAD_WORDS, TRI_BYTES, TRI_WORDS } from "@voxyl/mesher";
+import { EDGE_WORDS, QUAD_BYTES, QUAD_WORDS, TRI_BYTES, TRI_WORDS } from "@voxyl/mesher";
 import type { LightingMode } from "@voxyl/session";
+import { attribute, texture, varying, vec2 } from "three/tsl";
 import * as THREE from "three/webgpu";
+import type { RenderMode, Shading } from "../editor/view-options.ts";
 import type { LooksUpdate } from "../world/protocol.ts";
 import type { WorldOutput } from "../world/WorldClient.ts";
 import { BlockTextures } from "./block-textures.ts";
 import { LightVolume } from "./light-volume.ts";
 import {
+  type ColorSources,
   createFlatMaterial,
   createLightUniforms,
+  createViewUniforms,
   createVolumeLitMaterial,
   EMISSIVE_ALPHA,
   type LightUniforms,
   PALETTE_SIZE,
   type SurfaceKind,
+  VIEW_COLOR,
+  VIEW_SHADE,
+  type ViewUniforms,
 } from "./quad-material.ts";
+
+type MaterialSet = Record<SurfaceKind, THREE.MeshBasicNodeMaterial>;
+
+/** The render modes drawn with feature edges, which the world worker must then send. */
+export function usesEdges(mode: RenderMode): boolean {
+  return mode === "outline" || mode === "xray" || mode === "wire";
+}
+
+const COLOR_OF: Record<RenderMode, number> = {
+  textured: VIEW_COLOR.textured,
+  intent: VIEW_COLOR.intent,
+  clay: VIEW_COLOR.clay,
+  outline: VIEW_COLOR.fill,
+  xray: VIEW_COLOR.fill,
+  wire: VIEW_COLOR.fill,
+};
 
 /** Main-thread time per frame spent applying meshes and light from the world worker. */
 const APPLY_BUDGET_MS = 4;
@@ -51,9 +74,24 @@ export class ChunkRenderer {
   readonly #chunkBits: number;
   readonly #paletteData: Uint8Array;
   readonly #paletteTexture: THREE.DataTexture;
+  readonly #intentData: Uint8Array;
+  readonly #intentTexture: THREE.DataTexture;
   readonly #uniforms: LightUniforms = createLightUniforms();
+  readonly #view: ViewUniforms = createViewUniforms();
   readonly #blocks = new BlockTextures();
-  readonly #flatMaterials: Record<SurfaceKind, THREE.MeshBasicNodeMaterial>;
+  readonly #sources: ColorSources;
+  readonly #flatMaterials: MaterialSet;
+  readonly #xrayMaterials: MaterialSet;
+  /** The set the meshes have now; a pane that wants another swaps them. */
+  #current: MaterialSet | null = null;
+  /** The feature-edge lines, one per chunk, drawn by the line-drawing modes. */
+  readonly #edgeGroup = new THREE.Group();
+  readonly #edges = new Map<number, THREE.LineSegments>();
+  /** Edges dark and hidden by faces (Outline), or in intent colours through everything. */
+  readonly #edgeDark: THREE.LineBasicNodeMaterial;
+  readonly #edgeColor: THREE.LineBasicNodeMaterial;
+  readonly #faceGroup = new THREE.Group();
+  #intent: Uint8Array = new Uint8Array(0);
   /** StateLooks.colors from the world worker. */
   #looks: Uint8Array = new Uint8Array(0);
   #paletteDirty = true;
@@ -79,10 +117,43 @@ export class ChunkRenderer {
     this.#paletteTexture.magFilter = THREE.NearestFilter;
     this.#paletteTexture.minFilter = THREE.NearestFilter;
     this.#paletteTexture.generateMipmaps = false;
-    this.#flatMaterials = {
-      quad: createFlatMaterial(this.#paletteTexture, this.#blocks, "quad"),
-      tri: createFlatMaterial(this.#paletteTexture, this.#blocks, "tri"),
+    this.#intentData = new Uint8Array(PALETTE_SIZE * PALETTE_SIZE * 4);
+    this.#intentTexture = new THREE.DataTexture(this.#intentData, PALETTE_SIZE, PALETTE_SIZE);
+    this.#intentTexture.colorSpace = THREE.SRGBColorSpace;
+    this.#intentTexture.magFilter = THREE.NearestFilter;
+    this.#intentTexture.minFilter = THREE.NearestFilter;
+    this.#intentTexture.generateMipmaps = false;
+    this.#sources = {
+      palette: this.#paletteTexture,
+      intent: this.#intentTexture,
+      blocks: this.#blocks,
+      view: this.#view,
     };
+    this.#flatMaterials = {
+      quad: createFlatMaterial(this.#sources, "quad"),
+      tri: createFlatMaterial(this.#sources, "tri"),
+    };
+    this.#xrayMaterials = {
+      quad: createFlatMaterial(this.#sources, "quad", true),
+      tri: createFlatMaterial(this.#sources, "tri", true),
+    };
+    this.#edgeDark = new THREE.LineBasicNodeMaterial({ color: 0x15171b, fog: false });
+    this.#edgeColor = new THREE.LineBasicNodeMaterial({
+      transparent: true,
+      opacity: 0.85,
+      depthTest: false,
+      depthWrite: false,
+      fog: false,
+    });
+    // An edge's colour is its state's intent colour, looked up per vertex.
+    const id = attribute("edgeId", "float");
+    const uv = varying<"vec2">(
+      vec2(id.mod(PALETTE_SIZE), id.div(PALETTE_SIZE).floor()).add(0.5).div(PALETTE_SIZE),
+    );
+    this.#edgeColor.colorNode = texture(this.#intentTexture, uv).rgb;
+    this.#edgeGroup.visible = false;
+    this.#edgeGroup.renderOrder = 2;
+    this.group.add(this.#faceGroup, this.#edgeGroup);
     this.group.name = "chunks";
   }
 
@@ -121,8 +192,7 @@ export class ChunkRenderer {
       );
       const lit = (kind: SurfaceKind) =>
         createVolumeLitMaterial(
-          this.#paletteTexture,
-          this.#blocks,
+          this.#sources,
           this.#uniforms,
           this.#volume as LightVolume,
           this.#chunkBits,
@@ -157,6 +227,7 @@ export class ChunkRenderer {
    */
   setLooks(looks: LooksUpdate): void {
     this.#looks = looks.colors;
+    this.#intent = looks.intent;
     this.#paletteDirty = true;
     this.#blocks.update(looks);
   }
@@ -189,8 +260,11 @@ export class ChunkRenderer {
       if (!update) continue;
       if (update.type === "idle") this.#appliedSeq = update.seq;
       else if (update.type === "light") this.#applyLight(update.update);
-      else if (update.quadCount === 0 && update.triCount === 0) this.#removeMesh(update.key);
-      else this.#setMesh(update.key, update.quads, update.tris);
+      else {
+        if (update.quadCount === 0 && update.triCount === 0) this.#removeMesh(update.key);
+        else this.#setMesh(update.key, update.quads, update.tris);
+        this.#setEdges(update.key, update.edges);
+      }
     }
     this.#updates.splice(0, this.#updates.length, ...ordered.slice(i));
   }
@@ -209,11 +283,40 @@ export class ChunkRenderer {
     };
   }
 
+  /**
+   * How the next pane draws: its render mode and shading. Call before each pane renders;
+   * it swaps the meshes' materials only when the set changes, and sets shader values.
+   */
+  setView(mode: RenderMode, shading: Shading): void {
+    const lit = this.#lightShown ? this.#volumeMaterials : null;
+    const set =
+      mode === "xray" ? this.#xrayMaterials : shading === "app" && lit ? lit : this.#flatMaterials;
+    this.#view.color.value = COLOR_OF[mode];
+    this.#view.shade.value =
+      shading === "studio"
+        ? VIEW_SHADE.studio
+        : shading === "flat"
+          ? VIEW_SHADE.none
+          : VIEW_SHADE.facing;
+    this.#swapMaterials(set);
+    this.#faceGroup.visible = mode !== "wire";
+    this.#edgeGroup.visible = usesEdges(mode);
+    const edge = mode === "outline" ? this.#edgeDark : this.#edgeColor;
+    for (const line of this.#edges.values()) line.material = edge;
+  }
+
   dispose(): void {
     for (const key of [...this.#meshes.keys()]) this.#removeMesh(key);
+    for (const line of this.#edges.values()) line.geometry.dispose();
+    this.#edges.clear();
     this.group.clear();
     this.#flatMaterials.quad.dispose();
     this.#flatMaterials.tri.dispose();
+    this.#xrayMaterials.quad.dispose();
+    this.#xrayMaterials.tri.dispose();
+    this.#edgeDark.dispose();
+    this.#edgeColor.dispose();
+    this.#intentTexture.dispose();
     this.#disposeVolumeMaterials();
     this.#volume?.dispose();
     this.#paletteTexture.dispose();
@@ -221,15 +324,62 @@ export class ChunkRenderer {
   }
 
   #material(kind: SurfaceKind): THREE.Material {
+    if (this.#current) return this.#current[kind];
     const lit = this.#lightShown ? this.#volumeMaterials : null;
     return (lit ?? this.#flatMaterials)[kind];
   }
 
+  /** Lighting changed: the next setView picks the set again; until then, the default. */
   #applyMaterial(): void {
+    this.#current = null;
+    this.#swapMaterials((this.#lightShown ? this.#volumeMaterials : null) ?? this.#flatMaterials);
+  }
+
+  #swapMaterials(set: MaterialSet): void {
+    if (this.#current === set) return;
+    this.#current = set;
     for (const meshes of this.#meshes.values()) {
-      if (meshes.quads) meshes.quads.material = this.#material("quad");
-      if (meshes.tris) meshes.tris.material = this.#material("tri");
+      if (meshes.quads) meshes.quads.material = set.quad;
+      if (meshes.tris) meshes.tris.material = set.tri;
     }
+  }
+
+  /** A chunk's feature edges as lines (empty removes them). */
+  #setEdges(key: number, edges: Uint16Array): void {
+    const old = this.#edges.get(key);
+    if (old) {
+      old.geometry.dispose();
+      this.#edgeGroup.remove(old);
+      this.#edges.delete(key);
+    }
+    const count = edges.length / EDGE_WORDS;
+    if (count === 0) return;
+    const positions = new Float32Array(count * 6);
+    const ids = new Float32Array(count * 2);
+    for (let e = 0; e < count; e++) {
+      const w = e * EDGE_WORDS;
+      const x = edges[w] ?? 0;
+      const y = edges[w + 1] ?? 0;
+      const z = edges[w + 2] ?? 0;
+      const axis = edges[w + 3] ?? 0;
+      const length = edges[w + 4] ?? 0;
+      positions.set([x, y, z, x, y, z], e * 6);
+      positions[e * 6 + 3 + axis] = (positions[e * 6 + 3 + axis] ?? 0) + length;
+      ids[e * 2] = edges[w + 5] ?? 0;
+      ids[e * 2 + 1] = edges[w + 5] ?? 0;
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute("edgeId", new THREE.BufferAttribute(ids, 1));
+    setChunkBounds(geometry, this.#size);
+    const line = new THREE.LineSegments(geometry, this.#edgeColor);
+    const [cx, cy, cz] = chunkKeyToCoords(key);
+    line.position.set(cx * this.#size, cy * this.#size, cz * this.#size);
+    line.matrixAutoUpdate = false;
+    line.updateMatrix();
+    line.renderOrder = 2;
+    this.#edgeGroup.add(line);
+    this.#edges.set(key, line);
   }
 
   #disposeVolumeMaterials(): void {
@@ -258,6 +408,16 @@ export class ChunkRenderer {
       data[i + 3] = looks[i + 3] ? EMISSIVE_ALPHA : 0xff;
     }
     this.#paletteTexture.needsUpdate = true;
+    const intent = this.#intent;
+    const intentData = this.#intentData;
+    const states = Math.min(intent.length / 3, intentData.length / 4);
+    for (let id = 1; id < states; id++) {
+      intentData[id * 4] = intent[id * 3] ?? 0;
+      intentData[id * 4 + 1] = intent[id * 3 + 1] ?? 0;
+      intentData[id * 4 + 2] = intent[id * 3 + 2] ?? 0;
+      intentData[id * 4 + 3] = 0xff;
+    }
+    this.#intentTexture.needsUpdate = true;
     this.#paletteDirty = false;
   }
 
@@ -289,7 +449,7 @@ export class ChunkRenderer {
   ): THREE.Mesh | null {
     mesh?.geometry.dispose();
     if (!geometry) {
-      if (mesh) this.group.remove(mesh);
+      if (mesh) this.#faceGroup.remove(mesh);
       return null;
     }
     if (mesh) {
@@ -302,7 +462,7 @@ export class ChunkRenderer {
     created.position.set(cx * size, cy * size, cz * size);
     created.matrixAutoUpdate = false;
     created.updateMatrix();
-    this.group.add(created);
+    this.#faceGroup.add(created);
     return created;
   }
 

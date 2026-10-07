@@ -72,10 +72,11 @@ export class GroundGrid {
     material.depthWrite = false;
     material.side = THREE.DoubleSide;
     material.fog = false;
-    // Lose a coplanar fight with a block's bottom face.
+    // Lose a coplanar fight with a block's bottom face (which itself sits back by 1, 1 so
+    // edge lines win on it).
     material.polygonOffset = true;
-    material.polygonOffsetFactor = 1;
-    material.polygonOffsetUnits = 1;
+    material.polygonOffsetFactor = 2;
+    material.polygonOffsetUnits = 4;
     material.colorNode = Fn(() => {
       const xz = positionWorld.xz;
       const dist = length(xz.sub(cameraPosition.xz));

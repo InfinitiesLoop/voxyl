@@ -119,6 +119,8 @@ let saved: string | null = null;
 let autosave: ReturnType<typeof setTimeout> | null = null;
 let worldId = -1;
 let mode: LightingMode = "off";
+/** Whether meshes carry feature edges (a pane draws an outline, x-ray or wire view). */
+let edgesOn = false;
 let meshPorts: MeshPort[] = [];
 let lastSeq = 0;
 let idlePosted = -1;
@@ -227,6 +229,7 @@ async function open(command: Extract<Command, { type: "load" }>): Promise<WorldI
   shownOutline = null;
   project.setBlockProfiles(blockProfile);
   session = new WorldSession(next.world);
+  session.setEdges(edgesOn);
   worldId = command.world;
   looksPosted = { states: -1, revision: -1 };
   palettesPosted = -1;
@@ -320,6 +323,11 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       await libraryStore.delete(command.id);
       libraries.delete(command.id);
       librariesChanged();
+      return null;
+    case "edges":
+      edgesOn = command.on;
+      session?.setEdges(edgesOn);
+      pump();
       return null;
     case "lighting":
       mode = command.mode;
@@ -556,7 +564,16 @@ function pump(): void {
   }
   for (const key of s.takeRemoved()) {
     const none = new Uint16Array(0);
-    post({ type: "mesh", world: worldId, key, quads: none, quadCount: 0, tris: none, triCount: 0 });
+    post({
+      type: "mesh",
+      world: worldId,
+      key,
+      quads: none,
+      quadCount: 0,
+      tris: none,
+      triCount: 0,
+      edges: none,
+    });
   }
   const start = performance.now();
   for (let u = s.takeLightUpdate(LIGHT_BATCH); u; u = s.takeLightUpdate(LIGHT_BATCH)) {
@@ -598,11 +615,12 @@ function postLooks(s: WorldSession): void {
     post({ type: "palettes", world: worldId, palettes: paletteInfo(project as Project, blocks) });
   }
   if (states.size === looksPosted.states && registry.revision === looksPosted.revision) return;
-  const { colors, faces, modelSlots, clear, models } = stateLooks(states, registry, blocks);
+  const { colors, intent, faces, modelSlots, clear, models } = stateLooks(states, registry, blocks);
   const materials = blocks.data;
   const textures = blocks.takeTextures();
-  post({ type: "looks", world: worldId, colors, faces, modelSlots, materials, textures }, [
+  post({ type: "looks", world: worldId, colors, intent, faces, modelSlots, materials, textures }, [
     colors.buffer,
+    intent.buffer,
     faces.buffer,
     modelSlots.buffer,
     materials.buffer,
@@ -641,14 +659,15 @@ function onMeshReply(port: MeshPort, reply: MeshReply): void {
   port.load--;
   const s = session;
   if (s && reply.world === worldId) {
-    const { key, jobId, quads, quadCount, tris, triCount, lightBricks, ms } = reply.result;
+    const { key, jobId, quads, quadCount, tris, triCount, lightBricks, edges, ms } = reply.result;
     meshTimes.push(ms);
     if (meshTimes.length > 256) meshTimes.shift();
     // A chunk edited again while this mesh ran: the picture is of the older world.
     if (s.finishJob(key, jobId, lightBricks)) {
-      post({ type: "mesh", world: worldId, key, quads, quadCount, tris, triCount }, [
+      post({ type: "mesh", world: worldId, key, quads, quadCount, tris, triCount, edges }, [
         quads.buffer,
         tris.buffer,
+        edges.buffer,
       ]);
     }
   }

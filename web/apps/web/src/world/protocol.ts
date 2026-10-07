@@ -134,6 +134,8 @@ export type Command =
       width: number;
       height: number;
     }
+  /** Whether meshes come with feature edges, for the line-drawing render modes. */
+  | { type: "edges"; on: boolean }
   /** The project's bounds as cell corners, or null when it is empty. */
   | { type: "bounds" }
   /** What a cell holds, in words, or null if it is empty. */
@@ -176,6 +178,7 @@ export interface Replies {
   fillBox: number;
   aim: AimView | null;
   toolEdit: boolean;
+  edges: null;
   bounds: { min: Vec3; max: Vec3 } | null;
   rotate: boolean;
   place: boolean;
@@ -245,6 +248,8 @@ export type FromWorld =
       quadCount: number;
       tris: Uint16Array;
       triCount: number;
+      /** Feature edges (EDGE_WORDS each), or none when the session isn't finding them. */
+      edges: Uint16Array;
     }
   /** Writes for the light volume (see LightLayout), applied whole. */
   | { type: "light"; world: number; update: LightLayoutUpdate }
@@ -309,6 +314,8 @@ export const EMPTY_SELECTION: SelectionView = {
 export interface LooksUpdate {
   /** StateLooks.colors. */
   readonly colors: Uint8Array;
+  /** StateLooks.intent: each state's semantic's own colour. */
+  readonly intent: Uint8Array;
   /** StateLooks.faces: each state's face materials, and where its model's slots start. */
   readonly faces: Uint32Array;
   /** StateLooks.modelSlots: block models' face materials. */
@@ -348,6 +355,8 @@ export interface MeshResult {
   readonly triCount: number;
   /** The light bricks the faces read (ChunkMesh.lightBricks). */
   readonly lightBricks: Uint16Array;
+  /** Feature edges (chunkEdges), empty unless the job asked for them. */
+  readonly edges: Uint16Array;
   /** Time spent meshing. */
   readonly ms: number;
 }

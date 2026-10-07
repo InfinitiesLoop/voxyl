@@ -66,7 +66,12 @@ const FACE_NORMAL = FACES.map((f) => unit(f.axis, f.sign));
 // 0.8, bottom 0.5. A sloped face blends them by its normal's squared components.
 const FLAT_SHADE = { positive: [0.8, 1.0, 0.9], negative: [0.7, 0.5, 0.62] } as const;
 const LIT_SHADE = { positive: [0.6, 1.0, 0.8], negative: [0.6, 0.5, 0.8] } as const;
-type Shades = typeof FLAT_SHADE | typeof LIT_SHADE;
+/** The Studio shading: bright and even, so undersides read as well as tops. */
+const STUDIO_SHADE = { positive: [0.93, 1.0, 0.97], negative: [0.9, 0.84, 0.88] } as const;
+type Shades = typeof FLAT_SHADE | typeof LIT_SHADE | typeof STUDIO_SHADE;
+
+/** The Clay mode's one material (linear). */
+const CLAY = [0.6, 0.57, 0.52] as const;
 
 const makeFloat = (value: number) => uniform(value);
 type FloatUniform = ReturnType<typeof makeFloat>;
@@ -81,6 +86,32 @@ export interface LightUniforms {
 
 export function createLightUniforms(): LightUniforms {
   return { daylight: makeFloat(1), brightness: makeFloat(0.5) };
+}
+
+/**
+ * How the pane being drawn wants surfaces coloured and shaded, set before each pane's draw
+ * (the materials are shared by every pane). Lens settings only: cells and looks don't change.
+ */
+export interface ViewUniforms {
+  /** VIEW_COLOR: textured, intent, clay, or the look's flat colour. */
+  readonly color: FloatUniform;
+  /** VIEW_SHADE: by facing as usual, studio, or none. Unlit materials only. */
+  readonly shade: FloatUniform;
+}
+
+export const VIEW_COLOR = { textured: 0, intent: 1, clay: 2, fill: 3 } as const;
+export const VIEW_SHADE = { facing: 0, studio: 1, none: 2 } as const;
+
+export function createViewUniforms(): ViewUniforms {
+  return { color: makeFloat(VIEW_COLOR.textured), shade: makeFloat(VIEW_SHADE.facing) };
+}
+
+/** What colours a surface: the looks, each semantic's own intent colour, and the view. */
+export interface ColorSources {
+  readonly palette: THREE.Texture;
+  readonly intent: THREE.Texture;
+  readonly blocks: BlockTextures;
+  readonly view: ViewUniforms;
 }
 
 /** What the mesher draws: axis-aligned quads, or triangles for sloped shaped parts. */
@@ -147,12 +178,10 @@ function paletteColor(palette: THREE.Texture, id: THREE.Node<"float">) {
  * where its slots start, the surface's slot picks one, and its uv map turns the position in
  * the cell into texture coordinates per fragment, so merged faces repeat it once a cell.
  */
-function surfaceColor(
-  palette: THREE.Texture,
-  blocks: BlockTextures,
-  s: ReturnType<typeof surface>,
-): THREE.Node<"vec4"> {
+function surfaceColor(sources: ColorSources, s: ReturnType<typeof surface>): THREE.Node<"vec4"> {
+  const { palette, blocks, view } = sources;
   const color = paletteColor(palette, s.id);
+  const intent = paletteColor(sources.intent, s.id);
   // A face's own slot (0-5) is one lookup in the face table; a block model's slot finds its
   // state's start there first, then reads the model slot list.
   const faces = texture(blocks.faces);
@@ -192,11 +221,21 @@ function surfaceColor(
   const corner = vec2(tile.mod(ATLAS_COLUMNS), floor(tile.div(ATLAS_COLUMNS)));
   const atlasUv = corner.add(uv).div(vec2(ATLAS_COLUMNS, blocks.atlasRows));
   const texel = blocks.atlas.sample(atlasUv).level(lod);
-  const textured = material.greaterThan(0.5);
+  const textured = material.greaterThan(0.5).and(view.color.lessThan(0.5));
   Discard(textured.and(texel.a.lessThan(0.5)));
   // Tints are sRGB, like the colours they come from; the texel is already linear.
   const tint = pow(extra.yzw, vec3(2.2, 2.2, 2.2));
-  return vec4(select(textured, texel.rgb.mul(tint), color.rgb), color.a);
+  const looked = select(textured, texel.rgb.mul(tint), color.rgb);
+  const rgb = select(
+    view.color.lessThan(0.5),
+    looked,
+    select(
+      view.color.lessThan(1.5),
+      intent.rgb,
+      select(view.color.lessThan(2.5), vec3(...CLAY), color.rgb),
+    ),
+  );
+  return vec4(rgb, color.a);
 }
 
 /** Brightness by facing: the shades of each axis, weighted by the normal's squares. */
@@ -264,18 +303,44 @@ function minecraftFactor(light: THREE.Node<"vec3">, shade: THREE.Node<"float">) 
   return pow(light.mul(shade), vec3(2.2, 2.2, 2.2));
 }
 
-/** Lighting off: palette colour and a fixed shade by facing. */
+/**
+ * Lighting off (or a pane that asks for studio or no shading): the colour and a fixed shade
+ * by facing. `faint` is the x-ray view's: see-through, and writing no depth.
+ */
 export function createFlatMaterial(
-  palette: THREE.Texture,
-  blocks: BlockTextures,
+  sources: ColorSources,
   kind: SurfaceKind,
+  faint = false,
 ): THREE.MeshBasicNodeMaterial {
   const s = surface(kind);
   const material = new THREE.MeshBasicNodeMaterial();
   material.positionNode = s.position;
-  const shade = varying<"float">(shadeOf(s.normal, FLAT_SHADE));
-  material.colorNode = Fn(() => surfaceColor(palette, blocks, s).rgb.mul(shade))();
+  const { view } = sources;
+  const shade = varying<"float">(
+    select(
+      view.shade.lessThan(0.5),
+      shadeOf(s.normal, FLAT_SHADE),
+      select(view.shade.lessThan(1.5), shadeOf(s.normal, STUDIO_SHADE), float(1)),
+    ),
+  );
+  material.colorNode = Fn(() => surfaceColor(sources, s).rgb.mul(shade))();
+  backOff(material);
+  if (faint) {
+    material.transparent = true;
+    material.opacity = XRAY_OPACITY;
+    material.depthWrite = false;
+  }
   return material;
+}
+
+/** How much of a face the x-ray view shows. */
+const XRAY_OPACITY = 0.14;
+
+/** Faces sit a hair behind their edges, so drawn lines win the depth test on them. */
+function backOff(material: THREE.Material): void {
+  material.polygonOffset = true;
+  material.polygonOffsetFactor = 1;
+  material.polygonOffsetUnits = 1;
 }
 
 /** Light the volume reports where it holds none: open sky, not light-blocking. */
@@ -303,8 +368,7 @@ function loadLinear(tex: LinearTexture, index: THREE.Node<"uint">) {
  * blended bilinearly across the cell.
  */
 export function createVolumeLitMaterial(
-  palette: THREE.Texture,
-  blocks: BlockTextures,
+  sources: ColorSources,
   uniforms: LightUniforms,
   volume: LightVolume,
   chunkBits: number,
@@ -315,6 +379,7 @@ export function createVolumeLitMaterial(
   const { position, normal } = s;
   const material = new THREE.MeshBasicNodeMaterial();
   material.positionNode = position;
+  backOff(material);
   const shade = varying<"float">(shadeOf(normal, LIT_SHADE));
   const world = varying<"vec3">(modelWorldMatrix.mul(vec4(position, 1)).xyz);
   const surfaceNormal = varying<"vec3">(normal);
@@ -365,7 +430,7 @@ export function createVolumeLitMaterial(
   // brick slots would be assigned only in the branch the front cell takes, and neighbours on
   // other paths would read them unset (as missing light) along every brick boundary.
   material.colorNode = Fn(() => {
-    const color = surfaceColor(palette, blocks, s);
+    const color = surfaceColor(sources, s);
     // The cell just in front of the surface: beside a cube's face, or a shaped part's own
     // cell (which lets light through) when the face lies inside it.
     const front = floor(world.add(surfaceNormal.mul(1 / 64)));

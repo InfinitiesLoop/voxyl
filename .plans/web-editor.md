@@ -299,8 +299,24 @@ there is a point worth orbiting.
      **Speed** is a slider (2 to 400 cells a second), so = and - have a UI. Each pane keeps
      its view settings (render mode, shading, projection, background, orbit) in the layout,
      from one registry in `editor/view-options.ts`.
-  3. render modes, 4. slicing from 3D, 5. Home and shared palettes, 6. inventory and block
-     chooser, 7. 2D editing: in progress.
+  3. **Render menu** in each 3D bar, per pane, from Godot's ViewOptions. **Render**:
+     Textured; **Intent** (each semantic in its own colour, golden-angle hues from its id,
+     never anything a palette says: StateLooks.intent, a second lookup texture); **Clay**
+     (one neutral material); **Outline** (the looks' flat colours with dark feature edges);
+     **X-ray** (faces at 14% and every edge in intent colours, through everything); **Wire**
+     (edges only). **Shading**: App (the light volume when lighting is on), Studio (bright
+     and even), Flat (none). **Background**: Sky, or Plain (no sky, grid or fog). The
+     materials are shared, so each pane sets two shader values before it draws and swaps
+     the meshes' material set only when it differs (lit, unlit, or x-ray).
+     **Feature edges** come from the mesh workers (`packages/mesher/src/edges.ts`, tested):
+     an edge is drawn where one or three of its four cells are full (a corner), two diagonal
+     ones (a crease), or two side by side of different states (a seam); runs along an axis
+     merge. They are opt-in: the world worker remeshes with edges when a pane first picks a
+     line-drawing mode and stops sending them when none does. Shaped parts and block models
+     outline as their cell. Faces now sit back by polygon offset (1, 1) so lines win; the
+     ground grid moved to (2, 4).
+  4. slicing from 3D, 5. Home and shared palettes, 6. inventory and block chooser, 7. 2D
+     editing: in progress.
 
 ## Cross-project resources (what is planned, and what is not)
 

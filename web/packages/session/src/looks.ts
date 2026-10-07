@@ -129,6 +129,11 @@ export interface StateLooks {
    */
   readonly colors: Uint8Array;
   /**
+   * Three bytes per state id: its semantic's intent colour (intentColor), the same in every
+   * palette, for the Intent render mode. A state of parts takes its first part's.
+   */
+  readonly intent: Uint8Array;
+  /**
    * FACE_SLOTS per state id: the material (see BlockMaterials) of each face, 0 where it
    * draws in its colour, then where the state's block model slots start in modelSlots. A
    * cube draws its faces with the first six; a block model's faces use slot SIDE_SLOTS + k,
@@ -155,6 +160,21 @@ function blockOf(look: Look, rotation: Rotation, blocks?: BlockMaterials): Compi
   return compileBlock(blocks.libraries, look.block, rotation);
 }
 
+/**
+ * A semantic's colour in the Intent render mode: its own hue (golden-angle steps from its id,
+ * so neighbouring ids differ), never anything a palette says. Structure and intent, not
+ * material (CLAUDE.md principle 5).
+ */
+export function intentColor(semantic: SemanticId): [number, number, number] {
+  const hue = (semantic * 137.508) % 360;
+  const s = 0.55;
+  const l = 0.62;
+  const k = (n: number) => (n + hue / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1));
+  return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
+}
+
 /** A look's colour: its block's average colour if a library has the block, else its tint. */
 export function lookColor(look: Look, blocks?: BlockMaterials): string {
   return blockOf(look, IDENTITY, blocks)?.color ?? look.tint ?? UNDECIDED_COLOR;
@@ -173,6 +193,7 @@ export function stateLooks(
 ): StateLooks {
   const size = states.size + 1;
   const colors = new Uint8Array(size * 4);
+  const intent = new Uint8Array(size * 3);
   const faces = new Uint32Array(size * FACE_SLOTS);
   const modelSlots: number[] = [];
   const clear = new Uint8Array(size);
@@ -207,6 +228,7 @@ export function stateLooks(
     colors[id * 4 + 1] = (rgb >> 8) & 0xff;
     colors[id * 4 + 2] = rgb & 0xff;
     colors[id * 4 + 3] = look.glow ? 1 : 0;
+    intent.set(intentColor(parts[0]?.semantic ?? state.semantic), id * 3);
     opaque[id] = parts.length > 0 || block?.transparent ? 0 : 1;
     const level = look.glow ? GLOW_LEVEL : (block?.emits ?? 0);
     if (level > 0) emission[id] = packEmission(color, level);
@@ -243,6 +265,7 @@ export function stateLooks(
   }
   return {
     colors,
+    intent,
     faces,
     modelSlots: Uint16Array.from(modelSlots),
     clear,

@@ -1,3 +1,4 @@
+export { type ChunkEdges, chunkEdges, EDGE_WORDS, edgeAt } from "./edges.ts";
 export { type Axis, axisStrides, FACES, type FaceAxes } from "./faces.ts";
 export {
   type ChunkMesh,

@@ -22,6 +22,8 @@ export interface MeshJob {
   readonly cells: Uint16Array;
   /** Brick size for the light bricks the mesh reports (ChunkMesh.lightBricks). */
   readonly lightBrickBits: number;
+  /** Also find the chunk's feature edges (chunkEdges), for the line-drawing render modes. */
+  readonly edges: boolean;
 }
 
 export interface SessionStats {
@@ -80,6 +82,7 @@ export class WorldSession {
   /** Job ids superseded by a later edit of the same chunk. Their meshes are dropped. */
   readonly #stale = new Set<number>();
   readonly #removed: number[] = [];
+  #edges = false;
   #nextJob = 1;
   /** The light bricks each meshed chunk's faces read, kept with lighting off too. */
   readonly #meshBricks = new Map<number, Uint16Array>();
@@ -143,6 +146,20 @@ export class WorldSession {
     light.setMaterials(next);
     this.#relightAll();
     return true;
+  }
+
+  /**
+   * Whether meshes come with feature edges (the outline, x-ray and wire views need them).
+   * Turning them on meshes every chunk again; turning them off only stops sending them.
+   */
+  setEdges(on: boolean): void {
+    if (on === this.#edges) return;
+    this.#edges = on;
+    if (on) this.remeshAll();
+  }
+
+  get edges(): boolean {
+    return this.#edges;
   }
 
   /** Meshes every chunk again: the looks changed which cells hide their neighbours' faces. */
@@ -218,6 +235,7 @@ export class WorldSession {
         bits,
         cells: this.world.copyPadded(cx, cy, cz, new Uint16Array(paddedVolume(bits))),
         lightBrickBits: GPU_BRICK_BITS,
+        edges: this.#edges,
       };
       this.#inFlight.set(key, job.jobId);
       return job;

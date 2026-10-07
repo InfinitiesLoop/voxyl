@@ -28,7 +28,7 @@ import {
 } from "../world/protocol.ts";
 import { WorldClient, type WorldOutput } from "../world/WorldClient.ts";
 import type { WorldInfo, WorldSource } from "../worlds.ts";
-import { ChunkRenderer, type ChunkRendererStats } from "./ChunkRenderer.ts";
+import { ChunkRenderer, type ChunkRendererStats, usesEdges } from "./ChunkRenderer.ts";
 import { CellBoxes } from "./cell-boxes.ts";
 import { applyPose, FlyCamera, type FlyPose } from "./FlyCamera.ts";
 import {
@@ -167,6 +167,10 @@ export class Engine {
   /** Called when a click chooses a different 3D pane, so the chrome can follow. */
   onFocusView: ((id: string) => void) | null = null;
   readonly #views = new Map<string, ViewCamera>();
+  /** The sky's fog, near and far, for the world on screen. */
+  #fogRange: [number, number] = [175, 500];
+  /** Whether meshes carry feature edges (some pane draws lines). */
+  #edgesOn = false;
   /** The project's bounds (cell corners), for presets and orbiting; asked for as needed. */
   #bounds: CellBox | null = null;
   #boundsAt = 0;
@@ -310,6 +314,7 @@ export class Engine {
     this.#grid.setOffset(info.grid);
     this.#updateSky();
     const fogFar = Math.max(500, info.extent * 1.4);
+    this.#fogRange = [fogFar * 0.35, fogFar];
     this.#sky.setFogRange(fogFar * 0.35, fogFar);
     this.#initialMeshMs = null;
     this.#lastEditMs = null;
@@ -400,6 +405,11 @@ export class Engine {
   setFrames(frames: readonly ViewFrame[]): void {
     this.#framesSet = true;
     this.#viewFrames = [...frames];
+    const edges = frames.some((frame) => usesEdges(frame.view.mode));
+    if (edges !== this.#edgesOn) {
+      this.#edgesOn = edges;
+      void this.world.request({ type: "edges", on: edges });
+    }
     for (const frame of frames) this.#ensureView(frame.id);
     const focused = frames.find((frame) => frame.focused);
     if (focused) this.#switchFocus(focused.id);
@@ -747,7 +757,14 @@ export class Engine {
 
   /** The pane's own choices of overlay. Before the panes are measured, everything shows. */
   #showOverlays(frame: ViewFrame | undefined): void {
-    this.#grid.visible = frame?.grid ?? true;
+    const plain = frame?.view.background === "plain";
+    this.#grid.visible = (frame?.grid ?? true) && !plain;
+    this.#sky.mesh.visible = !plain;
+    // A plain backdrop has no sky for faraway blocks to fade into.
+    if (plain) this.#sky.setFogRange(1e7, 2e7);
+    else this.#sky.setFogRange(this.#fogRange[0], this.#fogRange[1]);
+    if (frame) this.#chunks?.setView(frame.view.mode, frame.view.shading);
+    else this.#chunks?.setView("textured", "app");
     this.#sliceGuide.object.visible =
       (frame?.slice ?? true) && this.#sliceGuide.window !== null && this.#info !== null;
   }
