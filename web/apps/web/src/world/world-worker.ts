@@ -4,7 +4,14 @@
 // main thread, together with light, in the order it produced them. Saved projects live in
 // OPFS (a ProjectStore), read and written here.
 
-import { DEFAULT_LIBRARY_ID, defaultLibrary, type Library } from "@voxyl/blocks";
+import {
+  DEFAULT_LIBRARY_ID,
+  defaultLibrary,
+  type Library,
+  parseBlockRef,
+  profileOfBlock,
+  searchBlocks,
+} from "@voxyl/blocks";
 import {
   type CellStateTable,
   type Command as EditCommand,
@@ -34,6 +41,8 @@ import {
   type WorldInfo,
 } from "../worlds.ts";
 import {
+  addPaletteCommand,
+  addSemanticCommand,
   aim,
   eraseCommand,
   fillBoxCommand,
@@ -42,12 +51,16 @@ import {
   paletteInfo,
   placeCommand,
   renameCommand,
+  renamePaletteCommand,
+  renameSemanticCommand,
   semanticOfState,
   setCellCommand,
+  setLookCommand,
   stepCommand,
 } from "./editing.ts";
 import { OpfsFolder } from "./opfs-folder.ts";
 import {
+  type BlockSearch,
   type Command,
   type FromWorld,
   type LibraryInfo,
@@ -184,6 +197,7 @@ async function open(command: Extract<Command, { type: "load" }>): Promise<WorldI
   }
   // The project and its session change together, after the last await.
   project = next;
+  project.setBlockProfiles(blockProfile);
   session = new WorldSession(next.world);
   worldId = command.world;
   looksPosted = { states: -1, revision: -1 };
@@ -225,6 +239,34 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       return store.save(newProject(command.name, 5));
     case "rename":
       return runEdit(renameCommand(openProject(), command.name)) >= 0;
+    case "addSemantic":
+      return runEdit(addSemanticCommand(openProject(), command.palette, command.name)) >= 0;
+    case "renameSemantic":
+      return runEdit(renameSemanticCommand(openProject(), command.semantic, command.name)) >= 0;
+    case "setLook":
+      return runEdit(setLookCommand(openProject(), command.semantic, command.look)) >= 0;
+    case "addPalette":
+      return runEdit(addPaletteCommand(openProject(), command.name, command.extends)) >= 0;
+    case "renamePalette":
+      return runEdit(renamePaletteCommand(openProject(), command.palette, command.name)) >= 0;
+    case "findBlocks": {
+      await librariesLoaded;
+      const { matched, hits } = searchBlocks(libraries, {
+        query: command.query,
+        ...(command.library !== undefined && { library: command.library }),
+        ...(command.limit !== undefined && { limit: command.limit }),
+      });
+      const icons = new Uint8Array(hits.length * 1024);
+      hits.forEach((hit, i) => {
+        if (hit.icon) icons.set(hit.icon.subarray(0, 1024), i * 1024);
+      });
+      return {
+        libraries: [...libraries.values()].map((l) => ({ id: l.id, name: l.name })),
+        matched,
+        hits: hits.map(({ ref, name, color }) => ({ ref, name, color })),
+        icons,
+      } satisfies BlockSearch;
+    }
     case "deleteProject":
       if (command.id === saved) saved = null; // it stays on screen, no longer saved
       await store.delete(command.id);
@@ -577,9 +619,19 @@ function infoOf(library: Library): LibraryInfo {
   return { id: library.id, name: library.name, blocks: Object.keys(library.blocks).length };
 }
 
+/** The profile a look's block supplies, when the semantic's form sets none. */
+function blockProfile(ref: string | undefined) {
+  if (!ref) return undefined;
+  const parsed = parseBlockRef(ref);
+  const block = parsed ? libraries.get(parsed.library)?.blocks[parsed.block] : undefined;
+  return block ? profileOfBlock(block) : undefined;
+}
+
 /** Looks that name the library's blocks change: resend looks, and relight if light did. */
 function librariesChanged(): void {
   looksPosted = { states: -1, revision: -1 };
   palettesPosted = -1; // block colours may have changed
+  // A block's profile may have arrived with its library.
+  project?.setBlockProfiles(blockProfile);
   session?.setMaterials(materials);
 }

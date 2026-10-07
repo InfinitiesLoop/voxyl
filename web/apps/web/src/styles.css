@@ -182,6 +182,12 @@ dd {
   pointer-events: none;
 }
 
+.palettes-open .hint {
+  /* Centred in the space beside the drawer, which covers the right 320px. */
+  left: calc(50% - 160px);
+  max-width: calc(100% - 360px);
+}
+
 .crosshair {
   position: absolute;
   top: 50%;
@@ -321,7 +327,7 @@ dd {
 
 .hotbar {
   position: absolute;
-  z-index: 2;
+  z-index: 5;
   bottom: 14px;
   left: 50%;
   display: flex;
@@ -450,4 +456,217 @@ dd {
 button[aria-pressed="true"] {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+.hotbar-slot.over {
+  border-color: var(--accent);
+}
+
+.palette-drawer {
+  position: absolute;
+  z-index: 4;
+  top: 40px;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  width: 320px;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.palette-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.palette-head strong {
+  color: var(--text);
+}
+
+.palette-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px 88px;
+}
+
+.palette-note,
+.palette-error {
+  margin: 6px 12px;
+  color: var(--text-quiet);
+  font-size: 12px;
+}
+
+.palette-error {
+  color: #f0a8a8;
+}
+
+.palette-add,
+.semantic-add,
+.look-block,
+.palette-name {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.palette-add,
+.semantic-add {
+  margin: 8px 0;
+}
+
+.palette-add input,
+.semantic-add input,
+.look-editor input[type="text"],
+.look-editor input:not([type="color"]):not([type="checkbox"]),
+.palette-name input,
+.block-picker input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: var(--text);
+  background: #23272d;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 6px;
+}
+
+.palette-add select,
+.block-picker select {
+  max-width: 140px;
+  font: inherit;
+}
+
+.palette-section {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.palette-name {
+  margin-bottom: 6px;
+}
+
+.name-button {
+  background: transparent;
+  border-color: transparent;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.extends,
+.semantic-from {
+  color: var(--text-quiet);
+  font-size: 11px;
+}
+
+.semantic-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.semantic-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 3px 4px;
+  border-color: transparent;
+  background: transparent;
+  border-radius: 6px;
+  cursor: grab;
+  text-align: left;
+}
+
+.semantic-row.selected,
+.semantic-row[aria-pressed="true"] {
+  background: rgb(34 211 238 / 0.12);
+}
+
+.semantic-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.look-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 14px;
+  border-top: 1px solid var(--line);
+  background: rgb(18 20 24 / 0.92);
+}
+
+.look-editor label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.look-block-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.look-glow {
+  justify-content: flex-start;
+}
+
+.block-picker {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  padding: 10px 12px 14px;
+}
+
+.block-picker .undecided {
+  align-self: flex-start;
+}
+
+.block-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  overflow: auto;
+  padding-bottom: 80px;
+}
+
+.block-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 6px 2px;
+  font-size: 11px;
+}
+
+.block-choice span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.block-icon {
+  width: 32px;
+  height: 32px;
+  image-rendering: pixelated;
+  border-radius: 4px;
 }

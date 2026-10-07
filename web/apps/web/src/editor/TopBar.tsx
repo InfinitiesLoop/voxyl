@@ -19,6 +19,8 @@ interface TopBarProps {
   onRename: (name: string) => void;
   devOpen: boolean;
   onDev: () => void;
+  palettesOpen: boolean;
+  onPalettes: () => void;
 }
 
 /**
@@ -37,6 +39,8 @@ export function TopBar({
   onRename,
   devOpen,
   onDev,
+  palettesOpen,
+  onPalettes,
 }: TopBarProps) {
   const history = useStore(engine.history);
   const name = useStore(engine.projectName) || info?.name || "";
@@ -107,6 +111,9 @@ export function TopBar({
         )}
       >
         2D view
+      </button>
+      <button type="button" aria-pressed={palettesOpen} onClick={click(onPalettes)}>
+        Palettes
       </button>
       <ViewMenu
         settings={settings}

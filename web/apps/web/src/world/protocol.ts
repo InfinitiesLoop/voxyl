@@ -8,7 +8,7 @@
 // sends about a world is tagged with the world's id, so messages about a world that has since
 // been replaced are dropped.
 
-import type { SemanticArg } from "@voxyl/core";
+import type { Look, PaletteId, SemanticArg } from "@voxyl/core";
 import type { ModelShape, StateShape } from "@voxyl/mesher";
 import type { LightingMode, LightLayoutUpdate, MeshJob, ProjectEntry } from "@voxyl/session";
 import type { SliceAxis } from "../views/plane.ts";
@@ -48,6 +48,20 @@ export type Command =
   | { type: "createProject"; name: string }
   /** Renames the open project (a settings command, so it undoes). */
   | { type: "rename"; name: string }
+  /** Adds a semantic to a palette. */
+  | { type: "addSemantic"; palette: PaletteId; name: string }
+  /** Renames a semantic, deriving it first when the palette only offers it. */
+  | { type: "renameSemantic"; semantic: SemanticArg; name: string }
+  /**
+   * Sets the look a semantic stores itself. Null drops it, so a derived semantic inherits
+   * its base's look again.
+   */
+  | { type: "setLook"; semantic: SemanticArg; look: Look | null }
+  /** Adds a palette, optionally extending another. */
+  | { type: "addPalette"; name: string; extends?: PaletteId }
+  | { type: "renamePalette"; palette: PaletteId; name: string }
+  /** Blocks from the libraries, for the palette drawer's picker. */
+  | { type: "findBlocks"; query: string; library?: string; limit?: number }
   | { type: "deleteProject"; id: string }
   /** Stores a bundle file as a saved project. */
   | { type: "importProject"; bytes: Uint8Array }
@@ -114,6 +128,13 @@ export interface Replies {
   createProject: ProjectEntry;
   /** True when the name changed. */
   rename: boolean;
+  /** False when there was nothing to do (an empty or unchanged name or look). */
+  addSemantic: boolean;
+  renameSemantic: boolean;
+  setLook: boolean;
+  addPalette: boolean;
+  renamePalette: boolean;
+  findBlocks: BlockSearch;
   deleteProject: null;
   importProject: ProjectEntry;
   exportProject: Uint8Array;
@@ -129,6 +150,16 @@ export interface Replies {
   slice: { ids: Uint16Array; below: Uint16Array };
   cell: string | null;
   rayEdit: boolean;
+}
+
+/** A page of blocks for the palette drawer's picker. */
+export interface BlockSearch {
+  readonly libraries: readonly { readonly id: string; readonly name: string }[];
+  /** How many blocks matched; hits is the first page of them. */
+  readonly matched: number;
+  readonly hits: readonly { readonly ref: string; readonly name: string; readonly color: string }[];
+  /** 16×16 RGBA per hit, concatenated. A blank icon is all zeros. */
+  readonly icons: Uint8Array;
 }
 
 /** A stored block library, as the app lists it. */

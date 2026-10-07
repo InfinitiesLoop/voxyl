@@ -66,6 +66,14 @@ export class Hotbar {
     this.state.set({ slots: next, selected });
   }
 
+  /** Puts a semantic in one slot and chooses that slot (a drag onto the hotbar). */
+  assign(slot: number, info: SemanticInfo): void {
+    if (slot < 0 || slot >= HOTBAR_SLOTS) return;
+    const next = [...this.state.get().slots];
+    next[slot] = info;
+    this.state.set({ slots: next, selected: slot });
+  }
+
   /**
    * Picks a semantic, as Minecraft's pick block does: chooses its slot if the hotbar has it,
    * else puts it in the chosen slot.

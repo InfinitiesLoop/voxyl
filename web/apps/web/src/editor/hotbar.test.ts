@@ -14,6 +14,7 @@ const info = (
   name,
   color: "#808080",
   glow: false,
+  ownLook: {},
 });
 
 const palette = (id: number, semantics: SemanticInfo[]): PaletteInfo => ({
@@ -66,5 +67,15 @@ describe("Hotbar", () => {
     expect(slots[0]?.ref).toBe(1);
     expect(slots[1]).toBeNull();
     expect(slots[2]?.ref).toBe(7);
+  });
+
+  it("puts a semantic in the slot it was dropped on", () => {
+    const hotbar = new Hotbar();
+    hotbar.update([palette(1, [info(1, "Wall")])]);
+    hotbar.assign(4, info(2, "Floor"));
+    const { slots, selected } = hotbar.state.get();
+    expect(selected).toBe(4);
+    expect(slots[4]?.name).toBe("Floor");
+    expect(slots[0]?.name).toBe("Wall");
   });
 });

@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { readSemanticDrag, SEMANTIC_DRAG } from "./drag.ts";
 import type { Hotbar } from "./hotbar.ts";
 import { useStore } from "./useStore.ts";
 
@@ -7,6 +9,7 @@ import { useStore } from "./useStore.ts";
  */
 export function HotbarBar({ hotbar }: { hotbar: Hotbar }) {
   const { slots, selected } = useStore(hotbar.state);
+  const [over, setOver] = useState<number | null>(null);
   const current = slots[selected];
   return (
     <div className="hotbar">
@@ -17,12 +20,29 @@ export function HotbarBar({ hotbar }: { hotbar: Hotbar }) {
             // biome-ignore lint/suspicious/noArrayIndexKey: slots are positions, not items
             key={i}
             type="button"
-            className="hotbar-slot"
+            className={over === i ? "hotbar-slot over" : "hotbar-slot"}
             aria-pressed={i === selected}
-            title={slot ? `${slot.name}${slot.block ? ` · ${slot.block}` : " · undecided"}` : ""}
+            title={
+              slot
+                ? `${slot.name}${slot.block ? ` · ${slot.block}` : " · undecided"}`
+                : "Drop a semantic here"
+            }
             onClick={(e) => {
               hotbar.select(i);
               e.currentTarget.blur(); // keys belong to the view, not the button
+            }}
+            onDragOver={(e) => {
+              if (![...e.dataTransfer.types].includes(SEMANTIC_DRAG)) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "copy";
+              setOver(i);
+            }}
+            onDragLeave={() => setOver((current) => (current === i ? null : current))}
+            onDrop={(e) => {
+              e.preventDefault();
+              setOver(null);
+              const info = readSemanticDrag(e.dataTransfer);
+              if (info) hotbar.assign(i, info);
             }}
           >
             <span
