@@ -2,8 +2,9 @@ import * as THREE from "three/webgpu";
 
 // Bindings follow the Godot app, with right-hand options for every action:
 // move WASD / arrows, up Space / right Ctrl / right Alt, down Shift / "/", sprint "\" (tap,
-// up to 4x, resets when you stop). The wheel scales base speed. Movement is immediate: no
-// damping or easing, the camera stops the moment the keys are released.
+// up to 4x, resets when you stop), base speed "=" / "-" or numpad + / -. Movement is
+// immediate: no damping or easing, the camera stops the moment the keys are released. The
+// wheel belongs to the editor (the hotbar while flying, moving forward and back otherwise).
 const FORWARD = ["KeyW", "ArrowUp"];
 const BACK = ["KeyS", "ArrowDown"];
 const LEFT = ["KeyA", "ArrowLeft"];
@@ -11,11 +12,28 @@ const RIGHT = ["KeyD", "ArrowRight"];
 const UP = ["Space", "ControlRight", "AltRight"];
 const DOWN = ["ShiftLeft", "ShiftRight", "Slash"];
 const SPRINT = "Backslash";
-const HANDLED = new Set([...FORWARD, ...BACK, ...LEFT, ...RIGHT, ...UP, ...DOWN, SPRINT]);
+const FASTER = ["Equal", "NumpadAdd"];
+const SLOWER = ["Minus", "NumpadSubtract"];
+const HANDLED = new Set([
+  ...FORWARD,
+  ...BACK,
+  ...LEFT,
+  ...RIGHT,
+  ...UP,
+  ...DOWN,
+  SPRINT,
+  ...FASTER,
+  ...SLOWER,
+]);
 
 /** Up and down move this many times faster than flying level. */
 const VERTICAL_SPEED = 1.2;
 const LOOK_RADIANS_PER_PIXEL = 0.0022;
+/** Turning by dragging the view with a free cursor (Godot's 0.4 degrees a pixel). */
+const DRAG_RADIANS_PER_PIXEL = 0.007;
+const SPEED_STEP = 1.25;
+const MIN_SPEED = 2;
+const MAX_SPEED = 400;
 const MAX_PITCH = Math.PI / 2 - 0.01;
 
 /** First-person fly controls. Active while the pointer is locked to the canvas. */
@@ -40,7 +58,6 @@ export class FlyCamera {
     document.addEventListener("mousemove", (e) => this.#onMouseMove(e), { signal });
     document.addEventListener("pointerlockchange", () => this.#keys.clear(), { signal });
     window.addEventListener("blur", () => this.#keys.clear(), { signal });
-    element.addEventListener("wheel", (e) => this.#onWheel(e), { signal, passive: false });
   }
 
   get locked(): boolean {
@@ -65,6 +82,23 @@ export class FlyCamera {
     this.yaw = Math.atan2(-dx, -dz);
     this.pitch = Math.atan2(dy, Math.hypot(dx, dz));
     this.#apply();
+  }
+
+  /** Turns the camera by a drag of the view with a free cursor, in pixels. */
+  drag(dx: number, dy: number): void {
+    this.#look(dx * DRAG_RADIANS_PER_PIXEL, dy * DRAG_RADIANS_PER_PIXEL);
+    this.#apply();
+  }
+
+  /** Moves the camera along where it looks, by `cells` (negative goes back). */
+  dolly(cells: number): void {
+    this.position.addScaledVector(this.forward(), cells);
+    this.#apply();
+  }
+
+  /** Multiplies the base speed (within limits). */
+  scaleSpeed(factor: number): void {
+    this.speed = THREE.MathUtils.clamp(this.speed * factor, MIN_SPEED, MAX_SPEED);
   }
 
   /** The direction the camera looks, as a unit vector. */
@@ -112,22 +146,21 @@ export class FlyCamera {
       if (down && !event.repeat) this.#sprint = Math.min(this.#sprint + 1, 2);
       return;
     }
+    if (FASTER.includes(event.code) || SLOWER.includes(event.code)) {
+      if (down) this.scaleSpeed(FASTER.includes(event.code) ? SPEED_STEP : 1 / SPEED_STEP);
+      return;
+    }
     if (down) this.#keys.add(event.code);
     else this.#keys.delete(event.code);
   }
 
   #onMouseMove(event: MouseEvent): void {
     if (!this.locked) return;
-    this.yaw -= event.movementX * LOOK_RADIANS_PER_PIXEL;
-    this.pitch = THREE.MathUtils.clamp(
-      this.pitch - event.movementY * LOOK_RADIANS_PER_PIXEL,
-      -MAX_PITCH,
-      MAX_PITCH,
-    );
+    this.#look(event.movementX * LOOK_RADIANS_PER_PIXEL, event.movementY * LOOK_RADIANS_PER_PIXEL);
   }
 
-  #onWheel(event: WheelEvent): void {
-    event.preventDefault();
-    this.speed = THREE.MathUtils.clamp(this.speed * (event.deltaY < 0 ? 1.25 : 0.8), 2, 400);
+  #look(yaw: number, pitch: number): void {
+    this.yaw -= yaw;
+    this.pitch = THREE.MathUtils.clamp(this.pitch - pitch, -MAX_PITCH, MAX_PITCH);
   }
 }

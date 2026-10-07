@@ -33,7 +33,8 @@ packages/light/     Minecraft-style sky and colored block light, incremental on 
 packages/session/   WorldSession: a World, its light, mesh scheduling and the GPU light layout
 packages/fixtures/  seeded test worlds (the benchmark city, plain or decorated with shaped parts)
 apps/web/           the React + Three.js app (Vite), with the in-app benchmark
-tools/              dev tools (shot)
+tools/              dev tools (shot, golden)
+golden/             golden images for `pnpm golden`
 ```
 
 Threads: the page runs a **world worker** (`apps/web/src/world/`) that owns the World, the
@@ -58,6 +59,11 @@ pnpm shot "world=city-5m&chunk=64&lighting=volume" --bench
 This is how changes get checked against exactly what `pnpm dev` serves, React's development
 double mount included.
 
+`pnpm golden` renders a fixed set of scenes (`tools/golden.ts`) on SwiftShader, Chrome's CPU
+WebGPU, and compares each with its image in `golden/`, so rendering changes show up whatever
+the GPU. Differences go to `shots/golden/` with a red diff; `pnpm golden --update` accepts the
+new renders, `pnpm golden sky` runs only matching scenes. A full run takes about 3 minutes.
+
 ## Benchmarks
 
 - `pnpm bench:mesh [cells ...] [--bits=5,6,7] [--parts]`: meshing and storage cost on one CPU
@@ -67,7 +73,7 @@ double mount included.
 - `pnpm bench:light [cells ...]`: full relight, light memory, the light bricks faces read and
   their copy cost, and incremental relights for single edits, a roof hole and big fills.
 - In the app, pick a world, chunk size and lighting (also in the URL, e.g.
-  `?world=city-5m&chunk=64&lighting=volume&daylight=0&brightness=50`; `world=parts-5m` is
+  `?world=city-5m&chunk=64&lighting=volume&time=0&brightness=50`; `world=parts-5m` is
   the same city decorated with shaped parts) and press **Run
   benchmark**: a scripted flight (frame, main-thread and GPU time), 100 single-cell edits, a
   roof hole and 100k/1M box fills, measured to the frame they appear. The result can be
@@ -77,7 +83,7 @@ double mount included.
 Lighting (`lighting=` in the URL) is `off` or `volume`: Minecraft-style light the shader reads
 per fragment from a sparse light volume (bricks of light only where faces read it), so a light
 change rewrites a few bricks and never remeshes. It needs WebGPU; WebGL2 draws unlit. Time of
-day (`daylight`, 0 midnight to 100 noon) and Brightness (`brightness`, Minecraft's slider:
+day (`time`, in hours: 0 midnight, 12 noon) and Brightness (`brightness`, Minecraft's slider:
 0 Moody, 50 default, 100 Bright) are shader values and cost nothing to change.
 
 ## ChatGPT widget probe
