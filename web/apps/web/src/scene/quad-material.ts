@@ -1,4 +1,5 @@
 import { FACES, TRI_SCALE } from "@voxyl/mesher";
+import { TEXTURE_SIZE } from "@voxyl/session";
 import {
   abs,
   attribute,
@@ -15,6 +16,8 @@ import {
   int,
   ivec2,
   ivec3,
+  length,
+  log2,
   max,
   mix,
   modelWorldMatrix,
@@ -33,10 +36,12 @@ import {
 } from "three/tsl";
 import * as THREE from "three/webgpu";
 import {
+  ATLAS_COLUMNS,
   type BlockTextures,
   FACE_WIDTH,
   MATERIAL_TEXELS,
   MATERIALS_PER_ROW,
+  MAX_TEXTURE_LOD,
 } from "./block-textures.ts";
 import type { LightVolume, LinearTexture } from "./light-volume.ts";
 
@@ -156,11 +161,18 @@ function surfaceColor(
   const extra = row(2); // layer, tint
   const p = varying<"vec3">(s.position);
   const q = fract(p);
-  // Gradients from the unwrapped coordinates: fract jumps at cell edges, and sampling with
-  // its own gradients would pick the smallest mip along every edge.
-  const whole = vec2(dot(u.xyz, p).add(u.w), dot(v.xyz, p).add(v.w));
-  const uv = vec2(dot(u.xyz, q).add(u.w), dot(v.xyz, q).add(v.w));
-  const texel = blocks.layers.sample(uv).depth(int(extra.x.round())).grad(dFdx(whole), dFdy(whole));
+  // The mip level from the unwrapped coordinates (fract jumps at cell edges, and its own
+  // gradients would pick the smallest mip along every edge), in texels of a tile, and no
+  // further down than a tile of one pixel.
+  const whole = vec2(dot(u.xyz, p).add(u.w), dot(v.xyz, p).add(v.w)).mul(TEXTURE_SIZE);
+  const footprint = max(length(dFdx(whole)), length(dFdy(whole)));
+  const lod = clamp(log2(max(footprint, 1)), 0, MAX_TEXTURE_LOD);
+  // Within the tile, clamped so a texel on its far edge never reads the next tile.
+  const uv = clamp(vec2(dot(u.xyz, q).add(u.w), dot(v.xyz, q).add(v.w)), 0, 0.9999);
+  const tile = extra.x.round();
+  const corner = vec2(tile.mod(ATLAS_COLUMNS), floor(tile.div(ATLAS_COLUMNS)));
+  const atlasUv = corner.add(uv).div(vec2(ATLAS_COLUMNS, blocks.atlasRows));
+  const texel = blocks.atlas.sample(atlasUv).level(lod);
   const textured = material.greaterThan(0.5);
   Discard(textured.and(texel.a.lessThan(0.5)));
   return vec4(select(textured, texel.rgb.mul(extra.yzw), color.rgb), color.a);
