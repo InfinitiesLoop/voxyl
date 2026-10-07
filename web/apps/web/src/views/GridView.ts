@@ -4,7 +4,9 @@
 // Read-only for now; the editor (Phase 3) adds placing.
 
 import type { Direction } from "@voxyl/core";
+import * as THREE from "three/webgpu";
 import type { Engine } from "../scene/Engine.ts";
+import type { SliceWindow } from "../scene/slice-guide.ts";
 import { MAX_SLICE_CELLS } from "../world/protocol.ts";
 import {
   type Orientation,
@@ -23,7 +25,11 @@ const BG = [21, 23, 27] as const;
 const MINOR_LINE = "rgb(255 255 255 / 0.06)";
 const MAJOR_LINE = "rgb(255 255 255 / 0.16)";
 const ORIGIN_LINE = "rgb(34 211 238 / 0.35)";
-const CAMERA = "#22d3ee";
+/** The focused 3D view's camera, and the other 3D views'. */
+const CAMERA = [34, 211, 238] as const;
+const OTHER_CAMERA = [148, 163, 184] as const;
+/** How far a camera's view cone reaches on screen, in CSS pixels, when it looks along the slice. */
+const CONE_PX = 46;
 /** How strongly the layer below shows through empty cells. */
 const BELOW = 0.32;
 /** Cells fetched beyond the visible edge, so small pans need no new request. */
@@ -81,8 +87,14 @@ export class GridView {
   #hoverAsked = "";
   #drag: { x: number; y: number } | null = null;
   #frame = 0;
-  /** Where the 3D camera was last drawn. */
+  /** Where the 3D cameras were last drawn. */
   #cameraKey = "";
+  /** Draw the 3D views' cameras. */
+  #cameras = true;
+  /** This view's slice is the one the 3D views draw. */
+  #active = false;
+  /** The window last given to the 3D views. */
+  #guideKey = "";
 
   constructor(host: HTMLElement, engine: Engine, onState: (state: GridViewState) => void) {
     this.#engine = engine;
@@ -154,7 +166,24 @@ export class GridView {
     this.#changed();
   }
 
+  /** Makes this view's slice the one the 3D views draw, or stops. */
+  setActive(active: boolean): void {
+    if (active === this.#active) return;
+    this.#active = active;
+    this.#guideKey = "";
+    if (active) this.#dirty = true;
+    else this.#engine.clearSliceGuide(this);
+  }
+
+  /** Shows or hides the 3D views' camera markers. */
+  setCameras(on: boolean): void {
+    if (on === this.#cameras) return;
+    this.#cameras = on;
+    this.#dirty = true;
+  }
+
   dispose(): void {
+    this.#engine.clearSliceGuide(this);
     cancelAnimationFrame(this.#frame);
     this.#abort.abort();
     this.#observer.disconnect();
@@ -226,8 +255,7 @@ export class GridView {
     const stale = !covered || f.revision !== revision;
     if (stale && !this.#fetching && performance.now() - this.#lastFetch > REFRESH_MS)
       void this.#fetch(revision);
-    const p = this.#engine.camera.position;
-    const cameraKey = `${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)}`;
+    const cameraKey = this.#cameras ? cameraKeyOf(this.#engine) : "";
     if (cameraKey !== this.#cameraKey) {
       this.#cameraKey = cameraKey;
       this.#dirty = true;
@@ -343,7 +371,8 @@ export class GridView {
     }
 
     this.#drawGrid(s0, t0, s1, t1, sx, ty, px);
-    this.#drawCamera(sx, ty, px);
+    if (this.#cameras) this.#drawCameras(sx, ty, px);
+    if (this.#active) this.#publishGuide(s0, t0, s1, t1);
     if (this.#hover) {
       const [u, v] = worldToPlane(this.#axis, this.#hover.at);
       const [s, t] = planeToScreen(this.#orientation, u, v);
@@ -404,26 +433,84 @@ export class GridView {
     }
   }
 
-  /** The 3D camera's position, as a dot with its heading on plans. */
-  #drawCamera(sx: (s: number) => number, ty: (t: number) => number, px: number): void {
-    const p = this.#engine.camera.position;
-    const [u, v] = worldToPlane(this.#axis, [p.x, p.y, p.z]);
-    // Fractional screen position: the inverse map works on cells, so offset within the cell.
-    const [s, t] = planeToScreen(this.#orientation, Math.floor(u), Math.floor(v));
-    const fu = u - Math.floor(u);
-    const fv = v - Math.floor(v);
-    const o = this.#orientation;
-    const frac = (a: { onU: boolean; sign: 1 | -1 }) => {
-      const f = a.onU ? fu : fv;
-      return a.sign > 0 ? f : 1 - f;
-    };
-    const x = sx(s) + frac(o.right) * px;
-    const y = ty(t) + frac(o.down) * px;
+  /**
+   * Each 3D view's camera, as a GPS app shows you: a dot where it stands and a cone the way
+   * it looks, as wide as its view. The cone shortens as the camera looks out of the slice
+   * (straight down on a plan), until only the dot is left. The focused view's is brightest.
+   */
+  #drawCameras(sx: (s: number) => number, ty: (t: number) => number, px: number): void {
     const ctx = this.#ctx;
-    ctx.fillStyle = CAMERA;
-    ctx.beginPath();
-    ctx.arc(x, y, 5 * (window.devicePixelRatio || 1), 0, Math.PI * 2);
-    ctx.fill();
+    const ratio = window.devicePixelRatio || 1;
+    const o = this.#orientation;
+    const cameras = this.#engine.viewCameras();
+    // The focused camera last, so it sits on top.
+    cameras.sort((a, b) => Number(a.focused) - Number(b.focused));
+    for (const { camera, focused } of cameras) {
+      const p = camera.position;
+      const [u, v] = worldToPlane(this.#axis, [p.x, p.y, p.z]);
+      // Fractional screen position: the inverse map works on cells, so offset within the cell.
+      const [s, t] = planeToScreen(o, Math.floor(u), Math.floor(v));
+      const fu = u - Math.floor(u);
+      const fv = v - Math.floor(v);
+      const frac = (a: { onU: boolean; sign: 1 | -1 }) => {
+        const f = a.onU ? fu : fv;
+        return a.sign > 0 ? f : 1 - f;
+      };
+      const x = sx(s) + frac(o.right) * px;
+      const y = ty(t) + frac(o.down) * px;
+      const [r, g, b] = focused ? CAMERA : OTHER_CAMERA;
+
+      const forward = camera.getWorldDirection(FORWARD);
+      const [du, dv] = worldToPlane(this.#axis, [forward.x, forward.y, forward.z]);
+      const along = (a: { onU: boolean; sign: 1 | -1 }) => (a.onU ? du : dv) * a.sign;
+      const right = along(o.right);
+      const down = along(o.down);
+      const reach = Math.hypot(right, down);
+      if (reach > 0.08) {
+        const heading = Math.atan2(down, right);
+        // A plan sees the camera's width; a cut its height.
+        const vertical = THREE.MathUtils.degToRad(camera.fov);
+        const wide =
+          this.#axis === 1 ? 2 * Math.atan(Math.tan(vertical / 2) * camera.aspect) : vertical;
+        const half = Math.min(wide / 2, THREE.MathUtils.degToRad(60));
+        const length = CONE_PX * ratio * reach;
+        const fill = ctx.createRadialGradient(x, y, 0, x, y, length);
+        fill.addColorStop(0, `rgb(${r} ${g} ${b} / ${focused ? 0.55 : 0.35})`);
+        fill.addColorStop(1, `rgb(${r} ${g} ${b} / 0)`);
+        ctx.fillStyle = fill;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.arc(x, y, length, heading - half, heading + half);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.beginPath();
+      ctx.arc(x, y, 5 * ratio, 0, Math.PI * 2);
+      ctx.fillStyle = `rgb(${r} ${g} ${b})`;
+      ctx.fill();
+      ctx.lineWidth = 1.5 * ratio;
+      ctx.strokeStyle = "rgb(255 255 255 / 0.9)";
+      ctx.stroke();
+    }
+  }
+
+  /** Tells the 3D views what this view shows: its layer, as wide as the visible cells. */
+  #publishGuide(s0: number, t0: number, s1: number, t1: number): void {
+    if (!this.#engine.info) return;
+    const [ua, va] = screenToPlane(this.#orientation, s0, t0);
+    const [ub, vb] = screenToPlane(this.#orientation, s1 - 1, t1 - 1);
+    const window: SliceWindow = {
+      axis: this.#axis,
+      depth: this.#depth,
+      u0: Math.min(ua, ub),
+      v0: Math.min(va, vb),
+      u1: Math.max(ua, ub) + 1,
+      v1: Math.max(va, vb) + 1,
+    };
+    const key = Object.values(window).join();
+    if (key === this.#guideKey) return;
+    this.#guideKey = key;
+    this.#engine.setSliceGuide(this, window);
   }
 
   #toScreenCell(event: PointerEvent | WheelEvent): [number, number] {
@@ -502,3 +589,17 @@ export class GridView {
 }
 
 const mix = (a: number, b: number, k: number) => Math.round(a + (b - a) * k);
+
+const FORWARD = new THREE.Vector3();
+
+/** Changes whenever a 3D view's camera moves or turns enough to redraw its marker. */
+function cameraKeyOf(engine: Engine): string {
+  let key = "";
+  for (const { camera, focused } of engine.viewCameras()) {
+    const p = camera.position;
+    const q = camera.quaternion;
+    key += `${focused ? "*" : ""}${p.x.toFixed(1)},${p.y.toFixed(1)},${p.z.toFixed(1)},`;
+    key += `${q.x.toFixed(3)},${q.y.toFixed(3)},${q.z.toFixed(3)},${q.w.toFixed(3)};`;
+  }
+  return key;
+}

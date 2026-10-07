@@ -2,12 +2,14 @@ import { useEffect, useState } from "react";
 import type { Engine } from "../scene/Engine.ts";
 import { HotbarBar } from "./HotbarBar.tsx";
 import { HOTBAR_SLOTS } from "./hotbar.ts";
+import { ToolStrip } from "./Tools.tsx";
 import { useStore } from "./useStore.ts";
 
 /**
  * Loads the hotbar. Palettes on the left, the chosen palette's semantics as swatches,
  * and the same hotbar as the workspace. Clicking a semantic fills the chosen slot and
  * moves to the next. Editing a look stays in the palette drawer; this is only for picking.
+ * The tools sit beside its hotbar, so a tool is chosen here too (E or Delete opens it).
  */
 export function Inventory({ engine }: { engine: Engine }) {
   const open = useStore(engine.inventoryOpen);
@@ -32,7 +34,7 @@ export function Inventory({ engine }: { engine: Engine }) {
       <div className="inventory-card" role="dialog" aria-label="Inventory">
         <header>
           <strong>Inventory</strong>
-          <span>Click a semantic to load the chosen slot</span>
+          <span>Click a semantic to load the chosen slot · E, Delete or Esc closes</span>
           <button type="button" onClick={() => engine.toggleInventory()}>
             Close
           </button>
@@ -75,7 +77,10 @@ export function Inventory({ engine }: { engine: Engine }) {
             {palette && palette.semantics.length === 0 && <p>Nothing in this palette.</p>}
           </div>
         </div>
-        <HotbarBar hotbar={engine.hotbar} />
+        <footer className="inventory-foot">
+          <ToolStrip engine={engine} />
+          <HotbarBar hotbar={engine.hotbar} />
+        </footer>
       </div>
     </div>
   );

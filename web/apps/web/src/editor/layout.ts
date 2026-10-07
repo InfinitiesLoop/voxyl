@@ -3,15 +3,25 @@
 // switching back to a grid restores the views you had.
 
 import { wrapHours } from "../scene/sky-model.ts";
+import {
+  defaultShow,
+  type PaneKind,
+  readShow,
+  type ShowId,
+  type ShowState,
+} from "./view-options.ts";
+
+export type { PaneKind } from "./view-options.ts";
 
 export type LayoutPreset = "single" | "columns" | "rows" | "grid";
-export type PaneKind = "3d" | "2d";
 
 export interface Pane {
   readonly id: string;
   readonly kind: PaneKind;
   /** Time of day in hours. A 2D pane draws flat and ignores it. */
   readonly time: number;
+  /** Which overlays this pane draws (view-options.ts). */
+  readonly show: ShowState;
 }
 
 export interface LayoutState {
@@ -35,7 +45,12 @@ export function isPreset(value: unknown): value is LayoutPreset {
 
 export function defaultLayout(time: number): LayoutState {
   const hours = wrapHours(time);
-  const pane = (id: string, kind: PaneKind): Pane => ({ id, kind, time: hours });
+  const pane = (id: string, kind: PaneKind): Pane => ({
+    id,
+    kind,
+    time: hours,
+    show: defaultShow(),
+  });
   return {
     preset: "single",
     panes: [pane("p0", "3d"), pane("p1", "2d"), pane("p2", "3d"), pane("p3", "3d")],
@@ -69,13 +84,20 @@ export function withFocus(layout: LayoutState, focus: number): LayoutState {
 export function withPane(
   layout: LayoutState,
   index: number,
-  patch: Partial<Pick<Pane, "kind" | "time">>,
+  patch: Partial<Pick<Pane, "kind" | "time" | "show">>,
 ): LayoutState {
   if (index < 0 || index >= layout.panes.length) return layout;
   const panes = layout.panes.map((pane, i) =>
     i === index ? { ...pane, ...patch } : pane,
   ) as unknown as LayoutState["panes"];
   return { ...layout, panes };
+}
+
+/** Turns one of a pane's overlays on or off. */
+export function withShow(layout: LayoutState, index: number, id: ShowId, on: boolean): LayoutState {
+  const pane = layout.panes[index];
+  if (!pane || pane.show[id] === on) return layout;
+  return withPane(layout, index, { show: { ...pane.show, [id]: on } });
 }
 
 /** The arrangement a link asked for, if it named one. */
@@ -112,7 +134,7 @@ export function saveLayout(layout: LayoutState): void {
       JSON.stringify({
         preset: layout.preset,
         focus: layout.focus,
-        panes: layout.panes.map((pane) => ({ kind: pane.kind, time: pane.time })),
+        panes: layout.panes.map((pane) => ({ kind: pane.kind, time: pane.time, show: pane.show })),
       }),
     );
   } catch {
@@ -131,11 +153,16 @@ function loadLayout(time: number): LayoutState | null {
     if (!Array.isArray(record.panes)) return null;
     const savedPanes = record.panes as unknown[];
     const panes = base.panes.map((pane, i) => {
-      const saved = savedPanes[i] as { kind?: unknown; time?: unknown } | undefined;
+      const saved = savedPanes[i] as { kind?: unknown; time?: unknown; show?: unknown } | undefined;
       if (!saved) return pane;
       const kind: PaneKind = saved.kind === "2d" ? "2d" : "3d";
       const hours = Number(saved.time);
-      return { id: pane.id, kind, time: Number.isFinite(hours) ? wrapHours(hours) : pane.time };
+      return {
+        id: pane.id,
+        kind,
+        time: Number.isFinite(hours) ? wrapHours(hours) : pane.time,
+        show: readShow(saved.show),
+      };
     }) as unknown as LayoutState["panes"];
     const preset = isPreset(record.preset) ? record.preset : "single";
     const focus = typeof record.focus === "number" ? record.focus : 0;

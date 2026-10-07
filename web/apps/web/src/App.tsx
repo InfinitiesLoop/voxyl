@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { type BenchResult, runBench } from "./bench/bench.ts";
 import { HotbarBar } from "./editor/HotbarBar.tsx";
 import { Inventory } from "./editor/Inventory.tsx";
+import { KeysPanel } from "./editor/KeysPanel.tsx";
 import {
   focusedPane,
   type LayoutPreset,
@@ -16,9 +17,8 @@ import { PaletteDrawer } from "./editor/PaletteDrawer.tsx";
 import { Panes } from "./editor/Panes.tsx";
 import { SelectionPanel } from "./editor/SelectionPanel.tsx";
 import { SelectionActions } from "./editor/selection-actions.tsx";
-import { ToolRail } from "./editor/ToolRail.tsx";
+import { ToolBadge } from "./editor/Tools.tsx";
 import { TopBar } from "./editor/TopBar.tsx";
-import type { EditorTool } from "./editor/tool.ts";
 import { useStore } from "./editor/useStore.ts";
 import { BenchPanel, Hud } from "./Hud.tsx";
 import { type Backend, Engine, type EngineStats } from "./scene/Engine.ts";
@@ -131,6 +131,9 @@ export function App() {
   const [palettesOpen, setPalettesOpen] = useState(
     () => localStorage.getItem(PALETTES_KEY) !== "0",
   );
+  /** The key bindings panel. */
+  const [keysOpen, setKeysOpen] = useState(false);
+  const closeKeys = useCallback(() => setKeysOpen(false), []);
   const togglePalettes = useCallback(() => {
     setPalettesOpen((open) => {
       localStorage.setItem(PALETTES_KEY, open ? "0" : "1");
@@ -368,8 +371,7 @@ export function App() {
         {engine && (
           <Panes engine={engine} info={info} layout={layout} onLayout={setLayout} locked={locked} />
         )}
-        {engine && <HotbarBar hotbar={engine.hotbar} />}
-        {engine && !loading && !benchStep && <FlyHint engine={engine} locked={locked} />}
+        {engine && <HotbarBar hotbar={engine.hotbar} aside={<ToolBadge engine={engine} />} />}
       </div>
       {engine && (
         <TopBar
@@ -388,10 +390,13 @@ export function App() {
           onDev={toggleDev}
           palettesOpen={palettesOpen}
           onPalettes={togglePalettes}
+          keysOpen={keysOpen}
+          onKeys={() => setKeysOpen((open) => !open)}
         />
       )}
       {engine && <EditorTools engine={engine} />}
       {engine && <Inventory engine={engine} />}
+      {engine && keysOpen && <KeysPanel tool={engine.tool.get()} onClose={closeKeys} />}
       {engine && palettesOpen && <PaletteDrawer engine={engine} />}
       <Hud
         backend={backend}
@@ -414,47 +419,15 @@ export function App() {
   );
 }
 
-/** The tool rail and the selection panel. They share the tool, so they switch together. */
+/** The selection panel and its actions. The panel follows the tool in hand. */
 function EditorTools({ engine }: { engine: Engine }) {
   const tool = useStore(engine.tool);
   return (
     <>
-      <ToolRail engine={engine} tool={tool} />
       <SelectionPanel engine={engine} tool={tool} />
       <SelectionActions engine={engine} />
     </>
   );
-}
-
-const BUILD_HINT =
-  "Click to fly · drag to look · wheel moves forward and back · WASD or arrows move · Space, right Ctrl or right Alt up · Shift or / down · \\ sprint · = and - set speed · left click removes · right click places · middle click picks · 1–9 or the wheel (while flying) chooses a slot · E opens the inventory · Ctrl+Z undoes · Esc releases";
-
-/** What the view is telling the user to do, for the tool they have. */
-function FlyHint({ engine, locked }: { engine: Engine; locked: boolean }) {
-  const tool = useStore(engine.tool);
-  const selection = useStore(engine.selection);
-  const text = hintText(tool, locked, selection.cells > 0);
-  if (text === null) return null;
-  return <div className="hint">{text}</div>;
-}
-
-function hintText(tool: EditorTool, locked: boolean, orbit: boolean): string | null {
-  if (tool === "select") {
-    return locked
-      ? "Right-click two corners · a third click clears · left click removes · middle click picks · Delete empties the selection · Esc releases"
-      : orbit
-        ? "Drag orbits the selection · the wheel moves in and out · click to fly"
-        : "Click to fly · drag to look · right-click two corners once you're flying";
-  }
-  if (tool === "wand") {
-    return locked
-      ? "Right-click a block to select every block of that kind touching it · Shift+right-click selects any kind · left click removes · Esc releases"
-      : "Click to fly · then right-click a block to select what touches it";
-  }
-  if (locked) return null;
-  return orbit
-    ? "Drag orbits the selection · the wheel moves in and out · click to fly"
-    : BUILD_HINT;
 }
 
 /** Saves a file through the browser's download. */

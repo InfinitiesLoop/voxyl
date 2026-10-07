@@ -41,8 +41,7 @@ body,
 
 .hud,
 .bench,
-.banner,
-.hint {
+.banner {
   position: absolute;
   border-radius: 8px;
   background: var(--panel);
@@ -53,7 +52,7 @@ body,
 .hud {
   z-index: 3;
   top: 52px;
-  left: 100px;
+  left: 12px;
   width: 340px;
   padding: 10px 14px 12px;
 }
@@ -170,24 +169,6 @@ dd {
   color: var(--text);
 }
 
-.hint {
-  z-index: 2;
-  bottom: 108px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 6px 12px;
-  width: max-content;
-  max-width: calc(100% - 24px);
-  text-align: center;
-  pointer-events: none;
-}
-
-.palettes-open .hint {
-  /* Centred in the space beside the drawer, which covers the right 320px. */
-  left: calc(50% - 160px);
-  max-width: calc(100% - 360px);
-}
-
 .crosshair {
   position: absolute;
   top: 50%;
@@ -275,33 +256,6 @@ dd {
 
 .pane.focused {
   box-shadow: inset 0 0 0 2px var(--accent);
-}
-
-.pane-bar {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  height: 32px;
-  padding: 0 8px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--line);
-  font-size: 12px;
-  pointer-events: auto;
-}
-
-.pane-time {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  color: var(--text-quiet);
-}
-
-.pane-time input[type="range"] {
-  width: 110px;
-}
-
-.pane-note {
-  color: var(--text-quiet);
 }
 
 .pane-body,
@@ -479,57 +433,6 @@ dd {
   font-variant-numeric: tabular-nums;
 }
 
-.pane-3d {
-  position: relative;
-  flex: 1;
-  min-width: 0;
-}
-
-.grid-pane {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  font-size: 12.5px;
-  color: var(--text-quiet);
-}
-
-.grid-toolbar {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  padding: 6px 10px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--line);
-}
-
-.grid-depth {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-}
-
-.grid-depth input {
-  width: 64px;
-  font: inherit;
-  color: var(--text);
-  background: #23272d;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 3px 6px;
-}
-
-.grid-hover {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: right;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-}
-
 .grid-host {
   position: relative;
   flex: 1;
@@ -552,6 +455,10 @@ button[aria-pressed="true"] {
 
 .hotbar-slot.over {
   border-color: var(--accent);
+}
+
+.palettes-open .panes {
+  right: 320px;
 }
 
 .palette-drawer {
@@ -763,37 +670,11 @@ button[aria-pressed="true"] {
   border-radius: 4px;
 }
 
-.tool-rail {
-  position: absolute;
-  z-index: 5;
-  /* Under the top bar and the first pane's own bar, so a split doesn't lay it across a divider. */
-  top: 80px;
-  left: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  width: 76px;
-  padding: 4px;
-  border-radius: 8px;
-  background: var(--panel);
-}
-
-.tool-rail button {
-  width: 100%;
-  height: 32px;
-  padding: 0;
-}
-
-.tool-rail button.active {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
 .selection-panel {
   position: absolute;
   z-index: 5;
   bottom: 152px;
-  left: 100px;
+  left: 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1072,4 +953,395 @@ button[aria-pressed="true"] {
   position: static;
   transform: none;
   align-self: center;
+}
+
+/* A pane's toolbar (ViewBar.tsx): the same pieces in every kind of pane. */
+.view-bar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  height: 34px;
+  padding: 0 6px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--text-quiet);
+  pointer-events: auto;
+  white-space: nowrap;
+}
+
+.view-bar button,
+.view-bar select,
+.view-bar input {
+  height: 24px;
+  padding: 0 7px;
+  font-size: 12px;
+}
+
+.view-bar-spacer {
+  flex: 1;
+  min-width: 4px;
+}
+
+.kind-switch {
+  display: flex;
+}
+
+.kind-switch button:first-child {
+  border-radius: 6px 0 0 6px;
+}
+
+.kind-switch button:last-child {
+  margin-left: -1px;
+  border-radius: 0 6px 6px 0;
+}
+
+.kind-switch button[aria-pressed="true"] {
+  position: relative;
+  background: #1d3a42;
+}
+
+.bar-menu {
+  position: relative;
+}
+
+.bar-menu > button {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.bar-menu-caret {
+  color: var(--text-quiet);
+  font-size: 10px;
+}
+
+.bar-menu-panel {
+  position: absolute;
+  z-index: 6;
+  top: calc(100% + 5px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 200px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #21242a;
+  color: var(--text);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.35);
+}
+
+.bar-menu-panel.left {
+  left: 0;
+}
+
+.bar-menu-panel.right {
+  right: 0;
+}
+
+.bar-check {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  cursor: pointer;
+}
+
+.bar-check input {
+  height: auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.bar-range {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-quiet);
+}
+
+.bar-range input {
+  width: 100%;
+  padding: 0;
+}
+
+.bar-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.bar-stepper {
+  display: flex;
+  gap: 3px;
+  align-items: center;
+}
+
+.bar-stepper input {
+  width: 58px;
+  color: var(--text);
+  background: #23272d;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+}
+
+.bar-readout {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The compass, top right of a pane's picture. */
+.pane-corner {
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  right: 8px;
+  pointer-events: none;
+}
+
+.compass {
+  display: block;
+  filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.5));
+}
+
+.compass-disc {
+  fill: rgb(21 23 27 / 0.55);
+  stroke: rgb(255 255 255 / 0.18);
+}
+
+.compass-north {
+  fill: #f87171;
+}
+
+.compass-south {
+  fill: rgb(255 255 255 / 0.45);
+}
+
+.compass-letter {
+  fill: rgb(255 255 255 / 0.5);
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.compass-letter.north {
+  fill: #fff;
+  font-size: 10px;
+}
+
+.cut-compass {
+  display: block;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgb(21 23 27 / 0.65);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+/* The tool in hand, left of the workspace hotbar's slots. */
+.hotbar-slots {
+  position: relative;
+}
+
+.hotbar-aside {
+  position: absolute;
+  right: calc(100% + 6px);
+  bottom: 0;
+}
+
+.tool-badge {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  height: 52px;
+  padding: 0 12px;
+  border-color: transparent;
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tool-badge-label {
+  color: var(--text-quiet);
+  font-size: 10px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* The inventory's footer: the tools beside its hotbar. */
+.inventory-foot {
+  display: flex;
+  gap: 16px;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.tool-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 260px;
+}
+
+.tool-strip-buttons {
+  display: flex;
+  gap: 4px;
+}
+
+.tool-strip-buttons button {
+  flex: 1;
+  height: 34px;
+}
+
+.tool-strip-hint {
+  min-height: 2.6em;
+  margin: 0;
+  color: var(--text-quiet);
+  font-size: 11.5px;
+  line-height: 1.3;
+}
+
+/* The key bindings panel. */
+.keys {
+  position: absolute;
+  z-index: 9;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 48px;
+}
+
+.keys-backdrop {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: rgb(0 0 0 / 0.62);
+  cursor: default;
+}
+
+.keys-card {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(1120px, 100%);
+  max-height: 100%;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #21242a;
+}
+
+.keys-card > header {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.keys-card > header strong {
+  color: var(--accent);
+  font-size: 16px;
+}
+
+.keys-card > header span {
+  flex: 1;
+  color: var(--text-quiet);
+  font-size: 12px;
+}
+
+.keys-sections {
+  columns: 340px 3;
+  column-gap: 16px;
+  overflow: auto;
+}
+
+.keys-section {
+  break-inside: avoid;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.keys-section.in-hand {
+  border-color: var(--accent);
+}
+
+.keys-section h3 {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 13.5px;
+}
+
+.keys-section h3 small {
+  color: var(--text-quiet);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.keys-section.in-hand h3 small {
+  color: var(--accent);
+}
+
+.keys-table {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) auto auto;
+  gap: 5px 10px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.keys-head {
+  color: var(--text-quiet);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.keys-action {
+  display: flex;
+  flex-direction: column;
+  color: var(--text);
+}
+
+.keys-note {
+  color: var(--text-quiet);
+  font-size: 10.5px;
+}
+
+.keys-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+kbd {
+  padding: 1px 6px;
+  border: 1px solid #3a4048;
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: #2a2e34;
+  color: var(--text);
+  font:
+    11.5px / 1.5 ui-monospace,
+    "Cascadia Mono",
+    Consolas,
+    monospace;
+  white-space: nowrap;
 }

@@ -8,7 +8,9 @@ import {
   withFocus,
   withPane,
   withPreset,
+  withShow,
 } from "./layout.ts";
+import { defaultShow, readShow } from "./view-options.ts";
 
 describe("layout", () => {
   it("shows one, two, or four panes and keeps the rest", () => {
@@ -33,6 +35,21 @@ describe("layout", () => {
     expect(presetFromParams(new URLSearchParams("views=split"))).toBe("columns");
     expect(presetFromParams(new URLSearchParams("views=3d"))).toBe("single");
     expect(presetFromParams(new URLSearchParams("layout=grid&views=3d"))).toBe("grid");
+  });
+
+  it("keeps each pane's overlays apart", () => {
+    const layout = withShow(withPreset(defaultLayout(12), "columns"), 1, "compass", false);
+    expect(layout.panes[1]?.show.compass).toBe(false);
+    expect(layout.panes[0]?.show.compass).toBe(true);
+    expect(withShow(layout, 1, "compass", false)).toBe(layout);
+  });
+
+  it("reads saved overlays over the defaults", () => {
+    expect(readShow({ grid: false, slice: "yes", bogus: true })).toEqual({
+      ...defaultShow(),
+      grid: false,
+    });
+    expect(readShow(null)).toEqual(defaultShow());
   });
 
   it("changes one pane's kind without touching the others", () => {

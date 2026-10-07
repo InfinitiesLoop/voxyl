@@ -42,19 +42,29 @@ Godot's model is proven with this user, so the web starts from it:
   Shift / `/`, sprint `\`.
 - **Hotbar**: 9 slots along the bottom. 1-9 or numpad 1-9 choose a slot; the wheel cycles
   slots while flying (as in Godot and Minecraft).
+- **Inventory**: E, or Delete for the right hand, opens and closes it (Esc closes it too). It
+  holds the tools as well as the palettes, as in Godot.
+- **Backspace** empties the selection, only while Select or Wand is in hand (as in Godot).
+- **Keys** in the top bar lists every binding, the right-hand keys in their own column
+  (`editor/keybindings.ts`).
 - **Undo** Ctrl+Z, **redo** Ctrl+Shift+Z or Ctrl+Y (either Ctrl key), from any mode.
 
 ## Layout
 
 The 3D view fills the window. Around it, all overlays:
 
-- **Top bar**: the project's name, undo and redo, whether it is saved, the arrangement (one
-  view, side by side, stacked, or a grid of four), palettes, and lighting and brightness.
+- **Top bar**: the project's name, undo and redo, whether it is saved, the arrangement (Full,
+  side by side, stacked, or a grid of four), palettes, lighting and brightness, and Keys.
   Time of day is each 3D pane's own control. A 2D pane has no lighting and no time of day.
-- **Hotbar** at the bottom centre.
-- **Palette drawer** on the right (later step): semantics grouped by palette, their looks,
-  adding and editing.
-- **Tool rail** on the left (later step): Build, Select, Wand, Paste.
+- **Each pane's bar** (`editor/ViewBar.tsx`): the kind (3D or 2D), then that kind's controls
+  as small menus, then readouts on the right. The overlays a pane can hide are one registry
+  (`editor/view-options.ts`) that builds its Show menu. Later view options (render modes,
+  camera presets, orbit) are more menus in the same bar.
+- **Hotbar** at the bottom centre, with a badge on its left naming the tool in hand.
+- **Palette drawer** on the right: semantics grouped by palette, their looks, adding and
+  editing. The panes shrink beside it rather than going under it.
+- **Tools** live in the inventory, beside its hotbar (Build, Select, Wand; Paste later), so
+  flying never gives up the pointer for a tool rail. The badge opens the inventory.
 - **Dev panel**: today's HUD (samples, chunk size, frame stats, benchmark) folds into a
   panel that starts closed.
 
@@ -198,4 +208,128 @@ there is a point worth orbiting.
     fills the chosen slot and advances. The palette drawer is still where a look is edited.
     The migration plan listed an inventory and the editor plan never gave it a step; the drawer
     was the editing half, and this is the picking half.
-  - Next is step 4, the clipboard and prefabs.
+- **Feedback, second round (2026-10-07).** The shell, before step 4.
+  - **Pane toolbars.** Every pane has one bar built from shared pieces (`editor/ViewBar.tsx`):
+    the 3D/2D switch, that kind's menus, and readouts on the right. A 3D bar has **Time** (a
+    slider and Sunrise, Noon, Sunset, Midnight) and **Show**. A 2D bar has the slice (plan or a
+    cut), the layer, Show, and what is under the pointer; the 2D view's own second toolbar is
+    gone. Show is built from `editor/view-options.ts` (ground grid, 2D slice, 3D cameras,
+    compass); each pane remembers its own choices in the layout. The one-view arrangement is
+    called **Full**.
+  - **The 3D cameras in a 2D view** are a dot and a cone, as a GPS app draws you: the cone is
+    as wide as the camera's view and points where it looks. It shortens as the camera looks out
+    of the slice (straight down on a plan), until only the dot is left. Every 3D pane has one;
+    the focused pane's is cyan, the others grey.
+  - **The 2D slice in the 3D views.** The active 2D pane (the focused one, else the 2D pane
+    focused last) shows its layer in every 3D pane as an amber one-cell slab, as wide as the 2D
+    view's window, so panning or zooming the 2D view moves it. Its edges are drawn crisp where
+    nothing hides them and faint through blocks; its faces are a 5% tint. Godot's sheet with a
+    cell grid was too much. Show → 2D slice turns it off per pane.
+  - **A compass** in the top right of each pane (Show → Compass). 3D: a disc that turns with
+    the camera, the needle on the project's real north (settings.north). A 2D plan always has
+    north at the top. A cut stands up, so it names the directions to the left and right
+    ("W ◂ ▸ E") instead. The math is `editor/compass.ts`, tested.
+  - **The ground grid** reads by day and stays quiet at night: dark lines by day, faint pale
+    ones at night (blending is in linear light, so a pale line on black looks far stronger than
+    its alpha; the night values are small on purpose). Each family of lines (along x, along z)
+    fades on its own as it crowds on screen, over a long gradient (whole at ~8 px apart, gone at
+    ~2.5), so lines running away from you outlast the ones packing toward the horizon; majors
+    fade the same way at their own spacing. Minor lines also end at 56 cells plus 3 per cell of
+    height: farther than before near the ground, much nearer from high up. The whole grid fades
+    over a longer gradient (from a tenth of the way out).
+  - **Tools moved into the inventory**, beside its hotbar, with a line saying what the tool in
+    hand does. A badge left of the workspace hotbar names the tool and opens the inventory.
+    The left rail is gone, and the selection panel and Dev panel moved to the left edge.
+  - **Delete** opens and closes the inventory, with E (the right-hand key, as in Godot).
+    **Backspace** now empties the selection, and only while Select or Wand is in hand.
+  - **Keys.** The hint along the bottom is gone. **Keys** in the top bar opens a panel of every
+    binding by what it is for (moving, building, selecting, the wand, hotbar and inventory,
+    history, the 2D view), right-hand keys in their own column, and the tool in hand marked.
+    The list is `editor/keybindings.ts`, where a rebinding screen would start.
+  - **The palette drawer** no longer covers the panes: they shrink beside it.
+  - Choices to review:
+    1. The slice guide follows the 2D pane's visible window (it moves when you pan the 2D view)
+       rather than the build's bounds.
+    2. Tools change only through the inventory (and its badge), as in Godot; there are no tool
+       keys yet.
+    3. The hint bar is gone with nothing in its place, so a first visit has no "click to fly"
+       on screen; Keys is the help.
+    4. A cut's compass names left and right instead of drawing a disc.
+- **Next:** step 4, the clipboard and prefabs, unless the user picks from the gaps below or
+  settles the cross-project questions first.
+
+## Cross-project resources (what is planned, and what is not)
+
+The user asked (2026-10-07) how resources that span projects fit: palettes as a top-level
+thing beside each project's own, promoting one, a semantic editor with descriptions (which
+tell agents what a semantic is for), and a way in that is less abrupt than opening straight
+into a project.
+
+**Already decided or built.**
+
+- **Shared palettes** are user-level palettes (web-core.md, confirmed 2026-10-06). A project
+  palette can extend one; the project holds a read-only *linked copy*, made and refreshed by
+  `palette_sync`, so the project renders anywhere without the owner's palettes. The core
+  command exists and the sample city themes use it. Nothing stores user-level palettes yet,
+  and no screen shows them.
+- **Semantics carry a description** in the core model (`Semantic.description`), inherited
+  like the name. The palette drawer cannot edit it yet.
+- **Block libraries** are already user-level (OPFS `LibraryStore`); the jar import sits in the
+  Dev panel for now.
+- **Step 8** (project home and settings) covers projects only: a list with thumbnails, new,
+  samples, import, project settings, app settings.
+
+**Not planned yet.** A store and screen for shared palettes; promoting a project palette to a
+shared one; a semantic editor with descriptions; where libraries and prefabs are managed
+outside a project; what the app opens on.
+
+**Proposal (awaiting the user).**
+
+1. **Home** replaces step 8's project list with four tabs: **Projects**, **Palettes** (the
+   shared ones), **Blocks** (libraries: import a jar, browse), **Prefabs**. The top bar gets a
+   Home button.
+2. **Shared palettes** are stored in OPFS beside the libraries (later synced with the
+   account). Editing one there is the same editor as the drawer. Each project that links it
+   shows "a newer version is available" and re-syncs with one click (`palette_sync`), never
+   silently, so a project only changes when its owner says so.
+3. **Promote**: on a project palette, "Share as a palette" copies it to the shared palettes
+   and turns the project's palette into a linked copy of it (cells keep their semantic ids;
+   `palette_sync` matches by key). The reverse, "Make a local copy", unlinks it.
+4. **Semantic editor**: name, description (a line on what it is for: the hint an agent and a
+   teammate read), placement form and look, in the drawer and in Home's palette editor. The
+   new-project starter semantics get descriptions ("Wall: vertical structure of the outer
+   shell", ...).
+5. **What opens first**: the first visit goes straight into a new empty build (the simplicity
+   the user likes); after that the app opens on Home, with the last project a click away
+   ("Continue New build"). Or: always reopen the last project, with Home one click away.
+
+## Gaps from the Godot app (2026-10-07)
+
+A survey of `scripts/` against the web plans, so differences are chosen, not missed. Items
+the editor steps already cover are listed last.
+
+**Not in any plan yet**
+
+| Godot feature | Where it lives in Godot | Suggestion |
+| --- | --- | --- |
+| Render modes per 3D view: Textured, Intent (flat colour per semantic), Clay, Outline, X-ray, Wire; lighting App/Studio/Flat; orthographic projection; plain background | `ViewOptions.gd`, `ViewToolbar.gd` | A Render menu in the 3D bar. Intent first: it is principle 5 made visible, and agents' tier 1 captures use the same look |
+| Camera presets (frame all; from N/S/E/W; top; iso) and auto-orbit at three speeds | `ViewToolbar.gd`, `CameraFraming.gd` | A Camera menu in the 3D bar; `CameraFraming` math is also what agent captures need (Phase 4) |
+| Choosing the 2D slice from the 3D view (Tab or Enter: a plane through the aimed cell, cycle the axis, move it, confirm) | `View3D.gd` slice-select | With step 7, or as a 2D-bar action "slice at the crosshair" |
+| A 2D view showing another 2D view's slice as a line | `View2DGrid.gd` guide line | Cheap once there are two 2D panes |
+| Build-to-me (fill from the aimed cell to where you stand), Exchange (swap blocks in place), brush size | `View3D.gd`, `ToolsPanel.gd` | New tools in the inventory's tool strip, after step 4 |
+| R turns the aimed block in place (Shift backwards) | `View3D.gd` `_rotate_targeted_block` | Step 5 already has "rotate on face"; add the key there |
+| Twelve hotbar slots (keys 1-9, 0 for the tenth; the wheel reaches all twelve) | `VoxelWorld.gd` `HOTBAR_SIZE`, `Hotbar.gd` | Decide: 9 like Minecraft, or more like Godot |
+| Sprint on a left Ctrl tap (the web has only `\`, a right-hand key) | `View3D.gd` `_tap_sprint` | Add left Ctrl tap, so each hand has a sprint |
+| Inventory: a "+" tile adds a semantic, right-click removes one, a search box (Tab) that also narrows the palettes, a Prefabs page | `InventoryScreen.gd`, `PalettePanel.gd` | Search and "+" soon; Prefabs page with step 4 |
+| Block chooser with a library filter rail and a turning 3D preview (1×1, 1×3, 3×3) | `BlockChooser.gd`, `BlockPreview3D.gd` | Improve the drawer's block picker when Home's Blocks tab is built |
+| Making a block from your own textures; browsing a library's blocks | `HomeScreen.gd` Block Types tab, `NewBlockDialog.gd` | Home → Blocks |
+| Animated textures (water, lava, portals) and a placement pop | `View3D.gd` | Later polish |
+| Selection shown in a 2D view (bright on its layers, dim off them), part footprints and facing glyphs, rotating and flipping the 2D view, pencil, line, rectangle and fill | `View2DGrid.gd` | Step 6 |
+| Views as tabs you drag between panes, any split tree | `MultiViewShell.gd`, `ViewPane.gd` | Deliberately not: four presets are simpler. Revisit if the user misses it |
+
+**Covered by the editor steps**: copy, cut and paste with R and M and the ghost (step 4); save
+a selection as a prefab, Ctrl+P, prefab handle and tags (step 4); part ghosts and the
+alternate placement on left Ctrl and the thumb buttons (step 5); cutaway with H and End,
+"cut above camera", isolation (step 7); project settings, north, grid offset, app settings
+(step 8). In Phase 4: export to schematic (with the include/exclude preview), agent
+connections and their settings tab.

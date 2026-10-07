@@ -23,6 +23,7 @@ import { LightVolume } from "./light-volume.ts";
 import { SelectionOutline } from "./SelectionOutline.ts";
 import { Sky } from "./sky.ts";
 import { NOON, skyAt } from "./sky-model.ts";
+import { SliceGuide, type SliceWindow } from "./slice-guide.ts";
 import { TargetOutline } from "./target.ts";
 
 export type Backend = "WebGPU" | "WebGL2";
@@ -32,6 +33,10 @@ export interface ViewFrame {
   readonly id: string;
   readonly time: number;
   readonly focused: boolean;
+  /** Draw the ground grid in this pane. */
+  readonly grid: boolean;
+  /** Draw where the active 2D view cuts the world. */
+  readonly slice: boolean;
   readonly x: number;
   readonly y: number;
   readonly width: number;
@@ -144,6 +149,9 @@ export class Engine {
   readonly #target = new TargetOutline();
   readonly #selectionOutline = new SelectionOutline();
   readonly #grid = new GroundGrid();
+  readonly #sliceGuide = new SliceGuide();
+  /** Which 2D view the slice guide belongs to. */
+  #sliceOwner: object | null = null;
   #anchor: Vec3 | null = null;
   /** Where a free-cursor drag orbits, when a selection has a box around it. */
   readonly #orbitTarget = new THREE.Vector3();
@@ -189,6 +197,7 @@ export class Engine {
     this.scene.add(this.#grid.group);
     this.scene.add(this.#target.object);
     this.scene.add(this.#selectionOutline.object);
+    this.scene.add(this.#sliceGuide.object);
     this.scene.fogNode = this.#sky.fog;
     this.#sky.set(skyAt(this.#hours, "north"));
     this.fly = new FlyCamera(this.camera, this.renderer.domElement);
@@ -377,6 +386,7 @@ export class Engine {
   #updateSky(hours = this.#hours): void {
     const sky = skyAt(hours, this.#info?.north ?? "north");
     this.#sky.set(sky);
+    this.#grid.setDaylight(sky.daylight);
     this.#chunks?.setDaylight(sky.daylight);
   }
 
@@ -481,6 +491,7 @@ export class Engine {
     this.fly.dispose();
     this.#target.dispose();
     this.#selectionOutline.dispose();
+    this.#sliceGuide.dispose();
     this.#grid.dispose();
     this.#chunks?.dispose();
     this.#sky.dispose();
@@ -625,6 +636,7 @@ export class Engine {
       this.renderer.setScissorTest(false);
       this.renderer.setViewport(0, 0, this.#width, this.#height);
       if (only) this.#updateSky(only.time);
+      this.#showOverlays(only);
       this.#grid.follow(this.camera.position);
       this.camera.aspect = this.#width / this.#height;
       this.camera.updateProjectionMatrix();
@@ -649,12 +661,55 @@ export class Engine {
       cam.aspect = frame.width / frame.height;
       cam.updateProjectionMatrix();
       this.#updateSky(frame.time);
+      this.#showOverlays(frame);
       this.#grid.follow(cam.position);
       this.renderer.setViewport(frame.x, frame.y, frame.width, frame.height);
       this.renderer.setScissor(frame.x, frame.y, frame.width, frame.height);
       this.renderer.render(this.scene, cam);
     }
     this.renderer.setScissorTest(false);
+  }
+
+  /** The pane's own choices of overlay. Before the panes are measured, everything shows. */
+  #showOverlays(frame: ViewFrame | undefined): void {
+    this.#grid.visible = frame?.grid ?? true;
+    this.#sliceGuide.object.visible =
+      (frame?.slice ?? true) && this.#sliceGuide.window !== null && this.#info !== null;
+  }
+
+  /**
+   * Shows where a 2D view cuts the world, in the 3D panes that want it. `owner` is the 2D
+   * view; only the active one should call this, and a later owner takes over.
+   */
+  setSliceGuide(owner: object, window: SliceWindow | null): void {
+    this.#sliceOwner = window ? owner : null;
+    this.#sliceGuide.show(window);
+  }
+
+  /** Drops the slice guide if `owner` still holds it (its 2D view closed or lost focus). */
+  clearSliceGuide(owner: object): void {
+    if (this.#sliceOwner !== owner) return;
+    this.#sliceOwner = null;
+    this.#sliceGuide.show(null);
+  }
+
+  /** Every 3D pane's camera, for the 2D view's markers. The focused one is flown. */
+  viewCameras(): { readonly camera: THREE.PerspectiveCamera; readonly focused: boolean }[] {
+    if (!this.#framesSet) return [{ camera: this.camera, focused: true }];
+    const out: { camera: THREE.PerspectiveCamera; focused: boolean }[] = [];
+    for (const frame of this.#viewFrames) {
+      const camera = frame.focused ? this.camera : this.#views.get(frame.id)?.camera;
+      if (camera) out.push({ camera, focused: frame.focused });
+    }
+    return out;
+  }
+
+  /** A 3D pane's heading: its camera's turn about the vertical (0 looks toward -z). */
+  viewYaw(id: string): number | null {
+    const frame = this.#viewFrames.find((f) => f.id === id);
+    const camera = frame?.focused ? this.camera : this.#views.get(id)?.camera;
+    if (!camera) return null;
+    return yawOf(camera);
   }
 
   #frameAt(event: { clientX: number; clientY: number }): ViewFrame | null {
@@ -801,12 +856,22 @@ export class Engine {
       return;
     }
     if (isTyping(event.target)) return;
-    if (event.code === "KeyE" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    // E, or Delete for the right hand, as in the Godot app.
+    const plain = !event.ctrlKey && !event.metaKey && !event.altKey;
+    if (plain && (event.code === "KeyE" || event.code === "Delete")) {
       event.preventDefault();
       this.toggleInventory();
       return;
     }
-    if (event.code === "Delete" && this.selection.get().cells > 0) {
+    // Backspace empties the selection, only while a selection tool is in hand, so a
+    // selection left behind never takes the key from Build.
+    const tool = this.tool.get();
+    if (
+      plain &&
+      event.code === "Backspace" &&
+      (tool === "select" || tool === "wand") &&
+      this.selection.get().cells > 0
+    ) {
       event.preventDefault();
       this.clearSelection();
       return;
@@ -1001,6 +1066,13 @@ function cellBox(cell: Vec3): {
   z1: number;
 } {
   return { x0: cell[0], y0: cell[1], z0: cell[2], x1: cell[0], y1: cell[1], z1: cell[2] };
+}
+
+const EULER = new THREE.Euler();
+
+/** A camera's turn about the vertical, as FlyCamera's yaw. */
+export function yawOf(camera: THREE.Camera): number {
+  return EULER.setFromQuaternion(camera.quaternion, "YXZ").y;
 }
 
 function clampSteps(steps: number): number {

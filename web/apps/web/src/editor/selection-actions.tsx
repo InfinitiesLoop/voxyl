@@ -41,7 +41,7 @@ const ACTIONS: readonly SelectionAction[] = [
   {
     id: "clear",
     label: () => "Clear",
-    title: "Empty the selected cells. The Delete key does this too.",
+    title: "Empty the selected cells. Backspace does this too, with Select or Wand in hand.",
     enabled: (ctx) => ctx.selection.occupied > 0,
     run: (ctx) => ctx.engine.clearSelection(),
   },

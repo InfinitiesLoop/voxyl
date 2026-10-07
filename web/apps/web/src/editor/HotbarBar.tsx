@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { readSemanticDrag, SEMANTIC_DRAG } from "./drag.ts";
 import type { Hotbar } from "./hotbar.ts";
 import { useStore } from "./useStore.ts";
@@ -6,8 +6,9 @@ import { useStore } from "./useStore.ts";
 /**
  * The hotbar along the bottom: nine semantic slots, the chosen one outlined and named above.
  * A swatch is the semantic's look (its block's colour, or its tint while undecided).
+ * `aside` sits to the left of the slots without moving them off centre (the tool badge).
  */
-export function HotbarBar({ hotbar }: { hotbar: Hotbar }) {
+export function HotbarBar({ hotbar, aside }: { hotbar: Hotbar; aside?: ReactNode }) {
   const { slots, selected } = useStore(hotbar.state);
   const [over, setOver] = useState<number | null>(null);
   const current = slots[selected];
@@ -15,6 +16,7 @@ export function HotbarBar({ hotbar }: { hotbar: Hotbar }) {
     <div className="hotbar">
       <div className="hotbar-name">{current ? current.name : "Empty slot"}</div>
       <div className="hotbar-slots">
+        {aside && <div className="hotbar-aside">{aside}</div>}
         {slots.map((slot, i) => (
           <button
             // biome-ignore lint/suspicious/noArrayIndexKey: slots are positions, not items

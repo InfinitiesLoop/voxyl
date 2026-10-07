@@ -24,6 +24,8 @@ interface TopBarProps {
   onDev: () => void;
   palettesOpen: boolean;
   onPalettes: () => void;
+  keysOpen: boolean;
+  onKeys: () => void;
 }
 
 /**
@@ -31,7 +33,7 @@ interface TopBarProps {
  * saved), undo and redo, a new project, and how the view looks.
  */
 const PRESETS: readonly { preset: LayoutPreset; label: string; title: string }[] = [
-  { preset: "single", label: "1", title: "One view" },
+  { preset: "single", label: "Full", title: "One view, the whole window" },
   { preset: "columns", label: "Side", title: "Two views side by side" },
   { preset: "rows", label: "Stack", title: "Two views, one above the other" },
   { preset: "grid", label: "Grid", title: "Four views" },
@@ -53,6 +55,8 @@ export function TopBar({
   onDev,
   palettesOpen,
   onPalettes,
+  keysOpen,
+  onKeys,
 }: TopBarProps) {
   const history = useStore(engine.history);
   const name = useStore(engine.projectName) || info?.name || "";
@@ -137,6 +141,14 @@ export function TopBar({
         busy={busy}
         volumeLighting={volumeLighting}
       />
+      <button
+        type="button"
+        aria-pressed={keysOpen}
+        title="Every key and mouse button"
+        onClick={click(onKeys)}
+      >
+        Keys
+      </button>
       <button type="button" aria-pressed={devOpen} onClick={click(onDev)}>
         Dev
       </button>
