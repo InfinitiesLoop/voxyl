@@ -1,14 +1,19 @@
 // What each cell state looks like, from the project's registry: semantics resolve their looks
 // through palette inheritance, so re-skinning a palette changes this table and never a cell.
 // A look that names a block ("library:block") draws with that block's textures when a library
-// here has it, and as the look's tint otherwise.
+// here has it, and as the look's tint otherwise. A block that isn't a whole cube (a slab, a
+// fence) also gives the mesher the geometry of its model, so a look can change a cell's shape.
 
 import {
   type CompiledBlock,
   type CompiledFace,
+  type CompiledShape,
   compileBlock,
+  compileShape,
+  FACE_SIDES,
   type Libraries,
   parseBlockRef,
+  type ShapeFace,
   type Texture,
 } from "@voxyl/blocks";
 import {
@@ -22,14 +27,25 @@ import {
   type SemanticRegistry,
 } from "@voxyl/core";
 import { type LightMaterials, packEmission } from "@voxyl/light";
+import { FACES, type ModelFaces, type ModelShape } from "@voxyl/mesher";
 import { slotName } from "@voxyl/shapes";
 
 /** How an undecided semantic with no hint colour draws. */
 export const UNDECIDED_COLOR = "#8a8f98";
 /** Light level of a glowing look. */
 const GLOW_LEVEL = 15;
-/** Entries per state in StateLooks.faces: one per face (+X, -X, +Y, -Y, +Z, -Z), then two unused. */
+/**
+ * Material slots every state has first, one per face (+X, -X, +Y, -Y, +Z, -Z); a block
+ * model's own faces count on from here (see ModelFaces in @voxyl/mesher).
+ */
+export const SIDE_SLOTS = 6;
+/**
+ * Entries per state in StateLooks.faces: its SIDE_SLOTS face materials, then where its
+ * model's slots start in StateLooks.modelSlots, then one unused.
+ */
 export const FACE_SLOTS = 8;
+/** Most material slots a state can have (quads keep the slot in a byte when merging). */
+const MAX_SLOTS = 256;
 /**
  * Floats per material in BlockMaterials.data: the face's uv map (two rows of four, see
  * faceUvMap in @voxyl/blocks), then its texture layer and tint (red, green, blue, 0..1).
@@ -113,12 +129,22 @@ export interface StateLooks {
    */
   readonly colors: Uint8Array;
   /**
-   * FACE_SLOTS per state id: each face's material (see BlockMaterials), 0 where it draws in its
-   * colour. Only states of whole cubes with a block have any.
+   * FACE_SLOTS per state id: the material (see BlockMaterials) of each face, 0 where it
+   * draws in its colour, then where the state's block model slots start in modelSlots. A
+   * cube draws its faces with the first six; a block model's faces use slot SIDE_SLOTS + k,
+   * modelSlots[start + k], and its first six serve parts drawn in its look. Kept apart so a
+   * cube's face costs the renderer one lookup.
    */
-  readonly faces: Uint16Array;
+  readonly faces: Uint32Array;
+  /** Materials of block models' faces, each state's from its start in `faces`. */
+  readonly modelSlots: Uint16Array;
   /** 1 per state id for a whole cube that can be seen through (ShapeTable.clear). */
   readonly clear: Uint8Array;
+  /**
+   * Per state id, the block model that shapes its cells (ShapeTable.setModels), for a look
+   * whose block isn't a whole cube; null otherwise.
+   */
+  readonly models: (ModelShape | null)[];
   /** Opacity and emission for the light engine. */
   readonly materials: LightMaterials;
 }
@@ -137,7 +163,8 @@ export function lookColor(look: Look, blocks?: BlockMaterials): string {
 /**
  * Resolves the look of every state in `states`. Without `blocks`, every look draws as its
  * tint; with it, a look naming a block draws that block's textures, and its light follows
- * the block (glass lets light through, light sources glow).
+ * the block (glass lets light through, light sources glow). A block that isn't a whole cube
+ * shapes the state's cells with its model.
  */
 export function stateLooks(
   states: CellStateTable,
@@ -146,8 +173,10 @@ export function stateLooks(
 ): StateLooks {
   const size = states.size + 1;
   const colors = new Uint8Array(size * 4);
-  const faces = new Uint16Array(size * FACE_SLOTS);
+  const faces = new Uint32Array(size * FACE_SLOTS);
+  const modelSlots: number[] = [];
   const clear = new Uint8Array(size);
+  const models: (ModelShape | null)[] = new Array(size).fill(null);
   const opaque = new Uint8Array(size);
   const emission = new Uint16Array(size);
   const looks = new Map<SemanticId, Look>();
@@ -181,15 +210,84 @@ export function stateLooks(
     opaque[id] = parts.length > 0 || block?.transparent ? 0 : 1;
     const level = look.glow ? GLOW_LEVEL : (block?.emits ?? 0);
     if (level > 0) emission[id] = packEmission(color, level);
-    // Other shapes (slabs, stairs) draw as coloured cubes until block models are meshed.
-    if (block?.cube && blocks) {
+    if (!block || !blocks || !look.block) continue;
+    const at = id * FACE_SLOTS;
+    if (block.cube) {
       block.cube.forEach((face, f) => {
-        faces[id * FACE_SLOTS + f] = face ? blocks.material(face) : 0;
+        faces[at + f] = face ? blocks.material(face) : 0;
       });
       if (block.cube.some((face) => face?.alpha !== "opaque")) clear[id] = 1;
+      continue;
     }
+    const shape = compileShape(blocks.libraries, look.block, state.rotation);
+    if (!shape) continue;
+    // Its faces by side, for parts drawn in this look; then a slot per material its model's
+    // faces use.
+    shape.sides.forEach((face, f) => {
+      faces[at + f] = face ? blocks.material(face) : 0;
+    });
+    const start = modelSlots.length;
+    faces[at + SIDE_SLOTS] = start;
+    const slots = new Map<number, number>();
+    const slotOf = (face: ShapeFace) => {
+      const material = blocks.material(face.face);
+      let slot = slots.get(material);
+      if (slot === undefined) {
+        slot = Math.min(SIDE_SLOTS + slots.size, MAX_SLOTS - 1);
+        if (slot === SIDE_SLOTS + slots.size) modelSlots.push(material);
+        slots.set(material, slot);
+      }
+      return slot;
+    };
+    models[id] = modelShape(shape, slotOf);
   }
-  return { colors, faces, clear, materials: { opaque, emission } };
+  return {
+    colors,
+    faces,
+    modelSlots: Uint16Array.from(modelSlots),
+    clear,
+    models,
+    materials: { opaque, emission },
+  };
+}
+
+/** A compiled block shape as the mesher takes it: rects where it can, triangles otherwise. */
+function modelShape(shape: CompiledShape, slotOf: (face: ShapeFace) => number): ModelShape {
+  const variants = shape.variants.map((faces): ModelFaces => {
+    const rects: number[] = [];
+    const tris: number[] = [];
+    for (const face of faces) {
+      const slot = slotOf(face);
+      const opaque = face.face.alpha === "opaque" ? 1 : 0;
+      const c = face.corners;
+      const f = face.side ? FACE_SIDES.indexOf(face.side) : -1;
+      const axes = FACES[f];
+      if (axes && c.every((p) => p.every(Number.isInteger))) {
+        const along = (axis: number) => c.map((p) => p[axis] ?? 0);
+        const u = along(axes.u);
+        const v = along(axes.v);
+        rects.push(
+          f,
+          c[0][axes.axis],
+          Math.min(...u),
+          Math.min(...v),
+          Math.max(...u),
+          Math.max(...v),
+          slot,
+          opaque,
+        );
+        continue;
+      }
+      for (const [a, b, d] of [
+        [0, 1, 2],
+        [0, 2, 3],
+      ] as const) {
+        tris.push(...c[a], ...c[b], ...c[d], slot, opaque);
+      }
+    }
+    return { rects, tris };
+  });
+  return { variants, group: shape.group, joins: shape.joins };
 }
 
 function hexRgb(color: string): [number, number, number] {

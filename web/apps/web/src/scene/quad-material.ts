@@ -1,5 +1,5 @@
-import { FACES, TRI_SCALE } from "@voxyl/mesher";
-import { TEXTURE_SIZE } from "@voxyl/session";
+import { FACES, QUAD_UNITS, TRI_SCALE } from "@voxyl/mesher";
+import { FACE_SLOTS, SIDE_SLOTS, TEXTURE_SIZE } from "@voxyl/session";
 import {
   abs,
   attribute,
@@ -42,6 +42,8 @@ import {
   MATERIAL_TEXELS,
   MATERIALS_PER_ROW,
   MAX_TEXTURE_LOD,
+  SLOT_WIDTH,
+  type TextureNode,
 } from "./block-textures.ts";
 import type { LightVolume, LinearTexture } from "./light-volume.ts";
 
@@ -93,8 +95,8 @@ export type SurfaceKind = "quad" | "tri";
 function surface(kind: SurfaceKind) {
   // Explicit type arguments: inferred, the element type widens to string and loses its methods.
   if (kind === "quad") {
-    const a = attribute("quadA", "vec4").mul(65535).round(); // x, y, z (eighths), face
-    const b = attribute("quadB", "vec4").mul(65535).round(); // w, h (eighths), id, unused
+    const a = attribute("quadA", "vec4").mul(65535).round(); // x, y, z (sixteenths), face
+    const b = attribute("quadB", "vec4").mul(65535).round(); // w, h (sixteenths), id, slot
     const face = a.w.toInt();
     const corner = positionGeometry.xy;
     const u = uniformArray<"vec3">(FACE_U, "vec3").element(face);
@@ -102,18 +104,32 @@ function surface(kind: SurfaceKind) {
     const position = a.xyz
       .add(u.mul(corner.x.mul(b.x)))
       .add(v.mul(corner.y.mul(b.y)))
-      .div(8);
+      .div(QUAD_UNITS);
     const normal = uniformArray<"vec3">(FACE_NORMAL, "vec3").element(face);
-    return { position, normal, id: b.z, face: a.w };
+    return { position, normal, id: b.z, slot: b.w };
   }
   const p0 = attribute("triA", "vec4").mul(65535).round(); // x, y, z, id
-  const p1 = attribute("triB", "vec4").mul(65535).round().xyz;
+  const p1 = attribute("triB", "vec4").mul(65535).round(); // x, y, z, slot
   const p2 = attribute("triC", "vec4").mul(65535).round().xyz;
   const w = positionGeometry;
-  const position = p0.xyz.mul(w.x).add(p1.mul(w.y)).add(p2.mul(w.z)).div(TRI_SCALE);
-  const normal = normalize(cross(p1.sub(p0.xyz), p2.sub(p0.xyz)));
-  // A slope takes the texture of the side it faces most.
-  return { position, normal, id: p0.w, face: dominantFace(normal) };
+  const position = p0.xyz.mul(w.x).add(p1.xyz.mul(w.y)).add(p2.mul(w.z)).div(TRI_SCALE);
+  const normal = normalize(cross(p1.xyz.sub(p0.xyz), p2.sub(p0.xyz)));
+  return { position, normal, id: p0.w, slot: p1.w };
+}
+
+/**
+ * Entry `index` of a table of floats stored four to an RGBA texel, `width` texels a row:
+ * chosen per vertex, so the branches cost little.
+ */
+function tableEntry(table: TextureNode, width: number, index: THREE.Node<"float">) {
+  const texel = floor(index.div(4));
+  const entry = table.load(ivec2(int(texel.mod(width)), int(floor(texel.div(width)))));
+  const k = index.mod(4);
+  return select(
+    k.lessThan(0.5),
+    entry.x,
+    select(k.lessThan(1.5), entry.y, select(k.lessThan(2.5), entry.z, entry.w)),
+  );
 }
 
 /** The palette colour of a cell-state id, looked up once per vertex. */
@@ -127,9 +143,9 @@ function paletteColor(palette: THREE.Texture, id: THREE.Node<"float">) {
 /**
  * A surface's colour: its block's texture where the face has a material (see BlockTextures),
  * else its palette colour; alpha is the palette's (the glow flag). Cut-out texels are
- * discarded, so call it inside Fn. The material is looked up per vertex: a state id and a
- * face pick it from the face table, and its uv map turns the position within the cell into
- * texture coordinates per fragment, so greedy-merged faces repeat the texture once a cell.
+ * discarded, so call it inside Fn. The material is looked up per vertex: the state id finds
+ * where its slots start, the surface's slot picks one, and its uv map turns the position in
+ * the cell into texture coordinates per fragment, so merged faces repeat it once a cell.
  */
 function surfaceColor(
   palette: THREE.Texture,
@@ -137,17 +153,20 @@ function surfaceColor(
   s: ReturnType<typeof surface>,
 ): THREE.Node<"vec4"> {
   const color = paletteColor(palette, s.id);
-  const faceEntry = (() => {
-    const texelIndex = s.id.mul(2).add(floor(s.face.div(4)));
-    const at = ivec2(int(texelIndex.mod(FACE_WIDTH)), int(floor(texelIndex.div(FACE_WIDTH))));
-    const entry = texture(blocks.faces).load(at);
-    const slot = s.face.mod(4);
-    return select(
-      slot.lessThan(0.5),
-      entry.x,
-      select(slot.lessThan(1.5), entry.y, select(slot.lessThan(2.5), entry.z, entry.w)),
-    );
-  })();
+  // A face's own slot (0-5) is one lookup in the face table; a block model's slot finds its
+  // state's start there first, then reads the model slot list.
+  const faces = texture(blocks.faces);
+  const faceSlot = (k: THREE.Node<"float">) =>
+    tableEntry(faces, FACE_WIDTH, s.id.mul(FACE_SLOTS).add(k));
+  const faceEntry = select(
+    s.slot.lessThan(SIDE_SLOTS - 0.5),
+    faceSlot(s.slot),
+    tableEntry(
+      blocks.modelSlots,
+      SLOT_WIDTH,
+      faceSlot(float(SIDE_SLOTS)).add(s.slot).sub(SIDE_SLOTS),
+    ),
+  );
   const material = varying<"float">(faceEntry);
   const row = (k: number) => {
     const m = faceEntry;

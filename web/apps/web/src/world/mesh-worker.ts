@@ -27,6 +27,7 @@ scope.addEventListener("message", (event) => {
     }
     if ("clear" in request) {
       table.setClear(request.clear);
+      table.setModels(request.models);
       return;
     }
     if (!("job" in request)) {

@@ -26,7 +26,7 @@ const PREFERRED: Readonly<Record<string, readonly string[]>> = {
   type: ["bottom", "single"],
   axis: ["y"],
   face: ["floor"],
-  shape: ["straight"],
+  shape: ["straight", "north_south"],
 };
 const PLAIN = new Set(["false", "none", "0", "low", "side"]);
 

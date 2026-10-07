@@ -47,7 +47,12 @@ interface RawElement {
   readonly from: [number, number, number];
   readonly to: [number, number, number];
   readonly faces?: Readonly<Partial<Record<string, RawFace>>>;
-  readonly rotation?: { origin: [number, number, number]; axis: "x" | "y" | "z"; angle: number };
+  readonly rotation?: {
+    origin: [number, number, number];
+    axis: "x" | "y" | "z";
+    angle: number;
+    rescale?: boolean;
+  };
   readonly shade?: boolean;
 }
 
@@ -212,7 +217,12 @@ export async function importJar(bytes: Uint8Array): Promise<ImportResult> {
         to: e.to,
         faces,
         ...(e.rotation && {
-          rotation: { origin: e.rotation.origin, axis: e.rotation.axis, angle: e.rotation.angle },
+          rotation: {
+            origin: e.rotation.origin,
+            axis: e.rotation.axis,
+            angle: e.rotation.angle,
+            ...(e.rotation.rescale && { rescale: true }),
+          },
         }),
         ...(e.shade === false && { shade: false }),
       };

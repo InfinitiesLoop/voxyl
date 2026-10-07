@@ -1,17 +1,25 @@
 import { FACES } from "./faces.ts";
 import {
+  boundsKey,
   canonicalAxes,
   covers,
+  QUAD_UNITS,
   RECT_STRIDE,
   type ShapeTable,
   TRI_SCALE,
   TRI_STRIDE,
 } from "./parts.ts";
 
-/** Uint16s per quad: x, y, z (eighths of a cell), face, w, h (eighths), cell-state id, unused. */
+/**
+ * Uint16s per quad: x, y, z (sixteenths of a cell), face, w, h (sixteenths), cell-state id,
+ * material slot.
+ */
 export const QUAD_WORDS = 8;
 export const QUAD_BYTES = QUAD_WORDS * 2;
-/** Uint16s per triangle: three corners of x, y, z (1/TRI_SCALE of a cell), plus the id after the first. */
+/**
+ * Uint16s per triangle: three corners of x, y, z (1/TRI_SCALE of a cell), each followed by
+ * one word: the cell-state id, the material slot, then unused.
+ */
 export const TRI_WORDS = 12;
 export const TRI_BYTES = TRI_WORDS * 2;
 
@@ -32,16 +40,17 @@ export interface ChunkMeshInput {
 
 export interface ChunkMesh {
   /**
-   * QUAD_WORDS per quad: the corner the quad starts at (x, y, z in eighths of a cell, chunk
-   * local, on the face's plane), the face, its size along the face's U and V axes in eighths,
-   * and the cell-state id it is coloured by.
+   * QUAD_WORDS per quad: the corner the quad starts at (x, y, z in sixteenths of a cell,
+   * chunk local, on the face's plane), the face, its size along the face's U and V axes in
+   * sixteenths, the cell-state id it is coloured by, and its material slot: which of the
+   * state's textured faces it shows (the face itself for a whole cube; see ModelFaces).
    */
   readonly quads: Uint16Array;
   readonly quadCount: number;
   /**
-   * TRI_WORDS per triangle, for shaped parts that aren't axis-aligned: corners (x, y, z) in
-   * 1/TRI_SCALE of a cell, chunk local, wound counter-clockwise seen from outside; word 3 is
-   * the cell-state id.
+   * TRI_WORDS per triangle, for shaped parts and model faces that aren't axis-aligned:
+   * corners (x, y, z) in 1/TRI_SCALE of a cell, chunk local, wound counter-clockwise seen
+   * from outside; word 3 is the cell-state id, word 7 the material slot.
    */
   readonly tris: Uint16Array;
   readonly triCount: number;
@@ -199,19 +208,19 @@ export function meshChunk(input: ChunkMeshInput, shapes: ShapeTable): ChunkMesh 
           for (let dv = 0; dv < h; dv++) {
             maskId.fill(0, (v + dv) * size + u, (v + dv) * size + u + w);
           }
-          origin[face.axis] = (face.sign > 0 ? d + 1 : d) * 8;
-          origin[face.u] = u * 8;
-          origin[face.v] = v * 8;
+          origin[face.axis] = (face.sign > 0 ? d + 1 : d) * QUAD_UNITS;
+          origin[face.u] = u * QUAD_UNITS;
+          origin[face.v] = v * QUAD_UNITS;
           const out = quads.reserve(QUAD_WORDS);
           const o = quads.length;
           out[o] = origin[0] ?? 0;
           out[o + 1] = origin[1] ?? 0;
           out[o + 2] = origin[2] ?? 0;
           out[o + 3] = f;
-          out[o + 4] = w * 8;
-          out[o + 5] = h * 8;
+          out[o + 4] = w * QUAD_UNITS;
+          out[o + 5] = h * QUAD_UNITS;
           out[o + 6] = id;
-          out[o + 7] = 0;
+          out[o + 7] = f;
           quads.length += QUAD_WORDS;
           u += w;
         }
@@ -237,6 +246,14 @@ export function meshChunk(input: ChunkMeshInput, shapes: ShapeTable): ChunkMesh 
   };
 }
 
+/** Padded-array steps to the sides a joining model's mask counts: north, east, south, west. */
+const JOIN_STEPS = [
+  [2, -1],
+  [0, 1],
+  [2, 1],
+  [0, -1],
+] as const;
+
 /**
  * Adds the faces of the chunk's shaped cells: rects to `quads` (merged across cells), and
  * returns the triangles. Flags the light bricks each shaped cell reads in `read` (as
@@ -253,18 +270,44 @@ function meshParts(
 ): Words {
   const P = size + 2;
   const strides = [1, P * P, P] as const;
-  const { cube, clear, geometry } = shapes;
+  const { cube, clear, geometry, variants, group, joins } = shapes;
   const tris = new Words(0);
   if (shapedCells.length === 0) return tris;
   const B = 1 << brickBits;
   const NB = (size >> brickBits) + 2;
-  // Visible rects by plane: key (face * 1025 + plane) * 65536 + colour -> u0, v0, u1, v1, ...
+  const U = QUAD_UNITS;
+  // Visible rects by plane, colour and slot: key -> u0, v0, u1, v1, ...
   const planes = new Map<number, number[]>();
   const uLow = [0, 1, 2, 3, 4, 5].map((f) => canonicalAxes(f).uLow);
   const cell = [0, 0, 0];
+  const at = [0, 0, 0];
+
+  /**
+   * The geometry of the cell at a padded index: for a model that joins its neighbours, the
+   * one for the sides it joins. Sides outside the padded array count as not joined; only
+   * cells in the chunk and their direct neighbours are asked, and those only about the side
+   * facing the chunk.
+   */
+  const geometryAt = (index: number) => {
+    const id = cells[index] ?? 0;
+    const options = variants[id];
+    if (!options) return geometry[id];
+    at[0] = index % P;
+    at[2] = Math.floor(index / P) % P;
+    let mask = 0;
+    for (let bit = 0; bit < 4; bit++) {
+      const [axis, sign] = JOIN_STEPS[bit] as readonly [number, number];
+      const c = (at[axis] ?? 0) + sign;
+      if (c < 0 || c >= P) continue;
+      const n = cells[index + sign * (strides[axis as 0 | 1 | 2] ?? 0)] ?? 0;
+      if (cube[n] || ((group[n] ?? 0) & (joins[id] ?? 0)) !== 0) mask |= 1 << bit;
+    }
+    return options[mask];
+  };
 
   for (const index of shapedCells) {
-    const g = geometry[cells[index] ?? 0];
+    const id = cells[index] ?? 0;
+    const g = geometryAt(index);
     if (!g) continue;
     const x = (index % P) - 1;
     const z = (Math.floor(index / P) % P) - 1;
@@ -293,41 +336,53 @@ function meshParts(
       const v0 = r[i + 3] ?? 0;
       const u1 = r[i + 4] ?? 0;
       const v1 = r[i + 5] ?? 0;
-      if (plane === (face.sign > 0 ? 8 : 0)) {
-        const n = cells[index + face.sign * strides[face.axis]] ?? 0;
+      if (plane === (face.sign > 0 ? U : 0)) {
+        const ni = index + face.sign * strides[face.axis];
+        const n = cells[ni] ?? 0;
         if (cube[n] && !clear[n]) continue;
-        const ng = geometry[n];
+        const ng = n === 0 ? undefined : geometryAt(ni);
         if (ng) {
+          // Hidden if the neighbour covers every eighth this face touches...
+          const a0 = Math.floor(u0 / 2);
+          const b0 = Math.floor(v0 / 2);
+          const a1 = Math.ceil(u1 / 2);
+          const b1 = Math.ceil(v1 / 2);
           const hidden = uLow[f]
-            ? covers(ng.cover, f ^ 1, u0, v0, u1, v1)
-            : covers(ng.cover, f ^ 1, v0, u0, v1, u1);
+            ? covers(ng.cover, f ^ 1, a0, b0, a1, b1)
+            : covers(ng.cover, f ^ 1, b0, a0, b1, a1);
           if (hidden) continue;
+          // ...or meets the very same face of it, opaque or of the same state.
+          const meets = ng.bounds[f ^ 1]?.get(boundsKey(f, u0, v0, u1, v1));
+          if (meets !== undefined && (meets || n === id)) continue;
         }
       }
-      const key = (f * 1025 + (cell[face.axis] ?? 0) * 8 + plane) * 65536 + (r[i + 6] ?? 0);
+      const slot = r[i + 7] ?? 0;
+      const key =
+        ((f * 4097 + (cell[face.axis] ?? 0) * U + plane) * 65536 + (r[i + 6] ?? 0)) * 256 + slot;
       let list = planes.get(key);
       if (!list) {
         list = [];
         planes.set(key, list);
       }
-      const cu = (cell[face.u] ?? 0) * 8;
-      const cv = (cell[face.v] ?? 0) * 8;
+      const cu = (cell[face.u] ?? 0) * U;
+      const cv = (cell[face.v] ?? 0) * U;
       list.push(cu + u0, cv + v0, cu + u1, cv + v1);
     }
 
     const t = g.tris;
     for (let i = 0; i < t.length; i += TRI_STRIDE) {
-      const b = t[i + 10] ?? -1;
+      const b = t[i + 11] ?? -1;
       if (b >= 0) {
         const face = FACES[b];
         if (!face) continue;
-        const n = cells[index + face.sign * strides[face.axis]] ?? 0;
+        const ni = index + face.sign * strides[face.axis];
+        const n = cells[ni] ?? 0;
         if (cube[n] && !clear[n]) continue;
-        const ng = geometry[n];
-        if (ng && ((t[i + 11] ?? 0) | (t[i + 12] ?? 0)) !== 0) {
+        const ng = n === 0 ? undefined : geometryAt(ni);
+        if (ng && ((t[i + 12] ?? 0) | (t[i + 13] ?? 0)) !== 0) {
           // Hidden if the neighbour covers every eighth of the side this triangle does.
-          const lo = t[i + 11] ?? 0;
-          const hi = t[i + 12] ?? 0;
+          const lo = t[i + 12] ?? 0;
+          const hi = t[i + 13] ?? 0;
           const side = (b ^ 1) * 2;
           if (
             ((ng.cover[side] ?? 0) & lo) >>> 0 === lo &&
@@ -346,32 +401,35 @@ function meshParts(
         out[o + k * 4 + 3] = 0;
       }
       out[o + 3] = t[i + 9] ?? 0;
+      out[o + 7] = t[i + 10] ?? 0;
       tris.length += TRI_WORDS;
     }
   }
 
   for (const [key, list] of planes) {
-    const color = key % 65536;
-    const rest = (key - color) / 65536;
-    const f = Math.floor(rest / 1025);
-    const plane = rest % 1025;
+    const slot = key % 256;
+    const rest = (key - slot) / 256;
+    const color = rest % 65536;
+    const where = (rest - color) / 65536;
+    const f = Math.floor(where / 4097);
+    const plane = where % 4097;
     const face = FACES[f];
     if (!face) continue;
     for (const { u0, v0, u1, v1 } of mergeRects(list)) {
       const out = quads.reserve(QUAD_WORDS);
       const o = quads.length;
-      const at = [0, 0, 0];
-      at[face.axis] = plane;
-      at[face.u] = u0;
-      at[face.v] = v0;
-      out[o] = at[0] ?? 0;
-      out[o + 1] = at[1] ?? 0;
-      out[o + 2] = at[2] ?? 0;
+      const p = [0, 0, 0];
+      p[face.axis] = plane;
+      p[face.u] = u0;
+      p[face.v] = v0;
+      out[o] = p[0] ?? 0;
+      out[o + 1] = p[1] ?? 0;
+      out[o + 2] = p[2] ?? 0;
       out[o + 3] = f;
       out[o + 4] = u1 - u0;
       out[o + 5] = v1 - v0;
       out[o + 6] = color;
-      out[o + 7] = 0;
+      out[o + 7] = slot;
       quads.length += QUAD_WORDS;
     }
   }

@@ -26,11 +26,11 @@ function meshOrigin(world: World) {
   return meshChunk({ bits: L.bits, cells, lightBrickBits: null }, ShapeTable.of(world.states));
 }
 
-/** Quads as [face, x, y, z, w, h] in eighths of a cell. */
+/** Quads as [face, x, y, z, w, h] in eighths of a cell (they store sixteenths). */
 function quads(mesh: ReturnType<typeof meshOrigin>) {
   return Array.from({ length: mesh.quadCount }, (_, q) => {
     const at = (i: number) => mesh.quads[q * QUAD_WORDS + i] ?? 0;
-    return [at(3), at(0), at(1), at(2), at(4), at(5)];
+    return [at(3), at(0) / 2, at(1) / 2, at(2) / 2, at(4) / 2, at(5) / 2];
   });
 }
 

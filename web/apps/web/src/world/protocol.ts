@@ -8,7 +8,7 @@
 // sends about a world is tagged with the world's id, so messages about a world that has since
 // been replaced are dropped.
 
-import type { StateShape } from "@voxyl/mesher";
+import type { ModelShape, StateShape } from "@voxyl/mesher";
 import type { LightingMode, LightLayoutUpdate, MeshJob, ProjectEntry } from "@voxyl/session";
 import type { SliceAxis } from "../views/plane.ts";
 import type { WorldInfo, WorldSource } from "../worlds.ts";
@@ -152,8 +152,10 @@ export type FromWorld =
 export interface LooksUpdate {
   /** StateLooks.colors. */
   readonly colors: Uint8Array;
-  /** StateLooks.faces: each state's face materials. */
-  readonly faces: Uint16Array;
+  /** StateLooks.faces: each state's face materials, and where its model's slots start. */
+  readonly faces: Uint32Array;
+  /** StateLooks.modelSlots: block models' face materials. */
+  readonly modelSlots: Uint16Array;
   /** Every material so far (BlockMaterials.data). */
   readonly materials: Float32Array;
   /** Texture layers added since the last looks, from layer `from` (takeTextures). */
@@ -162,13 +164,17 @@ export interface LooksUpdate {
 
 /**
  * What the world worker sends a mesh worker, tagged with its world: a job, the shapes of
- * cell states from id `from` on, or which states are clear (both sent before any job that
- * uses them).
+ * cell states from id `from` on, or what the looks decide about shapes: which states are
+ * clear and which draw a block model (all sent before any job that uses them).
  */
 export type MeshRequest =
   | { readonly world: number; readonly job: MeshJob }
   | { readonly world: number; readonly from: number; readonly shapes: readonly StateShape[] }
-  | { readonly world: number; readonly clear: Uint8Array };
+  | {
+      readonly world: number;
+      readonly clear: Uint8Array;
+      readonly models: readonly (ModelShape | null)[];
+    };
 
 /** What a mesh worker sends back. */
 export interface MeshReply {

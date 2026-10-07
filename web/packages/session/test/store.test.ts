@@ -177,6 +177,7 @@ describe("stateLooks with blocks", () => {
     const mass = states.intern({ semantic: project.semantics.byName("Mass", 1) as number });
     const looks = stateLooks(states, project.semantics, blocks());
     expect(looks.faces.every((m) => m === 0)).toBe(true);
+    expect(looks.models.every((m) => m === null)).toBe(true);
     expect([...looks.colors.subarray(mass * 4, mass * 4 + 3)]).toEqual([0x3b, 0x40, 0x48]);
   });
 });

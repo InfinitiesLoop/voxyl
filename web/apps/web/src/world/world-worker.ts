@@ -8,7 +8,7 @@ import { DEFAULT_LIBRARY_ID, defaultLibrary, type Library } from "@voxyl/blocks"
 import { type CellStateTable, EMPTY_ID, type Project, raycast } from "@voxyl/core";
 import { CITY_THEME_KEY, cityThemeOf, cityThemePalette } from "@voxyl/fixtures";
 import { importJar } from "@voxyl/mc-import";
-import type { StateShape } from "@voxyl/mesher";
+import type { ModelShape, StateShape } from "@voxyl/mesher";
 import {
   BlockMaterials,
   describeState,
@@ -91,8 +91,20 @@ const librariesLoaded = libraryStore
   .catch((error: unknown) => console.error("Reading the block libraries failed", error));
 /** Textured faces of the open world's looks, numbered as the renderer has them. */
 let blocks = new BlockMaterials(libraries);
-/** Which states are clear (StateLooks.clear), as the mesh workers last heard. */
-let clearSent: Uint8Array = new Uint8Array(0);
+/**
+ * What the mesh workers last heard of the looks' say in shapes: which states are clear
+ * (StateLooks.clear) and their block models, with each model as JSON to compare.
+ */
+const NO_LOOK_SHAPES: {
+  clear: Uint8Array;
+  models: (ModelShape | null)[];
+  keys: string[];
+} = {
+  clear: new Uint8Array(0),
+  models: [],
+  keys: [],
+};
+let lookShapesSent = NO_LOOK_SHAPES;
 let pumpScheduled = false;
 const meshTimes: number[] = [];
 
@@ -156,7 +168,7 @@ async function open(command: Extract<Command, { type: "load" }>): Promise<WorldI
   looksPosted = { states: -1, revision: -1 };
   shapes = [];
   blocks = new BlockMaterials(libraries);
-  clearSent = new Uint8Array(0);
+  lookShapesSent = NO_LOOK_SHAPES;
   idlePosted = -1;
   meshTimes.length = 0;
   if (mode !== "off") session.setLighting(mode, materials);
@@ -345,35 +357,41 @@ function postLooks(s: WorldSession): void {
   const states = s.world.states;
   const registry = (project as Project).semantics;
   if (states.size === looksPosted.states && registry.revision === looksPosted.revision) return;
-  const { colors, faces, clear } = stateLooks(states, registry, blocks);
+  const { colors, faces, modelSlots, clear, models } = stateLooks(states, registry, blocks);
   const materials = blocks.data;
   const textures = blocks.takeTextures();
-  post({ type: "looks", world: worldId, colors, faces, materials, textures }, [
+  post({ type: "looks", world: worldId, colors, faces, modelSlots, materials, textures }, [
     colors.buffer,
     faces.buffer,
+    modelSlots.buffer,
     materials.buffer,
     textures.rgba.buffer,
   ]);
   looksPosted = { states: states.size, revision: registry.revision };
-  sendClear(s, clear);
+  sendLookShapes(s, clear, models);
 }
 
 /**
- * Tells the mesh workers which states are clear, if that changed. A state that was clear
- * and isn't (or the other way round) changes which faces hide, so every chunk is meshed again.
+ * Tells the mesh workers which states are clear and which draw a block model, if that
+ * changed. A state already in use whose answer changed changes which faces show, so every
+ * chunk is meshed again.
  */
-function sendClear(s: WorldSession, clear: Uint8Array): void {
-  let same = clear.length === clearSent.length;
+function sendLookShapes(s: WorldSession, clear: Uint8Array, models: (ModelShape | null)[]): void {
+  const keys = models.map((m) => (m ? JSON.stringify(m) : ""));
+  let same = clear.length === lookShapesSent.clear.length;
   let remesh = false;
-  for (let id = 0; id < Math.max(clear.length, clearSent.length); id++) {
-    if ((clear[id] ?? 0) === (clearSent[id] ?? 0)) continue;
+  const n = Math.max(clear.length, lookShapesSent.clear.length);
+  for (let id = 0; id < n; id++) {
+    const was = lookShapesSent.clear[id] ?? 0;
+    const wasModel = lookShapesSent.keys[id] ?? "";
+    if ((clear[id] ?? 0) === was && (keys[id] ?? "") === wasModel) continue;
     same = false;
     // A state new since the last send has no cells meshed with the old answer.
-    if (id < clearSent.length) remesh = true;
+    if (id < lookShapesSent.clear.length) remesh = true;
   }
   if (same) return;
-  clearSent = clear;
-  const request: MeshRequest = { world: worldId, clear };
+  lookShapesSent = { clear, models, keys };
+  const request: MeshRequest = { world: worldId, clear, models };
   for (const p of meshPorts) p.port.postMessage(request);
   if (remesh) s.remeshAll();
 }
@@ -405,8 +423,9 @@ scope.addEventListener("message", (event) => {
         const request: MeshRequest = { world: worldId, from: 1, shapes };
         port.postMessage(request);
       }
-      if (clearSent.length > 0) {
-        const request: MeshRequest = { world: worldId, clear: clearSent };
+      if (lookShapesSent.clear.length > 0) {
+        const { clear, models } = lookShapesSent;
+        const request: MeshRequest = { world: worldId, clear, models };
         port.postMessage(request);
       }
       return entry;

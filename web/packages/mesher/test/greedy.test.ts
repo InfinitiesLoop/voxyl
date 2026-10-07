@@ -17,22 +17,22 @@ interface Quad {
   id: number;
 }
 
-/** Whole-cell quads, by the cell each starts at (quads store their corner in eighths). */
+/** Whole-cell quads, by the cell each starts at (quads store their corner in sixteenths). */
 function quadsOf(mesh: { quads: Uint16Array; quadCount: number }): Quad[] {
   const { quads, quadCount } = mesh;
   return Array.from({ length: quadCount }, (_, q) => {
     const at = (i: number) => quads[q * QUAD_WORDS + i] ?? 0;
     const face = FACES[at(3)];
     if (!face) throw new Error(`bad face ${at(3)}`);
-    const p = [at(0) / 8, at(1) / 8, at(2) / 8];
+    const p = [at(0) / 16, at(1) / 16, at(2) / 16];
     if (face.sign > 0) p[face.axis] = (p[face.axis] ?? 0) - 1;
     return {
       x: p[0] ?? 0,
       y: p[1] ?? 0,
       z: p[2] ?? 0,
       face: at(3),
-      w: at(4) / 8,
-      h: at(5) / 8,
+      w: at(4) / 16,
+      h: at(5) / 16,
       id: at(6),
     };
   });

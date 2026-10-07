@@ -3,9 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
   buildDefaultLibrary,
   compileBlock,
+  compileShape,
   DEFAULT_TEXTURE_KEYS,
   type Element,
   faceUvMap,
+  JOIN_FENCE,
+  JOIN_PANE,
+  JOIN_WALL,
   type Library,
   paintTexture,
   placeBlock,
@@ -146,5 +150,84 @@ describe("the default library", () => {
     const log = compileBlock(libraries, "voxyl:oak_log", compose(turn(2, 1), IDENTITY));
     expect(log?.cube?.[0]?.texture).toBe("voxyl:oak_log_top");
     expect(log?.cube?.[2]?.texture).toBe("voxyl:oak_log");
+  });
+});
+
+describe("block shapes", () => {
+  it("places a slab's faces in sixteenths, its top halfway up", () => {
+    const slab = compileShape(libraries, "voxyl:oak_slab", IDENTITY);
+    expect(slab?.variants.length).toBe(1);
+    const faces = slab?.variants[0] ?? [];
+    expect(faces.length).toBe(6);
+    const up = faces.find((f) => f.side === "up");
+    expect(up?.corners.every((c) => c[1] === 8)).toBe(true);
+    expect(up?.face.texture).toBe("voxyl:oak_planks");
+    // Parts drawn in a slab's look take its faces by side.
+    expect(slab?.sides.every((f) => f !== null)).toBe(true);
+  });
+
+  it("turns stairs with the cell, upside down too", () => {
+    const upsideDown = rotationFacing([0, 0, -1], [0, -1, 0]);
+    const stairs = compileShape(libraries, "voxyl:oak_stairs", upsideDown);
+    const faces = stairs?.variants[0] ?? [];
+    // The full-width half is now on top: its up face lies on the cell's top.
+    const top = faces.filter((f) => f.side === "up").map((f) => f.corners[0][1]);
+    expect(top).toContain(16);
+    const bottom = faces.filter((f) => f.side === "down").map((f) => f.corners[0][1]);
+    expect(bottom).toContain(8);
+  });
+
+  it("gives a joining block one set of faces per mask of joined sides", () => {
+    const fence = compileShape(libraries, "voxyl:oak_fence", IDENTITY);
+    expect(fence?.variants.length).toBe(16);
+    expect(fence?.group).toBe(JOIN_FENCE);
+    expect(fence?.joins).toBe(JOIN_FENCE);
+    const post = fence?.variants[0] ?? [];
+    expect(post.length).toBe(6);
+    // Joined north: two rails reach the north edge of the cell.
+    const north = fence?.variants[1] ?? [];
+    const reaching = north.filter((f) => f.side === "north" && f.corners[0][2] === 0);
+    expect(reaching.length).toBe(2);
+    const pane = compileShape(libraries, "voxyl:glass_pane", IDENTITY);
+    expect(pane?.group).toBe(JOIN_PANE);
+    expect(pane?.joins).toBe(JOIN_PANE | JOIN_WALL);
+    expect(compileShape(libraries, "voxyl:nothing", IDENTITY)).toBeNull();
+  });
+
+  it("draws a turned element as a diagonal face that still maps its whole texture", () => {
+    const plants: Library = {
+      id: "plants",
+      name: "Plants",
+      textures: { flower: paintTexture("glass") },
+      models: {
+        cross: {
+          elements: [
+            {
+              from: [0.8, 0, 8],
+              to: [15.2, 16, 8],
+              rotation: { origin: [8, 8, 8], axis: "y", angle: 45, rescale: true },
+              faces: {
+                north: { texture: "flower", uv: [0, 0, 16, 16] },
+                south: { texture: "flower", uv: [0, 0, 16, 16] },
+              },
+            },
+          ],
+        },
+      },
+      blocks: { flower: { variants: { "": { model: "cross" } }, color: "#ff0000" } },
+    };
+    const shape = compileShape(new Map([["plants", plants]]), "plants:flower", IDENTITY);
+    const faces = shape?.variants[0] ?? [];
+    expect(faces.length).toBe(2);
+    for (const face of faces) {
+      expect(face.side).toBeNull();
+      // Stretched corner to corner across the cell.
+      const xs = face.corners.map((c) => c[0]);
+      expect(Math.min(...xs)).toBeCloseTo(0.8, 3);
+      expect(Math.max(...xs)).toBeCloseTo(15.2, 3);
+      const us = face.corners.map((c) => uvOf(face.face.map, [c[0] / 16, c[1] / 16, c[2] / 16])[0]);
+      expect(Math.min(...us)).toBeCloseTo(0, 4);
+      expect(Math.max(...us)).toBeCloseTo(1, 4);
+    }
   });
 });

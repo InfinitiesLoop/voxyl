@@ -8,7 +8,8 @@ widget that runs relayed tool calls. 5M cells hold 120 fps on an M5 Max. Numbers
 core redesigned from scratch, per the design document [`web-core.md`](web-core.md), which
 records what was built and the numbers; the user confirmed step 7's four choices.
 **Phase 2 started** (2026-10-06): the web viewer, planned and tracked in
-[`web-viewer.md`](web-viewer.md).
+[`web-viewer.md`](web-viewer.md); steps 1-6 done (projects, storage, 2D view, part trimming,
+block libraries with textures and a vanilla jar import, block models), the sky and the gate next.
 Reviewed as a Claude Doc
 (https://claude.ai/code/artifact/98f31d14-989b-4c28-a24c-a3d7b8630a21); this file is now the
 working copy. **Keep it (and `web-lighting.md`) up to date as we go**, in the same commit as

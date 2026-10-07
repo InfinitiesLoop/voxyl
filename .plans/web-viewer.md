@@ -27,7 +27,7 @@ palettes, and every view is a lens on the one world in the world worker.
 5. **Block libraries and textures** (done; see "Block libraries" below). 5a: the library format, the
    original default set with its texture generator, and textured cubes in the renderer.
    5b: importing a vanilla Minecraft jar into an OPFS library.
-6. **Block models.** Non-cube blocks (slabs, stairs, fences, custom element models) as cached
+6. **Block models** (done). Non-cube blocks (slabs, stairs, fences, custom element models) as cached
    per-state geometry, like parts; panes and fences that join their neighbours.
 7. **Sky.** A sky with the time of day, replacing the flat background.
 8. **The gate.** Performance with textures on; golden images (Playwright with SwiftShader).
@@ -137,7 +137,7 @@ Minecraft textures can't be hosted, so Phase 2 gets textures two ways:
   thinner to thicker, lower slot to higher; centered posts yield to faces capping them, and
   between posts the thinner, then the higher slot, yields. A test with a slab and a hollow
   cover (which sorts after the slab in the state) fails without it.
-- **Step 5a in progress (2026-10-06).** Textured whole cubes, from the default set.
+- **Step 5a done (2026-10-06).** Textured whole cubes, from the default set.
   - `packages/blocks` (commit d963afd): the library format, variant choice from a cell's
     rotation, face uv maps as affine matrices (uv = A·q + b, q the point in its cell), whole
     cube compilation (`compileBlock`), and the default set: 25 cubes, logs, grass, sandstone,
@@ -213,4 +213,63 @@ Minecraft textures can't be hosted, so Phase 2 gets textures two ways:
     olive); the shader now linearises them.
   - Not yet: placement profiles derived from blockstate properties (editor work, Phase 3);
     pre-1.13 jars; mod jars (Phase 5); non-cube models still draw as coloured cubes (step 6).
-  - **Next:** step 6, block models (slabs, stairs, fences, panes, and the vanilla models).
+- **Step 6 done (2026-10-07).** Block models: every block that isn't one whole cube draws
+  its model (slabs, stairs, fences, panes, walls, and the vanilla jar's plants, torches,
+  lanterns, flower pots, anvils, cakes, ...).
+  - `packages/blocks/src/shape.ts`: `compileShape(libraries, ref, rotation)` places a block's
+    model faces in the cell for one cell rotation: four corners in sixteenths (world axes,
+    clamped to the cell) and a compiled face (texture, uv map, tint). Elements turned off the
+    axes (crossed plants, wall torches) follow Minecraft's element rotation, `rescale`
+    included (now kept by the importer), and their uv maps stay affine (`elementTurn` in
+    uv.ts). Blocks that join their neighbours compile 16 sets of faces, one per mask of
+    joined sides (north, east, south, west). Which multipart properties mean "joined" is read
+    from the block's conditions (`true`, or `low` for walls; walls drop their post when they
+    run straight through). Join groups come from the block's name: fences join fences, panes
+    and iron bars join panes and walls, walls join walls and panes; all join whole cubes.
+    Flat rails now pick `north_south` as their identity.
+  - Looks (`packages/session/src/looks.ts`): a look whose block isn't a whole cube gives its
+    state a `ModelShape` (rects where a face is axis-aligned on whole sixteenths, two
+    triangles otherwise; 1 or 16 variants; join group). Each distinct material of the model
+    gets a slot from 6 on; slots 0-5 hold the block's largest face per side, so microblock
+    parts in a stairs look still draw the stairs' textures. `StateLooks.faces` keeps 8 entries
+    a state (6 face materials, then where its model slots start in `modelSlots`).
+  - Mesher: quads are placed in **sixteenths** now (was eighths), with the material slot in
+    word 7 (the face for a whole cube); triangles carry their slot in word 7 too, and
+    `TRI_SCALE` is 96 (exact for thirty-seconds). `ShapeTable.setModels` overlays the looks'
+    models on the cells' shapes: a model state is shaped, its geometry built once, and its
+    faces culled like parts (a face on the cell's side hides when the neighbour is an opaque
+    cube or covers every eighth it touches). New: a face meeting **the very same face** of
+    the neighbour (fence rail ends, pane edges) hides when that face is opaque or of the same
+    state. A joining model picks its variant per cell from its four neighbours, inside the
+    padded chunk copy.
+  - World worker: models go to the mesh workers with the clear flags; if a state already in
+    use changes model or clearness, every chunk is meshed again (as clearness already did).
+    A re-skin that keeps shapes stays tables-only.
+  - Renderer: a quad's slot below 6 reads the face table as before (one lookup); a model
+    slot reads its state's start there, then the model slot list (a float texture that
+    doubles its rows as it grows).
+  - **Seen** (headless Edge, dev server): the default showcase (`?world=blocks`) has a new row:
+    a fence run turning a corner into a stone block, panes in a stone brick frame, bottom and
+    top slabs side by side. Fences join each other and the stone, panes join the frame, slabs
+    sit on the right half. The vanilla showcase (`?world=mc-blocks`, the user's 1.21 jar):
+    flowers, saplings and grass as crossed planes, flower pots, lanterns with chains, torches,
+    ladders, cakes with candles, anvils, cobwebs, walls, trapdoors, stairs and slabs all draw
+    their models, lit, with no console problems.
+  - **Measured** (city-5m, lighting on, B580, headless Edge): no cost. An A/B against the
+    previous commit on two dev servers, alternating, Blocks theme: GPU p50 3.66-3.73 ms
+    before, 3.59-3.75 ms after (the 3.28 ms recorded in step 5a predates later changes). The
+    mesher on the shaped 5M city (`pnpm bench:mesh --parts`, 64³): 10.24 ms p50 a chunk
+    before, 10.66 ms after, same 2.40M quads and 1.46M triangles. City-5m Blocks theme: 1.24M
+    quads (unchanged), initial mesh 2.9 s.
+  - **Choices to review:** (1) join rules as above (fence gates don't join yet; walls are
+    never "tall"); (2) faces meeting the same face of the neighbour hide when it is opaque or
+    of the same state, so two glass panes hide their touching edges but a pane against a
+    different glass block shows; (3) a re-skin that changes a block's shape remeshes every
+    chunk (fine at 2.9 s for 5M cells; narrowing it to chunks holding those states needs a
+    per-chunk state index); (4) a state gets at most 250 model materials (vanilla's most is
+    well under).
+  - Not yet: stair corners (inner/outer shapes from neighbouring stairs), fence gates, tall
+    walls, cover finer than eighths (faces on half-eighths are never hidden by a neighbour,
+    only drawn), picking and the 2D view still treat model cells as whole cells, elements
+    reaching outside the cell are clamped to it, translucent faces still draw cut out.
+  - **Next:** step 7, the sky.

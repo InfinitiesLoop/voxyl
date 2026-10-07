@@ -20,8 +20,24 @@ export {
   type Texture,
   type Variant,
 } from "./library.ts";
+export {
+  type CompiledShape,
+  compileShape,
+  JOIN_FENCE,
+  JOIN_PANE,
+  JOIN_SIDES,
+  JOIN_WALL,
+  type ShapeFace,
+} from "./shape.ts";
 export { decodeLibrary, encodeLibrary, LIBRARY_FORMAT } from "./storage.ts";
-export { FACE_SIDES, faceUvMap, SIDE_NORMAL, sideOfNormal } from "./uv.ts";
+export {
+  type ElementTurn,
+  elementTurn,
+  FACE_SIDES,
+  faceUvMap,
+  SIDE_NORMAL,
+  sideOfNormal,
+} from "./uv.ts";
 export {
   matches,
   type PlacedModel,

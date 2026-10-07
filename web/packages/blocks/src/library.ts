@@ -41,11 +41,16 @@ export interface Element {
   readonly from: readonly [number, number, number];
   readonly to: readonly [number, number, number];
   readonly faces: Readonly<Partial<Record<McSide, Face>>>;
-  /** Rotated elements (plants, torches) are kept but not drawn yet. */
+  /**
+   * A turn about one axis through `origin` (plants, torches), in degrees; with `rescale` the
+   * element is stretched across the other two axes so it still spans the cell, as Minecraft
+   * does for its crossed plants.
+   */
   readonly rotation?: {
     readonly origin: readonly [number, number, number];
     readonly axis: "x" | "y" | "z";
     readonly angle: number;
+    readonly rescale?: boolean;
   };
   readonly shade?: boolean;
 }

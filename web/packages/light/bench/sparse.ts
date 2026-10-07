@@ -197,8 +197,8 @@ for (const key of world.chunkKeys()) {
     shapes,
   );
   for (let q = 0; q < mesh.quadCount; q++) {
-    const w = (mesh.quads[q * QUAD_WORDS + 4] ?? 0) / 8;
-    const h = (mesh.quads[q * QUAD_WORDS + 5] ?? 0) / 8;
+    const w = (mesh.quads[q * QUAD_WORDS + 4] ?? 0) / 16;
+    const h = (mesh.quads[q * QUAD_WORDS + 5] ?? 0) / 16;
     grid += (w + 2) * (h + 2);
   }
   quads += mesh.quadCount;

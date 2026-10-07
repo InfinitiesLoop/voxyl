@@ -1,7 +1,8 @@
 // The GPU side of block textures (see BlockMaterials in @voxyl/session): which material each
-// face of each cell state draws with, the materials (a texture tile, how positions on the
-// face map to texture coordinates, and a tint), and the texture atlas. Everything here is a
-// table keyed by state id, so a re-skin rewrites tables and never touches a mesh.
+// face of each cell state draws with, and each slot of a block model's faces, the materials
+// (a texture tile, how positions on the face map to texture coordinates, and a tint), and the
+// texture atlas. Everything here is a table keyed by state id, so a re-skin rewrites tables
+// and touches no mesh, unless it changes a block's shape.
 
 import { FACE_SLOTS, MATERIAL_FLOATS, TEXTURE_SIZE } from "@voxyl/session";
 import { texture, uniform } from "three/tsl";
@@ -11,6 +12,11 @@ import type { LooksUpdate } from "../world/protocol.ts";
 /** Face table: two RGBA texels (FACE_SLOTS entries) per state, for every possible state id. */
 export const FACE_WIDTH = 512;
 const FACE_HEIGHT = (65536 * FACE_SLOTS) / 4 / FACE_WIDTH;
+/** Model slot list: block models' face materials, four a texel, SLOT_WIDTH texels a row. */
+export const SLOT_WIDTH = 512;
+const SLOT_ROWS = 16;
+/** The most slot list rows (4M slots). */
+const MAX_SLOT_ROWS = 2048;
 /** Material table: MATERIAL_TEXELS texels per material, MATERIALS_PER_ROW to a row. */
 export const MATERIAL_TEXELS = MATERIAL_FLOATS / 4;
 export const MATERIALS_PER_ROW = 256;
@@ -27,10 +33,12 @@ const MAX_ROWS = 8192 / TEXTURE_SIZE;
 const TILE_BYTES = TEXTURE_SIZE * TEXTURE_SIZE * 4;
 
 const textureNode = (t: THREE.Texture) => texture(t);
-type TextureNode = ReturnType<typeof textureNode>;
+export type TextureNode = ReturnType<typeof textureNode>;
 
 export class BlockTextures {
   readonly faces: THREE.DataTexture;
+  /** The model slot list, followed as it grows: read through this node. */
+  readonly modelSlots: TextureNode;
   readonly materials: THREE.DataTexture;
   /** The atlas, followed as it grows: sample through this node. */
   readonly atlas: TextureNode;
@@ -38,6 +46,7 @@ export class BlockTextures {
   readonly atlasRows = uniform(8);
   // Floats rather than integers, which both backends sample alike; exact to 2^24.
   readonly #faceData = new Float32Array(FACE_WIDTH * FACE_HEIGHT * 4);
+  #slotTexture: THREE.DataTexture;
   readonly #materialData = new Float32Array(
     MATERIALS_PER_ROW * MATERIAL_TEXELS * MATERIAL_ROWS * 4,
   );
@@ -45,22 +54,18 @@ export class BlockTextures {
   #tileCount = 0;
 
   constructor() {
-    this.faces = new THREE.DataTexture(
-      this.#faceData,
-      FACE_WIDTH,
-      FACE_HEIGHT,
-      THREE.RGBAFormat,
-      THREE.FloatType,
+    this.faces = floatTable(this.#faceData, FACE_WIDTH, FACE_HEIGHT);
+    this.#slotTexture = floatTable(
+      new Float32Array(SLOT_WIDTH * SLOT_ROWS * 4),
+      SLOT_WIDTH,
+      SLOT_ROWS,
     );
-    nearest(this.faces);
-    this.materials = new THREE.DataTexture(
+    this.modelSlots = textureNode(this.#slotTexture);
+    this.materials = floatTable(
       this.#materialData,
       MATERIALS_PER_ROW * MATERIAL_TEXELS,
       MATERIAL_ROWS,
-      THREE.RGBAFormat,
-      THREE.FloatType,
     );
-    nearest(this.materials);
     this.#atlasTexture = createAtlas(this.atlasRows.value);
     this.atlas = textureNode(this.#atlasTexture);
   }
@@ -69,6 +74,7 @@ export class BlockTextures {
   get memoryBytes(): number {
     return (
       this.#faceData.byteLength +
+      (this.#slotTexture.image.data?.byteLength ?? 0) +
       this.#materialData.byteLength +
       (this.#atlasTexture.image.data?.byteLength ?? 0)
     );
@@ -80,16 +86,17 @@ export class BlockTextures {
 
   /** Takes in new looks from the world worker. */
   update(looks: LooksUpdate): void {
-    const faces = looks.faces.subarray(0, this.#faceData.length);
     this.#faceData.fill(0);
-    this.#faceData.set(faces);
+    this.#faceData.set(looks.faces.subarray(0, this.#faceData.length));
     this.faces.needsUpdate = true;
+    this.#setModelSlots(looks.modelSlots);
     this.#materialData.fill(0);
     this.#materialData.set(looks.materials.subarray(0, this.#materialData.length));
     this.materials.needsUpdate = true;
 
     const { from, rgba } = looks.textures;
     const added = rgba.length / TILE_BYTES;
+    if (added === 0) return;
     if (added === 0) return;
     if (from !== this.#tileCount) {
       console.warn(`Texture tiles out of step: have ${this.#tileCount}, sent from ${from}`);
@@ -128,9 +135,34 @@ export class BlockTextures {
 
   dispose(): void {
     this.faces.dispose();
+    this.#slotTexture.dispose();
     this.materials.dispose();
     this.#atlasTexture.dispose();
   }
+
+  /** Writes the model slot list, growing its texture (doubling its rows) if it doesn't fit. */
+  #setModelSlots(list: Uint16Array): void {
+    let rows = this.#slotTexture.image.height;
+    while (rows * SLOT_WIDTH * 4 < list.length && rows < MAX_SLOT_ROWS) rows *= 2;
+    if (rows !== this.#slotTexture.image.height) {
+      const grown = floatTable(new Float32Array(SLOT_WIDTH * rows * 4), SLOT_WIDTH, rows);
+      this.#slotTexture.dispose();
+      this.#slotTexture = grown;
+      this.modelSlots.value = grown;
+    }
+    const data = this.#slotTexture.image.data as Float32Array;
+    if (list.length > data.length) console.warn(`Model slot list too long: ${list.length} slots`);
+    data.fill(0);
+    data.set(list.subarray(0, data.length));
+    this.#slotTexture.needsUpdate = true;
+  }
+}
+
+/** A table of floats, read texel by texel. */
+function floatTable(data: Float32Array, width: number, height: number): THREE.DataTexture {
+  const t = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.FloatType);
+  nearest(t);
+  return t;
 }
 
 function createAtlas(rows: number): THREE.DataTexture {

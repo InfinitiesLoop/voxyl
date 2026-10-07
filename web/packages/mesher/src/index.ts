@@ -11,8 +11,13 @@ export {
 } from "./greedy.ts";
 export {
   describeStates,
+  MODEL_RECT_STRIDE,
+  MODEL_TRI_STRIDE,
+  type ModelFaces,
+  type ModelShape,
   type PartGeometry,
   type PartShape,
+  QUAD_UNITS,
   ShapeTable,
   type StateShape,
   TRI_SCALE,

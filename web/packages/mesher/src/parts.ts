@@ -1,13 +1,20 @@
-// What the mesher knows about each cell state: empty, a whole cube, or shaped parts with
-// their geometry. Part geometry is built once per state and reused for every cell that holds
-// it, so meshing a part cell is a table lookup plus neighbour culling.
+// What the mesher knows about each cell state: empty, a whole cube, or shaped, with geometry
+// of its own. A state is shaped when its cell holds parts (from the cells), or when its look
+// draws a block model that isn't a whole cube (slabs, stairs, fences, plants; from the looks).
+// Geometry is built once per state and reused for every cell that holds it, so meshing a
+// shaped cell is a table lookup plus neighbour culling.
 
 import type { CellStateTable } from "@voxyl/core";
 import { archTriangles, MICRO_SHAPES, microBoxes, renderOrder } from "@voxyl/shapes";
 import { FACES } from "./faces.ts";
 
-/** Triangle corners are stored in 1/TRI_SCALE of a cell: exact for halves, thirds, quarters and sixteenths. */
-export const TRI_SCALE = 48;
+/**
+ * Triangle corners are stored in 1/TRI_SCALE of a cell: exact for halves, thirds, quarters,
+ * sixteenths and thirty-seconds.
+ */
+export const TRI_SCALE = 96;
+/** Quads and rects are placed in sixteenths of a cell, the unit of block models. */
+export const QUAD_UNITS = 16;
 
 /** One part of a shaped state, with the plain state id that colours it (its semantic's). */
 export interface PartShape {
@@ -16,11 +23,47 @@ export interface PartShape {
   readonly color: number;
 }
 
-/** What the mesher needs to know about one cell state. Plain data, so it can go to workers. */
+/** What the mesher needs to know about one cell state's cells. Plain data, for workers. */
 export type StateShape =
   | { readonly kind: "empty" }
   | { readonly kind: "cube" }
   | { readonly kind: "parts"; readonly parts: readonly PartShape[] };
+
+/** Numbers per rect in ModelFaces.rects. */
+export const MODEL_RECT_STRIDE = 8;
+/** Numbers per triangle in ModelFaces.tris. */
+export const MODEL_TRI_STRIDE = 11;
+
+/**
+ * A block model's faces in its cell, from its look. Material slots number the state's
+ * textured faces (see StateLooks in @voxyl/session): 0-5 are its faces by side, models
+ * count on from 6.
+ */
+export interface ModelFaces {
+  /**
+   * Axis-aligned faces, MODEL_RECT_STRIDE numbers each: face (FACES order), plane, u0, v0,
+   * u1, v1 in whole sixteenths of the cell, material slot, and 1 if the face is opaque (it
+   * hides what it covers of the neighbour).
+   */
+  readonly rects: readonly number[];
+  /**
+   * Other faces as triangles, MODEL_TRI_STRIDE numbers each: three corners (x, y, z in
+   * sixteenths, possibly fractional), wound counter-clockwise from outside, slot, opaque.
+   */
+  readonly tris: readonly number[];
+}
+
+/** A cell state's block model, from its look. Plain data, so it can go to workers. */
+export interface ModelShape {
+  /**
+   * One set of faces, or 16 for a block that joins its neighbours, by the mask of sides it
+   * joins (bit 0 north, 1 east, 2 south, 3 west). A side joins a whole cube, or a model
+   * whose `group` shares a bit with this one's `joins`.
+   */
+  readonly variants: readonly ModelFaces[];
+  readonly group: number;
+  readonly joins: number;
+}
 
 /**
  * Describes states `from` to the end of `states`. Each part is coloured by the plain state of
@@ -52,21 +95,25 @@ function isKnownShape(shape: string): boolean {
   return shape in MICRO_SHAPES || archTriangles(shape, 0).length > 0;
 }
 
-/** RECT_STRIDE numbers per rectangle: face, plane, u0, v0, u1, v1, colour (eighths of a cell). */
-export const RECT_STRIDE = 7;
 /**
- * TRI_STRIDE numbers per triangle: 9 corner coordinates (TRI_SCALE units), colour, the
- * boundary face it lies on or -1, and the two cover words of the eighths it covers there.
+ * RECT_STRIDE numbers per rectangle: face, plane, u0, v0, u1, v1 (sixteenths of a cell),
+ * colour, material slot.
  */
-export const TRI_STRIDE = 13;
+export const RECT_STRIDE = 8;
+/**
+ * TRI_STRIDE numbers per triangle: 9 corner coordinates (TRI_SCALE units), colour, material
+ * slot, the boundary face it lies on or -1, and the two cover words of the eighths it covers
+ * there.
+ */
+export const TRI_STRIDE = 14;
 
 /** A shaped state's geometry in its cell. */
 export interface PartGeometry {
   /**
    * Axis-aligned faces, RECT_STRIDE numbers each. `plane` is the face's position along its
-   * axis and u0..v1 its extent along the face's U and V axes (see FACES), all in eighths of
-   * a cell. A face on the cell's boundary (plane 0 or 8 on its outward side) can be hidden
-   * by the neighbour.
+   * axis and u0..v1 its extent along the face's U and V axes (see FACES), all in sixteenths
+   * of a cell. A face on the cell's boundary (plane 0 or 16 on its outward side) can be
+   * hidden by the neighbour.
    */
   readonly rects: readonly number[];
   readonly tris: readonly number[];
@@ -79,17 +126,31 @@ export interface PartGeometry {
   readonly cover: Uint32Array;
   /** Bit f set if side f (FACES order) is covered completely. */
   readonly full: number;
+  /**
+   * Its rects on each side of the cell, by boundsKey, and whether each is opaque: a face
+   * meeting the very same rect of the neighbour's (a fence rail its neighbour's, a pane
+   * the next pane) is hidden when that one is opaque or of the same state.
+   */
+  readonly bounds: readonly (ReadonlyMap<number, boolean> | null)[];
+}
+
+/** A boundary rect's key: its extent along the side's lower and higher in-plane axes. */
+export function boundsKey(face: number, u0: number, v0: number, u1: number, v1: number): number {
+  return canonicalAxes(face).uLow
+    ? u0 | (v0 << 5) | (u1 << 10) | (v1 << 15)
+    : v0 | (u0 << 5) | (v1 << 10) | (u1 << 15);
 }
 
 const MAX_IDS = 1 << 16;
+const EMPTY_SHAPE: StateShape = { kind: "empty" };
 
-/** Per cell-state id: is it a whole cube, what it covers, and its part geometry. */
+/** Per cell-state id: is it a whole cube, what it covers, and its shaped geometry. */
 export class ShapeTable {
   /** 1 for a whole cube. */
   readonly cube = new Uint8Array(MAX_IDS);
   /** Sides covered completely: 0x3f for a cube, 0 for empty. */
   readonly full = new Uint8Array(MAX_IDS);
-  /** 1 for a state with part geometry (see geometry). */
+  /** 1 for a state with geometry of its own (see geometry). */
   readonly shaped = new Uint8Array(MAX_IDS);
   /**
    * 1 for a whole cube that can be seen through (glass, leaves): it hides none of its
@@ -97,11 +158,19 @@ export class ShapeTable {
    * looks, not the cells, so it is set separately (setClear).
    */
   readonly clear = new Uint8Array(MAX_IDS);
+  /** Join group and joined groups of a model that joins its neighbours (ModelShape). */
+  readonly group = new Uint8Array(MAX_IDS);
+  readonly joins = new Uint8Array(MAX_IDS);
   /** How many ids are shaped: the mesher skips looking for parts when there are none. */
   shapedCount = 0;
   /** How many ids are clear: the mesher skips checking for them when there are none. */
   clearCount = 0;
+  /** Each shaped state's geometry; for a joining model, the one with no side joined. */
   readonly geometry: (PartGeometry | undefined)[] = [];
+  /** A joining model's 16 geometries, by the mask of sides joined. */
+  readonly variants: (readonly PartGeometry[] | undefined)[] = [];
+  readonly #shapes: StateShape[] = [];
+  #models: readonly (ModelShape | null)[] = [];
   #size = 1;
 
   /** Ids described so far, counting empty. */
@@ -119,24 +188,21 @@ export class ShapeTable {
   /** Sets the shapes of ids `from`, `from + 1`, ... */
   update(from: number, shapes: readonly StateShape[]): void {
     shapes.forEach((shape, i) => {
-      const id = from + i;
-      if (this.shaped[id]) this.shapedCount--;
-      this.cube[id] = 0;
-      this.full[id] = 0;
-      this.shaped[id] = 0;
-      this.geometry[id] = undefined;
-      if (shape.kind === "cube") {
-        this.cube[id] = 1;
-        this.full[id] = 0x3f;
-      } else if (shape.kind === "parts") {
-        const geometry = buildGeometry(shape.parts);
-        this.geometry[id] = geometry;
-        this.full[id] = geometry.full;
-        this.shaped[id] = 1;
-        this.shapedCount++;
-      }
+      this.#shapes[from + i] = shape;
+      this.#apply(from + i);
     });
     this.#size = Math.max(this.#size, from + shapes.length);
+  }
+
+  /**
+   * Sets every state's block model (by id; null or missing for none). A model replaces a
+   * plain state's cube; states of parts keep their parts.
+   */
+  setModels(models: readonly (ModelShape | null)[]): void {
+    const before = this.#models;
+    this.#models = models;
+    const n = Math.min(MAX_IDS, Math.max(before.length, models.length));
+    for (let id = 1; id < n; id++) if (before[id] || models[id]) this.#apply(id);
   }
 
   /** Sets which ids are clear (flags[id], 1 = clear); ids past its end are not. */
@@ -146,6 +212,39 @@ export class ShapeTable {
     let count = 0;
     for (let id = 1; id < flags.length && id < MAX_IDS; id++) count += flags[id] ? 1 : 0;
     this.clearCount = count;
+  }
+
+  #apply(id: number): void {
+    const shape = this.#shapes[id] ?? EMPTY_SHAPE;
+    const model = shape.kind === "cube" ? this.#models[id] : null;
+    if (this.shaped[id]) this.shapedCount--;
+    this.cube[id] = 0;
+    this.full[id] = 0;
+    this.shaped[id] = 0;
+    this.group[id] = 0;
+    this.joins[id] = 0;
+    this.geometry[id] = undefined;
+    this.variants[id] = undefined;
+    if (model) {
+      const variants = model.variants.map((v) => modelGeometry(v, id));
+      this.geometry[id] = variants[0];
+      if (variants.length > 1) this.variants[id] = variants;
+      // What it surely covers, whichever sides it joins.
+      this.full[id] = variants.reduce((all, g) => all & g.full, 0x3f);
+      this.group[id] = model.group;
+      this.joins[id] = model.joins;
+      this.shaped[id] = 1;
+      this.shapedCount++;
+    } else if (shape.kind === "cube") {
+      this.cube[id] = 1;
+      this.full[id] = 0x3f;
+    } else if (shape.kind === "parts") {
+      const geometry = buildGeometry(shape.parts);
+      this.geometry[id] = geometry;
+      this.full[id] = geometry.full;
+      this.shaped[id] = 1;
+      this.shapedCount++;
+    }
   }
 }
 
@@ -181,6 +280,38 @@ function setCover(cover: Uint32Array, face: number, a: number, b: number): void 
   cover[i] = ((cover[i] ?? 0) | (1 << ((a & 3) * 8 + b))) >>> 0;
 }
 
+function fullSides(cover: Uint32Array): number {
+  let full = 0;
+  for (let f = 0; f < 6; f++) {
+    if (cover[f * 2] === 0xffffffff && cover[f * 2 + 1] === 0xffffffff) full |= 1 << f;
+  }
+  return full;
+}
+
+/**
+ * Records each rect of `rects` that lies on its side of the cell (PartGeometry.bounds);
+ * `opaque` is asked by the rect's offset in `rects`.
+ */
+function boundsOf(rects: readonly number[], opaque: (i: number) => boolean) {
+  const bounds: (Map<number, boolean> | null)[] = [null, null, null, null, null, null];
+  for (let i = 0; i < rects.length; i += RECT_STRIDE) {
+    const f = rects[i] ?? 0;
+    const face = FACES[f];
+    if (!face || rects[i + 1] !== (face.sign > 0 ? QUAD_UNITS : 0)) continue;
+    const map = bounds[f] ?? new Map<number, boolean>();
+    bounds[f] = map;
+    const key = boundsKey(
+      f,
+      rects[i + 2] ?? 0,
+      rects[i + 3] ?? 0,
+      rects[i + 4] ?? 0,
+      rects[i + 5] ?? 0,
+    );
+    map.set(key, (map.get(key) ?? false) || opaque(i));
+  }
+  return bounds;
+}
+
 function buildGeometry(parts: readonly PartShape[]): PartGeometry {
   const cover = new Uint32Array(12);
   const rects: number[] = [];
@@ -205,21 +336,86 @@ function buildGeometry(parts: readonly PartShape[]): PartGeometry {
   for (const part of parts) {
     const t = archTriangles(part.shape, part.slot);
     for (let i = 0; i + 8 < t.length; i += 9) {
-      const corners = t.slice(i, i + 9);
-      const face = boundaryFace(corners);
-      for (const c of corners) tris.push(Math.round(c * TRI_SCALE));
-      const own = new Uint32Array(12);
-      if (face >= 0) coverTriangle(own, face, corners);
-      tris.push(part.color, face, own[face * 2] ?? 0, own[face * 2 + 1] ?? 0);
-      for (let k = 0; k < 12; k++) cover[k] = ((cover[k] ?? 0) | (own[k] ?? 0)) >>> 0;
+      // A slope takes the texture of the side it faces most.
+      addTriangle(
+        t.slice(i, i + 9),
+        part.color,
+        dominantFace(t.slice(i, i + 9)),
+        true,
+        tris,
+        cover,
+      );
     }
   }
+  return { rects, tris, cover, full: fullSides(cover), bounds: boundsOf(rects, () => true) };
+}
 
-  let full = 0;
-  for (let f = 0; f < 6; f++) {
-    if (cover[f * 2] === 0xffffffff && cover[f * 2 + 1] === 0xffffffff) full |= 1 << f;
+/** A block model's geometry; its faces are coloured by its own state, `id`. */
+function modelGeometry(model: ModelFaces, id: number): PartGeometry {
+  const cover = new Uint32Array(12);
+  const rects: number[] = [];
+  const tris: number[] = [];
+  const opaque: boolean[] = [];
+  const r = model.rects;
+  for (let i = 0; i + MODEL_RECT_STRIDE <= r.length; i += MODEL_RECT_STRIDE) {
+    const f = r[i] ?? 0;
+    const face = FACES[f];
+    if (!face) continue;
+    const [plane, u0, v0, u1, v1, slot] = [1, 2, 3, 4, 5, 6].map((k) => r[i + k] ?? 0) as [
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+    ];
+    rects.push(f, plane, u0, v0, u1, v1, id, slot);
+    opaque.push((r[i + 7] ?? 0) !== 0);
+    if (r[i + 7] && plane === (face.sign > 0 ? QUAD_UNITS : 0)) {
+      // The eighths it covers whole.
+      const { uLow } = canonicalAxes(f);
+      for (let a = Math.ceil(u0 / 2); a < Math.floor(u1 / 2); a++) {
+        for (let b = Math.ceil(v0 / 2); b < Math.floor(v1 / 2); b++)
+          setCover(cover, f, uLow ? a : b, uLow ? b : a);
+      }
+    }
   }
-  return { rects, tris, cover, full };
+  const t = model.tris;
+  for (let i = 0; i + MODEL_TRI_STRIDE <= t.length; i += MODEL_TRI_STRIDE) {
+    const corners = t.slice(i, i + 9).map((c) => c / QUAD_UNITS);
+    addTriangle(corners, id, t[i + 9] ?? 0, (t[i + 10] ?? 0) !== 0, tris, cover);
+  }
+  const bounds = boundsOf(rects, (k) => opaque[k / RECT_STRIDE] ?? false);
+  return { rects, tris, cover, full: fullSides(cover), bounds };
+}
+
+/**
+ * Adds a triangle (corners in cells, 0..1) to `tris`. One lying flat on a side of the cell
+ * records the eighths it covers there, and adds them to `cover` if it is opaque.
+ */
+function addTriangle(
+  corners: readonly number[],
+  color: number,
+  slot: number,
+  opaque: boolean,
+  tris: number[],
+  cover: Uint32Array,
+): void {
+  const face = boundaryFace(corners);
+  for (const c of corners) tris.push(Math.round(c * TRI_SCALE));
+  const own = new Uint32Array(12);
+  if (face >= 0) coverTriangle(own, face, corners);
+  tris.push(color, slot, face, own[face * 2] ?? 0, own[face * 2 + 1] ?? 0);
+  if (opaque) for (let k = 0; k < 12; k++) cover[k] = ((cover[k] ?? 0) | (own[k] ?? 0)) >>> 0;
+}
+
+/** The face (FACES order) a triangle's normal points most along; Y wins ties. */
+function dominantFace(c: readonly number[]): number {
+  const [x, y, z] = cross(c);
+  const [ax, ay, az] = [Math.abs(x), Math.abs(y), Math.abs(z)];
+  if (ay >= ax && ay >= az) return y > 0 ? 2 : 3;
+  if (az >= ax) return z > 0 ? 4 : 5;
+  return x > 0 ? 0 : 1;
 }
 
 const gridStrides = [1, 64, 8] as const; // x, y, z
@@ -250,7 +446,9 @@ function meshGrid(grid: Uint16Array, rects: number[], cover: Uint32Array): void 
       }
       if (!any) continue;
       const plane = face.sign > 0 ? d + 1 : d;
-      greedy8(mask, (u0, v0, u1, v1, color) => rects.push(f, plane, u0, v0, u1, v1, color));
+      greedy8(mask, (u0, v0, u1, v1, color) =>
+        rects.push(f, plane * 2, u0 * 2, v0 * 2, u1 * 2, v1 * 2, color, f),
+      );
     }
   }
 }

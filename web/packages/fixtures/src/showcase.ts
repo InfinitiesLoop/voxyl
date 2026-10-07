@@ -31,7 +31,7 @@ export function buildShowcase(project: Project, library: Library): ShowcaseStats
   const names = Object.keys(library.blocks).sort();
   // Blocks per row: a square for big libraries.
   const ROW = Math.max(10, Math.ceil(Math.sqrt(names.length)));
-  const rows = Math.ceil(names.length / ROW) + 4;
+  const rows = Math.ceil(names.length / ROW) + 7;
   const width = ROW * STEP + 1;
   const depth = rows * STEP + 1;
   const lawn = library.blocks.grass_block ? "grass_block" : names[0];
@@ -84,6 +84,32 @@ export function buildShowcase(project: Project, library: Library): ShowcaseStats
           if (wall && !door) place(rx, y, rz, "stone");
         }
     place(x1 - 2, 2, z0 + 2, "glowstone");
+  }
+  z += 7;
+
+  // Shapes that join or stack: a fence run turning a corner into a wall, panes in a stone
+  // frame, and slabs on both halves side by side.
+  const fence = names.find((n) => n.endsWith("_fence"));
+  if (fence) {
+    for (let fx = 1; fx <= 5; fx++) place(fx, 1, z, fence);
+    for (let fz = z + 1; fz <= z + 3; fz++) place(5, 1, fz, fence);
+    if (library.blocks.stone) place(5, 1, z + 4, "stone");
+  }
+  const pane = names.find((n) => n === "glass_pane") ?? names.find((n) => n.endsWith("_pane"));
+  const frame = library.blocks.stone_bricks ? "stone_bricks" : undefined;
+  if (pane && frame) {
+    for (let fx = 8; fx <= 14; fx++)
+      for (let y = 1; y <= 4; y++) {
+        const edge = fx === 8 || fx === 14 || y === 1 || y === 4;
+        place(fx, y, z, edge ? frame : pane);
+      }
+  }
+  const slab = names.find((n) => n.endsWith("_slab"));
+  if (slab) {
+    for (let sx = 17; sx <= 20; sx++) {
+      place(sx, 1, z, slab, sx < 19 ? 0 : upsideDown);
+      place(sx, 1, z + 2, slab, sx % 2 === 0 ? 0 : upsideDown);
+    }
   }
   return { min: [-1, 0, -1], max: [width - 1, 6, depth - 1] };
 }

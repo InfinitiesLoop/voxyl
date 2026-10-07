@@ -11,6 +11,7 @@ export {
   FACE_SLOTS,
   lookColor,
   MATERIAL_FLOATS,
+  SIDE_SLOTS,
   type StateLooks,
   stateLooks,
   TEXTURE_SIZE,
