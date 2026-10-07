@@ -59,6 +59,7 @@ import {
   renameSemanticCommand,
   replaceSelectionCommand,
   resemanticSelectionCommand,
+  rotateCommand,
   selectCommand,
   semanticOfState,
   setCellCommand,
@@ -67,19 +68,23 @@ import {
 } from "./editing.ts";
 import { OpfsFolder } from "./opfs-folder.ts";
 import {
+  type AimView,
   type BlockSearch,
   type Command,
   EMPTY_SELECTION,
   type FromWorld,
   type LibraryInfo,
+  MAX_PREVIEW_CELLS,
   MAX_SLICE_CELLS,
   type MeshReply,
   type MeshRequest,
   type RayHit,
   type Replies,
   type ToWorld,
+  type Vec3,
 } from "./protocol.ts";
 import { selectionView } from "./selection.ts";
+import { toolCells, toolCommand } from "./tools.ts";
 
 // The app compiles with DOM types, so describe the worker scope we use rather than pulling
 // in the WebWorker lib (the two conflict in one program).
@@ -337,8 +342,33 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       return runEdit(
         fillBoxCommand(openProject(), command.from, command.to, command.id, "Fill box"),
       );
-    case "aim":
-      return aim(world(), command.origin, command.dir, command.reach);
+    case "aim": {
+      const target = aim(world(), command.origin, command.dir, command.reach);
+      if (!target) return null;
+      let preview: Int32Array | null = null;
+      if (command.tool) {
+        const cells = toolCells(world(), { ...command.tool, aim: target });
+        const shown = Math.min(cells.length, MAX_PREVIEW_CELLS);
+        preview = new Int32Array(shown * 3);
+        for (let i = 0; i < shown; i++) preview.set(cells[i] as Vec3, i * 3);
+      }
+      return { ...target, preview } satisfies AimView;
+    }
+    case "toolEdit": {
+      const target = aim(world(), command.origin, command.dir, command.reach);
+      if (!target) return false;
+      const click = {
+        tool: command.tool,
+        brush: command.brush,
+        camera: command.camera,
+        aim: target,
+      };
+      return runEdit(toolCommand(openProject(), click, command.semantic, command.dir)) > 0;
+    }
+    case "rotate": {
+      const target = aim(world(), command.origin, command.dir, command.reach);
+      return target ? runEdit(rotateCommand(openProject(), target, command.reverse)) > 0 : false;
+    }
     case "place": {
       const target = aim(world(), command.origin, command.dir, command.reach);
       if (!target) return false;

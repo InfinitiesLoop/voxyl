@@ -8,7 +8,7 @@ import { useStore } from "./useStore.ts";
 const MODE_KEY = "voxyl.countMode";
 
 /**
- * What the selection holds, and how to change its shape. Open while Select or Wand is the
+ * What the selection holds, and how to change its shape. Open while Select is the
  * tool and something is selected. Things done *to* the cells live in the actions menu.
  */
 export function SelectionPanel({ engine, tool }: { engine: Engine; tool: EditorTool }) {
@@ -20,7 +20,7 @@ export function SelectionPanel({ engine, tool }: { engine: Engine; tool: EditorT
   );
   const [copied, setCopied] = useState(false);
 
-  if (tool !== "select" && tool !== "wand") return null;
+  if (tool !== "select") return null;
   if (selection.cells === 0 && anchor === null) return null;
 
   const rows = mode === "semantics" ? selection.semantics : selection.materials;

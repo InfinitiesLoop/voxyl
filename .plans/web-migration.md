@@ -343,6 +343,7 @@ gate means fixing or rethinking that phase, not starting the next one.
 | 4 · Agents on the web | Relay, headless host, ~70 tools, capture tiers, export | Agent eval builds as well as in Godot; Godot retired; private ChatGPT test |
 | 5 · Minecraft import | Jar and modpack import in browser, schematic import | Full GTNH library imports in the browser; spot checks match the game |
 | 6 · Public launch | Accounts, sync, sharing, quotas, ChatGPT app listing | ChatGPT app approved and listed; hosting cost tracked per active user |
+| P · Polish | Nice-to-haves collected along the way (list below) | Picked from by the user; no gate |
 
 **Scope by phase**
 
@@ -380,6 +381,16 @@ gate means fixing or rethinking that phase, not starting the next one.
    limit with its warnings, expiry of inactive data, rate limits, the hosted default texture
    set, ChatGPT app submission and the donation link (see "Storage, limits and funding").
    Local-only projects need no server, so they can ship as early as Phase 3.
+
+**Polish (an official phase, the user's call, 2026-10-07).** Things worth doing that aren't
+worth doing yet. Anything punted to "later polish" goes here, so it isn't lost; the user picks
+from it when the main phases allow.
+
+- **Animated textures** (water, lava, portals, fire): a big plus, not trivial. The jar
+  importer keeps only a texture's first frame; animation needs the `.mcmeta` frame strips in
+  the atlas, a frame count and frame time per material, and a clock in the quad shader.
+- Clouds, weather, and a time of day that runs by itself (punted 2026-10-07, web-viewer.md).
+- A placement "pop" when blocks appear (Godot's `_animate_placement`).
 
 **While the web version is built.** Godot stays the daily driver and gets fixes. With no
 parity target, Godot features no longer need freezing, but large new ones are better spent on

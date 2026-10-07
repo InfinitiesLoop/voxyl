@@ -3,7 +3,7 @@ import { KEY_SECTIONS } from "./keybindings.ts";
 import type { EditorTool } from "./tool.ts";
 
 /**
- * Every key and button, by what it is for, with the right-hand keys in their own column.
+ * Every key and button, by what it is for: the usual binding, and an alternate.
  * The section for the tool in hand is marked. Opened from Keys in the top bar.
  */
 export function KeysPanel({ tool, onClose }: { tool: EditorTool; onClose: () => void }) {
@@ -23,16 +23,14 @@ export function KeysPanel({ tool, onClose }: { tool: EditorTool; onClose: () => 
       <div className="keys-card" role="dialog" aria-label="Keys">
         <header>
           <strong>Keys</strong>
-          <span>
-            Every action has a key for the right hand, for flying with the mouse in the left.
-          </span>
+          <span>Most actions have an alternate key, so either hand can reach them.</span>
           <button type="button" onClick={onClose}>
             Close
           </button>
         </header>
         <div className="keys-sections">
           {KEY_SECTIONS.map((section) => {
-            const inHand = section.tool === tool;
+            const inHand = section.tools?.includes(tool) ?? false;
             return (
               <section
                 key={section.id}
@@ -44,16 +42,16 @@ export function KeysPanel({ tool, onClose }: { tool: EditorTool; onClose: () => 
                 </h3>
                 <div className="keys-table">
                   <span className="keys-head">Action</span>
-                  <span className="keys-head">Keys</span>
-                  <span className="keys-head">Right hand</span>
+                  <span className="keys-head">Binding</span>
+                  <span className="keys-head">Alternate</span>
                   {section.bindings.map((binding) => (
                     <Fragment key={binding.action}>
                       <span className="keys-action">
                         {binding.action}
                         {binding.note && <small className="keys-note">{binding.note}</small>}
                       </span>
-                      <Keys keys={binding.keys} />
-                      <Keys keys={binding.right ?? []} />
+                      <Keys keys={binding.binding} />
+                      <Keys keys={binding.alternate} />
                     </Fragment>
                   ))}
                 </div>

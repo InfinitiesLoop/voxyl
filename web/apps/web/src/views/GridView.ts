@@ -5,6 +5,7 @@
 
 import type { Direction } from "@voxyl/core";
 import * as THREE from "three/webgpu";
+import { isKey } from "../editor/keymap.ts";
 import type { Engine } from "../scene/Engine.ts";
 import type { SliceWindow } from "../scene/slice-guide.ts";
 import { MAX_SLICE_CELLS } from "../world/protocol.ts";
@@ -560,12 +561,7 @@ export class GridView {
   }
 
   #onKey(event: KeyboardEvent): void {
-    const step =
-      event.key === "]" || event.key === "PageUp"
-        ? 1
-        : event.key === "[" || event.key === "PageDown"
-          ? -1
-          : 0;
+    const step = isKey("layerUp", event.code) ? 1 : isKey("layerDown", event.code) ? -1 : 0;
     if (step === 0) return;
     event.preventDefault();
     this.setDepth(this.#depth + step * (event.shiftKey ? 4 : 1));

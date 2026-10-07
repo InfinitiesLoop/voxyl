@@ -1,18 +1,17 @@
-// Every binding the editor has, for the Keys panel. The handlers live where they act
-// (FlyCamera, Engine, GridView); this list is what the user reads, kept beside them in
-// spirit: change a binding there, change it here. Each action that has one names a key for
-// the right hand too (the user flies with the mouse in the left hand).
-//
-// Later, app settings can rebind keys; this list is where that screen would start.
+// The Keys panel's list: every binding by what it is for. Keyboard rows name an action in
+// keymap.ts, so the panel shows exactly what the handlers use; mouse and combination rows
+// are written out. Each row's `ui` says where the same thing is in the interface (every
+// action with a key can be done without it).
 
+import { KEYMAP, type KeyAction, keyLabel } from "./keymap.ts";
 import type { EditorTool } from "./tool.ts";
 
 export interface Binding {
   readonly action: string;
-  /** The usual keys or buttons. */
-  readonly keys: readonly string[];
-  /** Keys for the right hand, when the usual ones are on the left. */
-  readonly right?: readonly string[];
+  /** The usual key or button. */
+  readonly binding: readonly string[];
+  /** Another key for the same thing, usually for the other hand. */
+  readonly alternate: readonly string[];
   readonly note?: string;
 }
 
@@ -21,9 +20,25 @@ export interface BindingSection {
   readonly title: string;
   /** When it applies, in a few words. */
   readonly when: string;
-  /** The tool this section is about, so the panel can mark the one in hand. */
-  readonly tool?: EditorTool;
+  /** The tools this section is about, so the panel can mark the one in hand. */
+  readonly tools?: readonly EditorTool[];
   readonly bindings: readonly Binding[];
+}
+
+/** A keyboard row from the keymap. */
+function key(action: string, id: KeyAction, note?: string): Binding {
+  const k = KEYMAP[id];
+  return {
+    action,
+    binding: k.binding.map(keyLabel),
+    alternate: k.alternate.map(keyLabel),
+    ...(note && { note }),
+  };
+}
+
+/** A mouse or combination row. */
+function other(action: string, binding: readonly string[], note?: string): Binding {
+  return { action, binding, alternate: [], ...(note && { note }) };
 }
 
 export const KEY_SECTIONS: readonly BindingSection[] = [
@@ -32,70 +47,56 @@ export const KEY_SECTIONS: readonly BindingSection[] = [
     title: "Moving",
     when: "In a 3D view",
     bindings: [
-      { action: "Fly (take the pointer)", keys: ["Click the view"] },
-      { action: "Let the pointer go", keys: ["Esc"] },
-      { action: "Look around", keys: ["Mouse"], note: "while flying" },
-      { action: "Turn without flying", keys: ["Drag the view"] },
-      {
-        action: "Orbit the selection",
-        keys: ["Drag the view"],
-        note: "with a selection, not flying",
-      },
-      { action: "Forward and back", keys: ["Wheel"], note: "not flying" },
-      { action: "Move", keys: ["W", "A", "S", "D"], right: ["↑", "←", "↓", "→"] },
-      { action: "Up", keys: ["Space"], right: ["Right Ctrl", "Right Alt"] },
-      { action: "Down", keys: ["Left Shift"], right: ["Right Shift", "/"] },
-      { action: "Sprint", keys: ["\\"], note: "tap up to 4×; resets when you stop" },
-      { action: "Faster, slower", keys: ["=", "-"], right: ["Num +", "Num -"] },
+      other("Fly (take the pointer)", ["Click the view"]),
+      other("Let the pointer go", ["Esc"]),
+      other("Look around", ["Mouse"], "while flying"),
+      other("Turn without flying", ["Drag the view"]),
+      other("Orbit the selection", ["Drag the view"], "with a selection, not flying"),
+      other("Forward and back", ["Wheel"], "not flying"),
+      key("Forward", "forward"),
+      key("Back", "back"),
+      key("Left", "left"),
+      key("Right", "right"),
+      key("Up", "up"),
+      key("Down", "down"),
+      key("Sprint", "sprint", "tap, up to 4×; resets when you stop"),
+      key("Faster", "faster", "also the Camera menu"),
+      key("Slower", "slower", "also the Camera menu"),
     ],
   },
   {
     id: "build",
     title: "Building",
-    when: "Build tool, flying",
-    tool: "build",
+    when: "Flying",
+    tools: ["build", "column", "wand", "exchange"],
     bindings: [
-      { action: "Remove the aimed block", keys: ["Left click"] },
-      { action: "Place the hotbar semantic", keys: ["Right click"] },
-      { action: "Pick the aimed semantic", keys: ["Middle click"], note: "into the hotbar" },
+      other("Build with the tool in hand", ["Right click"]),
+      other("Remove the aimed block", ["Left click"]),
+      other("Pick the aimed semantic", ["Middle click"], "into the hotbar"),
+      key("Turn the aimed block", "rotateBlock", "Shift turns it the other way"),
     ],
   },
   {
     id: "select",
     title: "Selecting",
     when: "Select tool, flying",
-    tool: "select",
+    tools: ["select"],
     bindings: [
-      { action: "First corner, then second", keys: ["Right click"] },
-      { action: "Clear the box", keys: ["Right click"], note: "a third time" },
-      { action: "Empty the selected cells", keys: ["Backspace"] },
-      { action: "Remove, pick", keys: ["Left click", "Middle click"], note: "as in Build" },
+      other("First corner, then second", ["Right click"]),
+      other("Clear the box", ["Right click"], "a third time"),
+      other("Select the blocks touching it", ["Shift + Right click"], "of its kind, or any"),
+      key("Empty the selected cells", "clearSelection", "also Actions → Clear"),
     ],
   },
   {
-    id: "wand",
-    title: "Wand",
-    when: "Wand tool, flying",
-    tool: "wand",
-    bindings: [
-      { action: "Select connected blocks of a kind", keys: ["Right click"] },
-      { action: "Select connected blocks of any kind", keys: ["Shift + Right click"] },
-      { action: "Empty the selected cells", keys: ["Backspace"] },
-    ],
-  },
-  {
-    id: "hotbar",
-    title: "Hotbar and inventory",
+    id: "tools",
+    title: "Tools, hotbar and inventory",
     when: "Anywhere",
     bindings: [
-      { action: "Choose a slot", keys: ["1 … 9"], right: ["Num 1 … 9"] },
-      { action: "Next or previous slot", keys: ["Wheel"], note: "while flying" },
-      {
-        action: "Inventory: tools and the hotbar",
-        keys: ["E"],
-        right: ["Delete"],
-        note: "Esc also closes it",
-      },
+      key("Next tool", "nextTool", "Shift goes back; also the inventory"),
+      { action: "Choose a slot", binding: ["1 … 9"], alternate: ["Num 1 … 9"] },
+      other("Next or previous slot", ["Wheel"], "while flying"),
+      key("Inventory: tools and the hotbar", "inventory", "Esc also closes it"),
     ],
   },
   {
@@ -103,8 +104,8 @@ export const KEY_SECTIONS: readonly BindingSection[] = [
     title: "History",
     when: "Anywhere",
     bindings: [
-      { action: "Undo", keys: ["Ctrl + Z"], note: "either Ctrl" },
-      { action: "Redo", keys: ["Ctrl + Shift + Z", "Ctrl + Y"] },
+      other("Undo", ["Ctrl + Z"], "either Ctrl; also the top bar"),
+      { action: "Redo", binding: ["Ctrl + Shift + Z"], alternate: ["Ctrl + Y"] },
     ],
   },
   {
@@ -112,11 +113,11 @@ export const KEY_SECTIONS: readonly BindingSection[] = [
     title: "2D view",
     when: "Pointer over a 2D view",
     bindings: [
-      { action: "Pan", keys: ["Drag"] },
-      { action: "Zoom", keys: ["Wheel"] },
-      { action: "Layer up", keys: ["]"], right: ["Page Up"] },
-      { action: "Layer down", keys: ["["], right: ["Page Down"] },
-      { action: "Four layers at a time", keys: ["Shift + those"] },
+      other("Pan", ["Drag"]),
+      other("Zoom", ["Wheel"]),
+      key("Layer up", "layerUp", "also + in the bar"),
+      key("Layer down", "layerDown", "also − in the bar"),
+      other("Four layers at a time", ["Shift + those"]),
     ],
   },
 ];

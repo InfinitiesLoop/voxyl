@@ -1189,7 +1189,29 @@ button[aria-pressed="true"] {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  width: 260px;
+  width: 430px;
+}
+
+.tool-options {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  color: var(--text-quiet);
+  font-size: 11.5px;
+}
+
+.tool-options-label {
+  margin-right: 4px;
+}
+
+.tool-options button {
+  padding: 2px 6px;
+  font-size: 11.5px;
+}
+
+.tool-badge-brush {
+  color: var(--text-quiet);
+  font-weight: 400;
 }
 
 .tool-strip-buttons {
@@ -1200,6 +1222,8 @@ button[aria-pressed="true"] {
 .tool-strip-buttons button {
   flex: 1;
   height: 34px;
+  padding: 0 4px;
+  white-space: nowrap;
 }
 
 .tool-strip-hint {

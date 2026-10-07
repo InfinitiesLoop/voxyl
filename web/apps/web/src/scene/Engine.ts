@@ -3,20 +3,31 @@ import type { LightingMode } from "@voxyl/session";
 import * as THREE from "three/webgpu";
 import { grouped, nudgedBox } from "../editor/counts.ts";
 import { Hotbar } from "../editor/hotbar.ts";
+import { isKey } from "../editor/keymap.ts";
 import { boxLines } from "../editor/outline.ts";
 import { Store } from "../editor/store.ts";
-import { type EditorTool, readTool, rememberTool } from "../editor/tool.ts";
+import {
+  cycleTool,
+  type EditorTool,
+  isBuildTool,
+  readBrush,
+  readTool,
+  rememberBrush,
+  rememberTool,
+} from "../editor/tool.ts";
 import type { HistoryState, PaletteInfo } from "../world/editing.ts";
 import {
   EMPTY_SELECTION,
   type Ray,
   type SelectionView,
+  type ToolArgs,
   type Vec3,
   type WorldStats,
 } from "../world/protocol.ts";
 import { WorldClient, type WorldOutput } from "../world/WorldClient.ts";
 import type { WorldInfo, WorldSource } from "../worlds.ts";
 import { ChunkRenderer, type ChunkRendererStats } from "./ChunkRenderer.ts";
+import { CellBoxes } from "./cell-boxes.ts";
 import { applyPose, FlyCamera, type FlyPose } from "./FlyCamera.ts";
 import { GroundGrid } from "./ground-grid.ts";
 import { LightVolume } from "./light-volume.ts";
@@ -129,6 +140,10 @@ export class Engine {
   readonly projectName = new Store("");
   /** Build, Select or Wand. Remembered across visits. */
   readonly tool = new Store<EditorTool>(readTool());
+  /** Build to me's square and Exchange's reach: 1 is one block, 3 a 3×3. Remembered. */
+  readonly brush = new Store<number>(readBrush());
+  /** Shift+right-click with Select takes touching blocks of any kind, not only the one clicked. */
+  readonly connectAny = new Store(false);
   /** The project's selection, for the panel and the outline. */
   readonly selection = new Store<SelectionView>(EMPTY_SELECTION);
   /** The first corner of a box, before the second click completes it. */
@@ -147,6 +162,8 @@ export class Engine {
   #width = 1;
   #height = 1;
   readonly #target = new TargetOutline();
+  /** What a multi-block tool would build where the crosshair aims. */
+  readonly #toolPreview = new CellBoxes(0x8be9ff);
   readonly #selectionOutline = new SelectionOutline();
   readonly #grid = new GroundGrid();
   readonly #sliceGuide = new SliceGuide();
@@ -196,6 +213,7 @@ export class Engine {
     this.scene.add(this.#sky.mesh);
     this.scene.add(this.#grid.group);
     this.scene.add(this.#target.object);
+    this.scene.add(this.#toolPreview.object);
     this.scene.add(this.#selectionOutline.object);
     this.scene.add(this.#sliceGuide.object);
     this.scene.fogNode = this.#sky.fog;
@@ -490,6 +508,7 @@ export class Engine {
     this.#observer.disconnect();
     this.fly.dispose();
     this.#target.dispose();
+    this.#toolPreview.dispose();
     this.#selectionOutline.dispose();
     this.#sliceGuide.dispose();
     this.#grid.dispose();
@@ -738,14 +757,17 @@ export class Engine {
   #updateAim(): void {
     if (!this.fly.locked || !this.#info || this.#autopilot) {
       this.#target.show(null);
+      this.#toolPreview.show(null);
       this.#aimedFor = "";
       return;
     }
     if (this.#aiming) return;
     const ray = this.#ray();
+    const tool = this.#toolArgs();
     const at = ray.origin.map((v) => v.toFixed(3)).join();
     const toward = ray.dir.map((v) => v.toFixed(4)).join();
-    const key = `${at} ${toward} ${this.#revision}`;
+    const using = tool ? `${tool.tool}${tool.brush}` : "";
+    const key = `${at} ${toward} ${this.#revision} ${using}`;
     if (key === this.#aimedFor) return;
     this.#aiming = true;
     this.#aimedFor = key;
@@ -753,10 +775,20 @@ export class Engine {
     const done = () => {
       this.#aiming = false;
     };
-    void this.world.request({ type: "aim", ...ray }).then((aim) => {
+    void this.world.request({ type: "aim", ...ray, ...(tool && { tool }) }).then((aim) => {
       done();
-      if (world === this.#worldId && this.fly.locked) this.#target.show(aim);
+      if (world !== this.#worldId || !this.fly.locked) return;
+      this.#target.show(aim);
+      this.#toolPreview.show(aim?.preview ?? null);
     }, done);
+  }
+
+  /** The multi-block tool in hand, for an aim's preview or a click, or null. */
+  #toolArgs(): ToolArgs | null {
+    const tool = this.tool.get();
+    if (!isBuildTool(tool) || this.hotbar.current === null) return null;
+    const p = this.camera.position;
+    return { tool, brush: this.brush.get(), camera: [p.x, p.y, p.z] };
   }
 
   /** While flying: left click removes, right click places, middle click picks. */
@@ -766,11 +798,9 @@ export class Engine {
     if (!this.#info) return;
     const ray = this.#ray();
     const tool = this.tool.get();
-    if (event.button === 2 && (tool === "select" || tool === "wand")) {
+    if (event.button === 2 && tool === "select") {
       const shift = event.shiftKey;
-      this.#enqueue(() =>
-        tool === "select" ? this.#applySelect(ray) : this.#applyWand(ray, shift),
-      );
+      this.#enqueue(() => (shift ? this.#applyConnected(ray) : this.#applySelect(ray)));
       return;
     }
     if (event.button === 1) {
@@ -795,7 +825,10 @@ export class Engine {
     } else if (event.button === 2) {
       const semantic = this.hotbar.current?.ref;
       if (semantic === undefined) return;
-      void this.world.request({ type: "place", semantic, ...ray }).then(timed);
+      const args = this.#toolArgs();
+      if (args)
+        void this.world.request({ type: "toolEdit", semantic, ...args, ...ray }).then(timed);
+      else void this.world.request({ type: "place", semantic, ...ray }).then(timed);
     }
   }
 
@@ -856,20 +889,33 @@ export class Engine {
       return;
     }
     if (isTyping(event.target)) return;
-    // E, or Delete for the right hand, as in the Godot app.
+    // The keys are in editor/keymap.ts. Right Ctrl and right Alt fly up, so while flying
+    // they may be held with any of these.
     const plain = !event.ctrlKey && !event.metaKey && !event.altKey;
-    if (plain && (event.code === "KeyE" || event.code === "Delete")) {
-      event.preventDefault();
-      this.toggleInventory();
-      return;
+    const flying = this.fly.locked;
+    if ((plain || flying) && !event.repeat) {
+      if (isKey("inventory", event.code)) {
+        event.preventDefault();
+        this.toggleInventory();
+        return;
+      }
+      if (isKey("nextTool", event.code)) {
+        event.preventDefault();
+        this.setTool(cycleTool(this.tool.get(), event.shiftKey ? -1 : 1));
+        return;
+      }
+      if (isKey("rotateBlock", event.code) && flying) {
+        event.preventDefault();
+        this.rotateAimed(event.shiftKey);
+        return;
+      }
     }
-    // Backspace empties the selection, only while a selection tool is in hand, so a
-    // selection left behind never takes the key from Build.
-    const tool = this.tool.get();
+    // Backspace empties the selection, only while Select is in hand, so a selection left
+    // behind never takes the key from building.
     if (
       plain &&
-      event.code === "Backspace" &&
-      (tool === "select" || tool === "wand") &&
+      isKey("clearSelection", event.code) &&
+      this.tool.get() === "select" &&
       this.selection.get().cells > 0
     ) {
       event.preventDefault();
@@ -897,8 +943,23 @@ export class Engine {
     this.tool.set(tool);
     rememberTool(tool);
     this.#clearAnchor();
+    this.#aimedFor = ""; // the preview follows the tool
     // The outline is part of the selection tools. The selection itself stays, for actions.
     this.#showOutline(this.selection.get().lines);
+  }
+
+  /** The brush for Build to me and Exchange: 1 to 9 cells across. */
+  setBrush(brush: number): void {
+    const n = Math.max(1, Math.min(9, Math.round(brush)));
+    this.brush.set(n);
+    rememberBrush(n);
+    this.#aimedFor = "";
+  }
+
+  /** Turns the block the crosshair aims at about the face it hits (`reverse`: the other way). */
+  rotateAimed(reverse: boolean): void {
+    if (!this.#info) return;
+    void this.#run(this.world.request({ type: "rotate", reverse, ...this.#ray() }));
   }
 
   /**
@@ -989,13 +1050,14 @@ export class Engine {
     await this.#select(where, boxLines(boxOf(where.box)));
   }
 
-  async #applyWand(ray: Ray, shift: boolean): Promise<void> {
-    if (this.tool.get() !== "wand") return;
+  /** Shift+right-click with Select: the blocks touching the one clicked (`structure`). */
+  async #applyConnected(ray: Ray): Promise<void> {
+    if (this.tool.get() !== "select") return;
     const hit = await this.world.request({ type: "raycast", ...ray });
-    if (this.tool.get() !== "wand" || !hit) return;
+    if (this.tool.get() !== "select" || !hit) return;
     this.#dropAnchor();
     const seed: [number, number, number] = [hit.cell[0], hit.cell[1], hit.cell[2]];
-    const where: Region = shift
+    const where: Region = this.connectAny.get()
       ? { structure: { seed } }
       : { structure: { seed, semantics: [hit.semanticId] } };
     await this.#select(where);
@@ -1030,10 +1092,9 @@ export class Engine {
     this.#showOutline(this.selection.get().lines);
   }
 
-  /** The selection outline while a selection tool is on, and nothing while Build is. */
+  /** The selection outline while Select is in hand, and nothing while building. */
   #showOutline(lines: Float32Array): void {
-    const tool = this.tool.get();
-    this.#selectionOutline.show(tool === "select" || tool === "wand" ? lines : new Float32Array(0));
+    this.#selectionOutline.show(this.tool.get() === "select" ? lines : new Float32Array(0));
   }
 
   #setOrbit(bounds: SelectionView["bounds"]): void {

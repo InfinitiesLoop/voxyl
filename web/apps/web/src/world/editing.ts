@@ -19,6 +19,7 @@ import {
   regionStats,
   type SemanticArg,
   type SemanticId,
+  sideOf,
   stateInput,
   stateJSON,
   type World,
@@ -80,7 +81,7 @@ export function semanticOfState(state: CellState): SemanticId {
 }
 
 /** The semantic an argument names now: its id, or the base it would be derived from. */
-function semanticIdOf(project: Project, ref: SemanticArg): SemanticId {
+export function semanticIdOf(project: Project, ref: SemanticArg): SemanticId {
   if (typeof ref === "number") return ref;
   // Derived already? Then that one (its form may override the base's).
   const own = project.semantics
@@ -91,7 +92,7 @@ function semanticIdOf(project: Project, ref: SemanticArg): SemanticId {
 
 let nextId = 0;
 /** A command id unique to this editor session. */
-function commandId(): string {
+export function commandId(): string {
   const random = globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2);
   return `editor-${++nextId}-${random}`;
 }
@@ -136,6 +137,27 @@ export function eraseCommand(project: Project, target: Aim): Command | null {
     source: EDITOR_SOURCE,
     label: name ? `Remove ${name}` : "Remove",
     args: { states: [null], cells: [...target.hit, 0] },
+  };
+}
+
+/**
+ * The command that turns the block aimed at a quarter turn about the face it hits, clockwise
+ * as seen looking at that face (`reverse`: anticlockwise). Null when the aim is on the ground.
+ */
+export function rotateCommand(project: Project, target: Aim, reverse: boolean): Command | null {
+  if (!target.hit) return null;
+  const state = project.world.states.get(target.id);
+  const name = state ? project.semantics.nameOf(semanticOfState(state)) : "";
+  return {
+    id: commandId(),
+    kind: "rotate",
+    source: EDITOR_SOURCE,
+    label: name ? `Turn ${name}` : "Turn",
+    args: {
+      where: { box: [...target.hit, ...target.hit] },
+      face: sideOf(target.face),
+      turns: reverse ? -1 : 1,
+    },
   };
 }
 

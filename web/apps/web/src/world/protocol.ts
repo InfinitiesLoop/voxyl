@@ -14,6 +14,7 @@ import type { LightingMode, LightLayoutUpdate, MeshJob, ProjectEntry } from "@vo
 import type { SliceAxis } from "../views/plane.ts";
 import type { WorldInfo, WorldSource } from "../worlds.ts";
 import type { Aim, HistoryState, PaletteInfo } from "./editing.ts";
+import type { BuildTool } from "./tools.ts";
 
 /** The most cells one slice request may ask for. */
 export const MAX_SLICE_CELLS = 1 << 20;
@@ -30,6 +31,19 @@ export interface RayHit {
 }
 
 /** A ray from the camera, for aiming: where it starts, which way, and how far it reaches. */
+/** A multi-block tool, its brush, and where the camera is (Build to me builds toward it). */
+export interface ToolArgs {
+  readonly tool: BuildTool;
+  readonly brush: number;
+  readonly camera: Vec3;
+}
+
+/** An aim, and the cells (x, y, z, ...) the tool in hand would build there, if any. */
+export type AimView = Aim & { readonly preview: Int32Array | null };
+
+/** At most this many cells are previewed (the click still builds them all). */
+export const MAX_PREVIEW_CELLS = 8192;
+
 export interface Ray {
   readonly origin: Vec3;
   readonly dir: Vec3;
@@ -80,8 +94,15 @@ export type Command =
   /** Writes a state into one cell or a box (EMPTY_ID clears), as commands: scripted edits. */
   | { type: "setId"; at: Vec3; id: number }
   | { type: "fillBox"; from: Vec3; to: Vec3; id: number }
-  /** Where a ray from the crosshair aims (see editing.ts). */
-  | ({ type: "aim" } & Ray)
+  /**
+   * Where a ray from the crosshair aims (see editing.ts), and with `tool`, the cells that
+   * tool would build there (the preview).
+   */
+  | ({ type: "aim"; tool?: ToolArgs } & Ray)
+  /** Builds with a multi-block tool where the ray aims (see tools.ts). */
+  | ({ type: "toolEdit"; semantic: SemanticArg } & ToolArgs & Ray)
+  /** Turns the block the ray aims at about the face it hits (Shift: the other way). */
+  | ({ type: "rotate"; reverse: boolean } & Ray)
   /** Places a semantic where the ray aims, turned as its placement profile picks. */
   | ({ type: "place"; semantic: SemanticArg } & Ray)
   /** Empties the cell the ray aims at. */
@@ -151,7 +172,9 @@ export interface Replies {
   intern: number;
   setId: boolean;
   fillBox: number;
-  aim: Aim | null;
+  aim: AimView | null;
+  toolEdit: boolean;
+  rotate: boolean;
   place: boolean;
   erase: boolean;
   select: { cells: number };

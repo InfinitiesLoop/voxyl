@@ -44,9 +44,9 @@ Godot's model is proven with this user, so the web starts from it:
   slots while flying (as in Godot and Minecraft).
 - **Inventory**: E, or Delete for the right hand, opens and closes it (Esc closes it too). It
   holds the tools as well as the palettes, as in Godot.
-- **Backspace** empties the selection, only while Select or Wand is in hand (as in Godot).
-- **Keys** in the top bar lists every binding, the right-hand keys in their own column
-  (`editor/keybindings.ts`).
+- **Backspace** empties the selection, only while Select is in hand (as in Godot).
+- **Q** (alternate Num \*) steps through the tools; **R** (alternate Num 0) turns the aimed block.
+- **Keys** in the top bar lists every binding and its alternate (`editor/keymap.ts`).
 - **Undo** Ctrl+Z, **redo** Ctrl+Shift+Z or Ctrl+Y (either Ctrl key), from any mode.
 
 ## Layout
@@ -63,7 +63,8 @@ The 3D view fills the window. Around it, all overlays:
 - **Hotbar** at the bottom centre, with a badge on its left naming the tool in hand.
 - **Palette drawer** on the right: semantics grouped by palette, their looks, adding and
   editing. The panes shrink beside it rather than going under it.
-- **Tools** live in the inventory, beside its hotbar (Build, Select, Wand; Paste later), so
+- **Tools** live in the inventory, beside its hotbar (Build, Build to me, Wand, Exchange,
+  Select; Paste later), so
   flying never gives up the pointer for a tool rail. The badge opens the inventory.
 - **Dev panel**: today's HUD (samples, chunk size, frame stats, benchmark) folds into a
   panel that starts closed.
@@ -255,8 +256,39 @@ there is a point worth orbiting.
     3. The hint bar is gone with nothing in its place, so a first visit has no "click to fly"
        on screen; Keys is the help.
     4. A cut's compass names left and right instead of drawing a disc.
-- **Next:** step 4, the clipboard and prefabs, unless the user picks from the gaps below or
-  settles the cross-project questions first.
+- **The user's answers (2026-10-07, third round).**
+  - Keys say **Binding** and **Alternate**, never "left hand" or "right hand".
+  - **The wand is a building tool**, not a selection tool: right-click grows a surface by a
+    layer, as in Godot. (Selecting connected blocks moved to Select, with Shift.)
+  - Making your own blocks is dropped: blocks only come from imports and the default set.
+  - Animated textures go to the new **Polish** phase unless trivial (they aren't).
+  - Home and shared palettes: **yes**, and the app opens on **Home**; with no projects yet it
+    offers a link straight into a new build. New projects' starter palette uses the voxyl
+    default block set, not plain colours.
+  - The hotbar keeps 9 slots.
+  - **Tools get keys** (which keys is open), and anything with a key must also be doable from
+    the UI.
+  - No on-screen "click to fly" is fine.
+  - **Do now:** every gap in the table below except the two above (own blocks; animated
+    textures). Views as tabs stays out, as suggested.
+- **Third round, as built** (one commit per part):
+  1. **Keys and tools.** `editor/keymap.ts` holds every keyboard binding (binding and
+     alternate, as `KeyboardEvent.code`); FlyCamera, Engine and GridView read it and the Keys
+     panel lists it, so the two can't drift. Tools are Build, **Build to me**, **Wand**,
+     **Exchange** and Select (`world/tools.ts`, tested): Build to me lays a column from the
+     aimed face toward the camera, stopping one short of it, as wide as the brush; the Wand
+     puts a block on every open face of the clicked semantic's run in that face's plane (4-way
+     connected, 32 cells each way), keeping a turnable block's turn; Exchange swaps the clicked
+     block and its connected run within the brush, in place. Each click is one `set` command
+     ("Wand: 18 Wall"). The aim request also returns the cells the tool in hand would build,
+     drawn as one box per cell (Godot's builders'-wand look). The brush (1×1 to 9×9) and
+     Select's "Shift takes any kind" are tool options under the inventory's tool strip; the
+     badge shows the brush. **Q** steps through the tools (Shift back), alternate **Num \***;
+     **R** turns the aimed block about the face hit (Shift the other way, the `rotate`
+     command), alternate **Num 0**; **sprint** is a left Ctrl tap (sprints on release if no
+     other key came between, so Ctrl+Z doesn't), alternate `\`. Tool keys are a proposal.
+  2. Camera menu, 3. render modes, 4. slicing from 3D, 5. Home and shared palettes,
+     6. inventory and block chooser, 7. 2D editing: in progress.
 
 ## Cross-project resources (what is planned, and what is not)
 
@@ -318,12 +350,12 @@ the editor steps already cover are listed last.
 | A 2D view showing another 2D view's slice as a line | `View2DGrid.gd` guide line | Cheap once there are two 2D panes |
 | Build-to-me (fill from the aimed cell to where you stand), Exchange (swap blocks in place), brush size | `View3D.gd`, `ToolsPanel.gd` | New tools in the inventory's tool strip, after step 4 |
 | R turns the aimed block in place (Shift backwards) | `View3D.gd` `_rotate_targeted_block` | Step 5 already has "rotate on face"; add the key there |
-| Twelve hotbar slots (keys 1-9, 0 for the tenth; the wheel reaches all twelve) | `VoxelWorld.gd` `HOTBAR_SIZE`, `Hotbar.gd` | Decide: 9 like Minecraft, or more like Godot |
+| Twelve hotbar slots (keys 1-9, 0 for the tenth; the wheel reaches all twelve) | `VoxelWorld.gd` `HOTBAR_SIZE`, `Hotbar.gd` | Decided: 9 is fine |
 | Sprint on a left Ctrl tap (the web has only `\`, a right-hand key) | `View3D.gd` `_tap_sprint` | Add left Ctrl tap, so each hand has a sprint |
 | Inventory: a "+" tile adds a semantic, right-click removes one, a search box (Tab) that also narrows the palettes, a Prefabs page | `InventoryScreen.gd`, `PalettePanel.gd` | Search and "+" soon; Prefabs page with step 4 |
 | Block chooser with a library filter rail and a turning 3D preview (1×1, 1×3, 3×3) | `BlockChooser.gd`, `BlockPreview3D.gd` | Improve the drawer's block picker when Home's Blocks tab is built |
-| Making a block from your own textures; browsing a library's blocks | `HomeScreen.gd` Block Types tab, `NewBlockDialog.gd` | Home → Blocks |
-| Animated textures (water, lava, portals) and a placement pop | `View3D.gd` | Later polish |
+| Browsing a library's blocks | `HomeScreen.gd` Block Types tab | Home → Blocks. Making your own blocks is dropped (the user, 2026-10-07): blocks only come from imports and the default set |
+| Animated textures (water, lava, portals) and a placement pop | `View3D.gd` | The Polish phase (web-migration.md): not trivial |
 | Selection shown in a 2D view (bright on its layers, dim off them), part footprints and facing glyphs, rotating and flipping the 2D view, pencil, line, rectangle and fill | `View2DGrid.gd` | Step 6 |
 | Views as tabs you drag between panes, any split tree | `MultiViewShell.gd`, `ViewPane.gd` | Deliberately not: four presets are simpler. Revisit if the user misses it |
 

@@ -1,20 +1,21 @@
 import * as THREE from "three/webgpu";
+import { codesOf, isKey } from "../editor/keymap.ts";
 import { orbitOffset } from "../editor/orbit.ts";
 
-// Bindings follow the Godot app, with right-hand options for every action:
-// move WASD / arrows, up Space / right Ctrl / right Alt, down Shift / "/", sprint "\" (tap,
-// up to 4x, resets when you stop), base speed "=" / "-" or numpad + / -. Movement is
-// immediate: no damping or easing, the camera stops the moment the keys are released. The
-// wheel belongs to the editor (the hotbar while flying, moving forward and back otherwise).
-const FORWARD = ["KeyW", "ArrowUp"];
-const BACK = ["KeyS", "ArrowDown"];
-const LEFT = ["KeyA", "ArrowLeft"];
-const RIGHT = ["KeyD", "ArrowRight"];
-const UP = ["Space", "ControlRight", "AltRight"];
-const DOWN = ["ShiftLeft", "ShiftRight", "Slash"];
-const SPRINT = "Backslash";
-const FASTER = ["Equal", "NumpadAdd"];
-const SLOWER = ["Minus", "NumpadSubtract"];
+// Bindings live in editor/keymap.ts (the Keys panel lists the same table), with a key for
+// either hand for every action: move WASD / arrows, up Space / right Ctrl / right Alt, down
+// Shift / "/", sprint a left Ctrl tap or "\" (up to 4x, resets when you stop), base speed
+// "=" / "-" or numpad + / -. Movement is immediate: no damping or easing, the camera stops
+// the moment the keys are released. The wheel belongs to the editor (the hotbar while flying,
+// moving forward and back otherwise).
+const FORWARD = codesOf("forward");
+const BACK = codesOf("back");
+const LEFT = codesOf("left");
+const RIGHT = codesOf("right");
+const UP = codesOf("up");
+const DOWN = codesOf("down");
+const FASTER = codesOf("faster");
+const SLOWER = codesOf("slower");
 const HANDLED = new Set([
   ...FORWARD,
   ...BACK,
@@ -22,10 +23,12 @@ const HANDLED = new Set([
   ...RIGHT,
   ...UP,
   ...DOWN,
-  SPRINT,
+  ...codesOf("sprint"),
   ...FASTER,
   ...SLOWER,
 ]);
+
+const MODIFIER = /^(?:Control|Alt|Shift|Meta)/;
 
 /** Up and down move this many times faster than flying level. */
 const VERTICAL_SPEED = 1.2;
@@ -60,6 +63,8 @@ export class FlyCamera {
   /** Base speed in cells per second. */
   speed = 15;
   #sprint = 0;
+  /** A sprint key that sprints on a tap (left Ctrl) is down, with nothing else pressed since. */
+  #tapping: string | null = null;
   readonly #keys = new Set<string>();
   readonly #element: HTMLElement;
   readonly #abort = new AbortController();
@@ -203,10 +208,19 @@ export class FlyCamera {
   }
 
   #onKey(event: KeyboardEvent, down: boolean): void {
+    // Any other key between a tap key's press and release makes it a modifier, not a tap.
+    if (down && event.code !== this.#tapping) this.#tapping = null;
     if (!this.locked || !HANDLED.has(event.code)) return;
     event.preventDefault();
-    if (event.code === SPRINT) {
-      if (down && !event.repeat) this.#sprint = Math.min(this.#sprint + 1, 2);
+    if (isKey("sprint", event.code)) {
+      if (event.repeat) return;
+      // A modifier (left Ctrl) is also Ctrl: it sprints when let go untouched. Others on the press.
+      const onTap = MODIFIER.test(event.code);
+      if (onTap) {
+        if (down) this.#tapping = event.code;
+        else if (this.#tapping === event.code) this.#sprintStep();
+        if (!down) this.#tapping = null;
+      } else if (down) this.#sprintStep();
       return;
     }
     if (FASTER.includes(event.code) || SLOWER.includes(event.code)) {
@@ -215,6 +229,10 @@ export class FlyCamera {
     }
     if (down) this.#keys.add(event.code);
     else this.#keys.delete(event.code);
+  }
+
+  #sprintStep(): void {
+    this.#sprint = Math.min(this.#sprint + 1, 2);
   }
 
   #onMouseMove(event: MouseEvent): void {
