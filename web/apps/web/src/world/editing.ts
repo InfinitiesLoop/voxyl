@@ -4,10 +4,12 @@
 // the history with a label, undoes, and is the same command an agent would send.
 // Runs in the world worker; pure functions over a Project, so they test in Node.
 
+import { blockLabel } from "@voxyl/blocks";
 import {
   type CellState,
   type Command,
   EMPTY_ID,
+  type Look,
   NO_SEMANTIC,
   type PaletteId,
   Project,
@@ -168,6 +170,128 @@ export function fillBoxCommand(
     : { id: commandId(), kind: "clear", source: EDITOR_SOURCE, label, args: { where } };
 }
 
+/** The command that adds a semantic to a palette, or null if the name is empty. */
+export function addSemanticCommand(
+  project: Project,
+  palette: PaletteId,
+  name: string,
+): Command | null {
+  const trimmed = name.trim();
+  if (trimmed === "" || trimmed.length > 80 || !project.semantics.hasPalette(palette)) return null;
+  return {
+    id: commandId(),
+    kind: "semantic_add",
+    source: EDITOR_SOURCE,
+    label: `Add ${trimmed}`,
+    args: { name: trimmed, palette },
+  };
+}
+
+/** The command that renames a semantic, deriving it first when it is only offered. */
+export function renameSemanticCommand(
+  project: Project,
+  ref: SemanticArg,
+  name: string,
+): Command | null {
+  const trimmed = name.trim();
+  if (trimmed === "" || trimmed.length > 80) return null;
+  const current = project.semantics.nameOf(typeof ref === "number" ? ref : ref.base);
+  if (trimmed === current) return null;
+  return {
+    id: commandId(),
+    kind: "semantic_update",
+    source: EDITOR_SOURCE,
+    label: `Rename ${current} to ${trimmed}`,
+    args: { semantic: ref, name: trimmed },
+  };
+}
+
+/**
+ * The command that sets the look a semantic stores itself (null goes back to inheriting it).
+ * Null when the look would not change. Only the fields given are stored, so a derived
+ * semantic can override its glow without freezing the block it inherits.
+ */
+export function setLookCommand(
+  project: Project,
+  ref: SemanticArg,
+  look: Look | null,
+): Command | null {
+  const before = storedLook(project, ref);
+  if (sameLook(before, look)) return null;
+  const name = project.semantics.nameOf(typeof ref === "number" ? ref : ref.base);
+  return {
+    id: commandId(),
+    kind: "semantic_update",
+    source: EDITOR_SOURCE,
+    label: lookLabel(name, before, look),
+    args: { semantic: ref, look },
+  };
+}
+
+/** The command that adds a palette, optionally extending another. */
+export function addPaletteCommand(
+  project: Project,
+  name: string,
+  parent?: PaletteId,
+): Command | null {
+  const trimmed = name.trim();
+  if (trimmed === "" || trimmed.length > 80) return null;
+  if (parent !== undefined && !project.semantics.hasPalette(parent)) return null;
+  return {
+    id: commandId(),
+    kind: "palette_add",
+    source: EDITOR_SOURCE,
+    label: `Add palette ${trimmed}`,
+    args: { name: trimmed, ...(parent !== undefined && { extends: parent }) },
+  };
+}
+
+/** The command that renames a palette, or null if the name is empty or the same. */
+export function renamePaletteCommand(
+  project: Project,
+  palette: PaletteId,
+  name: string,
+): Command | null {
+  const trimmed = name.trim();
+  const current = project.semantics.palette(palette);
+  if (trimmed === "" || trimmed === current.name || trimmed.length > 80) return null;
+  return {
+    id: commandId(),
+    kind: "palette_update",
+    source: EDITOR_SOURCE,
+    label: `Rename palette ${current.name} to ${trimmed}`,
+    args: { palette, name: trimmed },
+  };
+}
+
+/** The look a semantic stores itself, or none when it doesn't exist yet or inherits all of it. */
+function storedLook(project: Project, ref: SemanticArg): Look | undefined {
+  if (typeof ref === "number")
+    return project.semantics.has(ref) ? project.semantics.get(ref).look : undefined;
+  const own = project.semantics
+    .semanticsIn(ref.palette)
+    .find((s) => project.semantics.get(s).base === ref.base);
+  return own === undefined ? undefined : project.semantics.get(own).look;
+}
+
+function sameLook(before: Look | undefined, after: Look | null): boolean {
+  const left = before ?? {};
+  const right = after ?? {};
+  return left.block === right.block && left.glow === right.glow && left.tint === right.tint;
+}
+
+function lookLabel(name: string, before: Look | undefined, after: Look | null): string {
+  if (after === null) return `${name} uses its base look`;
+  if (before?.block !== after.block) {
+    return after.block ? `${name} looks like ${blockLabel(after.block)}` : `${name} is undecided`;
+  }
+  if ((before?.glow === true) !== (after.glow === true)) {
+    return after.glow ? `${name} glows` : `${name} stops glowing`;
+  }
+  if (after.tint) return `${name} coloured ${after.tint}`;
+  return `Change ${name}'s look`;
+}
+
 /** The command that renames the project, or null if the name is empty or the same. */
 export function renameCommand(project: Project, name: string): Command | null {
   const trimmed = name.trim();
@@ -216,6 +340,8 @@ export interface SemanticInfo {
   readonly glow: boolean;
   /** The block its look names ("library:block"), or none while undecided. */
   readonly block?: string;
+  /** The look it sets itself. Empty when it inherits the whole look. */
+  readonly ownLook: Look;
 }
 
 export interface PaletteInfo {
@@ -247,6 +373,7 @@ export function paletteInfo(project: Project, blocks?: BlockMaterials): PaletteI
       const ref: SemanticArg =
         offer.id !== undefined ? offer.id : { palette: palette.id, base: offer.base ?? 0 };
       const base = offer.id !== undefined ? registry.get(offer.id).base : offer.base;
+      const ownLook = offer.id !== undefined ? registry.get(offer.id).look : undefined;
       return {
         ref,
         palette: palette.id,
@@ -255,6 +382,7 @@ export function paletteInfo(project: Project, blocks?: BlockMaterials): PaletteI
         color: lookColor(look, blocks),
         glow: look.glow === true,
         ...(look.block !== undefined && { block: look.block }),
+        ownLook: ownLook ?? {},
       };
     }),
   }));

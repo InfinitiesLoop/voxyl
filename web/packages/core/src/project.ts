@@ -19,7 +19,11 @@ import {
 import { COMMANDS } from "./commands/index.ts";
 import { chunkKeyToCoords } from "./coords.ts";
 import type { Piece } from "./piece.ts";
-import { type CompiledPlacement, compilePlacement } from "./placement-profile.ts";
+import {
+  type CompiledPlacement,
+  compilePlacement,
+  type PlacementProfile,
+} from "./placement-profile.ts";
 import { evaluate, plainBox, type Region, RegionError, type RegionScope } from "./region.ts";
 import { type PaletteId, type SemanticId, SemanticRegistry } from "./semantics.ts";
 import { DEFAULT_SETTINGS, type ProjectSettings } from "./settings.ts";
@@ -122,6 +126,8 @@ export class Project {
   // Compiled placement profiles by semantic, valid for one registry revision.
   readonly #placements = new Map<SemanticId, CompiledPlacement>();
   #placementsRevision = -1;
+  /** A look's block's profile, used when the semantic's form sets none. The host supplies it. */
+  #blockProfiles: ((block: string | undefined) => PlacementProfile | undefined) | null = null;
 
   constructor(
     options: ProjectOptions = {},
@@ -155,8 +161,22 @@ export class Project {
   }
 
   /**
-   * How a semantic's whole blocks may be oriented: its form's placement profile, or anything
-   * goes when it has none. The editor picks rotations for clicks with it.
+   * Where a look's block's placement profile comes from, for semantics whose form sets none
+   * (stairs face the player, a log follows the clicked face). The host knows the libraries;
+   * the project doesn't, and nothing about it is saved. Pass null to stop asking.
+   */
+  setBlockProfiles(
+    source: ((block: string | undefined) => PlacementProfile | undefined) | null,
+  ): void {
+    this.#blockProfiles = source;
+    this.#placements.clear();
+    this.#placementsRevision = -1;
+  }
+
+  /**
+   * How a semantic's whole blocks may be oriented. Its form's profile wins; otherwise the
+   * profile its look's block supplies (see setBlockProfiles). Anything goes when neither
+   * does. The editor picks rotations for clicks with it.
    */
   placement(semantic: SemanticId): CompiledPlacement {
     if (this.#placementsRevision !== this.semantics.revision) {
@@ -165,9 +185,8 @@ export class Project {
     }
     let compiled = this.#placements.get(semantic);
     if (!compiled) {
-      const profile = this.semantics.has(semantic)
-        ? this.semantics.resolve(semantic).form.placement
-        : undefined;
+      const resolved = this.semantics.has(semantic) ? this.semantics.resolve(semantic) : undefined;
+      const profile = resolved?.form.placement ?? this.#blockProfiles?.(resolved?.look.block);
       compiled = compilePlacement(profile);
       this.#placements.set(semantic, compiled);
     }
@@ -262,6 +281,7 @@ export class Project {
       { world: this.world.fork(), semantics: this.semantics.clone(), settings: this.#settings },
     );
     fork.#selection = this.#selection;
+    fork.#blockProfiles = this.#blockProfiles;
     return fork;
   }
 

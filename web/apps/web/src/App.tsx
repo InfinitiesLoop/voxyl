@@ -3,6 +3,7 @@ import type { LightingMode, ProjectEntry } from "@voxyl/session";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type BenchResult, runBench } from "./bench/bench.ts";
 import { HotbarBar } from "./editor/HotbarBar.tsx";
+import { PaletteDrawer } from "./editor/PaletteDrawer.tsx";
 import { TopBar } from "./editor/TopBar.tsx";
 import { BenchPanel, Hud } from "./Hud.tsx";
 import { type Backend, Engine, type EngineStats } from "./scene/Engine.ts";
@@ -69,6 +70,7 @@ function readSettings(): Settings {
 }
 
 const DEV_KEY = "voxyl.dev";
+const PALETTES_KEY = "voxyl.palettes";
 
 function writeSettings(s: Settings): void {
   const params = new URLSearchParams({
@@ -105,6 +107,16 @@ export function App() {
   const toggleDev = useCallback(() => {
     setDevOpen((open) => {
       localStorage.setItem(DEV_KEY, open ? "0" : "1");
+      return !open;
+    });
+  }, []);
+  /** The palette drawer, open until the user closes it. */
+  const [palettesOpen, setPalettesOpen] = useState(
+    () => localStorage.getItem(PALETTES_KEY) !== "0",
+  );
+  const togglePalettes = useCallback(() => {
+    setPalettesOpen((open) => {
+      localStorage.setItem(PALETTES_KEY, open ? "0" : "1");
       return !open;
     });
   }, []);
@@ -323,7 +335,7 @@ export function App() {
 
   const loading = tasks.at(-1) ?? null;
   return (
-    <div className="app">
+    <div className={palettesOpen ? "app palettes-open" : "app"}>
       <div className="panes">
         <div className="pane-3d">
           <div ref={hostRef} className="viewport" />
@@ -353,8 +365,11 @@ export function App() {
           onRename={(name) => void project.rename(name)}
           devOpen={devOpen}
           onDev={toggleDev}
+          palettesOpen={palettesOpen}
+          onPalettes={togglePalettes}
         />
       )}
+      {engine && palettesOpen && <PaletteDrawer engine={engine} />}
       <Hud
         backend={backend}
         stats={stats}

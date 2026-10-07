@@ -1,4 +1,11 @@
 export {
+  type BlockMatch,
+  type BlockQuery,
+  blockIcon,
+  blockLabel,
+  searchBlocks,
+} from "./catalog.ts";
+export {
   type CompiledBlock,
   type CompiledFace,
   compileBlock,
@@ -20,6 +27,7 @@ export {
   type Texture,
   type Variant,
 } from "./library.ts";
+export { profileOfBlock } from "./placement.ts";
 export {
   type CompiledShape,
   compileShape,

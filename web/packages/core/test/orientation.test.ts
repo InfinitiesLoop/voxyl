@@ -350,3 +350,31 @@ describe("region text", () => {
     expect(set.cells).toEqual([0, 0, 0, 0, 1, 0, 0, 1]);
   });
 });
+
+describe("block placement profiles", () => {
+  it("uses a block's profile when the form sets none, and the form wins when it sets one", () => {
+    const p = new Project();
+    const wall = p.semantics.add("Wall", { look: { block: "voxyl:oak_stairs" } });
+    p.setBlockProfiles((block) =>
+      block?.endsWith("stairs") ? PLACEMENTS.stairs : PLACEMENTS.cube,
+    );
+    // Looking north: stairs face the player, so their front points south.
+    const placed = p.placement(wall).pick({ face: [0, 1, 0], look: [0, -1, -1], hitY: 0 });
+    expect(facing(placed)).toBe("south");
+    expect(up(placed)).toBe("up");
+    // A fork places the same way.
+    expect(
+      facing(
+        p
+          .fork()
+          .placement(wall)
+          .pick({ face: [0, 1, 0], look: [0, -1, -1] }),
+      ),
+    ).toBe("south");
+    p.run(cmd("semantic_update", { semantic: wall, form: { placement: PLACEMENTS.log } }));
+    expect(p.placement(wall).profile).toMatchObject({ symmetry: "axis", pick: "attach" });
+    // The form is gone again, and the look is now a cube: one rotation, whichever way you look.
+    p.run(cmd("semantic_update", { semantic: wall, form: null, look: { block: "voxyl:stone" } }));
+    expect(p.placement(wall).allowed).toEqual([0]);
+  });
+});

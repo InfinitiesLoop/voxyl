@@ -114,4 +114,27 @@ there is a point worth orbiting.
     menu for lighting, time of day and brightness) and the hotbar. The old HUD is the Dev
     panel, closed until opened, and still in the page so `pnpm shot` can read it. Rename is
     a settings command, so it undoes, and a saved project autosaves it.
-  - Next is step 2, the palette drawer.
+- **Step 2 done (2026-10-07).** The palette drawer, on the right, opened from **Palettes** in
+  the top bar (open until closed; the choice is remembered).
+  - Semantics are grouped by palette. A row's swatch is the resolved look. Click a row to
+    edit it: rename, choose a block, set the colour it draws when no block is chosen, and
+    glow. Add a semantic, add a palette (extending another, Main by default, so a group of
+    the build starts with the parent's semantics), rename a palette. Every one of those is a
+    core command, so it undoes. A linked palette (a city theme) is read-only; extend it to
+    override a look.
+  - The block picker searches the libraries in this browser, with a 16×16 icon per block
+    (a cube's top texture, or its largest face). Choosing writes only that field of the
+    semantic's own look, so changing a derived semantic's glow does not freeze the block it
+    inherits. Clear removes its own block. An inherited block can't be dropped (looks merge,
+    and there is no "unset"); the picker says so.
+  - Drag a semantic onto a hotbar slot. Double-click puts it in the chosen slot.
+  - **Placement follows the look's block** when the semantic's form sets no profile. The
+    form still wins: intent over the material. `profileOfBlock` reads the blockstate
+    properties (no per-block code): an axis is a log, `type` bottom/top is a slab, a
+    horizontal facing with a top/bottom half is stairs, a `face` property attaches, a
+    facing of down and the sides is a hopper, all six facings point the front, a horizontal
+    facing points at the player, and anything else is a cube. The world worker gives
+    `Project.setBlockProfiles` that reading; it is not saved, and a fork keeps it. Stairs
+    face the player. A log lies along the face that was clicked (either end, since the two
+    ends look the same). A cube stores one rotation.
+  - Next is step 3, selection.

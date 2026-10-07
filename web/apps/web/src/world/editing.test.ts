@@ -1,7 +1,10 @@
-import { EMPTY_ID, PLACEMENTS, ROOT_PALETTE } from "@voxyl/core";
+import { defaultLibrary, profileOfBlock } from "@voxyl/blocks";
+import { EMPTY_ID, facingOf, PLACEMENTS, ROOT_PALETTE, sideOf, upOf } from "@voxyl/core";
 import { describe, expect, it } from "vitest";
 import {
   type Aim,
+  addPaletteCommand,
+  addSemanticCommand,
   aim,
   eraseCommand,
   fillBoxCommand,
@@ -10,8 +13,10 @@ import {
   paletteInfo,
   placeCommand,
   renameCommand,
+  renameSemanticCommand,
   STARTER_SEMANTICS,
   setCellCommand,
+  setLookCommand,
   stepCommand,
 } from "./editing.ts";
 
@@ -150,5 +155,89 @@ describe("newProject", () => {
     expect(root?.semantics.map((s) => s.name)).toEqual(STARTER_SEMANTICS.map((s) => s.name));
     expect(root?.semantics.every((s) => s.block === undefined)).toBe(true);
     expect(root?.semantics.find((s) => s.name === "Light")?.glow).toBe(true);
+    expect(root?.semantics.find((s) => s.name === "Wall")?.ownLook.tint).toBe("#d9d4c7");
+  });
+});
+
+describe("palette edits", () => {
+  it("adds, renames and re-skins, and ignores a look that is already set", () => {
+    const project = newProject("Test", 5);
+    const added = addSemanticCommand(project, ROOT_PALETTE, "  Path ");
+    if (!added) throw new Error("no command");
+    project.run(added);
+    expect(project.semantics.byName("Path")).toBeTypeOf("number");
+    expect(historyState(project).undo).toBe("Add Path");
+
+    const wallId = wall(project);
+    const renamed = renameSemanticCommand(project, wallId, "Stone wall");
+    if (!renamed) throw new Error("no command");
+    project.run(renamed);
+    expect(project.semantics.nameOf(wallId)).toBe("Stone wall");
+    expect(renameSemanticCommand(project, wallId, "Stone wall")).toBeNull();
+
+    const look = setLookCommand(project, wallId, { block: "voxyl:oak_stairs", tint: "#d9d4c7" });
+    if (!look) throw new Error("no command");
+    project.run(look);
+    expect(project.semantics.resolve(wallId).look.block).toBe("voxyl:oak_stairs");
+    expect(historyState(project).undo).toBe("Stone wall looks like Oak stairs");
+    expect(
+      setLookCommand(project, wallId, { block: "voxyl:oak_stairs", tint: "#d9d4c7" }),
+    ).toBeNull();
+
+    const child = addPaletteCommand(project, "Walkway", ROOT_PALETTE);
+    if (!child) throw new Error("no command");
+    project.run(child);
+    const palette = project.semantics.paletteByName("Walkway");
+    expect(palette?.extends).toBe(ROOT_PALETTE);
+    expect(historyState(project).undo).toBe("Add palette Walkway");
+    expect(addSemanticCommand(project, 99, "Nope")).toBeNull();
+  });
+});
+
+describe("placement from the look's block", () => {
+  const profiles = (project: ReturnType<typeof newProject>) => {
+    const blocks = defaultLibrary().blocks;
+    project.setBlockProfiles((ref) => {
+      const name = ref?.slice(ref.indexOf(":") + 1);
+      const block = name ? blocks[name] : undefined;
+      return block ? profileOfBlock(block) : undefined;
+    });
+  };
+
+  it("faces stairs at the player and lays a log along the clicked face", () => {
+    const project = newProject("Test", 5);
+    profiles(project);
+    const stairs = wall(project);
+    project.run(setLookCommand(project, stairs, { block: "voxyl:oak_stairs" }) as never);
+    const ground = aim(project.world, [0.5, 5, 10], [0, -1, -1], 100);
+    if (!ground?.place) throw new Error("no aim");
+    project.run(placeCommand(project, ground, stairs, [0, -1, -1]) as never);
+    const stood = project.world.get(...ground.place);
+    expect(stood && sideOf(facingOf(stood.rotation))).toBe("south");
+
+    const log = project.semantics.byName("Floor") as number;
+    project.run(setLookCommand(project, log, { block: "voxyl:oak_log" }) as never);
+    project.world.setId(0, 0, 0, project.world.states.intern({ semantic: stairs }));
+    const side = aim(project.world, [5, 0.5, 0.5], [-1, 0, 0], 100);
+    if (!side?.place) throw new Error("no aim");
+    project.run(placeCommand(project, side, log, [-1, 0, 0]) as never);
+    const laid = project.world.get(...side.place);
+    // Axis symmetry: the log lies along the clicked face, either end first.
+    const axis = laid ? upOf(laid.rotation) : [0, 0, 0];
+    expect(axis.map(Math.abs)).toEqual([1, 0, 0]);
+  });
+
+  it("stores a cube as one rotation, and a form's profile beats the block's", () => {
+    const project = newProject("Test", 5);
+    profiles(project);
+    const stone = wall(project);
+    project.run(setLookCommand(project, stone, { block: "voxyl:stone" }) as never);
+    const ground = aim(project.world, [0.5, 5, 10], [0, -1, -1], 100);
+    if (!ground?.place) throw new Error("no aim");
+    project.run(placeCommand(project, ground, stone, [0, -1, -1]) as never);
+    expect(project.world.get(...ground.place)?.rotation).toBe(0);
+
+    project.semantics.update(stone, { form: { placement: PLACEMENTS.log } });
+    expect(project.placement(stone).profile).toMatchObject({ pick: "attach" });
   });
 });
