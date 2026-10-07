@@ -128,18 +128,32 @@ export type FromWorld =
     }
   /** Writes for the light volume (see LightLayout), applied whole. */
   | { type: "light"; world: number; update: LightLayoutUpdate }
-  /** Every cell state's look (StateLooks.colors), sent when states or looks change. */
-  | { type: "looks"; world: number; colors: Uint8Array }
+  /** Every cell state's look, sent when states or looks change. */
+  | ({ type: "looks"; world: number } & LooksUpdate)
   | { type: "idle"; world: number; seq: number }
   | { type: "stats"; world: number; stats: WorldStats };
 
+/** Cell states' looks for the renderer (see StateLooks and BlockMaterials). */
+export interface LooksUpdate {
+  /** StateLooks.colors. */
+  readonly colors: Uint8Array;
+  /** StateLooks.faces: each state's face materials. */
+  readonly faces: Uint16Array;
+  /** Every material so far (BlockMaterials.data). */
+  readonly materials: Float32Array;
+  /** Texture layers added since the last looks, from layer `from` (takeTextures). */
+  readonly textures: { readonly from: number; readonly rgba: Uint8Array };
+}
+
 /**
- * What the world worker sends a mesh worker, tagged with its world: a job, or the shapes of
- * cell states from id `from` on (sent before any job that uses them).
+ * What the world worker sends a mesh worker, tagged with its world: a job, the shapes of
+ * cell states from id `from` on, or which states are clear (both sent before any job that
+ * uses them).
  */
 export type MeshRequest =
   | { readonly world: number; readonly job: MeshJob }
-  | { readonly world: number; readonly from: number; readonly shapes: readonly StateShape[] };
+  | { readonly world: number; readonly from: number; readonly shapes: readonly StateShape[] }
+  | { readonly world: number; readonly clear: Uint8Array };
 
 /** What a mesh worker sends back. */
 export interface MeshReply {

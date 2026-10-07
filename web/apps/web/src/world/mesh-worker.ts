@@ -25,6 +25,10 @@ scope.addEventListener("message", (event) => {
       tableWorld = request.world;
       table = new ShapeTable();
     }
+    if ("clear" in request) {
+      table.setClear(request.clear);
+      return;
+    }
     if (!("job" in request)) {
       table.update(request.from, request.shapes);
       return;

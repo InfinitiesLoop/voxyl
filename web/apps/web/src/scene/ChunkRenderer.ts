@@ -3,7 +3,9 @@ import { GPU_BRICK_BITS } from "@voxyl/light";
 import { QUAD_BYTES, QUAD_WORDS, TRI_BYTES, TRI_WORDS } from "@voxyl/mesher";
 import type { LightingMode } from "@voxyl/session";
 import * as THREE from "three/webgpu";
+import type { LooksUpdate } from "../world/protocol.ts";
 import type { WorldOutput } from "../world/WorldClient.ts";
+import { BlockTextures } from "./block-textures.ts";
 import { LightVolume } from "./light-volume.ts";
 import {
   createFlatMaterial,
@@ -50,6 +52,7 @@ export class ChunkRenderer {
   readonly #paletteData: Uint8Array;
   readonly #paletteTexture: THREE.DataTexture;
   readonly #uniforms: LightUniforms = createLightUniforms();
+  readonly #blocks = new BlockTextures();
   readonly #flatMaterials: Record<SurfaceKind, THREE.MeshBasicNodeMaterial>;
   /** StateLooks.colors from the world worker. */
   #looks: Uint8Array = new Uint8Array(0);
@@ -77,8 +80,8 @@ export class ChunkRenderer {
     this.#paletteTexture.minFilter = THREE.NearestFilter;
     this.#paletteTexture.generateMipmaps = false;
     this.#flatMaterials = {
-      quad: createFlatMaterial(this.#paletteTexture, "quad"),
-      tri: createFlatMaterial(this.#paletteTexture, "tri"),
+      quad: createFlatMaterial(this.#paletteTexture, this.#blocks, "quad"),
+      tri: createFlatMaterial(this.#paletteTexture, this.#blocks, "tri"),
     };
     this.group.name = "chunks";
   }
@@ -119,6 +122,7 @@ export class ChunkRenderer {
       const lit = (kind: SurfaceKind) =>
         createVolumeLitMaterial(
           this.#paletteTexture,
+          this.#blocks,
           this.#uniforms,
           this.#volume as LightVolume,
           this.#chunkBits,
@@ -148,12 +152,13 @@ export class ChunkRenderer {
   }
 
   /**
-   * Every cell state's look, as the world worker resolves it from the project's palettes (see
-   * StateLooks.colors). Only the palette texture changes.
+   * Every cell state's look, as the world worker resolves it from the project's palettes:
+   * colours and textured faces. Only the palette and block tables change, never a mesh.
    */
-  setLooks(colors: Uint8Array): void {
-    this.#looks = colors;
+  setLooks(looks: LooksUpdate): void {
+    this.#looks = looks.colors;
     this.#paletteDirty = true;
+    this.#blocks.update(looks);
   }
 
   /** Queues a mesh, light update or idle marker from the world worker; applied in update(). */
@@ -199,6 +204,7 @@ export class ChunkRenderer {
     this.#disposeVolumeMaterials();
     this.#volume?.dispose();
     this.#paletteTexture.dispose();
+    this.#blocks.dispose();
   }
 
   #material(kind: SurfaceKind): THREE.Material {

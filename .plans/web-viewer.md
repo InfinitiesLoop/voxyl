@@ -137,3 +137,43 @@ Minecraft textures can't be hosted, so Phase 2 gets textures two ways:
   thinner to thicker, lower slot to higher; centered posts yield to faces capping them, and
   between posts the thinner, then the higher slot, yields. A test with a slab and a hollow
   cover (which sorts after the slab in the state) fails without it.
+- **Step 5a in progress (2026-10-06).** Textured whole cubes, from the default set.
+  - `packages/blocks` (commit d963afd): the library format, variant choice from a cell's
+    rotation, face uv maps as affine matrices (uv = A·q + b, q the point in its cell), whole
+    cube compilation (`compileBlock`), and the default set: 25 cubes, logs, grass, sandstone,
+    quartz, 9 slab and 8 stair families, oak and spruce fences, glass panes, 37 textures
+    painted in code from seeded painters.
+  - Looks (`packages/session/src/looks.ts`): `stateLooks(states, registry, blocks)` takes a
+    `BlockMaterials` (one per open world). A look whose block a library has draws with that
+    block: its colour is the block's average colour (also in the 2D view), light follows it
+    (transparent blocks let light through, `emits` gives light), and each face of a whole cube
+    gets a material: a texture layer, its uv map and a tint. Materials and layers are numbered
+    as they first appear and only grow. `StateLooks.faces` holds 8 entries per state (6
+    faces), `clear` marks see-through cubes (any face cut out or missing).
+  - Mesher: `ShapeTable.clear`. A clear cube hides none of its neighbours' faces, and only
+    its own faces against cells of the same state (glass beside glass); parts show beside it.
+    The world worker sends `clear` to the mesh workers whenever it changes and remeshes every
+    chunk if an existing state flipped (`WorldSession.remeshAll`). Nothing else about looks
+    reaches the meshes: a re-skin is still table updates only.
+  - Renderer (`apps/web/src/scene/block-textures.ts`, `surfaceColor` in quad-material.ts): a
+    face table (state × face → material, float texture, 2 MB), a material table (3 texels a
+    material) and a 16×16 texture array (grows by doubling, three generates mipmaps). Per
+    vertex the shader picks the material; per fragment it maps the position in the cell to
+    texture coordinates and samples with gradients from the unwrapped position, so greedy
+    quads repeat the texture once a cell without mip seams at cell edges. Cut-out texels are
+    discarded. Microblock parts pick up the texture of their semantic's block for free (their
+    quads carry a plain state of it); slopes take the texture of the side they face most.
+  - Sample builds: a fourth city theme, **Blocks** (`?theme=blocks`): grass ground, gray
+    concrete roads, stone brick walls, glass, quartz trim, spruce roofs, glowstone lights.
+  - Seen: `world=city-1m&theme=blocks` in headless Edge on the dev server renders textured,
+    no console problems, initial mesh 283 ms, GPU p50 1.5 ms (B580).
+  - **Choices to review:** (1) with a block that resolves, the look's `tint` is only the
+    fallback colour, not multiplied in; (2) slabs, stairs, fences and panes draw as coloured
+    whole cubes until step 6; (3) blended textures are treated as cut-out until a translucent
+    pass exists; (4) only 16×16 textures go in the array (others draw in their colour).
+  - **Next:** close-up checks (glass from inside and out, logs on their side, stairs/slab
+    colours, texture orientation on all six sides, distant mips, microblocks and slopes with
+    textures, lit at night with a lamp), a benchmark with textures on (`?theme=blocks
+    --bench` on city-5m) against the Concrete theme, then 5b (the vanilla jar importer).
+    The close-up script is `web/shots/blocks-close.ts` (gitignored): it raycasts from the
+    home view and shoots from 3, 10 and 40 cells.

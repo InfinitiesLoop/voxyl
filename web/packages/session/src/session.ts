@@ -144,6 +144,11 @@ export class WorldSession {
     return true;
   }
 
+  /** Meshes every chunk again: the looks changed which cells hide their neighbours' faces. */
+  remeshAll(): void {
+    for (const key of this.world.chunkKeys()) this.#enqueue(key);
+  }
+
   /** Where the camera is, so the nearest chunks are meshed first. */
   setCamera(x: number, y: number, z: number): void {
     this.#camera[0] = x;

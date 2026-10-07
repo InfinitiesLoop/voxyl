@@ -5,10 +5,14 @@ export {
   type LightLayoutUpdate,
 } from "./light-layout.ts";
 export {
+  BlockMaterials,
   describeState,
+  FACE_SLOTS,
   lookColor,
+  MATERIAL_FLOATS,
   type StateLooks,
   stateLooks,
+  TEXTURE_SIZE,
   UNDECIDED_COLOR,
 } from "./looks.ts";
 export {

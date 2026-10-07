@@ -4,11 +4,16 @@ import {
   attribute,
   clamp,
   cross,
+  Discard,
+  dFdx,
+  dFdy,
   dot,
   Fn,
   float,
   floor,
+  fract,
   int,
+  ivec2,
   ivec3,
   max,
   mix,
@@ -27,6 +32,12 @@ import {
   vec4,
 } from "three/tsl";
 import * as THREE from "three/webgpu";
+import {
+  type BlockTextures,
+  FACE_WIDTH,
+  MATERIAL_TEXELS,
+  MATERIALS_PER_ROW,
+} from "./block-textures.ts";
 import type { LightVolume, LinearTexture } from "./light-volume.ts";
 
 /** The palette texture is 256 x 256, one texel per possible cell-state id. */
@@ -88,7 +99,7 @@ function surface(kind: SurfaceKind) {
       .add(v.mul(corner.y.mul(b.y)))
       .div(8);
     const normal = uniformArray<"vec3">(FACE_NORMAL, "vec3").element(face);
-    return { position, normal, id: b.z };
+    return { position, normal, id: b.z, face: a.w };
   }
   const p0 = attribute("triA", "vec4").mul(65535).round(); // x, y, z, id
   const p1 = attribute("triB", "vec4").mul(65535).round().xyz;
@@ -96,7 +107,8 @@ function surface(kind: SurfaceKind) {
   const w = positionGeometry;
   const position = p0.xyz.mul(w.x).add(p1.mul(w.y)).add(p2.mul(w.z)).div(TRI_SCALE);
   const normal = normalize(cross(p1.sub(p0.xyz), p2.sub(p0.xyz)));
-  return { position, normal, id: p0.w };
+  // A slope takes the texture of the side it faces most.
+  return { position, normal, id: p0.w, face: dominantFace(normal) };
 }
 
 /** The palette colour of a cell-state id, looked up once per vertex. */
@@ -105,6 +117,53 @@ function paletteColor(palette: THREE.Texture, id: THREE.Node<"float">) {
     vec2(id.mod(PALETTE_SIZE), id.div(PALETTE_SIZE).floor()).add(0.5).div(PALETTE_SIZE),
   );
   return texture(palette, paletteUv);
+}
+
+/**
+ * A surface's colour: its block's texture where the face has a material (see BlockTextures),
+ * else its palette colour; alpha is the palette's (the glow flag). Cut-out texels are
+ * discarded, so call it inside Fn. The material is looked up per vertex: a state id and a
+ * face pick it from the face table, and its uv map turns the position within the cell into
+ * texture coordinates per fragment, so greedy-merged faces repeat the texture once a cell.
+ */
+function surfaceColor(
+  palette: THREE.Texture,
+  blocks: BlockTextures,
+  s: ReturnType<typeof surface>,
+): THREE.Node<"vec4"> {
+  const color = paletteColor(palette, s.id);
+  const faceEntry = (() => {
+    const texelIndex = s.id.mul(2).add(floor(s.face.div(4)));
+    const at = ivec2(int(texelIndex.mod(FACE_WIDTH)), int(floor(texelIndex.div(FACE_WIDTH))));
+    const entry = texture(blocks.faces).load(at);
+    const slot = s.face.mod(4);
+    return select(
+      slot.lessThan(0.5),
+      entry.x,
+      select(slot.lessThan(1.5), entry.y, select(slot.lessThan(2.5), entry.z, entry.w)),
+    );
+  })();
+  const material = varying<"float">(faceEntry);
+  const row = (k: number) => {
+    const m = faceEntry;
+    const x = m.mod(MATERIALS_PER_ROW).mul(MATERIAL_TEXELS).add(k);
+    return varying<"vec4">(
+      texture(blocks.materials).load(ivec2(int(x), int(floor(m.div(MATERIALS_PER_ROW))))),
+    );
+  };
+  const u = row(0);
+  const v = row(1);
+  const extra = row(2); // layer, tint
+  const p = varying<"vec3">(s.position);
+  const q = fract(p);
+  // Gradients from the unwrapped coordinates: fract jumps at cell edges, and sampling with
+  // its own gradients would pick the smallest mip along every edge.
+  const whole = vec2(dot(u.xyz, p).add(u.w), dot(v.xyz, p).add(v.w));
+  const uv = vec2(dot(u.xyz, q).add(u.w), dot(v.xyz, q).add(v.w));
+  const texel = blocks.layers.sample(uv).depth(int(extra.x.round())).grad(dFdx(whole), dFdy(whole));
+  const textured = material.greaterThan(0.5);
+  Discard(textured.and(texel.a.lessThan(0.5)));
+  return vec4(select(textured, texel.rgb.mul(extra.yzw), color.rgb), color.a);
 }
 
 /** Brightness by facing: the shades of each axis, weighted by the normal's squares. */
@@ -175,13 +234,14 @@ function minecraftFactor(light: THREE.Node<"vec3">, shade: THREE.Node<"float">) 
 /** Lighting off: palette colour and a fixed shade by facing. */
 export function createFlatMaterial(
   palette: THREE.Texture,
+  blocks: BlockTextures,
   kind: SurfaceKind,
 ): THREE.MeshBasicNodeMaterial {
-  const { position, normal, id } = surface(kind);
+  const s = surface(kind);
   const material = new THREE.MeshBasicNodeMaterial();
-  material.positionNode = position;
-  const shade = varying<"float">(shadeOf(normal, FLAT_SHADE));
-  material.colorNode = paletteColor(palette, id).rgb.mul(shade);
+  material.positionNode = s.position;
+  const shade = varying<"float">(shadeOf(s.normal, FLAT_SHADE));
+  material.colorNode = Fn(() => surfaceColor(palette, blocks, s).rgb.mul(shade))();
   return material;
 }
 
@@ -211,14 +271,15 @@ function loadLinear(tex: LinearTexture, index: THREE.Node<"uint">) {
  */
 export function createVolumeLitMaterial(
   palette: THREE.Texture,
+  blocks: BlockTextures,
   uniforms: LightUniforms,
   volume: LightVolume,
   chunkBits: number,
   brickBits: number,
   kind: SurfaceKind,
 ): THREE.MeshBasicNodeMaterial {
-  const { position, normal, id } = surface(kind);
-  const color = paletteColor(palette, id);
+  const s = surface(kind);
+  const { position, normal } = s;
   const material = new THREE.MeshBasicNodeMaterial();
   material.positionNode = position;
   const shade = varying<"float">(shadeOf(normal, LIT_SHADE));
@@ -271,6 +332,7 @@ export function createVolumeLitMaterial(
   // brick slots would be assigned only in the branch the front cell takes, and neighbours on
   // other paths would read them unset (as missing light) along every brick boundary.
   material.colorNode = Fn(() => {
+    const color = surfaceColor(palette, blocks, s);
     // The cell just in front of the surface: beside a cube's face, or a shaped part's own
     // cell (which lets light through) when the face lies inside it.
     const front = floor(world.add(surfaceNormal.mul(1 / 64)));
@@ -311,16 +373,16 @@ export function createVolumeLitMaterial(
         float(packed.shiftRight(uint(4)).bitAnd(uint(15))),
         float(packed.bitAnd(uint(15))),
       );
-    const blocks = (packed: THREE.Node<"uint">) => float(packed.equal(uint(OPAQUE_LIGHT)));
+    const blocking = (packed: THREE.Node<"uint">) => float(packed.equal(uint(OPAQUE_LIGHT)));
 
     const center = decode(load(0, 0));
     const corner = (du: number, dv: number) => {
       const s1 = load(du, 0);
       const s2 = load(0, dv);
       const d = load(du, dv);
-      const o1 = blocks(s1);
-      const o2 = blocks(s2);
-      const od = max(blocks(d), o1.mul(o2)); // no light or open air leaks past two blocked sides
+      const o1 = blocking(s1);
+      const o2 = blocking(s2);
+      const od = max(blocking(d), o1.mul(o2)); // no light or open air leaks past two blocked sides
       const w1 = o1.oneMinus();
       const w2 = o2.oneMinus();
       const wd = od.oneMinus();

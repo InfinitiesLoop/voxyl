@@ -77,6 +77,28 @@ describe("meshChunk", () => {
     world.setId(0, 0, 0, 0x1234);
     expect(meshOrigin(world)[0]?.id).toBe(0x1234);
   });
+
+  it("shows faces behind clear cubes, and hides those between clear cubes of one state", () => {
+    const world = new World({ chunkBits: 3 });
+    const mass = world.states.intern({ semantic: MASS });
+    const glass = world.states.intern({ semantic: TRIM });
+    world.setId(0, 0, 0, mass);
+    world.setId(1, 0, 0, glass);
+    world.setId(2, 0, 0, glass);
+    const L = world.layout;
+    const cells = world.copyPadded(0, 0, 0, new Uint16Array(paddedVolume(L.bits)));
+    const table = ShapeTable.of(world.states);
+    const clear = new Uint8Array(glass + 1);
+    clear[glass] = 1;
+    table.setClear(clear);
+    const quads = quadsOf(meshChunk({ bits: L.bits, cells, lightBrickBits: null }, table));
+    // The mass shows its +X face behind the glass; the glass shows no -X face against the
+    // mass, and the two glass cells don't face each other.
+    expect(quads.some((q) => q.id === mass && q.face === 0)).toBe(true);
+    expect(quads.some((q) => q.id === glass && q.face === 1 && q.x === 1)).toBe(false);
+    expect(quads.some((q) => q.id === glass && q.face === 0 && q.x === 1)).toBe(false);
+    expect(quads.filter((q) => q.id === glass && (q.face === 0 || q.face === 1))).toHaveLength(1);
+  });
 });
 
 /** Every visible face as "face,x,y,z", found by checking each cell's six neighbours. */

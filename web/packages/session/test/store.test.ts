@@ -1,7 +1,16 @@
+import { DEFAULT_LIBRARY_ID, defaultLibrary } from "@voxyl/blocks";
 import { Project } from "@voxyl/core";
 import { CITY_THEMES, cityThemePalette, generateCity, prepareCityProject } from "@voxyl/fixtures";
 import { describe, expect, it } from "vitest";
-import { MemoryFolder, ProjectStore, stateLooks } from "../src/index.ts";
+import {
+  BlockMaterials,
+  FACE_SLOTS,
+  MATERIAL_FLOATS,
+  MemoryFolder,
+  ProjectStore,
+  stateLooks,
+  TEXTURE_SIZE,
+} from "../src/index.ts";
 
 function city(name: string, cells = 30_000): Project {
   const project = new Project({ chunkBits: 5 });
@@ -123,5 +132,50 @@ describe("stateLooks", () => {
     expect([...after.colors.subarray(glowState * 4, glowState * 4 + 3)]).toEqual([
       0x8a, 0x8f, 0x98,
     ]);
+  });
+});
+
+describe("stateLooks with blocks", () => {
+  const blocks = () => new BlockMaterials(new Map([[DEFAULT_LIBRARY_ID, defaultLibrary()]]));
+  const blocksTheme = CITY_THEMES.findIndex((t) => t.name === "Blocks");
+
+  it("textures whole cubes from the default library, and lets light through glass", () => {
+    const project = city("Alpha", 5_000);
+    project.run({
+      id: "skin",
+      kind: "palette_sync",
+      args: cityThemePalette(CITY_THEMES[blocksTheme] as never, 2),
+    });
+    const states = project.world.states;
+    const stateOf = (name: string) =>
+      states.intern({ semantic: project.semantics.byName(name, 1) as number });
+    const mass = stateOf("Mass");
+    const glass = stateOf("Glass");
+    const glow = stateOf("Glow");
+    const materials = blocks();
+    const looks = stateLooks(states, project.semantics, materials);
+    // Every face of the stone bricks is textured; the colour is the texture's average.
+    for (let f = 0; f < 6; f++) expect(looks.faces[mass * FACE_SLOTS + f]).toBeGreaterThan(0);
+    expect(looks.materials.opaque[mass]).toBe(1);
+    expect(looks.clear[mass]).toBe(0);
+    expect(looks.materials.opaque[glass]).toBe(0);
+    expect(looks.clear[glass]).toBe(1);
+    expect(looks.materials.emission[glow]).toBeGreaterThan(0);
+    const { from, rgba } = materials.takeTextures();
+    expect(from).toBe(0);
+    expect(rgba.length).toBe(materials.layerCount * TEXTURE_SIZE * TEXTURE_SIZE * 4);
+    expect(materials.data.length % MATERIAL_FLOATS).toBe(0);
+    // Asking again adds nothing new.
+    stateLooks(states, project.semantics, materials);
+    expect(materials.takeTextures().rgba.length).toBe(0);
+  });
+
+  it("draws looks without blocks, or with blocks no library has, in their tint", () => {
+    const project = city("Alpha", 5_000);
+    const states = project.world.states;
+    const mass = states.intern({ semantic: project.semantics.byName("Mass", 1) as number });
+    const looks = stateLooks(states, project.semantics, blocks());
+    expect(looks.faces.every((m) => m === 0)).toBe(true);
+    expect([...looks.colors.subarray(mass * 4, mass * 4 + 3)]).toEqual([0x3b, 0x40, 0x48]);
   });
 });

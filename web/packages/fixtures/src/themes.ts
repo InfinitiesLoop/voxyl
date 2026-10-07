@@ -6,8 +6,10 @@ export const CITY_THEME_KEY = "voxyl.city";
 
 export interface CityTheme {
   readonly name: string;
-  /** Per semantic: a hint colour, and whether it glows. None = undecided. */
-  readonly looks: Partial<Record<CitySemantic, { readonly tint: string; readonly glow?: true }>>;
+  /** Per semantic: a hint colour, a block, and whether it glows. None = undecided. */
+  readonly looks: Partial<
+    Record<CitySemantic, { readonly tint: string; readonly block?: string; readonly glow?: true }>
+  >;
 }
 
 export const CITY_THEMES: readonly CityTheme[] = [
@@ -36,6 +38,19 @@ export const CITY_THEMES: readonly CityTheme[] = [
     },
   },
   { name: "Undecided", looks: {} },
+  {
+    // Blocks from the default library; the tints are how it draws where blocks don't.
+    name: "Blocks",
+    looks: {
+      Ground: { tint: "#689c3b", block: "voxyl:grass_block" },
+      Road: { tint: "#383b3f", block: "voxyl:gray_concrete" },
+      Mass: { tint: "#7b7b7b", block: "voxyl:stone_bricks" },
+      Glass: { tint: "#c9e3e8", block: "voxyl:glass" },
+      Trim: { tint: "#e9e3da", block: "voxyl:quartz_block" },
+      Roof: { tint: "#6f5334", block: "voxyl:spruce_planks" },
+      Glow: { tint: "#ffd27a", block: "voxyl:glowstone", glow: true },
+    },
+  },
 ];
 
 /**
@@ -94,7 +109,7 @@ export function cityThemeOf(registry: SemanticRegistry): number | null {
       const id = registry.byName(name, linked.id);
       const look = id === undefined ? {} : registry.resolve(id).look;
       const want = theme.looks[name];
-      return look.tint === want?.tint && !!look.glow === !!want?.glow;
+      return look.tint === want?.tint && look.block === want?.block && !!look.glow === !!want?.glow;
     }),
   );
   return index < 0 ? null : index;

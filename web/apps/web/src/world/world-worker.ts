@@ -4,10 +4,12 @@
 // main thread, together with light, in the order it produced them. Saved projects live in
 // OPFS (a ProjectStore), read and written here.
 
+import { DEFAULT_LIBRARY_ID, defaultLibrary } from "@voxyl/blocks";
 import { type CellStateTable, EMPTY_ID, type Project, raycast } from "@voxyl/core";
 import { CITY_THEME_KEY, cityThemeOf, cityThemePalette } from "@voxyl/fixtures";
 import type { StateShape } from "@voxyl/mesher";
 import {
+  BlockMaterials,
   describeState,
   type LightingMode,
   ProjectStore,
@@ -74,12 +76,18 @@ let idlePosted = -1;
 let looksPosted = { states: -1, revision: -1 };
 /** Every state's shape so far, for mesh workers (id - 1 -> shape). */
 let shapes: StateShape[] = [];
+/** The libraries looks draw blocks from: the default set for now. */
+const libraries = new Map([[DEFAULT_LIBRARY_ID, defaultLibrary()]]);
+/** Textured faces of the open world's looks, numbered as the renderer has them. */
+let blocks = new BlockMaterials(libraries);
+/** Which states are clear (StateLooks.clear), as the mesh workers last heard. */
+let clearSent: Uint8Array = new Uint8Array(0);
 let pumpScheduled = false;
 const meshTimes: number[] = [];
 
 const nameOf = (semantic: number) => project?.semantics.nameOf(semantic) ?? "";
 const materials = (states: CellStateTable) =>
-  stateLooks(states, (project as Project).semantics).materials;
+  stateLooks(states, (project as Project).semantics, blocks).materials;
 const post = (message: FromWorld, transfer: Transferable[] = []) =>
   scope.postMessage(message, transfer);
 
@@ -135,6 +143,8 @@ async function open(command: Extract<Command, { type: "load" }>): Promise<WorldI
   worldId = command.world;
   looksPosted = { states: -1, revision: -1 };
   shapes = [];
+  blocks = new BlockMaterials(libraries);
+  clearSent = new Uint8Array(0);
   idlePosted = -1;
   meshTimes.length = 0;
   if (mode !== "off") session.setLighting(mode, materials);
@@ -306,9 +316,37 @@ function postLooks(s: WorldSession): void {
   const states = s.world.states;
   const registry = (project as Project).semantics;
   if (states.size === looksPosted.states && registry.revision === looksPosted.revision) return;
-  const { colors } = stateLooks(states, registry);
-  post({ type: "looks", world: worldId, colors }, [colors.buffer]);
+  const { colors, faces, clear } = stateLooks(states, registry, blocks);
+  const materials = blocks.data;
+  const textures = blocks.takeTextures();
+  post({ type: "looks", world: worldId, colors, faces, materials, textures }, [
+    colors.buffer,
+    faces.buffer,
+    materials.buffer,
+    textures.rgba.buffer,
+  ]);
   looksPosted = { states: states.size, revision: registry.revision };
+  sendClear(s, clear);
+}
+
+/**
+ * Tells the mesh workers which states are clear, if that changed. A state that was clear
+ * and isn't (or the other way round) changes which faces hide, so every chunk is meshed again.
+ */
+function sendClear(s: WorldSession, clear: Uint8Array): void {
+  let same = clear.length === clearSent.length;
+  let remesh = false;
+  for (let id = 0; id < Math.max(clear.length, clearSent.length); id++) {
+    if ((clear[id] ?? 0) === (clearSent[id] ?? 0)) continue;
+    same = false;
+    // A state new since the last send has no cells meshed with the old answer.
+    if (id < clearSent.length) remesh = true;
+  }
+  if (same) return;
+  clearSent = clear;
+  const request: MeshRequest = { world: worldId, clear };
+  for (const p of meshPorts) p.port.postMessage(request);
+  if (remesh) s.remeshAll();
 }
 
 function onMeshReply(port: MeshPort, reply: MeshReply): void {
@@ -336,6 +374,10 @@ scope.addEventListener("message", (event) => {
       // Shapes of the states the world already has, if it was loaded first.
       if (shapes.length > 0) {
         const request: MeshRequest = { world: worldId, from: 1, shapes };
+        port.postMessage(request);
+      }
+      if (clearSent.length > 0) {
+        const request: MeshRequest = { world: worldId, clear: clearSent };
         port.postMessage(request);
       }
       return entry;

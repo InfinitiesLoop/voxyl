@@ -91,8 +91,16 @@ export class ShapeTable {
   readonly full = new Uint8Array(MAX_IDS);
   /** 1 for a state with part geometry (see geometry). */
   readonly shaped = new Uint8Array(MAX_IDS);
+  /**
+   * 1 for a whole cube that can be seen through (glass, leaves): it hides none of its
+   * neighbours' faces, and only its own faces against cells of the same state. From the
+   * looks, not the cells, so it is set separately (setClear).
+   */
+  readonly clear = new Uint8Array(MAX_IDS);
   /** How many ids are shaped: the mesher skips looking for parts when there are none. */
   shapedCount = 0;
+  /** How many ids are clear: the mesher skips checking for them when there are none. */
+  clearCount = 0;
   readonly geometry: (PartGeometry | undefined)[] = [];
   #size = 1;
 
@@ -129,6 +137,15 @@ export class ShapeTable {
       }
     });
     this.#size = Math.max(this.#size, from + shapes.length);
+  }
+
+  /** Sets which ids are clear (flags[id], 1 = clear); ids past its end are not. */
+  setClear(flags: Uint8Array): void {
+    this.clear.fill(0);
+    this.clear.set(flags.subarray(0, MAX_IDS));
+    let count = 0;
+    for (let id = 1; id < flags.length && id < MAX_IDS; id++) count += flags[id] ? 1 : 0;
+    this.clearCount = count;
   }
 }
 

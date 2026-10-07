@@ -93,7 +93,8 @@ export function meshChunk(input: ChunkMeshInput, shapes: ShapeTable): ChunkMesh 
   const area = size * size;
   const maskId = new Uint16Array(area);
   const quads = new Words(QUAD_WORDS * 1024);
-  const { cube, full, shaped } = shapes;
+  const { cube, full, shaped, clear } = shapes;
+  const anyClear = shapes.clearCount > 0;
   const origin = [0, 0, 0];
 
   // Shaped cells, border included. If there are none, every occupied cell is a whole cube
@@ -109,7 +110,8 @@ export function meshChunk(input: ChunkMeshInput, shapes: ShapeTable): ChunkMesh 
         kinds = new Uint8Array(cells.length);
         for (let k = 0; k < cells.length; k++) {
           const id = cells[k] ?? 0;
-          kinds[k] = (full[id] ?? 0) | ((cube[id] ?? 0) << 6);
+          // A clear cube covers none of its sides.
+          kinds[k] = (clear[id] ? 0 : (full[id] ?? 0)) | ((cube[id] ?? 0) << 6);
         }
       }
       const x = i % P;
@@ -153,11 +155,14 @@ export function meshChunk(input: ChunkMeshInput, shapes: ShapeTable): ChunkMesh 
             continue;
           }
           // Near shaped cells: shaped cells draw no cube faces, and a neighbour hides a face
-          // only if it covers that whole side.
+          // only if it covers that whole side. A clear cube hides only faces of its own state.
+          const n = cells[index + step] ?? 0;
           if (
             kinds
-              ? ((kinds[index] ?? 0) & 64) === 0 || ((kinds[index + step] ?? 0) & hides) !== 0
-              : (cells[index + step] ?? 0) !== 0
+              ? ((kinds[index] ?? 0) & 64) === 0 ||
+                ((kinds[index + step] ?? 0) & hides) !== 0 ||
+                n === id
+              : n !== 0 && (!anyClear || n === id || clear[n] === 0)
           ) {
             maskId[m] = 0;
             continue;
@@ -248,7 +253,7 @@ function meshParts(
 ): Words {
   const P = size + 2;
   const strides = [1, P * P, P] as const;
-  const { cube, geometry } = shapes;
+  const { cube, clear, geometry } = shapes;
   const tris = new Words(0);
   if (shapedCells.length === 0) return tris;
   const B = 1 << brickBits;
@@ -290,7 +295,7 @@ function meshParts(
       const v1 = r[i + 5] ?? 0;
       if (plane === (face.sign > 0 ? 8 : 0)) {
         const n = cells[index + face.sign * strides[face.axis]] ?? 0;
-        if (cube[n]) continue;
+        if (cube[n] && !clear[n]) continue;
         const ng = geometry[n];
         if (ng) {
           const hidden = uLow[f]
@@ -317,7 +322,7 @@ function meshParts(
         const face = FACES[b];
         if (!face) continue;
         const n = cells[index + face.sign * strides[face.axis]] ?? 0;
-        if (cube[n]) continue;
+        if (cube[n] && !clear[n]) continue;
         const ng = geometry[n];
         if (ng && ((t[i + 11] ?? 0) | (t[i + 12] ?? 0)) !== 0) {
           // Hidden if the neighbour covers every eighth of the side this triangle does.

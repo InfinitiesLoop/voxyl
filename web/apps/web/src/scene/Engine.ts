@@ -324,7 +324,7 @@ export class Engine {
     if (message.type !== "idle") this.#revision++;
     const chunks = this.#chunks;
     if (!chunks) return;
-    if (message.type === "looks") chunks.setLooks(message.colors);
+    if (message.type === "looks") chunks.setLooks(message);
     else chunks.receive(message);
   }
 
