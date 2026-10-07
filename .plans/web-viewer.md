@@ -1,6 +1,6 @@
 # Voxyl Web — Viewer (Phase 2)
 
-Status: **Started** (2026-10-06). Phase 1 left `packages/core` with real projects (commands,
+Status: **Done** (2026-10-07; started 2026-10-06). Phase 1 left `packages/core` with real projects (commands,
 semantics and palettes, the project format); the app still renders generated city fixtures
 through a palette keyed by semantic name. Phase 2 puts the app on real projects and gives it
 textures, models, a sky, a 2D grid and local storage. The gate, from
@@ -30,7 +30,7 @@ palettes, and every view is a lens on the one world in the world worker.
 6. **Block models** (done). Non-cube blocks (slabs, stairs, fences, custom element models) as cached
    per-state geometry, like parts; panes and fences that join their neighbours.
 7. **Sky** (done). A sky with the time of day, replacing the flat background.
-8. **The gate.** Performance with textures on; golden images (Playwright with SwiftShader).
+8. **The gate** (done). Performance with textures on; golden images (Playwright with SwiftShader).
 
 ## Textures: the user's decision (2026-10-06)
 
@@ -326,4 +326,36 @@ Minecraft textures can't be hosted, so Phase 2 gets textures two ways:
     with a flat background), nothing measurable on city views.
   - **Punted (the user, 2026-10-07):** clouds, weather and a time that runs by itself are
     future polish; editor features come first.
-  - **Next:** step 8, the gate (performance with textures on, golden images).
+- **Step 8, the gate, done (2026-10-07).** Phase 2 is done; Phase 3 (the editor) continues in
+  [`web-editor.md`](web-editor.md).
+  - **Golden images** (`pnpm golden`, `web/tools/golden.ts`): ten scenes in `web/golden/`
+    (640×360 PNGs, about 1 MB in all): the block showcase from above, its models row, its
+    orientations, the glowstone room at 21:00 with lighting; the 1M city in Concrete with
+    lighting, a Blocks street, a shaped city close-up; the dawn sky and the night rings; and
+    the 2D view's plan. Each loads its URL on the dev server, places the camera, waits until
+    every mesh and light is on screen, and captures the canvas. Rendering runs on
+    **SwiftShader's WebGPU adapter** (`--use-webgpu-adapter=swiftshader`), so the pixels don't
+    depend on the GPU. A scene fails when more than 0.02% of its pixels differ by more than
+    24 in a channel; failures leave the render and a red diff in `shots/golden/`. `--update`
+    rewrites the images, `--gpu` renders on the real GPU instead to tell SwiftShader quirks
+    from real problems. A full run takes about 3 minutes (the cities are slow on the CPU:
+    35-80 s each); a second run matched every scene exactly (0.000%).
+  - **Caught on the first run:** a dotted line across the dawn sky, also on the real GPU.
+    Where the rings' plane is seen edge-on, `fwidth(r)` is huge and each band's smoothstep
+    settled at a quarter instead of fading. Fixed in `sky.ts` by fading the density as a
+    pixel's footprint widens. That line was 0.06% of the image, which is why the threshold
+    is 0.02% rather than the 0.5% first tried.
+  - **Performance with textures on** (city-5m, Blocks theme, lighting on, 64³ chunks, B580,
+    headless Edge at 1600×900), against the targets in `web-migration.md`:
+
+    | Measure | Target | Measured | |
+    | --- | --- | --- | --- |
+    | Fly-through frame p95 | 16.7 ms | 16.8 ms (display-paced; GPU p50 / p95 2.6 / 3.8 ms, main thread p95 5.8 ms) | Met |
+    | Single edit to visible | next frame | p50 18 ms, p95 34 ms (one or two frames) | Met within a frame |
+    | Open to first frame | 3 s | generated in 0.24 s, chunks stream in nearest first; all meshed and lit in 3.4 s | Met (progressive) |
+    | 100k fill to visible | 250 ms | 469 ms (clear 484 ms) | Missed on this desktop |
+    | Tab memory | 1.5 GB | page heap 77 MB, light 53 MB CPU and 60 MB GPU, quads 19 MB | Met |
+
+    The 100k fill is held up by the light engine, as in Phase 0: the MacBook (the user's M5
+    Max) did it in 168 ms, and the user deferred light-engine speed (2026-10-05). It stays a
+    known gap to look at when editing makes big fills common (Phase 3 selection fills).

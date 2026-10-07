@@ -33,7 +33,8 @@ packages/light/     Minecraft-style sky and colored block light, incremental on 
 packages/session/   WorldSession: a World, its light, mesh scheduling and the GPU light layout
 packages/fixtures/  seeded test worlds (the benchmark city, plain or decorated with shaped parts)
 apps/web/           the React + Three.js app (Vite), with the in-app benchmark
-tools/              dev tools (shot)
+tools/              dev tools (shot, golden)
+golden/             golden images for `pnpm golden`
 ```
 
 Threads: the page runs a **world worker** (`apps/web/src/world/`) that owns the World, the
@@ -57,6 +58,11 @@ pnpm shot "world=city-5m&chunk=64&lighting=volume" --bench
 
 This is how changes get checked against exactly what `pnpm dev` serves, React's development
 double mount included.
+
+`pnpm golden` renders a fixed set of scenes (`tools/golden.ts`) on SwiftShader, Chrome's CPU
+WebGPU, and compares each with its image in `golden/`, so rendering changes show up whatever
+the GPU. Differences go to `shots/golden/` with a red diff; `pnpm golden --update` accepts the
+new renders, `pnpm golden sky` runs only matching scenes. A full run takes about 3 minutes.
 
 ## Benchmarks
 

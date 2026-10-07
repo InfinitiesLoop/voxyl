@@ -13,6 +13,7 @@ import {
   If,
   length,
   max,
+  min,
   mix,
   modelViewMatrix,
   normalize,
@@ -247,7 +248,13 @@ function ringsAt(d: V3, u: SkyUniforms) {
     .sub(0.5)
     .mul(RINGLET_DEPTH);
   const sharp = clamp(float(1).sub(w.mul(RINGLETS * 2)), 0, 1);
-  density = clamp(density.mul(ringlet.mul(sharp).add(1)), 0, 1).mul(select(hit, 1, 0));
+  // Where the rings' plane is seen edge-on a pixel spans a huge range of r, and each band's
+  // smoothstep would settle at a quarter instead of fading: a pale dotted line across the sky.
+  // A pixel that wide sees the bands' average, which falls as it widens.
+  const edgeOn = min(float(1), float(0.25).div(w));
+  density = clamp(density.mul(ringlet.mul(sharp).add(1)), 0, 1)
+    .mul(edgeOn)
+    .mul(select(hit, 1, 0));
   // In the planet's shadow when the line toward the sun passes through the planet.
   const along = dot(p, u.sun);
   const off = length(p.sub(u.sun.mul(along)));
