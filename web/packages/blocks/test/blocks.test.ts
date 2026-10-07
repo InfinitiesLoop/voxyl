@@ -25,8 +25,9 @@ function uvOf(map: Float32Array, q: [number, number, number]): [number, number] 
   ];
 }
 
-const close = (a: readonly number[], b: readonly number[]) =>
-  a.forEach((v, i) => expect(v).toBeCloseTo(b[i] ?? Number.NaN, 5));
+const close = (a: readonly number[], b: readonly number[]) => {
+  for (const [i, v] of a.entries()) expect(v).toBeCloseTo(b[i] ?? Number.NaN, 5);
+};
 
 describe("variant rotations", () => {
   it("turns as Minecraft does: y clockwise from above, x taking a front up at 270", () => {

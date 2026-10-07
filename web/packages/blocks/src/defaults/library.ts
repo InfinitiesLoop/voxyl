@@ -157,21 +157,23 @@ const paneSide = (glass: string, edge: string): Model => ({
   ],
 });
 
-const one = (model: string): Block["variants"] => ({ "": { model } });
+type Variants = Readonly<Record<string, Variant>>;
 
-const column = (model: string): Block["variants"] => ({
+const one = (model: string): Variants => ({ "": { model } });
+
+const column = (model: string): Variants => ({
   "axis=y": { model },
   "axis=z": { model, x: 90 },
   "axis=x": { model, x: 90, y: 90 },
 });
 
-const slabStates = (bottom: string, top: string, full: string): Block["variants"] => ({
+const slabStates = (bottom: string, top: string, full: string): Variants => ({
   "type=bottom": { model: bottom },
   "type=top": { model: top },
   "type=double": { model: full },
 });
 
-function stairStates(model: string): Block["variants"] {
+function stairStates(model: string): Variants {
   const out: Record<string, Variant> = {};
   const turns = { east: 0, south: 90, west: 180, north: 270 } as const;
   for (const [facing, y] of Object.entries(turns))
