@@ -5,6 +5,7 @@ import { type BenchResult, runBench } from "./bench/bench.ts";
 import { BenchPanel, Hud } from "./Hud.tsx";
 import { type Backend, Engine, type EngineStats } from "./scene/Engine.ts";
 import { GridPane } from "./views/GridPane.tsx";
+import type { LibraryInfo } from "./world/protocol.ts";
 import {
   CHUNK_SIZES,
   sampleKind,
@@ -83,6 +84,9 @@ export function App() {
   /** What is open, once loaded. */
   const [info, setInfo] = useState<WorldInfo | null>(null);
   const [projects, setProjects] = useState<ProjectEntry[]>([]);
+  const [libraries, setLibraries] = useState<LibraryInfo[]>([]);
+  /** Bumped to open the same source again (a sample whose library just arrived). */
+  const [reloads, setReloads] = useState(0);
 
   const track = useCallback((label: string, work: Promise<unknown>) => {
     setTasks((t) => [...t, label]);
@@ -139,6 +143,14 @@ export function App() {
     void refreshProjects();
   }, [refreshProjects]);
 
+  const refreshLibraries = useCallback(async () => {
+    if (engine) setLibraries(await engine.world.request({ type: "libraries" }));
+  }, [engine]);
+
+  useEffect(() => {
+    void refreshLibraries();
+  }, [refreshLibraries]);
+
   // Generate a sample or open a saved project when the source or chunk size changes. Both
   // happen (and, with lighting on, light) in the world worker, so the page stays responsive.
   // A sample that was just saved is already on screen: only the source changed.
@@ -165,7 +177,9 @@ export function App() {
     });
     work.catch((error: unknown) => console.error(`Couldn't open ${source}`, error));
     track(label, work);
-  }, [engine, source, chunkSize, track]);
+    // reloads only asks for the same source again.
+    void reloads;
+  }, [engine, source, chunkSize, track, reloads]);
 
   useEffect(() => {
     if (!engine || theme === appliedTheme.current) return;
@@ -200,6 +214,31 @@ export function App() {
       await refreshProjects();
       // The open project is gone: show a sample instead.
       if (savedId(settings.world) === id) setSettings((s) => ({ ...s, world: "city-1m" }));
+    },
+  };
+
+  const library = {
+    importJar: async (file: File) => {
+      if (!engine) return;
+      const work = (async () => {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const imported = await engine.world.request({ type: "importJar", bytes });
+        console.log(
+          `Imported ${imported.name}: ${imported.blocks} blocks in ${imported.ms.toFixed(0)} ms ` +
+            `(${imported.skipped} drawn by the game itself left out)`,
+        );
+        await refreshLibraries();
+        if (source === "mc-blocks") setReloads((n) => n + 1);
+      })();
+      track("Importing the Minecraft jar", work);
+      await work.catch((error: unknown) =>
+        alert(`Couldn't import ${file.name}: ${error instanceof Error ? error.message : error}`),
+      );
+    },
+    delete: async (id: string, name: string) => {
+      if (!engine || !confirm(`Remove ${name} from this browser?`)) return;
+      await engine.world.request({ type: "deleteLibrary", id });
+      await refreshLibraries();
     },
   };
 
@@ -270,6 +309,8 @@ export function App() {
         info={info}
         projects={projects}
         project={project}
+        libraries={libraries}
+        library={library}
       />
       {(loading || benchStep) && <div className="banner">{benchStep ?? loading}…</div>}
       {bench && <BenchPanel result={bench} onClose={() => setBench(null)} />}

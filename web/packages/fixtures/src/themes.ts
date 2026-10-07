@@ -51,6 +51,20 @@ export const CITY_THEMES: readonly CityTheme[] = [
       Glow: { tint: "#ffd27a", block: "voxyl:glowstone", glow: true },
     },
   },
+  {
+    // The same in Minecraft's own blocks: textured once the user imports their jar, drawn in
+    // the tints until then.
+    name: "Minecraft",
+    looks: {
+      Ground: { tint: "#689c3b", block: "minecraft:grass_block" },
+      Road: { tint: "#383b3f", block: "minecraft:gray_concrete" },
+      Mass: { tint: "#7b7b7b", block: "minecraft:stone_bricks" },
+      Glass: { tint: "#c9e3e8", block: "minecraft:glass" },
+      Trim: { tint: "#e9e3da", block: "minecraft:quartz_block" },
+      Roof: { tint: "#6f5334", block: "minecraft:spruce_planks" },
+      Glow: { tint: "#ffd27a", block: "minecraft:sea_lantern", glow: true },
+    },
+  },
 ];
 
 /**

@@ -24,7 +24,7 @@ palettes, and every view is a lens on the one world in the world worker.
    from the world worker), beside or instead of the 3D view.
 4. **Trimming overlapping parts in the mesher** (Godot's `render_boxes`, Forge Microblocks'
    render-time trim), carried over from Phase 1.
-5. **Block libraries and textures** (see "Block libraries" below). 5a: the library format, the
+5. **Block libraries and textures** (done; see "Block libraries" below). 5a: the library format, the
    original default set with its texture generator, and textured cubes in the renderer.
    5b: importing a vanilla Minecraft jar into an OPFS library.
 6. **Block models.** Non-cube blocks (slabs, stairs, fences, custom element models) as cached
@@ -184,4 +184,33 @@ Minecraft textures can't be hosted, so Phase 2 gets textures two ways:
     1.24M, full relight 0.77 -> 1.84 s, light CPU 22 -> 53 MB, initial mesh 1.7 -> 3.2 s,
     meshing 5.3 -> 9.1 ms a chunk. Not a texture cost: the Blocks theme's glass is clear, so
     every room behind a window is now meshed and lit (Concrete's tinted glass hides them).
-  - **Next:** 5b, the vanilla jar importer (`packages/mc-import`).
+  - **Atlas instead of a texture array** (commit aa347ab): WebGPU's default limit is 256
+    array layers and a vanilla jar has about a thousand block textures, so tiles go into a
+    512-pixel-wide 2D atlas (32 tiles a row, height doubling as needed). The shader picks the
+    mip level from the unwrapped coordinates and stops at level 4 (one pixel a tile); tiles
+    sit on their own grid and are sampled nearest within a level, so they never bleed.
+- **Step 5b done (2026-10-06).** Importing the user's own Minecraft jar.
+  - `packages/mc-import` (no DOM): a zip reader and PNG decoder over the standard
+    decompression streams, and `importJar`: blockstates as they are (the first of random
+    variants), models with parents and `#texture` references resolved, element rotations
+    kept, Minecraft's computed tints (plains grass and foliage, birch, spruce, water, ...)
+    on tinted faces, animated textures cut to their first frame, and whole-cube overlays (the
+    grass block's sides) layered into one texture with the tint baked in. Light levels of
+    always-lit blocks come from a small table. A block's colour is its plain variant's top,
+    tinted. Blocks no model draws (air, fluids, and what the game draws itself: signs,
+    chests, beds, banners, heads, shulker boxes) are left out. Needs a 1.13+ jar.
+  - Libraries as files: `encodeLibrary`/`decodeLibrary` (packages/blocks), `LibraryStore`
+    (packages/session) in OPFS under `libraries/<id>/`. The world worker reads them at
+    startup, before the first world opens.
+  - The app: a HUD row under the project row, "Minecraft jar…" (and Remove), showing
+    "Minecraft 1.21 · 922 blocks". A **Minecraft block showcase** sample (`?world=mc-blocks`,
+    needs the import) and a **Minecraft** city theme (`?theme=minecraft`, the Blocks theme
+    in minecraft: blocks; drawn in its tints without the import).
+  - Measured with the user's 1.21 jar (local only, never committed): 922 blocks (397 whole
+    cubes), 1,833 models, 971 textures, all 16×16; 140 blocks left out. Import 0.33 s in
+    the browser's worker (0.8 s in Node), stored as 2.1 MB of JSON plus 0.97 MB of pixels.
+  - Fixed on the way: tints are sRGB and were multiplied into linear texels (grass looked
+    olive); the shader now linearises them.
+  - Not yet: placement profiles derived from blockstate properties (editor work, Phase 3);
+    pre-1.13 jars; mod jars (Phase 5); non-cube models still draw as coloured cubes (step 6).
+  - **Next:** step 6, block models (slabs, stairs, fences, panes, and the vanilla models).

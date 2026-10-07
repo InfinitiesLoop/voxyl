@@ -4,6 +4,7 @@ import { useRef } from "react";
 import type { Settings } from "./App.tsx";
 import type { BenchResult, Distribution } from "./bench/bench.ts";
 import type { Backend, EngineStats } from "./scene/Engine.ts";
+import type { LibraryInfo } from "./world/protocol.ts";
 import { CHUNK_SIZES, savedSource, WORLD_KINDS, type WorldInfo } from "./worlds.ts";
 
 const ms = (v: number | null | undefined, digits = 1) =>
@@ -40,6 +41,9 @@ interface HudProps {
   info: WorldInfo | null;
   projects: readonly ProjectEntry[];
   project: ProjectActions;
+  /** Imported block libraries. */
+  libraries: readonly LibraryInfo[];
+  library: LibraryActions;
 }
 
 export function Hud({
@@ -54,6 +58,8 @@ export function Hud({
   info,
   projects,
   project,
+  libraries,
+  library,
 }: HudProps) {
   const f = stats?.frame;
   const c = stats?.chunks;
@@ -214,6 +220,7 @@ export function Hud({
         <dd>{stats ? `${stats.speed.toFixed(0)} cells/s` : "–"}</dd>
       </dl>
       <ProjectRow info={info} project={project} busy={busy} />
+      <LibraryRow libraries={libraries} library={library} busy={busy} />
       <div className="actions">
         <button type="button" onClick={onHome} disabled={busy}>
           Overview
@@ -291,6 +298,70 @@ function ProjectRow({
           const chosen = e.target.files?.[0];
           e.target.value = "";
           if (chosen) void project.import(chosen);
+        }}
+      />
+    </div>
+  );
+}
+
+export interface LibraryActions {
+  importJar(file: File): Promise<void>;
+  delete(id: string, name: string): Promise<void>;
+}
+
+/**
+ * Textures from the user's own Minecraft: import their client jar (it stays in this browser),
+ * or remove it again. Looks naming "minecraft:" blocks draw in their colours until then.
+ */
+function LibraryRow({
+  libraries,
+  library,
+  busy,
+}: {
+  libraries: readonly LibraryInfo[];
+  library: LibraryActions;
+  busy: boolean;
+}) {
+  const file = useRef<HTMLInputElement>(null);
+  const minecraft = libraries.find((l) => l.id === "minecraft");
+  return (
+    <div className="project">
+      <span
+        className="project-name"
+        title="Block textures from your own Minecraft, kept in this browser"
+      >
+        {minecraft ? (
+          `${minecraft.name} · ${minecraft.blocks} blocks`
+        ) : (
+          <em>No Minecraft textures</em>
+        )}
+      </span>
+      {minecraft && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void library.delete(minecraft.id, minecraft.name)}
+        >
+          Remove
+        </button>
+      )}
+      <button
+        type="button"
+        disabled={busy}
+        title="Pick a client jar, e.g. .minecraft/versions/1.21/1.21.jar"
+        onClick={() => file.current?.click()}
+      >
+        Minecraft jar…
+      </button>
+      <input
+        ref={file}
+        type="file"
+        accept=".jar"
+        hidden
+        onChange={(e) => {
+          const chosen = e.target.files?.[0];
+          e.target.value = "";
+          if (chosen) void library.importJar(chosen);
         }}
       />
     </div>

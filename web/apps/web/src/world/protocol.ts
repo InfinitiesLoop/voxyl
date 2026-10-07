@@ -39,6 +39,11 @@ export type Command =
   /** A saved project as a bundle file. */
   | { type: "exportProject"; id: string }
   | { type: "lighting"; mode: LightingMode }
+  /** Block libraries stored in this browser (imported ones; the default set is built in). */
+  | { type: "libraries" }
+  /** Imports a Minecraft client jar as the "minecraft" library, replacing any before. */
+  | { type: "importJar"; bytes: Uint8Array }
+  | { type: "deleteLibrary"; id: string }
   /** Re-skins a city with another city theme (a palette_sync): looks only. */
   | { type: "theme"; theme: number }
   /** The id of the whole-block state of a semantic, by name (added if new). */
@@ -74,6 +79,9 @@ export type Command =
 export interface Replies {
   load: WorldInfo;
   lighting: { lightAllMs: number | null };
+  libraries: LibraryInfo[];
+  importJar: LibraryInfo & { readonly skipped: number; readonly ms: number };
+  deleteLibrary: null;
   /** applied is false for a project without the city theme. */
   theme: { applied: boolean; relit: boolean };
   save: ProjectEntry;
@@ -88,6 +96,13 @@ export interface Replies {
   slice: { ids: Uint16Array; below: Uint16Array };
   cell: string | null;
   rayEdit: boolean;
+}
+
+/** A stored block library, as the app lists it. */
+export interface LibraryInfo {
+  readonly id: string;
+  readonly name: string;
+  readonly blocks: number;
 }
 
 export type ToWorld =

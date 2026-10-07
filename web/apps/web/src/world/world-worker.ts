@@ -4,13 +4,15 @@
 // main thread, together with light, in the order it produced them. Saved projects live in
 // OPFS (a ProjectStore), read and written here.
 
-import { DEFAULT_LIBRARY_ID, defaultLibrary } from "@voxyl/blocks";
+import { DEFAULT_LIBRARY_ID, defaultLibrary, type Library } from "@voxyl/blocks";
 import { type CellStateTable, EMPTY_ID, type Project, raycast } from "@voxyl/core";
 import { CITY_THEME_KEY, cityThemeOf, cityThemePalette } from "@voxyl/fixtures";
+import { importJar } from "@voxyl/mc-import";
 import type { StateShape } from "@voxyl/mesher";
 import {
   BlockMaterials,
   describeState,
+  LibraryStore,
   type LightingMode,
   ProjectStore,
   stateLooks,
@@ -30,6 +32,7 @@ import { OpfsFolder } from "./opfs-folder.ts";
 import {
   type Command,
   type FromWorld,
+  type LibraryInfo,
   MAX_SLICE_CELLS,
   type MeshReply,
   type MeshRequest,
@@ -62,6 +65,7 @@ interface MeshPort {
 }
 
 const store = new ProjectStore(new OpfsFolder("voxyl"));
+const libraryStore = new LibraryStore(new OpfsFolder("voxyl"));
 let session: WorldSession | null = null;
 let project: Project | null = null;
 /** The id the open project is saved under, or null for an unsaved sample. */
@@ -76,8 +80,15 @@ let idlePosted = -1;
 let looksPosted = { states: -1, revision: -1 };
 /** Every state's shape so far, for mesh workers (id - 1 -> shape). */
 let shapes: StateShape[] = [];
-/** The libraries looks draw blocks from: the default set for now. */
-const libraries = new Map([[DEFAULT_LIBRARY_ID, defaultLibrary()]]);
+/** The libraries looks draw blocks from: the default set, and any imported ones. */
+const libraries = new Map<string, Library>([[DEFAULT_LIBRARY_ID, defaultLibrary()]]);
+/** Imported libraries, read from storage once at startup (before the first world opens). */
+const librariesLoaded = libraryStore
+  .loadAll()
+  .then((stored) => {
+    for (const library of stored) libraries.set(library.id, library);
+  })
+  .catch((error: unknown) => console.error("Reading the block libraries failed", error));
 /** Textured faces of the open world's looks, numbered as the renderer has them. */
 let blocks = new BlockMaterials(libraries);
 /** Which states are clear (StateLooks.clear), as the mesh workers last heard. */
@@ -120,13 +131,14 @@ async function flushAutosave(): Promise<void> {
 
 async function open(command: Extract<Command, { type: "load" }>): Promise<WorldInfo> {
   await flushAutosave();
+  await librariesLoaded;
   const start = performance.now();
   const kind = sampleKind(command.source);
   const id = savedId(command.source);
   let framing: Framing;
   let next: Project;
   if (kind) {
-    const built = buildSample(kind, command.chunkSize, themeAt(command.theme));
+    const built = buildSample(kind, command.chunkSize, themeAt(command.theme), libraries);
     next = built.project;
     framing = built.framing;
     saved = null;
@@ -181,6 +193,23 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
     case "exportProject":
       await flushAutosave();
       return store.exportBundle(command.id);
+    case "libraries":
+      await librariesLoaded;
+      return [...libraries.values()].filter((l) => l.id !== DEFAULT_LIBRARY_ID).map(infoOf);
+    case "importJar": {
+      const start = performance.now();
+      const { library, skipped } = await importJar(command.bytes);
+      await libraryStore.save(library);
+      libraries.set(library.id, library);
+      librariesChanged();
+      return { ...infoOf(library), skipped: skipped.length, ms: performance.now() - start };
+    }
+    case "deleteLibrary":
+      if (command.id === DEFAULT_LIBRARY_ID) return null;
+      await libraryStore.delete(command.id);
+      libraries.delete(command.id);
+      librariesChanged();
+      return null;
     case "lighting":
       mode = command.mode;
       session?.setLighting(mode, materials);
@@ -437,4 +466,14 @@ function transfersOf(value: unknown): Transferable[] {
   return Object.values(value)
     .filter((v): v is ArrayBufferView => ArrayBuffer.isView(v))
     .map((v) => v.buffer as ArrayBuffer);
+}
+
+function infoOf(library: Library): LibraryInfo {
+  return { id: library.id, name: library.name, blocks: Object.keys(library.blocks).length };
+}
+
+/** Looks that name the library's blocks change: resend looks, and relight if light did. */
+function librariesChanged(): void {
+  looksPosted = { states: -1, revision: -1 };
+  session?.setMaterials(materials);
 }

@@ -1,3 +1,4 @@
+export { LibraryStore } from "./libraries.ts";
 export {
   type CopyLight,
   LightLayout,

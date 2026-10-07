@@ -199,6 +199,9 @@ importers:
       '@voxyl/light':
         specifier: workspace:*
         version: link:../../packages/light
+      '@voxyl/mc-import':
+        specifier: workspace:*
+        version: link:../../packages/mc-import
       '@voxyl/mesher':
         specifier: workspace:*
         version: link:../../packages/mesher

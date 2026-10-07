@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   BlockMaterials,
   FACE_SLOTS,
+  LibraryStore,
   MATERIAL_FLOATS,
   MemoryFolder,
   ProjectStore,
@@ -177,5 +178,20 @@ describe("stateLooks with blocks", () => {
     const looks = stateLooks(states, project.semantics, blocks());
     expect(looks.faces.every((m) => m === 0)).toBe(true);
     expect([...looks.colors.subarray(mass * 4, mass * 4 + 3)]).toEqual([0x3b, 0x40, 0x48]);
+  });
+});
+
+describe("LibraryStore", () => {
+  it("stores a library and loads it back, pixels and all", async () => {
+    const store = new LibraryStore(new MemoryFolder());
+    const library = { ...defaultLibrary(), id: "copy", name: "A copy" };
+    await store.save(library);
+    const [loaded] = await store.loadAll();
+    expect(loaded?.name).toBe("A copy");
+    expect(Object.keys(loaded?.blocks ?? {})).toEqual(Object.keys(library.blocks));
+    expect(loaded?.textures.stone?.rgba).toEqual(library.textures.stone?.rgba);
+    expect(loaded?.models.oak_stairs).toEqual(library.models.oak_stairs);
+    await store.delete("copy");
+    expect(await store.loadAll()).toEqual([]);
   });
 });

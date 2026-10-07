@@ -13,8 +13,7 @@ import {
   turnClockwise,
 } from "@voxyl/core";
 
-/** Blocks per row, and the step between them. */
-const ROW = 10;
+/** The step between blocks. */
 const STEP = 3;
 
 export interface ShowcaseStats {
@@ -37,6 +36,8 @@ export function buildShowcase(project: Project, library: Library): ShowcaseStats
     world.set(x, y, z, { semantic: lookOf(name), rotation });
 
   const names = Object.keys(library.blocks).sort();
+  // Blocks per row: a square for big libraries.
+  const ROW = Math.max(10, Math.ceil(Math.sqrt(names.length)));
   const rows = Math.ceil(names.length / ROW) + 4;
   const width = ROW * STEP + 1;
   const depth = rows * STEP + 1;
@@ -55,7 +56,7 @@ export function buildShowcase(project: Project, library: Library): ShowcaseStats
   const lyingX = (spin: number) => compose(turn(2, 1), turn(1, spin));
   const lyingZ = (spin: number) => compose(turn(0, 1), turn(1, spin));
   let x = 1;
-  for (const log of names.filter((n) => n.endsWith("_log"))) {
+  for (const log of names.filter((n) => n.endsWith("_log")).slice(0, 2)) {
     for (const r of [lyingX(0), lyingX(1), lyingZ(0), lyingZ(1)]) {
       place(x, 1, z, log, r);
       x += 2;

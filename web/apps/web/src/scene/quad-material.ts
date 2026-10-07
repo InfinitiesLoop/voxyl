@@ -175,7 +175,9 @@ function surfaceColor(
   const texel = blocks.atlas.sample(atlasUv).level(lod);
   const textured = material.greaterThan(0.5);
   Discard(textured.and(texel.a.lessThan(0.5)));
-  return vec4(select(textured, texel.rgb.mul(extra.yzw), color.rgb), color.a);
+  // Tints are sRGB, like the colours they come from; the texel is already linear.
+  const tint = pow(extra.yzw, vec3(2.2, 2.2, 2.2));
+  return vec4(select(textured, texel.rgb.mul(tint), color.rgb), color.a);
 }
 
 /** Brightness by facing: the shades of each axis, weighted by the normal's squares. */
