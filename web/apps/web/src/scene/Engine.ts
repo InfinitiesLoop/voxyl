@@ -1,6 +1,7 @@
 import { boxOf, type Region, type SemanticArg } from "@voxyl/core";
 import type { LightingMode } from "@voxyl/session";
 import * as THREE from "three/webgpu";
+import { bearingOf } from "../editor/compass.ts";
 import { grouped, nudgedBox } from "../editor/counts.ts";
 import { Hotbar } from "../editor/hotbar.ts";
 import { isKey } from "../editor/keymap.ts";
@@ -15,6 +16,7 @@ import {
   rememberBrush,
   rememberTool,
 } from "../editor/tool.ts";
+import { orbitDegrees, type ViewSettings } from "../editor/view-options.ts";
 import type { HistoryState, PaletteInfo } from "../world/editing.ts";
 import {
   EMPTY_SELECTION,
@@ -29,6 +31,14 @@ import type { WorldInfo, WorldSource } from "../worlds.ts";
 import { ChunkRenderer, type ChunkRendererStats } from "./ChunkRenderer.ts";
 import { CellBoxes } from "./cell-boxes.ts";
 import { applyPose, FlyCamera, type FlyPose } from "./FlyCamera.ts";
+import {
+  type CellBox,
+  centreOf,
+  ELEVATIONS,
+  framePose,
+  orbitStep,
+  orthoHalfHeight,
+} from "./framing.ts";
 import { GroundGrid } from "./ground-grid.ts";
 import { LightVolume } from "./light-volume.ts";
 import { SelectionOutline } from "./SelectionOutline.ts";
@@ -48,6 +58,8 @@ export interface ViewFrame {
   readonly grid: boolean;
   /** Draw where the active 2D view cuts the world. */
   readonly slice: boolean;
+  /** Render mode, shading, projection, background and orbit. */
+  readonly view: ViewSettings;
   readonly x: number;
   readonly y: number;
   readonly width: number;
@@ -154,7 +166,14 @@ export class Engine {
   readonly inventoryOpen = new Store(false);
   /** Called when a click chooses a different 3D pane, so the chrome can follow. */
   onFocusView: ((id: string) => void) | null = null;
-  readonly #views = new Map<string, { camera: THREE.PerspectiveCamera; pose: FlyPose }>();
+  readonly #views = new Map<string, ViewCamera>();
+  /** The project's bounds (cell corners), for presets and orbiting; asked for as needed. */
+  #bounds: CellBox | null = null;
+  #boundsAt = 0;
+  /** The focused view's flying speed, for the Camera menu. */
+  readonly speed = new Store(15);
+  /** Called when flying or dragging a pane stops its orbit, so the layout can say so. */
+  onOrbitStop: ((id: string) => void) | null = null;
   #viewFrames: ViewFrame[] = [];
   /** False until the panes have reported their rectangles, so the first frames fill the canvas. */
   #framesSet = false;
@@ -266,6 +285,8 @@ export class Engine {
     }
     this.#chunks = null;
     this.#info = null;
+    this.#bounds = null;
+    this.#boundsAt = 0;
     this.#worldStats = null;
     this.hotbar.clear();
     this.palettes.set([]);
@@ -408,15 +429,54 @@ export class Engine {
     this.#chunks?.setDaylight(sky.daylight);
   }
 
-  #ensureView(id: string): { camera: THREE.PerspectiveCamera; pose: FlyPose } {
+  #ensureView(id: string): ViewCamera {
     const existing = this.#views.get(id);
     if (existing) return existing;
     const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 6000);
     const pose = this.fly.capture();
     applyPose(camera, pose);
-    const view = { camera, pose };
+    // Orthographic sees the same way from the same place; near is far behind it, so what is
+    // behind the camera still shows, as a drawing would.
+    const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, -ORTHO_DEPTH, ORTHO_DEPTH);
+    const view: ViewCamera = { camera, pose, ortho, orthoHalf: null };
     this.#views.set(id, view);
     return view;
+  }
+
+  /** The camera a pane draws with: its own, or its orthographic twin. */
+  #cameraFor(frame: ViewFrame | undefined, aspect: number): THREE.Camera {
+    const view = frame ? this.#views.get(frame.id) : undefined;
+    const cam = frame && !frame.focused && view ? view.camera : this.camera;
+    cam.aspect = aspect;
+    cam.updateProjectionMatrix();
+    if (!view || frame?.view.projection !== "orthographic") {
+      this.#sky.mesh.scale.setScalar(1);
+      return cam;
+    }
+    if (view.orthoHalf === null) view.orthoHalf = this.#orthoHalfFor(cam);
+    const half = view.orthoHalf;
+    const ortho = view.ortho;
+    ortho.left = -half * aspect;
+    ortho.right = half * aspect;
+    ortho.top = half;
+    ortho.bottom = -half;
+    ortho.updateProjectionMatrix();
+    ortho.position.copy(cam.position);
+    ortho.quaternion.copy(cam.quaternion);
+    ortho.updateMatrixWorld();
+    // The sky is a sphere about the eye; seen without perspective it must be big enough to
+    // fill the view (its colour still comes from the direction, so it reads as a gradient).
+    this.#sky.mesh.scale.setScalar(Math.max(half * aspect, half) * 1.5);
+    return ortho;
+  }
+
+  /** An orthographic size that shows about what the perspective camera shows at the build. */
+  #orthoHalfFor(cam: THREE.PerspectiveCamera): number {
+    const centre = this.#bounds ? centreOf(this.#bounds) : this.#info?.center;
+    const distance = centre
+      ? cam.position.distanceTo(new THREE.Vector3(centre[0], centre[1], centre[2]))
+      : 40;
+    return Math.max(2, distance * Math.tan((cam.fov * Math.PI) / 360));
   }
 
   #switchFocus(id: string): void {
@@ -569,7 +629,9 @@ export class Engine {
       this.fly.place(pose.position, pose.target);
     } else {
       this.fly.update(Math.min(dt, 0.1));
+      this.#tickOrbits(Math.min(dt, 0.1));
     }
+    if (this.speed.get() !== this.fly.speed) this.speed.set(this.fly.speed);
     const p = this.camera.position;
     if (p.distanceTo(this.#sentCamera) > CAMERA_STEP) {
       this.#sentCamera.copy(p);
@@ -657,9 +719,7 @@ export class Engine {
       if (only) this.#updateSky(only.time);
       this.#showOverlays(only);
       this.#grid.follow(this.camera.position);
-      this.camera.aspect = this.#width / this.#height;
-      this.camera.updateProjectionMatrix();
-      this.renderer.render(this.scene, this.camera);
+      this.renderer.render(this.scene, this.#cameraFor(only, this.#width / this.#height));
       return;
     }
     if (frames.length === 0) {
@@ -674,11 +734,7 @@ export class Engine {
     this.renderer.clear();
     this.renderer.setScissorTest(true);
     for (const frame of frames) {
-      const view = this.#views.get(frame.id);
-      const cam = frame.focused ? this.camera : view?.camera;
-      if (!cam) continue;
-      cam.aspect = frame.width / frame.height;
-      cam.updateProjectionMatrix();
+      const cam = this.#cameraFor(frame, frame.width / frame.height);
       this.#updateSky(frame.time);
       this.#showOverlays(frame);
       this.#grid.follow(cam.position);
@@ -849,6 +905,7 @@ export class Engine {
     if (!drag || this.fly.locked) return;
     const distance = Math.hypot(event.clientX - drag.x, event.clientY - drag.y);
     if (!drag.moved && distance < CLICK_SLOP) return;
+    if (!drag.moved) this.#stopOrbit(this.#focusedId);
     drag.moved = true;
     if (this.#orbiting) this.fly.orbit(this.#orbitTarget, event.movementX, event.movementY);
     else this.fly.drag(event.movementX, event.movementY);
@@ -870,6 +927,15 @@ export class Engine {
       this.onFocusView?.(frame.id);
     }
     if (!this.fly.locked) {
+      const focused = this.#viewFrames.find((f) => f.focused);
+      const view = focused ? this.#views.get(focused.id) : undefined;
+      if (focused?.view.projection === "orthographic" && view?.orthoHalf) {
+        view.orthoHalf = Math.max(
+          1,
+          Math.min(4000, view.orthoHalf * Math.exp(event.deltaY * 0.0012)),
+        );
+        return;
+      }
       this.fly.dolly(-event.deltaY * DOLLY_PER_WHEEL * (this.fly.speed / 15));
       return;
     }
@@ -936,6 +1002,134 @@ export class Engine {
     if (ctrl && !this.fly.locked) return;
     if (ctrl) event.preventDefault();
     this.hotbar.select(Number(slot[1]) - 1);
+  }
+
+  /**
+   * Puts a pane's camera on a preset: the overview, a compass side, from above, iso, or
+   * around the selection. Frames the whole build (or the selection) so it fits the pane.
+   */
+  async frameView(id: string, preset: CameraPreset): Promise<void> {
+    const frame = this.#viewFrames.find((f) => f.id === id);
+    if (!frame || !this.#info) return;
+    if (preset === "overview") {
+      if (frame.focused) this.home();
+      return;
+    }
+    const selection = this.selection.get().bounds;
+    let box: CellBox | null;
+    if (preset === "selection") {
+      if (!selection) return;
+      box = {
+        min: [selection[0], selection[1], selection[2]],
+        max: [selection[3] + 1, selection[4] + 1, selection[5] + 1],
+      };
+    } else {
+      box = await this.#freshBounds();
+    }
+    if (!box) return;
+    const view = this.#views.get(id);
+    const cam = frame.focused ? this.camera : view?.camera;
+    if (!cam || !view) return;
+    const north = this.#info.north;
+    const here = cam.position;
+    const centre = centreOf(box);
+    const current = bearingOf(here.x - centre[0], here.z - centre[2], north);
+    // Top stands a hair south, so north is up the screen, as on the 2D plan.
+    const sides: Record<string, number> = { north: 0, east: 90, south: 180, west: 270, top: 180 };
+    const bearing =
+      preset === "iso"
+        ? 45 + 90 * Math.floor(current / 90)
+        : preset in sides
+          ? (sides[preset] ?? 0)
+          : current;
+    const elevation =
+      preset === "top" ? ELEVATIONS.top : preset === "iso" ? ELEVATIONS.iso : ELEVATIONS.mid;
+    const pose = framePose(
+      box,
+      bearing,
+      elevation,
+      north,
+      cam.fov,
+      frame.width / Math.max(1, frame.height),
+    );
+    const position = { x: pose.position[0], y: pose.position[1], z: pose.position[2] };
+    const target = { x: pose.target[0], y: pose.target[1], z: pose.target[2] };
+    if (frame.focused) {
+      this.fly.place(position, target);
+    } else {
+      cam.position.set(position.x, position.y, position.z);
+      cam.lookAt(target.x, target.y, target.z);
+      cam.updateMatrixWorld();
+      view.pose = poseOf(cam, view.pose.speed);
+    }
+    if (frame.view.projection === "orthographic") {
+      const f = new THREE.Vector3();
+      cam.getWorldDirection(f);
+      view.orthoHalf = orthoHalfHeight(
+        box,
+        [f.x, f.y, f.z],
+        frame.width / Math.max(1, frame.height),
+      );
+    }
+  }
+
+  /** The focused camera's flying speed, in cells a second. */
+  setSpeed(speed: number): void {
+    this.fly.scaleSpeed(speed / this.fly.speed);
+    this.speed.set(this.fly.speed);
+  }
+
+  /** Turns each orbiting pane's camera about the build's centre. */
+  #tickOrbits(dt: number): void {
+    if (dt <= 0 || !this.#info) return;
+    for (const frame of this.#viewFrames) {
+      const degrees = orbitDegrees(frame.view.orbit);
+      if (degrees === 0) continue;
+      if (frame.focused && this.fly.locked) {
+        this.#stopOrbit(frame.id);
+        continue;
+      }
+      if (performance.now() - this.#boundsAt > 2000) void this.#freshBounds();
+      const box = this.#bounds;
+      if (!box) continue;
+      const centre = centreOf(box);
+      const view = this.#views.get(frame.id);
+      const cam = frame.focused ? this.camera : view?.camera;
+      if (!cam || !view) continue;
+      const p = orbitStep(
+        [cam.position.x, cam.position.y, cam.position.z],
+        centre,
+        ((degrees * Math.PI) / 180) * dt,
+      );
+      const position = { x: p[0], y: p[1], z: p[2] };
+      const target = { x: centre[0], y: centre[1], z: centre[2] };
+      if (frame.focused) {
+        this.fly.place(position, target);
+      } else {
+        cam.position.set(p[0], p[1], p[2]);
+        cam.lookAt(target.x, target.y, target.z);
+        cam.updateMatrixWorld();
+        view.pose = poseOf(cam, view.pose.speed);
+      }
+    }
+  }
+
+  #stopOrbit(id: string): void {
+    const frame = this.#viewFrames.find((f) => f.id === id);
+    if (!frame || frame.view.orbit === "off") return;
+    this.#viewFrames = this.#viewFrames.map((f) =>
+      f.id === id ? { ...f, view: { ...f.view, orbit: "off" } } : f,
+    );
+    this.onOrbitStop?.(id);
+  }
+
+  /** The project's bounds, asked of the world worker (at most every couple of seconds). */
+  async #freshBounds(): Promise<CellBox | null> {
+    this.#boundsAt = performance.now();
+    const world = this.#worldId;
+    const bounds = await this.world.request({ type: "bounds" });
+    if (world === this.#worldId) this.#bounds = bounds;
+    return bounds;
   }
 
   /** Switches the fly tool. A half-chosen box corner is dropped. */
@@ -1127,6 +1321,40 @@ function cellBox(cell: Vec3): {
   z1: number;
 } {
   return { x0: cell[0], y0: cell[1], z0: cell[2], x1: cell[0], y1: cell[1], z1: cell[2] };
+}
+
+/** A 3D pane's cameras: the one it flies, its pose while unfocused, an orthographic twin. */
+interface ViewCamera {
+  readonly camera: THREE.PerspectiveCamera;
+  pose: FlyPose;
+  readonly ortho: THREE.OrthographicCamera;
+  /** Half the orthographic view's height in cells; set the first time it draws orthographic. */
+  orthoHalf: number | null;
+}
+
+/** The camera presets of a 3D pane's Camera menu. */
+export type CameraPreset =
+  | "overview"
+  | "north"
+  | "east"
+  | "south"
+  | "west"
+  | "top"
+  | "iso"
+  | "selection";
+
+/** How far an orthographic view sees in front of and behind its camera. */
+const ORTHO_DEPTH = 4000;
+
+/** A camera's pose as FlyCamera keeps it. */
+function poseOf(camera: THREE.Camera, speed: number): FlyPose {
+  const e = EULER.setFromQuaternion(camera.quaternion, "YXZ");
+  return {
+    position: [camera.position.x, camera.position.y, camera.position.z],
+    yaw: e.y,
+    pitch: e.x,
+    speed,
+  };
 }
 
 const EULER = new THREE.Euler();

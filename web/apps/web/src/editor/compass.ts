@@ -4,7 +4,7 @@
 import type { Direction } from "@voxyl/core";
 
 /** The real north as a vector in the project's own axes (x, z): its north is -z. */
-const REAL_NORTH: Record<Direction, readonly [number, number]> = {
+export const REAL_NORTH: Record<Direction, readonly [number, number]> = {
   north: [0, -1],
   east: [1, 0],
   south: [0, 1],
@@ -39,4 +39,23 @@ export function compassPoint(dx: number, dz: number, north: Direction): CompassP
   const bearing = Math.atan2(dx * ex + dz * ez, dx * nx + dz * nz);
   const quarter = Math.round(bearing / (Math.PI / 2));
   return COMPASS_POINTS[((quarter % 4) + 4) % 4] ?? "N";
+}
+
+/**
+ * The horizontal unit vector (x, z) toward a compass bearing: degrees clockwise from the real
+ * north, so 90 is the real east.
+ */
+export function bearingVector(degrees: number, north: Direction): [number, number] {
+  const [nx, nz] = REAL_NORTH[north];
+  const ex = -nz;
+  const ez = nx;
+  const b = (degrees * Math.PI) / 180;
+  return [nx * Math.cos(b) + ex * Math.sin(b), nz * Math.cos(b) + ez * Math.sin(b)];
+}
+
+/** The bearing (degrees clockwise from the real north) of a horizontal direction (x, z). */
+export function bearingOf(dx: number, dz: number, north: Direction): number {
+  const [nx, nz] = REAL_NORTH[north];
+  const deg = (Math.atan2(dx * -nz + dz * nx, dx * nx + dz * nz) * 180) / Math.PI;
+  return (deg + 360) % 360;
 }

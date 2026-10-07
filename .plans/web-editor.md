@@ -287,8 +287,20 @@ there is a point worth orbiting.
      **R** turns the aimed block about the face hit (Shift the other way, the `rotate`
      command), alternate **Num 0**; **sprint** is a left Ctrl tap (sprints on release if no
      other key came between, so Ctrl+Z doesn't), alternate `\`. Tool keys are a proposal.
-  2. Camera menu, 3. render modes, 4. slicing from 3D, 5. Home and shared palettes,
-     6. inventory and block chooser, 7. 2D editing: in progress.
+  2. **Camera menu** in each 3D bar. Presets: Overview, From north / east / south / west
+     (the real compass, settings.north), Top (north up the screen, as on the plan), Iso (the
+     nearest corner, 35.26°), Selection. Each frames the build's exact bounds (a new `bounds`
+     request) or the selection, backing off until all eight corners fit
+     (`scene/framing.ts`, after Godot's CameraFraming, tested). **Orbit** off / slow / medium
+     / fast (6, 12, 24°/s) turns the pane's camera about the build's centre; flying or
+     dragging that pane turns it off. **Projection** perspective or orthographic: an
+     orthographic twin camera shares the pane's position and turn, sees 4000 cells either
+     side, and the wheel zooms it; the sky sphere is scaled up so it still fills the view.
+     **Speed** is a slider (2 to 400 cells a second), so = and - have a UI. Each pane keeps
+     its view settings (render mode, shading, projection, background, orbit) in the layout,
+     from one registry in `editor/view-options.ts`.
+  3. render modes, 4. slicing from 3D, 5. Home and shared palettes, 6. inventory and block
+     chooser, 7. 2D editing: in progress.
 
 ## Cross-project resources (what is planned, and what is not)
 

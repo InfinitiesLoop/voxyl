@@ -136,3 +136,35 @@ export function ShowMenu({
     </BarMenu>
   );
 }
+
+/** One choice of several, as a row of buttons inside a menu: a view setting. */
+export function ChoiceRow<T extends string>({
+  label,
+  choices,
+  value,
+  onChange,
+}: {
+  label: string;
+  choices: readonly { value: T; label: string; title: string }[];
+  value: T;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="bar-choice-row">
+      <span className="bar-choice-label">{label}</span>
+      <span className="bar-choices">
+        {choices.map((choice) => (
+          <button
+            key={choice.value}
+            type="button"
+            title={choice.title}
+            aria-pressed={value === choice.value}
+            onClick={blurAfter(() => onChange(choice.value))}
+          >
+            {choice.label}
+          </button>
+        ))}
+      </span>
+    </div>
+  );
+}

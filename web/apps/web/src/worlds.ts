@@ -137,8 +137,13 @@ export function buildSample(
 /** Above this many cells, framing uses whole chunks rather than visiting every cell. */
 const EXACT_FRAMING_CELLS = 4_000_000;
 
-/** Framing for any project: its exact bounds, or the chunks it occupies when it is huge. */
-export function frameProject(project: Project): Framing {
+/**
+ * A project's bounds as cell corners (min inclusive, max exclusive): exact, or the chunks it
+ * occupies when it is huge. Null for an empty project.
+ */
+export function projectBounds(
+  project: Project,
+): { min: [number, number, number]; max: [number, number, number] } | null {
   const world = project.world;
   const size = world.layout.size;
   const lo = [Infinity, Infinity, Infinity];
@@ -161,9 +166,16 @@ export function frameProject(project: Project): Framing {
       }
     }
   }
-  if (lo[0] === Infinity) return { center: [0, 0, 0], extent: 16, top: 0 };
-  const [x0, y0, z0] = lo as [number, number, number];
-  const [x1, y1, z1] = hi as [number, number, number];
+  if (lo[0] === Infinity) return null;
+  return { min: lo as [number, number, number], max: hi as [number, number, number] };
+}
+
+/** Framing for any project: its exact bounds, or the chunks it occupies when it is huge. */
+export function frameProject(project: Project): Framing {
+  const bounds = projectBounds(project);
+  if (!bounds) return { center: [0, 0, 0], extent: 16, top: 0 };
+  const [x0, y0, z0] = bounds.min;
+  const [x1, y1, z1] = bounds.max;
   return {
     center: [(x0 + x1) / 2, Math.max(0, y0), (z0 + z1) / 2],
     extent: Math.max(x1 - x0, z1 - z0),

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
-import type { Engine, ViewFrame } from "../scene/Engine.ts";
+import type { CameraPreset, Engine, ViewFrame } from "../scene/Engine.ts";
 import { GridPane } from "../views/GridPane.tsx";
 import type { WorldInfo } from "../worlds.ts";
 import { Compass } from "./Compass.tsx";
@@ -12,9 +12,20 @@ import {
   withFocus,
   withPane,
   withShow,
+  withView,
 } from "./layout.ts";
 import { timeLabel } from "./TopBar.tsx";
-import { BarMenu, BarSpacer, blurAfter, KindSwitch, ShowMenu, ViewBar } from "./ViewBar.tsx";
+import { useStore } from "./useStore.ts";
+import {
+  BarMenu,
+  BarSpacer,
+  blurAfter,
+  ChoiceRow,
+  KindSwitch,
+  ShowMenu,
+  ViewBar,
+} from "./ViewBar.tsx";
+import { ORBITS, PROJECTIONS, type ViewSettings } from "./view-options.ts";
 
 /** Times of day a click away, as in Minecraft's /time set. */
 const TIMES: readonly { label: string; hours: number }[] = [
@@ -59,8 +70,13 @@ export function Panes({
       const index = visiblePanes(layout).findIndex((pane) => pane.id === id);
       if (index >= 0) onLayout(withFocus(layout, index));
     };
+    engine.onOrbitStop = (id) => {
+      const index = layout.panes.findIndex((pane) => pane.id === id);
+      if (index >= 0) onLayout(withView(layout, index, { orbit: "off" }));
+    };
     return () => {
       engine.onFocusView = null;
+      engine.onOrbitStop = null;
     };
   }, [engine, layout, onLayout]);
 
@@ -81,6 +97,7 @@ export function Panes({
           focused: index === focus,
           grid: pane.show.grid,
           slice: pane.show.slice,
+          view: pane.view,
           x: rect.left - origin.left,
           y: rect.top - origin.top,
           width: rect.width,
@@ -127,6 +144,12 @@ export function Panes({
                   <TimeMenu
                     pane={pane}
                     onTime={(time) => onLayout(withPane(layout, index, { time }))}
+                  />
+                  <CameraMenu
+                    engine={engine}
+                    paneId={pane.id}
+                    view={pane.view}
+                    onView={(patch) => onLayout(withView(layout, index, patch))}
                   />
                   <ShowMenu kind="3d" show={pane.show} onShow={onShow} />
                   <BarSpacer />
@@ -195,6 +218,73 @@ function TimeMenu({ pane, onTime }: { pane: Pane; onTime: (hours: number) => voi
           </button>
         ))}
       </span>
+    </BarMenu>
+  );
+}
+
+const PRESETS: readonly { preset: CameraPreset; label: string; title: string }[] = [
+  { preset: "overview", label: "Overview", title: "Back to where the project opened" },
+  { preset: "north", label: "From north", title: "Frame the build from the real north" },
+  { preset: "east", label: "From east", title: "Frame the build from the real east" },
+  { preset: "south", label: "From south", title: "Frame the build from the real south" },
+  { preset: "west", label: "From west", title: "Frame the build from the real west" },
+  { preset: "top", label: "Top", title: "Straight down on the build" },
+  { preset: "iso", label: "Iso", title: "From the nearest corner, at the isometric angle" },
+  { preset: "selection", label: "Selection", title: "Frame the selection" },
+];
+
+/** The pane's camera: presets, orbit, projection and flying speed. */
+function CameraMenu({
+  engine,
+  paneId,
+  view,
+  onView,
+}: {
+  engine: Engine;
+  paneId: string;
+  view: ViewSettings;
+  onView: (patch: Partial<ViewSettings>) => void;
+}) {
+  const speed = useStore(engine.speed);
+  const selection = useStore(engine.selection);
+  return (
+    <BarMenu label="Camera" title="Camera presets, orbit, projection and speed">
+      <span className="bar-choices">
+        {PRESETS.map((p) => (
+          <button
+            key={p.preset}
+            type="button"
+            title={p.title}
+            disabled={p.preset === "selection" && !selection.bounds}
+            onClick={blurAfter(() => void engine.frameView(paneId, p.preset))}
+          >
+            {p.label}
+          </button>
+        ))}
+      </span>
+      <ChoiceRow
+        label="Orbit"
+        choices={ORBITS}
+        value={view.orbit}
+        onChange={(orbit) => onView({ orbit })}
+      />
+      <ChoiceRow
+        label="Projection"
+        choices={PROJECTIONS}
+        value={view.projection}
+        onChange={(projection) => onView({ projection })}
+      />
+      <label className="bar-range">
+        Speed {Math.round(speed)} cells a second (= and -)
+        <input
+          type="range"
+          min={Math.log(2)}
+          max={Math.log(400)}
+          step={0.01}
+          value={Math.log(speed)}
+          onChange={(e) => engine.setSpeed(Math.exp(Number(e.target.value)))}
+        />
+      </label>
     </BarMenu>
   );
 }

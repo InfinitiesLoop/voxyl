@@ -1369,3 +1369,18 @@ kbd {
     monospace;
   white-space: nowrap;
 }
+
+.bar-choice-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bar-choice-label {
+  color: var(--text-quiet);
+  font-size: 11px;
+}
+
+.bar-menu-panel {
+  min-width: 260px;
+}

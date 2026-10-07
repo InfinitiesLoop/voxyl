@@ -5,10 +5,13 @@
 import { wrapHours } from "../scene/sky-model.ts";
 import {
   defaultShow,
+  defaultView,
   type PaneKind,
   readShow,
+  readView,
   type ShowId,
   type ShowState,
+  type ViewSettings,
 } from "./view-options.ts";
 
 export type { PaneKind } from "./view-options.ts";
@@ -22,6 +25,8 @@ export interface Pane {
   readonly time: number;
   /** Which overlays this pane draws (view-options.ts). */
   readonly show: ShowState;
+  /** How a 3D pane draws: render mode, shading, projection, background, orbit. */
+  readonly view: ViewSettings;
 }
 
 export interface LayoutState {
@@ -50,6 +55,7 @@ export function defaultLayout(time: number): LayoutState {
     kind,
     time: hours,
     show: defaultShow(),
+    view: defaultView(),
   });
   return {
     preset: "single",
@@ -84,7 +90,7 @@ export function withFocus(layout: LayoutState, focus: number): LayoutState {
 export function withPane(
   layout: LayoutState,
   index: number,
-  patch: Partial<Pick<Pane, "kind" | "time" | "show">>,
+  patch: Partial<Pick<Pane, "kind" | "time" | "show" | "view">>,
 ): LayoutState {
   if (index < 0 || index >= layout.panes.length) return layout;
   const panes = layout.panes.map((pane, i) =>
@@ -98,6 +104,17 @@ export function withShow(layout: LayoutState, index: number, id: ShowId, on: boo
   const pane = layout.panes[index];
   if (!pane || pane.show[id] === on) return layout;
   return withPane(layout, index, { show: { ...pane.show, [id]: on } });
+}
+
+/** Changes some of a pane's view settings. */
+export function withView(
+  layout: LayoutState,
+  index: number,
+  patch: Partial<ViewSettings>,
+): LayoutState {
+  const pane = layout.panes[index];
+  if (!pane) return layout;
+  return withPane(layout, index, { view: { ...pane.view, ...patch } });
 }
 
 /** The arrangement a link asked for, if it named one. */
@@ -134,7 +151,7 @@ export function saveLayout(layout: LayoutState): void {
       JSON.stringify({
         preset: layout.preset,
         focus: layout.focus,
-        panes: layout.panes.map((pane) => ({ kind: pane.kind, time: pane.time, show: pane.show })),
+        panes: layout.panes.map(({ kind, time, show, view }) => ({ kind, time, show, view })),
       }),
     );
   } catch {
@@ -153,7 +170,7 @@ function loadLayout(time: number): LayoutState | null {
     if (!Array.isArray(record.panes)) return null;
     const savedPanes = record.panes as unknown[];
     const panes = base.panes.map((pane, i) => {
-      const saved = savedPanes[i] as { kind?: unknown; time?: unknown; show?: unknown } | undefined;
+      const saved = savedPanes[i] as Record<string, unknown> | undefined;
       if (!saved) return pane;
       const kind: PaneKind = saved.kind === "2d" ? "2d" : "3d";
       const hours = Number(saved.time);
@@ -162,6 +179,7 @@ function loadLayout(time: number): LayoutState | null {
         kind,
         time: Number.isFinite(hours) ? wrapHours(hours) : pane.time,
         show: readShow(saved.show),
+        view: readView(saved.view),
       };
     }) as unknown as LayoutState["panes"];
     const preset = isPreset(record.preset) ? record.preset : "single";

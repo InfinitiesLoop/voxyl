@@ -134,6 +134,8 @@ export type Command =
       width: number;
       height: number;
     }
+  /** The project's bounds as cell corners, or null when it is empty. */
+  | { type: "bounds" }
   /** What a cell holds, in words, or null if it is empty. */
   | { type: "cell"; at: Vec3 }
   /** Raycast and edit what it hits: erase it, or place state `id` against it (the bench). */
@@ -174,6 +176,7 @@ export interface Replies {
   fillBox: number;
   aim: AimView | null;
   toolEdit: boolean;
+  bounds: { min: Vec3; max: Vec3 } | null;
   rotate: boolean;
   place: boolean;
   erase: boolean;

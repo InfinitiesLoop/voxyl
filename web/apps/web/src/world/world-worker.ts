@@ -37,6 +37,7 @@ import {
   buildSample,
   type Framing,
   frameProject,
+  projectBounds,
   sampleKind,
   savedId,
   themeAt,
@@ -439,6 +440,8 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
         }
       return { ids, below };
     }
+    case "bounds":
+      return project ? projectBounds(project) : null;
     case "cell": {
       const state = world().get(...command.at);
       return state && project ? describeState(state, project.semantics) : null;
