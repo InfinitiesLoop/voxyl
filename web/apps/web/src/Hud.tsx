@@ -4,6 +4,7 @@ import { useRef } from "react";
 import type { Settings } from "./App.tsx";
 import type { BenchResult, Distribution } from "./bench/bench.ts";
 import type { Backend, EngineStats } from "./scene/Engine.ts";
+import { clockLabel } from "./scene/sky-model.ts";
 import type { LibraryInfo } from "./world/protocol.ts";
 import { CHUNK_SIZES, savedSource, WORLD_KINDS, type WorldInfo } from "./worlds.ts";
 
@@ -12,11 +13,11 @@ const ms = (v: number | null | undefined, digits = 1) =>
 const count = (v: number) =>
   v >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}k` : String(v);
 
-/** Daylight as a time of day: 0 is midnight, 100 noon. */
-function daylightLabel(daylight: number): string {
-  if (daylight === 0) return "midnight";
-  if (daylight === 100) return "noon";
-  return `${daylight}%`;
+/** The time of day as a clock, with midnight and noon named. */
+function timeLabel(hours: number): string {
+  if (hours === 0 || hours === 24) return "midnight";
+  if (hours === 12) return "noon";
+  return clockLabel(hours);
 }
 
 /** Minecraft's names for the ends and middle of its Brightness slider. */
@@ -147,14 +148,14 @@ export function Hud({
           </select>
         </label>
         <label className="wide">
-          Time of day {daylightLabel(settings.daylight)}
+          Time of day {timeLabel(settings.time)}
           <input
             type="range"
             min={0}
-            max={100}
-            value={settings.daylight}
-            disabled={settings.lighting === "off"}
-            onChange={(e) => onSettings({ ...settings, daylight: Number(e.target.value) })}
+            max={24}
+            step={0.25}
+            value={settings.time}
+            onChange={(e) => onSettings({ ...settings, time: Number(e.target.value) })}
           />
         </label>
         <label className="wide">

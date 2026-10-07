@@ -29,7 +29,7 @@ palettes, and every view is a lens on the one world in the world worker.
    5b: importing a vanilla Minecraft jar into an OPFS library.
 6. **Block models** (done). Non-cube blocks (slabs, stairs, fences, custom element models) as cached
    per-state geometry, like parts; panes and fences that join their neighbours.
-7. **Sky.** A sky with the time of day, replacing the flat background.
+7. **Sky** (done). A sky with the time of day, replacing the flat background.
 8. **The gate.** Performance with textures on; golden images (Playwright with SwiftShader).
 
 ## Textures: the user's decision (2026-10-06)
@@ -272,4 +272,42 @@ Minecraft textures can't be hosted, so Phase 2 gets textures two ways:
     walls, cover finer than eighths (faces on half-eighths are never hidden by a neighbour,
     only drawn), picking and the 2D view still treat model cells as whole cells, elements
     reaching outside the cell are clamped to it, translucent faces still draw cut out.
-  - **Next:** step 7, the sky.
+- **Step 7 done (2026-10-07).** The sky, after Minecraft's, replacing the flat background.
+  - **Time of day is a clock now**: `time` in hours (0 midnight, 12 noon; the HUD slider steps
+    15 minutes and works with lighting off too, since the sky follows it). The light shader's
+    darkening is derived from it with Minecraft's formula (`clamp(cos·2 + 0.2)`), so night
+    falls between about 16:30 and 18:30 and dawn mirrors it. Old `daylight=` links still open
+    (0 is midnight, 100 noon).
+  - `apps/web/src/scene/sky-model.ts` (pure, tested): Minecraft's plains sky and fog colours
+    darkened by time (`ClientLevel.getSkyColor`, `FogRenderer`), the sunrise and sunset
+    colour and strength (`getSunriseColor`) and star brightness. **The sun rises in the
+    project's real east** (`settings.north`), passes overhead at noon and sets in the west;
+    the moon is opposite it and the stars turn about real north with them.
+  - `apps/web/src/scene/sky.ts`: one colour function for the sky without sun, moon or stars
+    (zenith fading to the horizon as Minecraft's fogged sky disc does, the horizon toward the
+    sun tinted at dawn and dusk, the glow as an ellipse on the sun's side, a little darker
+    below the horizon). The sky adds a square pixel-art sun (white core, stepped yellow
+    halo), a square moon (8 × 8 pixels, a drawn crater map, no phases) and about 1,500
+    stars hashed onto a cube grid, each at least a pixel across. **The fog takes this colour
+    along each view ray**, so faraway terrain melts into whatever sky is behind it (Minecraft
+    fogs to one horizon colour).
+  - Drawing: the sky is its own sphere at the far plane, drawn after the opaque world and
+    depth tested, so it shades only pixels the world leaves empty (three's scene background
+    shades every pixel first). The fog computes the sky colour only where it fogs.
+  - **Seen** (headless Edge, dev server, `shots/sky.ts`): noon, sunrise at 6:00 and 6:30
+    (orange horizon and glow in the east, sun half-set at the horizon, stars fading), dusk
+    at 18:00 (dusky blue, buildings darkening), the moon rising in the east at 19:00, and
+    midnight (black sky, stars, the moon overhead). The default page, the block showcase at
+    20:30 (the glowstone lighting the lawn) and old `daylight=0` links work, with no console
+    problems.
+  - **Measured** (city-5m, Blocks theme, lighting on, B580, 1600×900): toggled in one page
+    from fixed poses, GPU p50 sky vs flat background: overview 2.2 vs 2.2-2.5 ms, a street
+    view into the fog 1.95 vs 1.93 ms, open sky 0.29 vs 0.24 ms, so about 0.05 ms for a
+    screen of sky. The full benchmark flight swings between two GPU modes run to run (about
+    3.4 and 1.7 ms p50) on both versions, so it can't resolve a difference this small.
+  - **Choices to review:** (1) a 24-hour clock replaces the 0-100 daylight slider; (2) the sky
+    shows the chosen time even with lighting off (blocks stay fully lit under a night sky);
+    (3) the sun passes straight overhead as in Minecraft (no latitude tilt); (4) the moon has
+    no phases; (5) fog fades to the sky along each ray rather than one horizon colour.
+  - Not yet: clouds, weather, a time that runs by itself.
+  - **Next:** step 8, the gate (performance with textures on, golden images).

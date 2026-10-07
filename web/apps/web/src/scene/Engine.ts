@@ -6,10 +6,11 @@ import type { WorldInfo, WorldSource } from "../worlds.ts";
 import { ChunkRenderer, type ChunkRendererStats } from "./ChunkRenderer.ts";
 import { FlyCamera } from "./FlyCamera.ts";
 import { LightVolume } from "./light-volume.ts";
+import { Sky } from "./sky.ts";
+import { NOON, skyAt } from "./sky-model.ts";
 
 export type Backend = "WebGPU" | "WebGL2";
 
-const BACKGROUND = "#15171b";
 const FRAME_WINDOW = 240;
 const REACH = 400;
 const PLACE_SEMANTIC = "Glow";
@@ -81,7 +82,8 @@ export class Engine {
   /** Counts world changes seen (meshes, light, looks), so other views know to refresh. */
   #revision = 0;
   #lighting: LightingMode = "off";
-  #daylight = 1;
+  #hours = NOON;
+  readonly #sky = new Sky();
   #brightness = 0.5;
   readonly #sentCamera = new THREE.Vector3(Number.POSITIVE_INFINITY, 0, 0);
 
@@ -104,7 +106,9 @@ export class Engine {
 
   constructor(host: HTMLElement) {
     this.#host = host;
-    this.scene.background = new THREE.Color(BACKGROUND);
+    this.scene.add(this.#sky.mesh);
+    this.scene.fogNode = this.#sky.fog;
+    this.#sky.set(skyAt(this.#hours, "north"));
     this.fly = new FlyCamera(this.camera, this.renderer.domElement);
     this.#observer = new ResizeObserver(() => this.#resize());
     const canvas = this.renderer.domElement;
@@ -152,14 +156,14 @@ export class Engine {
     if (id !== this.#worldId || this.#disposed) return null;
     // The worker sends nothing about this world before its reply, so nothing was missed.
     const chunks = new ChunkRenderer(this.renderer, chunkSize);
-    chunks.setDaylight(this.#daylight);
     chunks.setBrightness(this.#brightness);
     chunks.setLighting(this.#lighting);
     this.#chunks = chunks;
     this.#info = info;
     this.scene.add(chunks.group);
+    this.#updateSky();
     const fogFar = Math.max(500, info.extent * 1.4);
-    this.scene.fog = new THREE.Fog(BACKGROUND, fogFar * 0.35, fogFar);
+    this.#sky.setFogRange(fogFar * 0.35, fogFar);
     this.#initialMeshMs = null;
     this.#lastEditMs = null;
     this.home();
@@ -227,10 +231,19 @@ export class Engine {
     return this.#lighting;
   }
 
-  /** Time of day, 0 (midnight) to 1 (noon). */
-  setDaylight(daylight: number): void {
-    this.#daylight = daylight;
-    this.#chunks?.setDaylight(daylight);
+  /**
+   * Time of day in hours (0 midnight, 12 noon): the sky, where the sun and moon stand (rising
+   * in the project's real east), and how far the light shader darkens sky light.
+   */
+  setTime(hours: number): void {
+    this.#hours = hours;
+    this.#updateSky();
+  }
+
+  #updateSky(): void {
+    const sky = skyAt(this.#hours, this.#info?.north ?? "north");
+    this.#sky.set(sky);
+    this.#chunks?.setDaylight(sky.daylight);
   }
 
   /** Minecraft's Brightness setting, 0 (Moody) to 1 (Bright); 0.5 is its default. */
@@ -309,6 +322,7 @@ export class Engine {
     this.#observer.disconnect();
     this.fly.dispose();
     this.#chunks?.dispose();
+    this.#sky.dispose();
     this.world.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();

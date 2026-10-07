@@ -67,7 +67,7 @@ double mount included.
 - `pnpm bench:light [cells ...]`: full relight, light memory, the light bricks faces read and
   their copy cost, and incremental relights for single edits, a roof hole and big fills.
 - In the app, pick a world, chunk size and lighting (also in the URL, e.g.
-  `?world=city-5m&chunk=64&lighting=volume&daylight=0&brightness=50`; `world=parts-5m` is
+  `?world=city-5m&chunk=64&lighting=volume&time=0&brightness=50`; `world=parts-5m` is
   the same city decorated with shaped parts) and press **Run
   benchmark**: a scripted flight (frame, main-thread and GPU time), 100 single-cell edits, a
   roof hole and 100k/1M box fills, measured to the frame they appear. The result can be
@@ -77,7 +77,7 @@ double mount included.
 Lighting (`lighting=` in the URL) is `off` or `volume`: Minecraft-style light the shader reads
 per fragment from a sparse light volume (bricks of light only where faces read it), so a light
 change rewrites a few bricks and never remeshes. It needs WebGPU; WebGL2 draws unlit. Time of
-day (`daylight`, 0 midnight to 100 noon) and Brightness (`brightness`, Minecraft's slider:
+day (`time`, in hours: 0 midnight, 12 noon) and Brightness (`brightness`, Minecraft's slider:
 0 Moody, 50 default, 100 Bright) are shader values and cost nothing to change.
 
 ## ChatGPT widget probe

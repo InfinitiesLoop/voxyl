@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { type BenchResult, runBench } from "./bench/bench.ts";
 import { BenchPanel, Hud } from "./Hud.tsx";
 import { type Backend, Engine, type EngineStats } from "./scene/Engine.ts";
+import { NOON, wrapHours } from "./scene/sky-model.ts";
 import { GridPane } from "./views/GridPane.tsx";
 import type { LibraryInfo } from "./world/protocol.ts";
 import {
@@ -23,8 +24,8 @@ export interface Settings {
   /** The city theme of the sample builds (CITY_THEMES). */
   theme: number;
   lighting: LightingMode;
-  /** Time of day, 0 (midnight) to 100 (noon). */
-  daylight: number;
+  /** Time of day in hours, 0 (midnight) to 24; 12 is noon. */
+  time: number;
   /** Minecraft's Brightness, 0 (Moody) to 100 (Bright); 50 is its default. */
   brightness: number;
   /** The 3D view alone, or beside a 2D view of one slice. */
@@ -34,6 +35,14 @@ export interface Settings {
 function percent(value: string | null, fallback: number): number {
   const n = Number(value ?? fallback);
   return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : fallback;
+}
+
+/** `time` in hours; earlier versions had `daylight`, 0 (midnight) to 100 (noon). */
+function readTime(params: URLSearchParams): number {
+  const time = Number(params.get("time") ?? Number.NaN);
+  if (Number.isFinite(time)) return wrapHours(time);
+  if (params.has("daylight")) return (percent(params.get("daylight"), 100) / 100) * NOON;
+  return NOON;
 }
 
 function readSettings(): Settings {
@@ -51,7 +60,7 @@ function readSettings(): Settings {
     theme: Math.max(0, theme),
     // "on" and "vertex" are from earlier versions; any lighting now means the light volume.
     lighting: lighting === null || lighting === "off" ? "off" : "volume",
-    daylight: percent(params.get("daylight"), 100),
+    time: readTime(params),
     brightness: percent(params.get("brightness"), 50),
     views: params.get("views") === "split" ? "split" : "3d",
   };
@@ -63,7 +72,7 @@ function writeSettings(s: Settings): void {
     chunk: String(s.chunk),
     theme: CITY_THEMES[s.theme]?.name.toLowerCase() ?? "concrete",
     lighting: s.lighting,
-    daylight: String(s.daylight),
+    time: String(s.time),
     brightness: String(s.brightness),
     views: s.views,
   });
@@ -133,7 +142,7 @@ export function App() {
   // regenerates the world: it only goes to setTheme below, a palette_sync of looks.
   const themeRef = useRef(settings.theme);
   themeRef.current = settings.theme;
-  const { world: source, chunk: chunkSize, theme, lighting, daylight, brightness } = settings;
+  const { world: source, chunk: chunkSize, theme, lighting, time, brightness } = settings;
 
   const refreshProjects = useCallback(async () => {
     if (engine) setProjects(await engine.world.request({ type: "projects" }));
@@ -243,9 +252,9 @@ export function App() {
   };
 
   useEffect(() => {
-    engine?.setDaylight(daylight / 100);
+    engine?.setTime(time);
     engine?.setBrightness(brightness / 100);
-  }, [engine, daylight, brightness]);
+  }, [engine, time, brightness]);
 
   // Turning lighting on lights the whole world in the worker: the world stays on screen,
   // unlit, until each chunk's light arrives.
