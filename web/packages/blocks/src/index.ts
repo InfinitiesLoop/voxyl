@@ -20,6 +20,7 @@ export {
   type Texture,
   type Variant,
 } from "./library.ts";
+export { decodeLibrary, encodeLibrary, LIBRARY_FORMAT } from "./storage.ts";
 export { FACE_SIDES, faceUvMap, SIDE_NORMAL, sideOfNormal } from "./uv.ts";
 export {
   matches,

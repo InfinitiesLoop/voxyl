@@ -292,6 +292,19 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
+  packages/mc-import:
+    dependencies:
+      '@voxyl/blocks':
+        specifier: workspace:*
+        version: link:../blocks
+      '@voxyl/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+
   packages/mesher:
     dependencies:
       '@voxyl/core':
