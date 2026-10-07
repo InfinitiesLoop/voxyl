@@ -4,7 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { type BenchResult, runBench } from "./bench/bench.ts";
 import { HotbarBar } from "./editor/HotbarBar.tsx";
 import { PaletteDrawer } from "./editor/PaletteDrawer.tsx";
+import { SelectionPanel } from "./editor/SelectionPanel.tsx";
+import { ToolRail } from "./editor/ToolRail.tsx";
 import { TopBar } from "./editor/TopBar.tsx";
+import type { EditorTool } from "./editor/tool.ts";
+import { useStore } from "./editor/useStore.ts";
 import { BenchPanel, Hud } from "./Hud.tsx";
 import { type Backend, Engine, type EngineStats } from "./scene/Engine.ts";
 import { NOON, wrapHours } from "./scene/sky-model.ts";
@@ -341,14 +345,7 @@ export function App() {
           <div ref={hostRef} className="viewport" />
           {locked && <div className="crosshair" />}
           {engine && <HotbarBar hotbar={engine.hotbar} />}
-          {!locked && !loading && !benchStep && (
-            <div className="hint">
-              Click to fly · drag to look · wheel moves forward and back · WASD or arrows move ·
-              Space, right Ctrl or right Alt up · Shift or / down · \ sprint · = and - set speed ·
-              left click removes · right click places · middle click picks · 1–9 or the wheel (while
-              flying) chooses a slot · Ctrl+Z undoes · Esc releases
-            </div>
-          )}
+          {engine && !loading && !benchStep && <FlyHint engine={engine} locked={locked} />}
         </div>
         {settings.views === "split" && engine && <GridPane engine={engine} info={info} />}
       </div>
@@ -369,6 +366,7 @@ export function App() {
           onPalettes={togglePalettes}
         />
       )}
+      {engine && <EditorTools engine={engine} />}
       {engine && palettesOpen && <PaletteDrawer engine={engine} />}
       <Hud
         backend={backend}
@@ -389,6 +387,48 @@ export function App() {
       {bench && <BenchPanel result={bench} onClose={() => setBench(null)} />}
     </div>
   );
+}
+
+/** The tool rail and the selection panel. They share the tool, so they switch together. */
+function EditorTools({ engine }: { engine: Engine }) {
+  const tool = useStore(engine.tool);
+  return (
+    <>
+      <ToolRail engine={engine} tool={tool} />
+      <SelectionPanel engine={engine} tool={tool} />
+    </>
+  );
+}
+
+const BUILD_HINT =
+  "Click to fly · drag to look · wheel moves forward and back · WASD or arrows move · Space, right Ctrl or right Alt up · Shift or / down · \\ sprint · = and - set speed · left click removes · right click places · middle click picks · 1–9 or the wheel (while flying) chooses a slot · Ctrl+Z undoes · Esc releases";
+
+/** What the view is telling the user to do, for the tool they have. */
+function FlyHint({ engine, locked }: { engine: Engine; locked: boolean }) {
+  const tool = useStore(engine.tool);
+  const selection = useStore(engine.selection);
+  const text = hintText(tool, locked, selection.cells > 0);
+  if (text === null) return null;
+  return <div className="hint">{text}</div>;
+}
+
+function hintText(tool: EditorTool, locked: boolean, orbit: boolean): string | null {
+  if (tool === "select") {
+    return locked
+      ? "Right-click two corners · a third click clears · left click removes · middle click picks · Delete empties the selection · Esc releases"
+      : orbit
+        ? "Drag orbits the selection · the wheel moves in and out · click to fly"
+        : "Click to fly · drag to look · right-click two corners once you're flying";
+  }
+  if (tool === "wand") {
+    return locked
+      ? "Right-click a block to select every block of that kind touching it · Shift+right-click selects any kind · left click removes · Esc releases"
+      : "Click to fly · then right-click a block to select what touches it";
+  }
+  if (locked) return null;
+  return orbit
+    ? "Drag orbits the selection · the wheel moves in and out · click to fly"
+    : BUILD_HINT;
 }
 
 /** Saves a file through the browser's download. */

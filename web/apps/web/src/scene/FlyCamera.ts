@@ -1,4 +1,5 @@
 import * as THREE from "three/webgpu";
+import { orbitOffset } from "../editor/orbit.ts";
 
 // Bindings follow the Godot app, with right-hand options for every action:
 // move WASD / arrows, up Space / right Ctrl / right Alt, down Shift / "/", sprint "\" (tap,
@@ -81,6 +82,31 @@ export class FlyCamera {
     const dz = target.z - position.z;
     this.yaw = Math.atan2(-dx, -dz);
     this.pitch = Math.atan2(dy, Math.hypot(dx, dz));
+    this.#apply();
+  }
+
+  /**
+   * Orbits `pivot` by a drag of the view, in pixels: the camera moves about the point and
+   * keeps looking at it. A drag right swings toward the camera's right; a drag down raises it.
+   */
+  orbit(pivot: THREE.Vector3, dx: number, dy: number): void {
+    const ox = this.position.x - pivot.x;
+    const oy = this.position.y - pivot.y;
+    const oz = this.position.z - pivot.z;
+    const offset =
+      ox * ox + oy * oy + oz * oz < 1e-4 ? ([0, 0, 4] as const) : ([ox, oy, oz] as const);
+    const next = orbitOffset(
+      offset,
+      dx * DRAG_RADIANS_PER_PIXEL,
+      dy * DRAG_RADIANS_PER_PIXEL,
+      this.yaw,
+    );
+    this.position.set(pivot.x + next[0], pivot.y + next[1], pivot.z + next[2]);
+    const lookX = -next[0];
+    const lookY = -next[1];
+    const lookZ = -next[2];
+    this.yaw = Math.atan2(-lookX, -lookZ);
+    this.pitch = Math.atan2(lookY, Math.hypot(lookX, lookZ));
     this.#apply();
   }
 

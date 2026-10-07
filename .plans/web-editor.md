@@ -138,3 +138,30 @@ there is a point worth orbiting.
     face the player. A log lies along the face that was clicked (either end, since the two
     ends look the same). A cube stores one rotation.
   - Next is step 3, selection.
+- **Step 3 done (2026-10-07).** Selection, the wand, and orbiting a selection.
+  - The tool rail on the left: **Build** (place and remove, as before), **Select**, and
+    **Wand**. Paste waits for step 4. The choice is remembered.
+  - **Select**, in fly mode: right-click marks two corners (the ground counts, so an empty
+    world can be boxed). The first corner is a one-cell outline until the second click. A
+    third right-click clears. Left click still removes; middle click still picks. **Delete**
+    empties the selected cells.
+  - The selection is a core `select` command, so it is the same value an agent will use, and
+    it is not itself an undo step. **Grow** and **Shrink** are `{ grow }` and `{ shrink }`
+    through faces (Shift+click does five). On a plain box, each face nudges on its own and
+    stops at the opposite face. The outline is the silhouette (a plain box is its twelve
+    edges; collinear edges merge). Past 60,000 cells that aren't a plain box, the outline
+    falls back to the bounding box and the panel says so.
+  - Region commands, all core commands on `{ selection: true }` or the occupied cells inside
+    it: **Fill** writes the hotbar semantic into every selected cell (stairs face the player).
+    **Clear** empties them (the Delete key). **Replace** turns occupied cells into whole
+    blocks of the hotbar semantic and leaves empty cells empty. **Re-semantic** switches one
+    semantic for another and keeps each cell's shape, and says how many it skipped.
+  - The panel counts the selection **by semantic** or **by block**, with stack counts (64),
+    and copies the list. Empty cells are listed with the semantics. Each swatch is the
+    resolved look.
+  - **Wand**: right-click selects the connected cells of that block's semantic (`structure`,
+    face to face). Shift+right-click selects whatever is connected, of any kind. It stops at
+    a gap.
+  - With a selection, dragging the view with a free cursor **orbits** the selection's centre
+    instead of turning in place. The wheel still moves in and out. Flying stays first person.
+  - Next is step 4, the clipboard and prefabs.

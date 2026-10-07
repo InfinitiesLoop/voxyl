@@ -1,15 +1,26 @@
+import { boxOf, type Region, type SemanticArg } from "@voxyl/core";
 import type { LightingMode } from "@voxyl/session";
 import * as THREE from "three/webgpu";
+import { grouped, nudgedBox } from "../editor/counts.ts";
 import { Hotbar } from "../editor/hotbar.ts";
+import { boxLines } from "../editor/outline.ts";
 import { Store } from "../editor/store.ts";
+import { type EditorTool, readTool, rememberTool } from "../editor/tool.ts";
 import type { HistoryState, PaletteInfo } from "../world/editing.ts";
-import type { Ray, WorldStats } from "../world/protocol.ts";
+import {
+  EMPTY_SELECTION,
+  type Ray,
+  type SelectionView,
+  type Vec3,
+  type WorldStats,
+} from "../world/protocol.ts";
 import { WorldClient, type WorldOutput } from "../world/WorldClient.ts";
 import type { WorldInfo, WorldSource } from "../worlds.ts";
 import { ChunkRenderer, type ChunkRendererStats } from "./ChunkRenderer.ts";
 import { FlyCamera } from "./FlyCamera.ts";
 import { GroundGrid } from "./ground-grid.ts";
 import { LightVolume } from "./light-volume.ts";
+import { SelectionOutline } from "./SelectionOutline.ts";
 import { Sky } from "./sky.ts";
 import { NOON, skyAt } from "./sky-model.ts";
 import { TargetOutline } from "./target.ts";
@@ -96,8 +107,23 @@ export class Engine {
   readonly history = new Store<HistoryState>({ undo: null, redo: null });
   /** The open project's name, as it is now (renames undo). */
   readonly projectName = new Store("");
+  /** Build, Select or Wand. Remembered across visits. */
+  readonly tool = new Store<EditorTool>(readTool());
+  /** The project's selection, for the panel and the outline. */
+  readonly selection = new Store<SelectionView>(EMPTY_SELECTION);
+  /** The first corner of a box, before the second click completes it. */
+  readonly anchor = new Store<Vec3 | null>(null);
+  /** A command the selection panel should say failed, or "". */
+  readonly notice = new Store("");
   readonly #target = new TargetOutline();
+  readonly #selectionOutline = new SelectionOutline();
   readonly #grid = new GroundGrid();
+  #anchor: Vec3 | null = null;
+  /** Where a free-cursor drag orbits, when a selection has a box around it. */
+  readonly #orbitTarget = new THREE.Vector3();
+  #orbiting = false;
+  /** Select and wand clicks, so a second corner waits for the first to be recorded. */
+  #clicks: Promise<unknown> = Promise.resolve();
   /** An aim request in flight, and the camera pose and world revision last aimed for. */
   #aiming = false;
   #aimedFor = "";
@@ -136,6 +162,7 @@ export class Engine {
     this.scene.add(this.#sky.mesh);
     this.scene.add(this.#grid.group);
     this.scene.add(this.#target.object);
+    this.scene.add(this.#selectionOutline.object);
     this.scene.fogNode = this.#sky.fog;
     this.#sky.set(skyAt(this.#hours, "north"));
     this.fly = new FlyCamera(this.camera, this.renderer.domElement);
@@ -190,6 +217,11 @@ export class Engine {
     this.palettes.set([]);
     this.history.set({ undo: null, redo: null });
     this.projectName.set("");
+    this.selection.set(EMPTY_SELECTION);
+    this.#clearAnchor();
+    this.#orbiting = false;
+    this.#selectionOutline.show(new Float32Array(0));
+    this.notice.set("");
     this.#target.show(null);
     const info = await this.world.request({ type: "load", world: id, source, chunkSize, theme });
     if (id !== this.#worldId || this.#disposed) return null;
@@ -371,6 +403,7 @@ export class Engine {
     this.#observer.disconnect();
     this.fly.dispose();
     this.#target.dispose();
+    this.#selectionOutline.dispose();
     this.#grid.dispose();
     this.#chunks?.dispose();
     this.#sky.dispose();
@@ -394,6 +427,13 @@ export class Engine {
       this.history.set({ undo: message.undo, redo: message.redo });
       this.projectName.set(message.name);
       this.#grid.setOffset(message.grid);
+      return;
+    }
+    if (message.type === "selection") {
+      this.selection.set(message.view);
+      this.#setOrbit(message.view.bounds);
+      // A pending first corner draws its own cell; the worker's empty selection must not clear it.
+      if (this.#anchor === null) this.#selectionOutline.show(message.view.lines);
       return;
     }
     if (message.type === "looks") this.#looks = message.colors;
@@ -530,6 +570,14 @@ export class Engine {
     event.preventDefault();
     if (!this.#info) return;
     const ray = this.#ray();
+    const tool = this.tool.get();
+    if (event.button === 2 && (tool === "select" || tool === "wand")) {
+      const shift = event.shiftKey;
+      this.#enqueue(() =>
+        tool === "select" ? this.#applySelect(ray) : this.#applyWand(ray, shift),
+      );
+      return;
+    }
     if (event.button === 1) {
       void this.world.request({ type: "raycast", ...ray }).then((hit) => {
         if (!hit) return;
@@ -569,7 +617,8 @@ export class Engine {
     const distance = Math.hypot(event.clientX - drag.x, event.clientY - drag.y);
     if (!drag.moved && distance < CLICK_SLOP) return;
     drag.moved = true;
-    this.fly.drag(event.movementX, event.movementY);
+    if (this.#orbiting) this.fly.orbit(this.#orbitTarget, event.movementX, event.movementY);
+    else this.fly.drag(event.movementX, event.movementY);
   }
 
   #onPointerUp(event: PointerEvent): void {
@@ -597,6 +646,11 @@ export class Engine {
   /** Hotbar slots (1-9, numpad too), undo and redo, wherever the cursor is. */
   #onKey(event: KeyboardEvent): void {
     if (isTyping(event.target)) return;
+    if (event.code === "Delete" && this.selection.get().cells > 0) {
+      event.preventDefault();
+      this.clearSelection();
+      return;
+    }
     const ctrl = event.ctrlKey || event.metaKey;
     if (ctrl && (event.code === "KeyZ" || event.code === "KeyY")) {
       event.preventDefault();
@@ -612,6 +666,170 @@ export class Engine {
     if (ctrl) event.preventDefault();
     this.hotbar.select(Number(slot[1]) - 1);
   }
+
+  /** Switches the fly tool. A half-chosen box corner is dropped. */
+  setTool(tool: EditorTool): void {
+    this.tool.set(tool);
+    rememberTool(tool);
+    this.#dropAnchor();
+  }
+
+  /** Grows the selection `steps` cells through every face. */
+  growSelection(steps: number): void {
+    const n = clampSteps(steps);
+    void this.#select({ grow: n, of: { selection: true } });
+  }
+
+  /** Shrinks the selection `steps` cells through every face. */
+  shrinkSelection(steps: number): void {
+    const n = clampSteps(steps);
+    void this.#select({ shrink: n, of: { selection: true } });
+  }
+
+  /** Moves one face of a box selection. */
+  nudgeSelection(axis: 0 | 1 | 2, maxSide: boolean, delta: number): void {
+    const view = this.selection.get();
+    if (!view.box || !view.bounds) return;
+    void this.#select({ box: nudgedBox(view.bounds, axis, maxSide, delta) });
+  }
+
+  /** Fills the selection with the chosen hotbar semantic. */
+  fillSelection(): void {
+    const semantic = this.hotbar.current?.ref;
+    if (semantic === undefined) return;
+    void this.#run(this.world.request({ type: "fillSelection", semantic, look: this.#look() }));
+  }
+
+  /** Empties the selection. */
+  clearSelection(): void {
+    void this.#run(this.world.request({ type: "clearSelection" }));
+  }
+
+  /** Turns occupied cells into whole blocks of the chosen hotbar semantic. */
+  replaceSelection(): void {
+    const semantic = this.hotbar.current?.ref;
+    if (semantic === undefined) return;
+    void this.#run(this.world.request({ type: "replaceSelection", semantic, look: this.#look() }));
+  }
+
+  /** Switches one semantic for another inside the selection, keeping geometry. */
+  resemanticSelection(from: SemanticArg, to: SemanticArg): void {
+    void this.#run(this.world.request({ type: "resemanticSelection", from, to }), (result) =>
+      result.skipped > 0 ? `Skipped ${grouped(result.skipped)} that don't fit the new shape` : "",
+    );
+  }
+
+  /** Drops the selection and any half-chosen corner. */
+  deselect(): void {
+    this.#dropAnchor();
+    if (this.selection.get().cells > 0) void this.#select(null);
+  }
+
+  #enqueue(work: () => Promise<void>): void {
+    this.#clicks = this.#clicks.then(work, work);
+  }
+
+  async #applySelect(ray: Ray): Promise<void> {
+    if (this.tool.get() !== "select") return;
+    const aimed = await this.world.request({ type: "aim", ...ray });
+    if (this.tool.get() !== "select") return;
+    const cell = aimed?.hit ?? aimed?.place ?? null;
+    const selected = this.selection.get().cells > 0;
+    if (selected && this.#anchor === null) {
+      await this.#select(null);
+      return;
+    }
+    if (!cell) {
+      if (selected) await this.#select(null);
+      return;
+    }
+    if (!this.#anchor) {
+      this.#anchor = cell;
+      this.anchor.set(cell);
+      this.#selectionOutline.show(boxLines(cellBox(cell)));
+      return;
+    }
+    const first = this.#anchor;
+    this.#dropAnchor();
+    const where: Region = { box: [first[0], first[1], first[2], cell[0], cell[1], cell[2]] };
+    await this.#select(where, boxLines(boxOf(where.box)));
+  }
+
+  async #applyWand(ray: Ray, shift: boolean): Promise<void> {
+    if (this.tool.get() !== "wand") return;
+    const hit = await this.world.request({ type: "raycast", ...ray });
+    if (this.tool.get() !== "wand" || !hit) return;
+    this.#dropAnchor();
+    const seed: [number, number, number] = [hit.cell[0], hit.cell[1], hit.cell[2]];
+    const where: Region = shift
+      ? { structure: { seed } }
+      : { structure: { seed, semantics: [hit.semanticId] } };
+    await this.#select(where);
+  }
+
+  /** Runs a select. `preview` is drawn at once; a failure puts the previous outline back. */
+  async #select(where: Region | null, preview?: Float32Array): Promise<void> {
+    const previous = this.selection.get().lines;
+    if (preview) this.#selectionOutline.show(preview);
+    else if (where === null) this.#selectionOutline.show(new Float32Array(0));
+    try {
+      await this.world.request({ type: "select", where });
+      this.notice.set("");
+    } catch (error) {
+      this.notice.set(error instanceof Error ? error.message : String(error));
+      if (this.#anchor === null) this.#selectionOutline.show(previous);
+    }
+  }
+
+  async #run<T>(work: Promise<T>, note: (value: T) => string = () => ""): Promise<void> {
+    try {
+      this.notice.set(note(await work));
+    } catch (error) {
+      this.notice.set(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  #dropAnchor(): void {
+    if (this.#anchor === null) return;
+    this.#anchor = null;
+    this.anchor.set(null);
+    this.#selectionOutline.show(this.selection.get().lines);
+  }
+
+  #setOrbit(bounds: SelectionView["bounds"]): void {
+    if (!bounds) {
+      this.#orbiting = false;
+      return;
+    }
+    const [x0, y0, z0, x1, y1, z1] = bounds;
+    this.#orbitTarget.set((x0 + x1 + 1) / 2, (y0 + y1 + 1) / 2, (z0 + z1 + 1) / 2);
+    this.#orbiting = true;
+  }
+
+  #look(): Vec3 {
+    const dir = this.fly.forward();
+    return [dir.x, dir.y, dir.z];
+  }
+
+  #clearAnchor(): void {
+    this.#anchor = null;
+    this.anchor.set(null);
+  }
+}
+
+function cellBox(cell: Vec3): {
+  x0: number;
+  y0: number;
+  z0: number;
+  x1: number;
+  y1: number;
+  z1: number;
+} {
+  return { x0: cell[0], y0: cell[1], z0: cell[2], x1: cell[0], y1: cell[1], z1: cell[2] };
+}
+
+function clampSteps(steps: number): number {
+  return Math.max(1, Math.min(64, Math.floor(steps)));
 }
 
 /** True for keys typed into a text field or menu, which the editor leaves alone. */

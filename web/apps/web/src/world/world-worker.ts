@@ -13,6 +13,7 @@ import {
   searchBlocks,
 } from "@voxyl/blocks";
 import {
+  type CellSet,
   type CellStateTable,
   type Command as EditCommand,
   type Project,
@@ -30,6 +31,7 @@ import {
   stateLooks,
   WorldSession,
 } from "@voxyl/session";
+import { outlineOf } from "../editor/outline.ts";
 import { planeToWorld } from "../views/plane.ts";
 import {
   buildSample,
@@ -44,8 +46,10 @@ import {
   addPaletteCommand,
   addSemanticCommand,
   aim,
+  clearSelectionCommand,
   eraseCommand,
   fillBoxCommand,
+  fillSelectionCommand,
   historyState,
   newProject,
   paletteInfo,
@@ -53,6 +57,9 @@ import {
   renameCommand,
   renamePaletteCommand,
   renameSemanticCommand,
+  replaceSelectionCommand,
+  resemanticSelectionCommand,
+  selectCommand,
   semanticOfState,
   setCellCommand,
   setLookCommand,
@@ -62,6 +69,7 @@ import { OpfsFolder } from "./opfs-folder.ts";
 import {
   type BlockSearch,
   type Command,
+  EMPTY_SELECTION,
   type FromWorld,
   type LibraryInfo,
   MAX_SLICE_CELLS,
@@ -71,6 +79,7 @@ import {
   type Replies,
   type ToWorld,
 } from "./protocol.ts";
+import { selectionView } from "./selection.ts";
 
 // The app compiles with DOM types, so describe the worker scope we use rather than pulling
 // in the WebWorker lib (the two conflict in one program).
@@ -112,6 +121,15 @@ let looksPosted = { states: -1, revision: -1 };
 /** The registry revision the last palettes sent were for, and the last history state sent. */
 let palettesPosted = -1;
 let historyPosted = "";
+/**
+ * The selection last described to the main thread, and a stamp of the cells and the registry,
+ * so a command that touches neither sends nothing. `contentRev` counts cell-changing edits.
+ */
+let shownSelection: CellSet | null | undefined;
+let postedSelectionKey = "";
+let contentRev = 0;
+/** The outline of `shownSelection`, so a content change doesn't retrace it. */
+let shownOutline: ReturnType<typeof outlineOf> | null = null;
 /** Every state's shape so far, for mesh workers (id - 1 -> shape). */
 let shapes: StateShape[] = [];
 /** The libraries looks draw blocks from: the default set, and any imported ones. */
@@ -197,6 +215,10 @@ async function open(command: Extract<Command, { type: "load" }>): Promise<WorldI
   }
   // The project and its session change together, after the last await.
   project = next;
+  shownSelection = undefined;
+  postedSelectionKey = "";
+  contentRev = 0;
+  shownOutline = null;
   project.setBlockProfiles(blockProfile);
   session = new WorldSession(next.world);
   worldId = command.world;
@@ -326,6 +348,35 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       const target = aim(world(), command.origin, command.dir, command.reach);
       return target ? runEdit(eraseCommand(openProject(), target)) > 0 : false;
     }
+    case "select": {
+      const open = openProject();
+      if (command.where === null && open.selection === null) return { cells: 0 };
+      const { report } = open.run(selectCommand(command.where));
+      return { cells: Number(report.notes.selected ?? 0) };
+    }
+    case "fillSelection":
+      return {
+        cells: Math.max(
+          0,
+          runEdit(fillSelectionCommand(openProject(), command.semantic, command.look)),
+        ),
+      };
+    case "clearSelection":
+      return { cells: Math.max(0, runEdit(clearSelectionCommand(openProject()))) };
+    case "replaceSelection":
+      return {
+        cells: Math.max(
+          0,
+          runEdit(replaceSelectionCommand(openProject(), command.semantic, command.look)),
+        ),
+      };
+    case "resemanticSelection": {
+      const report = applyEdit(resemanticSelectionCommand(openProject(), command.from, command.to));
+      return {
+        switched: Number(report?.notes.switched ?? 0),
+        skipped: Number(report?.notes.skipped ?? 0),
+      };
+    }
     case "undo":
     case "redo":
       return runEdit(stepCommand(openProject(), command.type)) >= 0;
@@ -384,10 +435,10 @@ function openProject(): Project {
 
 /**
  * Runs an edit command on the open project (every edit goes through Project.run, so it is
- * in the history and undoes). Returns the cells it changed, or -1 if there was nothing to do.
+ * in the history and undoes). Null when there was nothing to do.
  */
-function runEdit(command: EditCommand | null): number {
-  if (!command) return -1;
+function applyEdit(command: EditCommand | null) {
+  if (!command) return null;
   const open = openProject();
   const before = open.settings;
   const { report } = open.run(command);
@@ -398,8 +449,38 @@ function runEdit(command: EditCommand | null): number {
     after.north !== before.north ||
     after.grid[0] !== before.grid[0] ||
     after.grid[1] !== before.grid[1];
+  if (report.cells > 0) contentRev++;
   if (report.cells > 0 || report.registryChanged || settingsChanged) changed();
-  return report.cells;
+  return report;
+}
+
+/** The cells an edit changed, or -1 if there was nothing to do. */
+function runEdit(command: EditCommand | null): number {
+  const report = applyEdit(command);
+  return report ? report.cells : -1;
+}
+
+/** Tells the main thread what the selection holds, when that changed. */
+function postSelection(): void {
+  if (!project) return;
+  const sel = project.selection;
+  const key = `${contentRev}|${project.semantics.revision}|${sel?.size ?? 0}`;
+  if (sel === shownSelection && key === postedSelectionKey) return;
+  const setChanged = sel !== shownSelection;
+  if (!sel || sel.size === 0) {
+    const wasEmpty = shownSelection === null;
+    shownSelection = null;
+    shownOutline = null;
+    postedSelectionKey = key;
+    if (!wasEmpty) post({ type: "selection", world: worldId, view: EMPTY_SELECTION });
+    return;
+  }
+  if (setChanged || !shownOutline) shownOutline = outlineOf(sel);
+  shownSelection = sel;
+  postedSelectionKey = key;
+  const lines = shownOutline.lines.slice();
+  const view = selectionView(project, { ...shownOutline, lines }, blocks);
+  post({ type: "selection", world: worldId, view }, lines.byteLength > 0 ? [lines.buffer] : []);
 }
 
 /** Tells the main thread what undo and redo would do, and the name and grid, if that changed. */
@@ -580,6 +661,7 @@ async function run(message: Extract<ToWorld, { seq: number }>): Promise<void> {
   }
   lastSeq = seq;
   postHistory();
+  postSelection();
   pump();
 }
 

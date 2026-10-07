@@ -13,8 +13,10 @@ import {
   NO_SEMANTIC,
   type PaletteId,
   Project,
+  type Region,
   ROOT_PALETTE,
   raycast,
+  regionStats,
   type SemanticArg,
   type SemanticId,
   stateInput,
@@ -147,6 +149,113 @@ export function setCellCommand(project: Project, at: Vec3, id: number, label: st
     label,
     args: { states: [state ? stateInput(stateJSON(state)) : null], cells: [...at, 0] },
   };
+}
+
+/** The command that sets the selection (null clears it). Selecting is not an undo step. */
+export function selectCommand(where: Region | null): Command {
+  return {
+    id: commandId(),
+    kind: "select",
+    source: EDITOR_SOURCE,
+    label: where === null ? "Clear selection" : "Select",
+    args: { where },
+  };
+}
+
+/**
+ * Fills the selection, empty cells included, with one semantic. Its rotation is the one a
+ * click on top of a block would pick while looking `look`, so stairs face the player.
+ */
+export function fillSelectionCommand(
+  project: Project,
+  ref: SemanticArg,
+  look: Vec3,
+): Command | null {
+  if (!project.selection || project.selection.size === 0) return null;
+  const semantic = semanticIdOf(project, ref);
+  if (!project.semantics.has(semantic)) return null;
+  return {
+    id: commandId(),
+    kind: "fill",
+    source: EDITOR_SOURCE,
+    label: `Fill with ${project.semantics.nameOf(semantic)}`,
+    args: {
+      where: { selection: true },
+      state: { semantic: ref, rotation: rotationFor(project, semantic, look) },
+    },
+  };
+}
+
+/** Empties the selection. */
+export function clearSelectionCommand(project: Project): Command | null {
+  if (!project.selection || project.selection.size === 0) return null;
+  return {
+    id: commandId(),
+    kind: "clear",
+    source: EDITOR_SOURCE,
+    label: "Clear selection",
+    args: { where: { selection: true } },
+  };
+}
+
+/**
+ * Turns every occupied cell in the selection into a whole block of `ref` (empty cells stay
+ * empty). Parts become whole blocks; re-semantic is the one that keeps their shape.
+ */
+export function replaceSelectionCommand(
+  project: Project,
+  ref: SemanticArg,
+  look: Vec3,
+): Command | null {
+  if (!project.selection || project.selection.size === 0) return null;
+  const stats = regionStats(project, { selection: true });
+  const ids = [
+    ...new Set([
+      ...stats.blocks.map((block) => block.semantic),
+      ...stats.parts.map((part) => part.semantic),
+    ]),
+  ];
+  if (ids.length === 0) return null;
+  const occupied: Region =
+    ids.length === 1
+      ? { all: [{ selection: true }, { semantic: ids[0] ?? 0 }] }
+      : { all: [{ selection: true }, { any: ids.map((semantic) => ({ semantic })) }] };
+  const semantic = semanticIdOf(project, ref);
+  if (!project.semantics.has(semantic)) return null;
+  return {
+    id: commandId(),
+    kind: "fill",
+    source: EDITOR_SOURCE,
+    label: `Replace with ${project.semantics.nameOf(semantic)}`,
+    args: {
+      where: occupied,
+      state: { semantic: ref, rotation: rotationFor(project, semantic, look) },
+    },
+  };
+}
+
+/** Switches one semantic for another inside the selection, keeping each cell's geometry. */
+export function resemanticSelectionCommand(
+  project: Project,
+  from: SemanticArg,
+  to: SemanticArg,
+): Command | null {
+  if (!project.selection || project.selection.size === 0) return null;
+  const a = semanticIdOf(project, from);
+  const b = semanticIdOf(project, to);
+  if (a === b || !project.semantics.has(a) || !project.semantics.has(b)) return null;
+  return {
+    id: commandId(),
+    kind: "resemantic",
+    source: EDITOR_SOURCE,
+    label: `${project.semantics.nameOf(a)} to ${project.semantics.nameOf(b)}`,
+    args: { where: { selection: true }, from, to },
+  };
+}
+
+/** The rotation a region fill stores: as if the block were placed on a top face. */
+function rotationFor(project: Project, semantic: SemanticId, look: Vec3): number {
+  return project.placement(semantic).pick({ face: [0, 1, 0], look, hitY: 1 });
 }
 
 /** The command that fills a box with state `id` (EMPTY_ID clears it). */

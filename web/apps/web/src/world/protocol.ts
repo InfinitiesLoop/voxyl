@@ -8,7 +8,7 @@
 // sends about a world is tagged with the world's id, so messages about a world that has since
 // been replaced are dropped.
 
-import type { Look, PaletteId, SemanticArg } from "@voxyl/core";
+import type { Look, PaletteId, Region, SemanticArg } from "@voxyl/core";
 import type { ModelShape, StateShape } from "@voxyl/mesher";
 import type { LightingMode, LightLayoutUpdate, MeshJob, ProjectEntry } from "@voxyl/session";
 import type { SliceAxis } from "../views/plane.ts";
@@ -86,6 +86,16 @@ export type Command =
   | ({ type: "place"; semantic: SemanticArg } & Ray)
   /** Empties the cell the ray aims at. */
   | ({ type: "erase" } & Ray)
+  /** Sets the selection to a region (null clears it). Not an undo step. */
+  | { type: "select"; where: Region | null }
+  /** Fills the selection with a semantic, empty cells included. */
+  | { type: "fillSelection"; semantic: SemanticArg; look: Vec3 }
+  /** Empties the selection. */
+  | { type: "clearSelection" }
+  /** Turns occupied cells in the selection into whole blocks of a semantic. */
+  | { type: "replaceSelection"; semantic: SemanticArg; look: Vec3 }
+  /** Switches one semantic for another in the selection, keeping geometry. */
+  | { type: "resemanticSelection"; from: SemanticArg; to: SemanticArg }
   /** Undoes the latest step, or redoes the latest undone one. */
   | { type: "undo" }
   | { type: "redo" }
@@ -144,6 +154,11 @@ export interface Replies {
   aim: Aim | null;
   place: boolean;
   erase: boolean;
+  select: { cells: number };
+  fillSelection: { cells: number };
+  clearSelection: { cells: number };
+  replaceSelection: { cells: number };
+  resemanticSelection: { switched: number; skipped: number };
   undo: boolean;
   redo: boolean;
   raycast: RayHit | null;
@@ -212,6 +227,8 @@ export type FromWorld =
   | { type: "idle"; world: number; seq: number }
   /** Every palette and what it can place, sent when the registry or the libraries change. */
   | { type: "palettes"; world: number; palettes: PaletteInfo[] }
+  /** The selection and what it holds, sent when either changes. */
+  | { type: "selection"; world: number; view: SelectionView }
   /** What undo and redo would do, plus the name and grid, sent when any of them change. */
   | ({
       type: "history";
@@ -220,6 +237,47 @@ export type FromWorld =
       grid: readonly [number, number];
     } & HistoryState)
   | { type: "stats"; world: number; stats: WorldStats };
+
+/** One row of the selection panel: a semantic, or a block several semantics share. */
+export interface SelectionRow {
+  readonly semantic: number;
+  readonly name: string;
+  readonly color: string;
+  readonly count: number;
+  /** A part's shape, or the semantics a shared block merges. */
+  readonly detail?: string;
+}
+
+/** The selection, as the panel and the outline draw it. `lines` are the silhouette. */
+export interface SelectionView {
+  /** Cells in the selection, empty ones included. */
+  readonly cells: number;
+  /** Cells in it that hold something. */
+  readonly occupied: number;
+  /** The selection is exactly its bounding box. */
+  readonly box: boolean;
+  /** False when the outline fell back to that box because the selection is too big to trace. */
+  readonly exact: boolean;
+  readonly bounds: readonly [number, number, number, number, number, number] | null;
+  /** Whole blocks, then parts, by semantic. */
+  readonly semantics: readonly SelectionRow[];
+  /** The same contents by the block each semantic's look maps to. */
+  readonly materials: readonly SelectionRow[];
+  /** Segment endpoints, xyz xyz, in cell-corner coordinates. */
+  readonly lines: Float32Array;
+}
+
+/** No selection. */
+export const EMPTY_SELECTION: SelectionView = {
+  cells: 0,
+  occupied: 0,
+  box: false,
+  exact: true,
+  bounds: null,
+  semantics: [],
+  materials: [],
+  lines: new Float32Array(0),
+};
 
 /** Cell states' looks for the renderer (see StateLooks and BlockMaterials). */
 export interface LooksUpdate {
