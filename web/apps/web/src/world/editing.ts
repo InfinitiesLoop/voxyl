@@ -56,13 +56,20 @@ export interface Aim {
 
 /**
  * Casts the crosshair's ray. Past every cell it can rest on the ground plane, the top of
- * layer -1, so an empty world has somewhere to put the first block.
+ * layer -1, so an empty world has somewhere to put the first block. Cells `hidden` says are
+ * hidden (a cutaway) are not there to hit.
  */
-export function aim(world: World, origin: Vec3, dir: Vec3, reach: number): Aim | null {
+export function aim(
+  world: World,
+  origin: Vec3,
+  dir: Vec3,
+  reach: number,
+  hidden?: (x: number, y: number, z: number) => boolean,
+): Aim | null {
   const length = Math.hypot(dir[0], dir[1], dir[2]);
   if (length === 0) return null;
   const d: Vec3 = [dir[0] / length, dir[1] / length, dir[2] / length];
-  const hit = raycast(world, origin, d, reach);
+  const hit = raycast(world, origin, d, reach, hidden);
   if (hit) {
     const [nx, ny, nz] = hit.normal;
     const [x, y, z] = hit.cell;

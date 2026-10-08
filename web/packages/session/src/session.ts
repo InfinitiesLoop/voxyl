@@ -2,6 +2,14 @@ import { type CellStateTable, chunkKeyToCoords, type World } from "@voxyl/core";
 import { GPU_BRICK_BITS, LightEngine, type LightMaterials } from "@voxyl/light";
 import { describeStates, paddedVolume, type StateShape } from "@voxyl/mesher";
 import { LightLayout, type LightLayoutUpdate } from "./light-layout.ts";
+import {
+  type CellBox,
+  chunkMeets,
+  maskPadded,
+  SHOW_ALL,
+  sameBox,
+  type Visibility,
+} from "./visibility.ts";
 
 /**
  * How faces are lit: not at all, or from the light volume (light the renderer reads per
@@ -89,6 +97,7 @@ export class WorldSession {
   readonly #copyTimes: number[] = [];
   /** States described to the mesher so far (see takeShapes). */
   #described = 0;
+  #visibility: Visibility = SHOW_ALL;
 
   constructor(world: World) {
     this.world = world;
@@ -162,6 +171,32 @@ export class WorldSession {
     return this.#edges;
   }
 
+  /** What is hidden from the meshes now (a cutaway, or only a box shown). */
+  get visibility(): Visibility {
+    return this.#visibility;
+  }
+
+  /**
+   * Hides cells from the meshes: a cutaway box, and/or everything outside an isolated box.
+   * Only the chunks the change can touch are meshed again: those meeting the old and new
+   * cutaway, or every chunk when the isolated box changes.
+   */
+  setVisibility(next: Visibility): void {
+    const prev = this.#visibility;
+    if (sameBox(prev.hide, next.hide) && sameBox(prev.only, next.only)) return;
+    this.#visibility = next;
+    const bits = this.world.layout.bits;
+    const all = !sameBox(prev.only, next.only);
+    const boxes: CellBox[] = [];
+    if (prev.hide) boxes.push(prev.hide);
+    if (next.hide) boxes.push(next.hide);
+    for (const key of this.world.chunkKeys()) {
+      if (all || boxes.some((box) => chunkMeets(box, chunkKeyToCoords(key), bits))) {
+        this.#enqueue(key);
+      }
+    }
+  }
+
   /** Meshes every chunk again: the looks changed which cells hide their neighbours' faces. */
   remeshAll(): void {
     for (const key of this.world.chunkKeys()) this.#enqueue(key);
@@ -229,11 +264,13 @@ export class WorldSession {
         continue;
       }
       const bits = this.world.layout.bits;
+      const cells = this.world.copyPadded(cx, cy, cz, new Uint16Array(paddedVolume(bits)));
+      maskPadded(cells, this.#visibility, [cx, cy, cz], bits);
       const job: MeshJob = {
         jobId: this.#nextJob++,
         key,
         bits,
-        cells: this.world.copyPadded(cx, cy, cz, new Uint16Array(paddedVolume(bits))),
+        cells,
         lightBrickBits: GPU_BRICK_BITS,
         edges: this.#edges,
       };

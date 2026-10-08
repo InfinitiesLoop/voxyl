@@ -20,6 +20,7 @@ export const KEY_ACTIONS = [
   "nextTool",
   "rotateBlock",
   "mirrorPaste",
+  "toggleCutaway",
   "placeOpposite",
   "clearSelection",
   "layerUp",
@@ -55,6 +56,8 @@ export const KEYMAP: Readonly<Record<KeyAction, KeyBinding>> = {
   mirrorPaste: { binding: ["KeyM"], alternate: ["NumpadDecimal"] },
   /** Held while placing a shaped part: it goes on the far side of the cell (also the mouse thumb buttons). */
   placeOpposite: { binding: ["ControlLeft"], alternate: ["NumpadDivide", "Period"] },
+  /** Switches the cutaway off and on, when there is one (End is near the arrows). */
+  toggleCutaway: { binding: ["KeyH"], alternate: ["End"] },
   clearSelection: { binding: ["Backspace"], alternate: [] },
   layerUp: { binding: ["BracketRight"], alternate: ["PageUp"] },
   layerDown: { binding: ["BracketLeft"], alternate: ["PageDown"] },

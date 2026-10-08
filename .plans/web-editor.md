@@ -475,6 +475,31 @@ there is a point worth orbiting.
        pane can't lock the pointer): the picture cards, the dialogs, the tool options, and the
        paste and part ghosts at an aimed cell.
 
+  3. **Cutaway and isolation** (editor step 7).
+     - **A lens, not an edit.** The cutaway hides a box of cells in every 3D view; isolation hides
+       everything outside the selection's box. Neither touches a cell or the history. Hidden
+       cells are not drawn and **rays pass through them**, so the aim, a click and the ghost all
+       ignore what is hidden (`raycast` takes a `hidden` test).
+     - **Done in the mesh job, so a cut looks like a cut.** The session (`WorldSession.setVisibility`,
+       `packages/session/src/visibility.ts`) makes hidden cells read as empty in each chunk's
+       copied cells, so the neighbours show the faces that were buried and the walls of the cut
+       are real faces, not a see-through hole in a shell. Only the chunks meeting the old and
+       new cutaway are meshed again, or every chunk when the isolated box moves. Tested: a cut
+       meshes exactly like a world where those cells were removed, and clearing it restores the
+       original meshes. Light is left alone, so a cut surface keeps the light it had.
+     - **The Cutaway menu** in each 3D bar, as in Godot: **Cut above camera** (everything above
+       eye level, over the whole build: lift the roof off), **Cut away selection**, **Adjust
+       bounds…** (a panel with each of the box's six faces to step, Shift moves five, and the
+       box outlined in orange while it is open), **Cutaway on** (**H**, or **End**) and **Clear**,
+       plus **Show only the selection**. Actions on a selection also has Cut away this region and
+       Show only the selection. The cut is the same in every 3D pane; a new project starts with
+       none.
+     - **Isolation is the selection's bounding box**, exact for a box and a bounding box for any
+       other shape (Godot hid exactly the selected cells). With the selection gone there is
+       nothing to isolate, so it switches itself off.
+     - **Checked on screen**: a notch cut into a solid block shows its real inside walls, the
+       frame and the panel draw, and the toggle, Clear and Cut above camera work.
+
 ## Cross-project resources (what is planned, and what is not)
 
 The user asked (2026-10-07) how resources that span projects fit: palettes as a top-level

@@ -30,7 +30,9 @@ import { importJar } from "@voxyl/mc-import";
 import type { ModelShape, StateShape } from "@voxyl/mesher";
 import {
   BlockMaterials,
+  type CellBox,
   describeState,
+  isHidden,
   LibraryStore,
   type LightingMode,
   lookColor,
@@ -168,6 +170,9 @@ let worldId = -1;
 let mode: LightingMode = "off";
 /** Whether meshes carry feature edges (a pane draws an outline, x-ray or wire view). */
 let edgesOn = false;
+/** What the views hide: a cutaway box, and whether only the selection's box is shown. */
+let cutHide: CellBox | null = null;
+let isolating = false;
 let meshPorts: MeshPort[] = [];
 let lastSeq = 0;
 let idlePosted = -1;
@@ -277,6 +282,8 @@ async function open(command: Extract<Command, { type: "load" }>): Promise<WorldI
   project.setBlockProfiles(blockProfile);
   session = new WorldSession(next.world);
   session.setEdges(edgesOn);
+  cutHide = null;
+  isolating = false;
   worldId = command.world;
   looksPosted = { states: -1, revision: -1 };
   palettesPosted = -1;
@@ -496,6 +503,12 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       return (
         runEdit(describeSemanticCommand(openProject(), command.semantic, command.description)) >= 0
       );
+    case "visibility":
+      cutHide = command.hide;
+      isolating = command.isolate;
+      applyVisibility();
+      pump();
+      return null;
     case "edges":
       edgesOn = command.on;
       session?.setEdges(edgesOn);
@@ -524,7 +537,7 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
         fillBoxCommand(openProject(), command.from, command.to, command.id, "Fill box"),
       );
     case "aim": {
-      const target = aim(world(), command.origin, command.dir, command.reach);
+      const target = aim(world(), command.origin, command.dir, command.reach, hiddenNow());
       if (!target) return null;
       let preview: Int32Array | null = null;
       if (command.tool) {
@@ -549,7 +562,7 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       } satisfies AimView;
     }
     case "toolEdit": {
-      const target = aim(world(), command.origin, command.dir, command.reach);
+      const target = aim(world(), command.origin, command.dir, command.reach, hiddenNow());
       if (!target) return false;
       const click = {
         tool: command.tool,
@@ -575,7 +588,7 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       clipboard = null;
       return null;
     case "paste": {
-      const target = aim(world(), command.origin, command.dir, command.reach);
+      const target = aim(world(), command.origin, command.dir, command.reach, hiddenNow());
       if (!clipboard || !target?.place) return 0;
       const at: Vec3 = [
         target.place[0] + command.offset[0],
@@ -637,11 +650,11 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       await prefabStore.delete(command.id);
       return null;
     case "rotate": {
-      const target = aim(world(), command.origin, command.dir, command.reach);
+      const target = aim(world(), command.origin, command.dir, command.reach, hiddenNow());
       return target ? runEdit(rotateCommand(openProject(), target, command.reverse)) > 0 : false;
     }
     case "place": {
-      const target = aim(world(), command.origin, command.dir, command.reach);
+      const target = aim(world(), command.origin, command.dir, command.reach, hiddenNow());
       if (!target) return false;
       return (
         runEdit(
@@ -650,7 +663,7 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       );
     }
     case "erase": {
-      const target = aim(world(), command.origin, command.dir, command.reach);
+      const target = aim(world(), command.origin, command.dir, command.reach, hiddenNow());
       return target ? runEdit(eraseCommand(openProject(), target)) > 0 : false;
     }
     case "select": {
@@ -686,7 +699,13 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
     case "redo":
       return runEdit(stepCommand(openProject(), command.type)) >= 0;
     case "raycast": {
-      const hit = raycast(world(), [...command.origin], [...command.dir], command.reach);
+      const hit = raycast(
+        world(),
+        [...command.origin],
+        [...command.dir],
+        command.reach,
+        hiddenNow(),
+      );
       if (!hit) return null;
       const state = world().states.get(hit.id);
       const met = hit.part ? state?.parts[hit.part.index] : undefined;
@@ -734,6 +753,24 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       return runEdit(setCellCommand(project, at, command.id, "Place")) > 0;
     }
   }
+}
+
+/** Tells the session what to hide: the cutaway, and the selection's box when isolating. */
+function applyVisibility(): void {
+  if (!session) return;
+  let only: CellBox | null = null;
+  const bounds = isolating ? project?.selection?.bounds() : null;
+  if (bounds) {
+    only = { min: [bounds.x0, bounds.y0, bounds.z0], max: [bounds.x1, bounds.y1, bounds.z1] };
+  }
+  session.setVisibility({ hide: cutHide, only });
+}
+
+/** Whether a ray should pass through a cell: the views hide it. */
+function hiddenNow(): ((x: number, y: number, z: number) => boolean) | undefined {
+  const current = session?.visibility;
+  if (!current || (current.hide === null && current.only === null)) return undefined;
+  return (x, y, z) => isHidden(current, x, y, z);
 }
 
 /** The selection as a piece anchored at the middle of its footprint, on its floor. */
@@ -855,6 +892,7 @@ function postSelection(): void {
   const key = `${contentRev}|${project.semantics.revision}|${sel?.size ?? 0}`;
   if (sel === shownSelection && key === postedSelectionKey) return;
   const setChanged = sel !== shownSelection;
+  if (setChanged && isolating) applyVisibility();
   if (!sel || sel.size === 0) {
     const wasEmpty = shownSelection === null;
     shownSelection = null;

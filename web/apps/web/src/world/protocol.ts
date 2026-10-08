@@ -11,6 +11,7 @@
 import type { Form, Look, PaletteId, Region, SemanticArg, SharedPalette } from "@voxyl/core";
 import type { ModelShape, StateShape } from "@voxyl/mesher";
 import type {
+  CellBox,
   LightingMode,
   LightLayoutUpdate,
   MeshJob,
@@ -264,6 +265,11 @@ export type Command =
   | { type: "describeSemantic"; semantic: SemanticArg; description: string }
   /** Whether meshes come with feature edges, for the line-drawing render modes. */
   | { type: "edges"; on: boolean }
+  /**
+   * What the views hide: a cutaway box (inclusive cells) and, with isolate, everything outside
+   * the selection's box. Hidden cells are not drawn and rays pass through them.
+   */
+  | { type: "visibility"; hide: CellBox | null; isolate: boolean }
   /** The project's bounds as cell corners, or null when it is empty. */
   | { type: "bounds" }
   /** What a cell holds, in words, or null if it is empty. */
@@ -334,6 +340,7 @@ export interface Replies {
   blockPreview: BlockPreview | null;
   bakeIcons: { readonly size: number; readonly icons: Uint8Array };
   edges: null;
+  visibility: null;
   bounds: { min: Vec3; max: Vec3 } | null;
   rotate: boolean;
   place: boolean;

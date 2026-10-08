@@ -4,6 +4,7 @@ import { GridPane } from "../views/GridPane.tsx";
 import type { WorldInfo } from "../worlds.ts";
 import { Compass } from "./Compass.tsx";
 import { northHeading } from "./compass.ts";
+import { KEYMAP, keyLabel } from "./keymap.ts";
 import {
   focusedIndex,
   type LayoutState,
@@ -178,6 +179,7 @@ export function Panes({
                     view={pane.view}
                     onView={(patch) => onLayout(withView(layout, index, patch))}
                   />
+                  <CutawayMenu engine={engine} />
                   <ShowMenu kind="3d" show={pane.show} onShow={onShow} />
                   <BarSpacer />
                 </ViewBar>
@@ -261,6 +263,85 @@ const PRESETS: readonly { preset: CameraPreset; label: string; title: string }[]
   { preset: "iso", label: "Iso", title: "From the nearest corner, at the isometric angle" },
   { preset: "selection", label: "Selection", title: "Frame the selection" },
 ];
+
+/**
+ * Hides part of the build in every 3D view, to see and build inside. The cut is a lens: it
+ * touches no cell, and rays and clicks pass through what is hidden.
+ */
+function CutawayMenu({ engine }: { engine: Engine }) {
+  const cutaway = useStore(engine.cutaway);
+  const isolate = useStore(engine.isolate);
+  const selection = useStore(engine.selection);
+  const cut = cutaway.box !== null;
+  return (
+    <BarMenu
+      label={cut && cutaway.on ? "Cutaway •" : "Cutaway"}
+      title="Hide part of the build to see inside. The cells are not touched."
+    >
+      <span className="bar-choices">
+        <button
+          type="button"
+          title="Hide everything above the camera, over the whole build: lift the roof off"
+          onClick={blurAfter(() => void engine.cutAboveCamera())}
+        >
+          Cut above camera
+        </button>
+        <button
+          type="button"
+          disabled={!selection.bounds}
+          title="Hide the selected region"
+          onClick={blurAfter(() => engine.cutAwaySelection())}
+        >
+          Cut away selection
+        </button>
+        <button
+          type="button"
+          disabled={!cut}
+          title="Move the faces of the hidden box"
+          onClick={blurAfter(() => engine.setCutPanel(true))}
+        >
+          Adjust bounds…
+        </button>
+        <button
+          type="button"
+          disabled={!cut}
+          title="Bring everything back and forget the box"
+          onClick={blurAfter(() => engine.setCutaway(null))}
+        >
+          Clear
+        </button>
+      </span>
+      <label className="bar-check" title="Switch the cut off and on without losing the box">
+        <input
+          type="checkbox"
+          disabled={!cut}
+          checked={cut && cutaway.on}
+          onChange={(e) => {
+            engine.toggleCutaway();
+            e.currentTarget.blur();
+          }}
+        />
+        Cutaway on ({keyLabel(KEYMAP.toggleCutaway.binding[0] ?? "")} or{" "}
+        {keyLabel(KEYMAP.toggleCutaway.alternate[0] ?? "")})
+      </label>
+      <label
+        className="bar-check"
+        title="Hide every cell outside the selection's box, to check exactly what is selected"
+      >
+        <input
+          type="checkbox"
+          checked={isolate}
+          disabled={!selection.bounds && !isolate}
+          onChange={(e) => {
+            engine.setIsolate(e.target.checked);
+            e.currentTarget.blur();
+          }}
+        />
+        Show only the selection
+      </label>
+    </BarMenu>
+  );
+}
 
 /** The pane's camera: presets, orbit, projection and flying speed. */
 function CameraMenu({

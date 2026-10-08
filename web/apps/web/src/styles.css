@@ -2312,3 +2312,76 @@ button.brand {
   color: var(--text-quiet);
   font-size: 12px;
 }
+
+/* The cutaway's bounds panel. */
+.cutaway-panel {
+  position: fixed;
+  z-index: 8;
+  top: 96px;
+  left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 280px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  font-size: 12.5px;
+}
+
+.cutaway-panel header {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.cutaway-panel header strong {
+  color: #fb923c;
+  font-size: 14px;
+}
+
+.cutaway-panel p {
+  margin: 0;
+}
+
+.cutaway-on {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  color: var(--text-quiet);
+}
+
+.cutaway-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.cutaway-row > span:first-child {
+  width: 14px;
+  color: var(--text-quiet);
+}
+
+.cutaway-face {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+}
+
+.cutaway-face output {
+  min-width: 30px;
+  text-align: center;
+}
+
+.cutaway-to {
+  margin: 0 4px 0 8px;
+  color: var(--text-quiet);
+}
+
+.cutaway-panel footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}

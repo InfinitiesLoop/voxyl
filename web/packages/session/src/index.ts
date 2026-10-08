@@ -28,3 +28,12 @@ export {
   WorldSession,
 } from "./session.ts";
 export { type Folder, MemoryFolder, type ProjectEntry, ProjectStore } from "./store.ts";
+export {
+  type CellBox,
+  inBox,
+  isHidden,
+  SHOW_ALL,
+  sameBox,
+  sameVisibility,
+  type Visibility,
+} from "./visibility.ts";

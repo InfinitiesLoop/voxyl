@@ -294,4 +294,87 @@ describe("WorldSession", () => {
     }
     expect(order).toEqual([5, 4, 3, 2, 1, 0]);
   });
+
+  describe("visibility (cutaway and isolation)", () => {
+    /** A solid 12 x 12 x 12 block of stone, meshed in 8-cell chunks. */
+    function solid(): World {
+      const world = new World({ chunkBits: 3 });
+      const stone = world.states.intern({ semantic: STONE });
+      world.fillBox(0, 0, 0, 11, 11, 11, stone);
+      return world;
+    }
+
+    const quadsKey = (m: ChunkMesh) =>
+      `${m.quadCount}:${Array.from(m.quads.subarray(0, m.quadCount * 4)).join()}`;
+    const keyed = (view: View) => new Map([...view.meshes].map(([key, m]) => [key, quadsKey(m)]));
+
+    /** What the meshes of a world would be: quads by chunk key. */
+    function meshesOf(world: World): Map<number, string> {
+      const view = newView();
+      settle(new WorldSession(world), view);
+      return keyed(view);
+    }
+
+    it("meshes a cut exactly as if the hidden cells were not there", () => {
+      const hidden = solid();
+      const session = new WorldSession(hidden);
+      session.setVisibility({ hide: { min: [3, 5, 3], max: [8, 11, 8] }, only: null });
+      const view = newView();
+      settle(session, view);
+
+      const removed = solid();
+      removed.fillBox(3, 5, 3, 8, 11, 8, 0);
+      expect(keyed(view)).toEqual(meshesOf(removed));
+      // The world itself is untouched.
+      expect(hidden.getId(5, 8, 5)).not.toBe(0);
+    });
+
+    it("shows the buried faces the cut exposes", () => {
+      const world = solid();
+      const before = newView();
+      settle(new WorldSession(world), before);
+      const session = new WorldSession(world);
+      session.setVisibility({ hide: { min: [4, 4, 4], max: [7, 7, 7] }, only: null });
+      const after = newView();
+      settle(session, after);
+      const quads = (view: View) => [...view.meshes.values()].reduce((n, m) => n + m.quadCount, 0);
+      expect(quads(after)).toBeGreaterThan(quads(before));
+    });
+
+    it("meshes only the chunks a cut touches, and puts the world back when it is cleared", () => {
+      const world = solid();
+      const session = new WorldSession(world);
+      const view = newView();
+      settle(session, view);
+      const original = keyed(view);
+      session.setVisibility({ hide: { min: [9, 9, 9], max: [11, 11, 11] }, only: null });
+      let jobs = 0;
+      for (let job = session.takeJob(); job; job = session.takeJob()) {
+        jobs++;
+        session.finishJob(job.key, job.jobId, new Uint16Array(0));
+      }
+      expect(jobs).toBeGreaterThan(0);
+      expect(jobs).toBeLessThan([...world.chunkKeys()].length);
+      session.setVisibility({ hide: null, only: null });
+      settle(session, view);
+      expect(keyed(view)).toEqual(original);
+    });
+
+    it("shows only an isolated box, and everything again after", () => {
+      const world = solid();
+      const session = new WorldSession(world);
+      const view = newView();
+      settle(session, view);
+      const original = keyed(view);
+      session.setVisibility({ hide: null, only: { min: [2, 2, 2], max: [4, 4, 4] } });
+      settle(session, view);
+      const expected = solid();
+      expected.fillBox(0, 0, 0, 11, 11, 11, 0);
+      expected.fillBox(2, 2, 2, 4, 4, 4, expected.states.intern({ semantic: STONE }));
+      expect(keyed(view)).toEqual(meshesOf(expected));
+      session.setVisibility({ hide: null, only: null });
+      settle(session, view);
+      expect(keyed(view)).toEqual(original);
+    });
+  });
 });

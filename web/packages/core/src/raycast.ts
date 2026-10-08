@@ -23,13 +23,14 @@ export interface RayHit {
  * occupied cell within `maxDistance`. Cell [x, y, z] spans x..x+1 on each axis. `dir` need not
  * be normalised; distance is measured in units of its length. A cell of parts is only hit
  * where the ray meets one of them (a slab leaves the rest of its cell open), and the hit says
- * which.
+ * which. Cells `hidden` says are hidden (a cutaway) are skipped, as if they were empty.
  */
 export function raycast(
   world: World,
   origin: readonly [number, number, number],
   dir: readonly [number, number, number],
   maxDistance: number,
+  hidden?: (x: number, y: number, z: number) => boolean,
 ): RayHit | null {
   const L = world.layout;
   const [ox, oy, oz] = origin;
@@ -53,7 +54,7 @@ export function raycast(
     if (!L.isWorldCoord(x) || !L.isWorldCoord(y) || !L.isWorldCoord(z)) {
       return null;
     }
-    const id = world.getId(x, y, z);
+    const id = hidden?.(x, y, z) ? EMPTY_ID : world.getId(x, y, z);
     if (id !== EMPTY_ID) {
       const state = world.states.get(id);
       if (!state || state.parts.length === 0) {

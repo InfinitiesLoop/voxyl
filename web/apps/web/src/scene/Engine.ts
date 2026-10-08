@@ -1,5 +1,5 @@
 import { boxOf, type Region, type SemanticArg } from "@voxyl/core";
-import type { LightingMode } from "@voxyl/session";
+import type { CellBox as HiddenBox, LightingMode } from "@voxyl/session";
 import { shapeName } from "@voxyl/shapes";
 import * as THREE from "three/webgpu";
 import { bearingOf } from "../editor/compass.ts";
@@ -32,6 +32,7 @@ import {
 } from "../world/protocol.ts";
 import { WorldClient, type WorldOutput } from "../world/WorldClient.ts";
 import type { WorldInfo, WorldSource } from "../worlds.ts";
+import { BoxFrame } from "./box-frame.ts";
 import { ChunkRenderer, type ChunkRendererStats, usesEdges } from "./ChunkRenderer.ts";
 import { CellBoxes } from "./cell-boxes.ts";
 import { applyPose, FlyCamera, type FlyPose } from "./FlyCamera.ts";
@@ -176,6 +177,15 @@ export class Engine {
   readonly anchor = new Store<Vec3 | null>(null);
   /** A command the selection panel should say failed, or "". */
   readonly notice = new Store("");
+  /** A box of cells hidden in every 3D view (a cutaway), and whether it is switched on. */
+  readonly cutaway = new Store<{ readonly box: HiddenBox | null; readonly on: boolean }>({
+    box: null,
+    on: true,
+  });
+  /** Show only the selection in the 3D views. */
+  readonly isolate = new Store(false);
+  /** The cutaway's bounds panel is open, and its box is outlined in the views. */
+  readonly cutPanel = new Store(false);
   /** What the clipboard holds (kept in the world worker, across projects), or null. */
   readonly clipboard = new Store<ClipboardInfo | null>(null);
   /** How the Paste tool sets the clipboard down: turn, mirror, air, and a shift. */
@@ -222,6 +232,8 @@ export class Engine {
   readonly #ghost = new PartOutline(0x8be9ff, { overlay: true });
   /** The clipboard as it would land where the Paste tool aims. */
   readonly #pasteGhost = new PasteGhostView();
+  /** The cutaway's box, outlined while its bounds panel is open. */
+  readonly #cutFrame = new BoxFrame(0xfb923c);
   readonly #selectionOutline = new SelectionOutline();
   readonly #grid = new GroundGrid();
   readonly #sliceGuide = new SliceGuide();
@@ -281,6 +293,7 @@ export class Engine {
     this.scene.add(this.#aimedPart.object);
     this.scene.add(this.#ghost.object);
     this.scene.add(this.#pasteGhost.object);
+    this.scene.add(this.#cutFrame.object);
     this.scene.add(this.#selectionOutline.object);
     this.scene.add(this.#sliceGuide.object);
     this.scene.fogNode = this.#sky.fog;
@@ -359,6 +372,11 @@ export class Engine {
     chunks.setLighting(this.#lighting);
     this.#chunks = chunks;
     this.#info = info;
+    // A new world starts with nothing hidden (its session is new).
+    this.cutaway.set({ box: null, on: true });
+    this.isolate.set(false);
+    this.cutPanel.set(false);
+    this.#cutFrame.show(null);
     void this.syncClipboard();
     this.scene.add(chunks.group);
     this.#grid.setOffset(info.grid);
@@ -675,6 +693,7 @@ export class Engine {
     this.#aimedPart.dispose();
     this.#ghost.dispose();
     this.#pasteGhost.dispose();
+    this.#cutFrame.dispose();
     this.#selectionOutline.dispose();
     this.#sliceGuide.dispose();
     this.#grid.dispose();
@@ -704,6 +723,8 @@ export class Engine {
     }
     if (message.type === "selection") {
       this.selection.set(message.view);
+      // Isolation is of a selection: with none left there is nothing to isolate.
+      if (message.view.cells === 0 && this.isolate.get()) this.setIsolate(false);
       this.#setOrbit(message.view.bounds);
       // A pending first corner draws its own cell; the worker's empty selection must not clear it.
       if (this.#anchor === null) this.#showOutline(message.view.lines);
@@ -1214,6 +1235,11 @@ export class Engine {
         this.setTool(cycleTool(this.tool.get(), event.shiftKey ? -1 : 1));
         return;
       }
+      if (isKey("toggleCutaway", event.code)) {
+        event.preventDefault();
+        this.toggleCutaway();
+        return;
+      }
       if (isKey("rotateBlock", event.code) && this.tool.get() === "paste") {
         event.preventDefault();
         this.turnPaste(event.shiftKey ? -1 : 1);
@@ -1425,6 +1451,87 @@ export class Engine {
     } catch (error) {
       this.say(error instanceof Error ? error.message : String(error));
     }
+  }
+
+  /** Tells the world what the views hide, and redraws the cutaway's frame. */
+  #pushVisibility(): void {
+    const { box, on } = this.cutaway.get();
+    void this.world.request({
+      type: "visibility",
+      hide: on ? box : null,
+      isolate: this.isolate.get(),
+    });
+    this.#cutFrame.show(this.cutPanel.get() ? box : null);
+    this.#aimedFor = ""; // rays now pass through what is hidden
+  }
+
+  /** Hides a box of cells (both corners inclusive) in the 3D views, or null brings them back. */
+  setCutaway(box: HiddenBox | null, on = true): void {
+    this.cutaway.set({ box, on: box === null ? true : on });
+    if (box === null) this.cutPanel.set(false);
+    this.#pushVisibility();
+  }
+
+  /** Switches the cutaway off and on (H or End). */
+  toggleCutaway(): void {
+    const { box, on } = this.cutaway.get();
+    if (box === null) {
+      this.say("Nothing is cut away. Use the Cutaway menu, or select a region first.");
+      return;
+    }
+    this.cutaway.set({ box, on: !on });
+    this.#pushVisibility();
+  }
+
+  /** Hides the selected region, and opens the panel to adjust it. */
+  cutAwaySelection(): void {
+    const b = this.selection.get().bounds;
+    if (!b) {
+      this.say("Select a region first.");
+      return;
+    }
+    this.cutaway.set({ box: { min: [b[0], b[1], b[2]], max: [b[3], b[4], b[5]] }, on: true });
+    this.cutPanel.set(true);
+    this.#pushVisibility();
+  }
+
+  /** Lifts the roof off: hides everything above the camera over the whole build. */
+  async cutAboveCamera(): Promise<void> {
+    const bounds = await this.#freshBounds();
+    if (!bounds) {
+      this.say("There is nothing to cut.");
+      return;
+    }
+    const lo = bounds.min;
+    const hi = bounds.max;
+    // The box starts one cell above eye level, and reaches past the build on every side.
+    const y = Math.min(Math.max(Math.floor(this.camera.position.y) + 1, lo[1]), hi[1] - 1);
+    this.setCutaway({ min: [lo[0] - 1, y, lo[2] - 1], max: [hi[0], hi[1], hi[2]] });
+  }
+
+  /** Moves one face of the cutaway box (`axis` 0 x, 1 y, 2 z) by `delta` cells. */
+  nudgeCutaway(axis: number, end: "min" | "max", delta: number): void {
+    const { box, on } = this.cutaway.get();
+    if (!box) return;
+    const min = [...box.min] as [number, number, number];
+    const max = [...box.max] as [number, number, number];
+    if (end === "min") min[axis] = Math.min((min[axis] ?? 0) + delta, max[axis] ?? 0);
+    else max[axis] = Math.max((max[axis] ?? 0) + delta, min[axis] ?? 0);
+    this.cutaway.set({ box: { min, max }, on });
+    this.#pushVisibility();
+  }
+
+  /** Shows only the selection in the 3D views (or everything again). */
+  setIsolate(on: boolean): void {
+    if (on === this.isolate.get()) return;
+    this.isolate.set(on);
+    this.#pushVisibility();
+  }
+
+  /** Opens or closes the cutaway's bounds panel; its box is outlined while it is open. */
+  setCutPanel(open: boolean): void {
+    this.cutPanel.set(open);
+    this.#cutFrame.show(open ? this.cutaway.get().box : null);
   }
 
   /** Keeps the selection as a prefab. */

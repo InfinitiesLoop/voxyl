@@ -79,6 +79,7 @@ export const KEY_SECTIONS: readonly BindingSection[] = [
         "placeOpposite",
         "hold; also a mouse thumb button, or the inventory's Far side",
       ),
+      key("Cutaway off and on", "toggleCutaway", "also the Cutaway menu"),
       key("Slice the 2D view here", "sliceHere", "Shift turns the slice; also 3D aim in a 2D bar"),
     ],
   },

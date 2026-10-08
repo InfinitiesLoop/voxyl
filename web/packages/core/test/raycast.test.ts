@@ -45,6 +45,13 @@ describe("raycast", () => {
     expect(hit?.part).toBeUndefined();
   });
 
+  it("skips cells it is told are hidden", () => {
+    // The mass at 5,0,0 is hidden, so the ray carries on to nothing.
+    const skip = (x: number, y: number, z: number) => x === 5 && y === 0 && z === 0;
+    expect(raycast(world, [0.5, 0.5, 0.5], [1, 0, 0], 100, skip)).toBeNull();
+    expect(raycast(world, [0.5, 0.5, 0.5], [1, 0, 0], 100, () => false)?.cell).toEqual([5, 0, 0]);
+  });
+
   describe("cells of parts", () => {
     const w = new World();
     // A slab (4/8) on the floor of cell 0,0,0 and a strip in the far corner of cell 3,0,0.

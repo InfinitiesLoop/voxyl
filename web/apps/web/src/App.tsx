@@ -2,6 +2,7 @@ import { CITY_THEMES } from "@voxyl/fixtures";
 import type { LightingMode, ProjectEntry } from "@voxyl/session";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type BenchResult, runBench } from "./bench/bench.ts";
+import { CutawayPanel } from "./editor/CutawayPanel.tsx";
 import { Home } from "./editor/Home.tsx";
 import { HotbarBar } from "./editor/HotbarBar.tsx";
 import { Inventory } from "./editor/Inventory.tsx";
@@ -419,6 +420,7 @@ export function App() {
       {engine && <EditorTools engine={engine} />}
       {engine && <Inventory engine={engine} />}
       {engine && <Toast engine={engine} />}
+      {engine && <CutawayPanel engine={engine} />}
       {engine && <PrefabSaveDialog engine={engine} />}
       {engine && keysOpen && <KeysPanel tool={engine.tool.get()} onClose={closeKeys} />}
       {engine && palettesOpen && <PaletteDrawer engine={engine} />}

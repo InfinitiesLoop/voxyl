@@ -40,6 +40,22 @@ const ACTIONS: readonly SelectionAction[] = [
     run: (ctx) => void ctx.engine.copySelection(true),
   },
   {
+    id: "cut-away",
+    label: () => "Cut away this region",
+    title:
+      "Hide these cells in the 3D views so you can see and build inside. The cells are not touched.",
+    enabled: (ctx) => ctx.selection.cells > 0,
+    run: (ctx) => ctx.engine.cutAwaySelection(),
+  },
+  {
+    id: "isolate",
+    label: (ctx) => (ctx.engine.isolate.get() ? "Show everything" : "Show only the selection"),
+    title:
+      "Hide every cell outside the selection's box in the 3D views, to check exactly what is selected.",
+    enabled: (ctx) => ctx.selection.cells > 0,
+    run: (ctx) => ctx.engine.setIsolate(!ctx.engine.isolate.get()),
+  },
+  {
     id: "prefab",
     label: () => "Save as prefab…",
     title: "Keep the selection as a prefab: a named piece you can paste into any build (Ctrl+P).",
@@ -75,6 +91,8 @@ export function SelectionActions({ engine }: { engine: Engine }) {
   const notice = useStore(engine.notice);
   const hotbar = useStore(engine.hotbar.state);
   const palettes = useStore(engine.palettes);
+  // The isolate label follows this, so the menu redraws when it changes.
+  useStore(engine.isolate);
   const [open, setOpen] = useState(false);
   const slot = hotbar.slots[hotbar.selected] ?? null;
   const ctx: ActionContext = {
