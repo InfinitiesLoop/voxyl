@@ -1336,19 +1336,21 @@ button[aria-pressed="true"] {
   height: 22px;
 }
 
-/* The inventory's footer: the tools beside its hotbar. */
+/* The inventory's footer: the tools over the hotbar (side by side they need too much width). */
 .inventory-foot {
   display: flex;
-  gap: 16px;
-  align-items: flex-end;
-  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
 }
 
 .tool-strip {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  width: min(500px, 50vw);
+  width: min(560px, 100%);
 }
 
 .tool-options {

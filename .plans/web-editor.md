@@ -715,3 +715,6 @@ connections and their settings tab.
 - **Paste panel and tool strip, roomier.** The panel is 300 px wide with one row per axis: a
   coloured letter (X red, Y green, Z blue), a 32 px minus, the shift, a 32 px plus. The
   inventory's tool buttons are 68 px tall with a 32 px icon and the tool's name under it.
+- **Inventory footer is a column.** Tools over the hotbar (a rule between it and the blocks),
+  both centred, instead of side by side: the two needed ~1250 px and collided in a 1240 px
+  card. Checked at 1600×900 and 1100×700.
