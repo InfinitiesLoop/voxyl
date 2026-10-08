@@ -1,4 +1,4 @@
-import { boxOf, type Region, type SemanticArg } from "@voxyl/core";
+import { boxOf, type Direction, type Region, type SemanticArg } from "@voxyl/core";
 import type { CellBox as HiddenBox, LightingMode } from "@voxyl/session";
 import { shapeName } from "@voxyl/shapes";
 import * as THREE from "three/webgpu";
@@ -177,6 +177,8 @@ export class Engine {
   readonly anchor = new Store<Vec3 | null>(null);
   /** A command the selection panel should say failed, or "". */
   readonly notice = new Store("");
+  /** Which of the project's directions is the real north (a setting; changes undo). */
+  readonly north = new Store<Direction>("north");
   /** A box of cells hidden in every 3D view (a cutaway), and whether it is switched on. */
   readonly cutaway = new Store<{ readonly box: HiddenBox | null; readonly on: boolean }>({
     box: null,
@@ -372,6 +374,7 @@ export class Engine {
     chunks.setLighting(this.#lighting);
     this.#chunks = chunks;
     this.#info = info;
+    this.north.set(info.north);
     // A new world starts with nothing hidden (its session is new).
     this.cutaway.set({ box: null, on: true });
     this.isolate.set(false);
@@ -719,6 +722,10 @@ export class Engine {
       this.history.set({ undo: message.undo, redo: message.redo });
       this.projectName.set(message.name);
       this.#grid.setOffset(message.grid);
+      if (this.#info && this.#info.north !== message.north) {
+        this.#info = { ...this.#info, north: message.north };
+      }
+      this.north.set(message.north);
       return;
     }
     if (message.type === "selection") {
@@ -1470,6 +1477,11 @@ export class Engine {
     this.cutaway.set({ box, on: box === null ? true : on });
     if (box === null) this.cutPanel.set(false);
     this.#pushVisibility();
+  }
+
+  /** Changes the project's north and major grid offset (one undo step). */
+  async setProjectSettings(change: { north?: Direction; grid?: [number, number] }): Promise<void> {
+    await this.world.request({ type: "settings", ...change });
   }
 
   /** Switches the cutaway off and on (H or End). */

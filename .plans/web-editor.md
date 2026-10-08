@@ -500,6 +500,24 @@ there is a point worth orbiting.
      - **Checked on screen**: a notch cut into a solid block shows its real inside walls, the
        frame and the panel draw, and the toggle, Clear and Cut above camera work.
 
+  4. **Project and app settings** (editor step 8, what was left).
+     - **Project settings**, from **Project** in the top bar: the name, **real north** (which of
+       the build's own directions is north: -Z by default, or +X, +Z, -X) and the **major grid
+       offset** (0 to 15 on x and z). Each change is a `settings` command, so it undoes, and a
+       saved build keeps it. North moves no cell: it turns the compass and the camera presets and
+       turns what crosses between builds (a prefab keeps its own north, so it lands the right
+       way round). The editor follows a change at once, including an undo of one.
+     - **Rebinding keys**, in the Keys panel: **Rebind**, click a key, press the new one.
+       Esc is reserved (it lets go of the pointer); Backspace clears an alternate; a binding
+       always keeps a key; a key already used elsewhere is mentioned, not refused (some are
+       shared on purpose, as R turns a block while flying and the clipboard with Paste in hand).
+       Per-row **Reset** and **Reset all**; saved in this browser. `editor/keymap.ts` is now
+       the live table (`KEYMAP` over `DEFAULT_KEYMAP`): FlyCamera and every handler read it each
+       time, so a change takes effect at once. Mouse and combination rows (Ctrl+C and so on)
+       are fixed. The slot keys 1 to 9 are fixed too.
+     - **Autosave** was already incremental (a save writes only chunk blobs the folder does not
+       have, `ProjectStore`), so nothing to add there.
+
 ## Cross-project resources (what is planned, and what is not)
 
 The user asked (2026-10-07) how resources that span projects fit: palettes as a top-level

@@ -8,7 +8,15 @@
 // sends about a world is tagged with the world's id, so messages about a world that has since
 // been replaced are dropped.
 
-import type { Form, Look, PaletteId, Region, SemanticArg, SharedPalette } from "@voxyl/core";
+import type {
+  Direction,
+  Form,
+  Look,
+  PaletteId,
+  Region,
+  SemanticArg,
+  SharedPalette,
+} from "@voxyl/core";
 import type { ModelShape, StateShape } from "@voxyl/mesher";
 import type {
   CellBox,
@@ -270,6 +278,8 @@ export type Command =
    * the selection's box. Hidden cells are not drawn and rays pass through them.
    */
   | { type: "visibility"; hide: CellBox | null; isolate: boolean }
+  /** Which of the project's directions is the real north, and the major grid's offset. */
+  | { type: "settings"; north?: Direction; grid?: [number, number] }
   /** The project's bounds as cell corners, or null when it is empty. */
   | { type: "bounds" }
   /** What a cell holds, in words, or null if it is empty. */
@@ -341,6 +351,8 @@ export interface Replies {
   bakeIcons: { readonly size: number; readonly icons: Uint8Array };
   edges: null;
   visibility: null;
+  /** True when anything changed. */
+  settings: boolean;
   bounds: { min: Vec3; max: Vec3 } | null;
   rotate: boolean;
   place: boolean;
@@ -428,6 +440,7 @@ export type FromWorld =
       world: number;
       name: string;
       grid: readonly [number, number];
+      north: Direction;
     } & HistoryState)
   | { type: "stats"; world: number; stats: WorldStats };
 

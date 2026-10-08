@@ -8,6 +8,7 @@ import { blockLabel } from "@voxyl/blocks";
 import {
   type CellState,
   type Command,
+  type Direction,
   EMPTY_ID,
   type Form,
   type Look,
@@ -749,6 +750,35 @@ export function linkPaletteCommand(project: Project, shared: SharedPalette): Com
       ...(shared.description !== undefined && { description: shared.description }),
       semantics: shared.semantics.map((s) => ({ ...s })),
     },
+  };
+}
+
+/**
+ * The command that changes which direction is the real north and where the major grid falls,
+ * or null when nothing would change. Cells never move; north turns what crosses in or out.
+ */
+export function settingsCommand(
+  project: Project,
+  patch: { readonly north?: Direction; readonly grid?: readonly [number, number] },
+): Command | null {
+  const now = project.settings;
+  const north = patch.north !== undefined && patch.north !== now.north ? patch.north : undefined;
+  const grid =
+    patch.grid !== undefined && (patch.grid[0] !== now.grid[0] || patch.grid[1] !== now.grid[1])
+      ? patch.grid
+      : undefined;
+  if (north === undefined && grid === undefined) return null;
+  return {
+    id: commandId(),
+    kind: "settings",
+    source: EDITOR_SOURCE,
+    label:
+      north !== undefined && grid !== undefined
+        ? "Change north and the grid"
+        : north !== undefined
+          ? `North is now ${north === "north" ? "-Z (the default)" : north}`
+          : `Grid offset ${grid?.[0]}, ${grid?.[1]}`,
+    args: { ...(north !== undefined && { north }), ...(grid !== undefined && { grid }) },
   };
 }
 

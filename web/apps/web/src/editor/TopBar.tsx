@@ -4,6 +4,7 @@ import type { Engine } from "../scene/Engine.ts";
 import { clockLabel } from "../scene/sky-model.ts";
 import type { WorldInfo } from "../worlds.ts";
 import { type LayoutPreset, type LayoutState, withPreset } from "./layout.ts";
+import { ProjectSettingsDialog } from "./ProjectSettings.tsx";
 import { useStore } from "./useStore.ts";
 
 interface TopBarProps {
@@ -61,6 +62,7 @@ export function TopBar({
   onKeys,
 }: TopBarProps) {
   const history = useStore(engine.history);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const name = useStore(engine.projectName) || info?.name || "";
   const rename = () => {
     const next = prompt("Project name", name);
@@ -99,6 +101,22 @@ export function TopBar({
       >
         {info ? name : "–"}
       </button>
+      <button
+        type="button"
+        disabled={!info}
+        title="Project settings: name, real north, the major grid"
+        onClick={click(() => setSettingsOpen(true))}
+      >
+        Project
+      </button>
+      {info && settingsOpen && (
+        <ProjectSettingsDialog
+          engine={engine}
+          info={info}
+          onRename={onRename}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
       {info &&
         (info.saved ? (
           <span className="save-state">Saved in this browser</span>

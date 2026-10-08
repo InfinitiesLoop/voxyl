@@ -2385,3 +2385,73 @@ button.brand {
   gap: 8px;
   justify-content: flex-end;
 }
+
+/* Project settings. */
+.project-settings {
+  width: min(520px, 100%);
+}
+
+.project-settings label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-quiet);
+  font-size: 12px;
+}
+
+.project-settings input:not([type="checkbox"]),
+.project-settings select {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #23272d;
+  color: var(--text);
+  font: inherit;
+}
+
+.project-settings p {
+  margin: 0;
+}
+
+.project-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  color: var(--text-quiet);
+  font-size: 12px;
+}
+
+.project-grid label {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.project-grid input {
+  width: 64px;
+}
+
+/* Rebinding keys in the Keys panel. */
+.keys-note-line {
+  margin: 0;
+  color: var(--text-quiet);
+  font-size: 12px;
+}
+
+.keys-slot {
+  padding: 2px 4px;
+  border: 1px dashed var(--line);
+  background: transparent;
+  cursor: pointer;
+}
+
+.keys-slot.waiting {
+  border-color: var(--accent);
+}
+
+.keys-reset {
+  margin-left: 8px;
+  padding: 0 6px;
+  font-size: 11px;
+}

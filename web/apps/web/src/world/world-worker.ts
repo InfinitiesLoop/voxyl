@@ -96,6 +96,7 @@ import {
   semanticOfState,
   setCellCommand,
   setLookCommand,
+  settingsCommand,
   sharedFromPalette,
   stepCommand,
 } from "./editing.ts";
@@ -503,6 +504,10 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       return (
         runEdit(describeSemanticCommand(openProject(), command.semantic, command.description)) >= 0
       );
+    case "settings": {
+      const { type: _, ...patch } = command;
+      return runEdit(settingsCommand(openProject(), patch)) >= 0;
+    }
     case "visibility":
       cutHide = command.hide;
       isolating = command.isolate;
@@ -916,6 +921,7 @@ function postHistory(): void {
     ...historyState(project),
     name: project.settings.name,
     grid: project.settings.grid,
+    north: project.settings.north,
   };
   const key = JSON.stringify(state);
   if (key === historyPosted) return;

@@ -8,25 +8,19 @@ import { orbitOffset } from "../editor/orbit.ts";
 // "=" / "-" or numpad + / -. Movement is immediate: no damping or easing, the camera stops
 // the moment the keys are released. The wheel belongs to the editor (the hotbar while flying,
 // moving forward and back otherwise).
-const FORWARD = codesOf("forward");
-const BACK = codesOf("back");
-const LEFT = codesOf("left");
-const RIGHT = codesOf("right");
-const UP = codesOf("up");
-const DOWN = codesOf("down");
-const FASTER = codesOf("faster");
-const SLOWER = codesOf("slower");
-const HANDLED = new Set([
-  ...FORWARD,
-  ...BACK,
-  ...LEFT,
-  ...RIGHT,
-  ...UP,
-  ...DOWN,
-  ...codesOf("sprint"),
-  ...FASTER,
-  ...SLOWER,
-]);
+// The keys are read from the table each time, so rebinding one takes effect at once.
+const HANDLED_ACTIONS = [
+  "forward",
+  "back",
+  "left",
+  "right",
+  "up",
+  "down",
+  "sprint",
+  "faster",
+  "slower",
+] as const;
+const handled = (code: string) => HANDLED_ACTIONS.some((action) => isKey(action, code));
 
 const MODIFIER = /^(?:Control|Alt|Shift|Meta)/;
 
@@ -179,11 +173,11 @@ export class FlyCamera {
     const move = new THREE.Vector3();
     const forward = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
-    if (held(FORWARD)) move.add(forward);
-    if (held(BACK)) move.sub(forward);
-    if (held(RIGHT)) move.add(right);
-    if (held(LEFT)) move.sub(right);
-    const rise = (held(UP) ? 1 : 0) - (held(DOWN) ? 1 : 0);
+    if (held(codesOf("forward"))) move.add(forward);
+    if (held(codesOf("back"))) move.sub(forward);
+    if (held(codesOf("right"))) move.add(right);
+    if (held(codesOf("left"))) move.sub(right);
+    const rise = (held(codesOf("up")) ? 1 : 0) - (held(codesOf("down")) ? 1 : 0);
     if (move.lengthSq() === 0 && rise === 0) {
       this.#sprint = 0;
     } else {
@@ -210,7 +204,7 @@ export class FlyCamera {
   #onKey(event: KeyboardEvent, down: boolean): void {
     // Any other key between a tap key's press and release makes it a modifier, not a tap.
     if (down && event.code !== this.#tapping) this.#tapping = null;
-    if (!this.locked || !HANDLED.has(event.code)) return;
+    if (!this.locked || !handled(event.code)) return;
     event.preventDefault();
     if (isKey("sprint", event.code)) {
       if (event.repeat) return;
@@ -223,8 +217,8 @@ export class FlyCamera {
       } else if (down) this.#sprintStep();
       return;
     }
-    if (FASTER.includes(event.code) || SLOWER.includes(event.code)) {
-      if (down) this.scaleSpeed(FASTER.includes(event.code) ? SPEED_STEP : 1 / SPEED_STEP);
+    if (isKey("faster", event.code) || isKey("slower", event.code)) {
+      if (down) this.scaleSpeed(isKey("faster", event.code) ? SPEED_STEP : 1 / SPEED_STEP);
       return;
     }
     if (down) this.#keys.add(event.code);

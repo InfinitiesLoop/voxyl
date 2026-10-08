@@ -187,6 +187,15 @@ export function App() {
     };
   }, []);
 
+  // The project's north is a setting that can change (and undo) while it is open.
+  useEffect(() => {
+    if (!engine) return;
+    return engine.north.subscribe(() => {
+      const north = engine.north.get();
+      setInfo((current) => (current && current.north !== north ? { ...current, north } : current));
+    });
+  }, [engine]);
+
   useEffect(() => writeSettings(settings), [settings]);
 
   // The focused 3D pane's time is the one a link records. The other panes stay in storage.

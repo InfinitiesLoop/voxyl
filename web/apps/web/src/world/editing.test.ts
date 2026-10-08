@@ -21,6 +21,7 @@ import {
   STARTER_SEMANTICS,
   setCellCommand,
   setLookCommand,
+  settingsCommand,
   sharedFromPalette,
   stepCommand,
 } from "./editing.ts";
@@ -417,5 +418,36 @@ describe("shaped semantics place parts", () => {
     expect(project.world.get(6, 0, 6)?.parts).toEqual([
       { semantic: trim, shape: "face1", slot: 0 },
     ]);
+  });
+});
+
+describe("project settings", () => {
+  it("changes north and the grid offset as one undoable step each, and ignores no-ops", () => {
+    const project = newProject("Test", 5);
+    expect(settingsCommand(project, { north: "north", grid: [0, 0] })).toBeNull();
+    const turn = settingsCommand(project, { north: "east" });
+    if (!turn) throw new Error("no command");
+    project.run(turn);
+    expect(project.settings.north).toBe("east");
+    expect(historyState(project).undo).toBe("North is now east");
+    const grid = settingsCommand(project, { grid: [4, 9] });
+    if (!grid) throw new Error("no command");
+    project.run(grid);
+    expect(project.settings.grid).toEqual([4, 9]);
+    expect(project.settings.north).toBe("east");
+    project.run(stepCommand(project, "undo") as never);
+    expect(project.settings.grid).toEqual([0, 0]);
+    expect(project.settings.north).toBe("east");
+    project.run(stepCommand(project, "undo") as never);
+    expect(project.settings.north).toBe("north");
+  });
+
+  it("touches no cell when north changes", () => {
+    const project = newProject("Test", 5);
+    const id = project.world.states.intern({ semantic: wall(project) });
+    project.world.setId(1, 2, 3, id);
+    project.run(settingsCommand(project, { north: "west" }) as never);
+    expect(project.world.getId(1, 2, 3)).toBe(id);
+    expect(project.world.cellCount).toBe(1);
   });
 });
