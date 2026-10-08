@@ -164,6 +164,8 @@ export class Engine {
   readonly notice = new Store("");
   /** The inventory overlay. E toggles it; opening releases the pointer. */
   readonly inventoryOpen = new Store(false);
+  /** Set while something (Home) covers every view: frames are skipped. */
+  paused = false;
   /** Called when a click chooses a different 3D pane, so the chrome can follow. */
   onFocusView: ((id: string) => void) | null = null;
   readonly #views = new Map<string, ViewCamera>();
@@ -331,6 +333,20 @@ export class Engine {
       chunks.revealLight();
     });
     return info;
+  }
+
+  /** Closes the world on screen (its project was deleted): nothing is drawn until a load. */
+  unload(): void {
+    this.#worldId++;
+    if (this.#chunks) {
+      this.scene.remove(this.#chunks.group);
+      this.#chunks.dispose();
+    }
+    this.#chunks = null;
+    this.#info = null;
+    this.palettes.set([]);
+    this.hotbar.clear();
+    this.selection.set(EMPTY_SELECTION);
   }
 
   /** Undoes the latest step, if there is one. */
@@ -633,6 +649,11 @@ export class Engine {
   }
 
   #frame(time: number): void {
+    // Home covers the view: draw nothing until it closes.
+    if (this.paused) {
+      this.#lastTime = -1;
+      return;
+    }
     const cpuStart = performance.now();
     const delta = this.#lastTime < 0 ? -1 : time - this.#lastTime;
     const dt = delta < 0 ? 0 : delta / 1000;

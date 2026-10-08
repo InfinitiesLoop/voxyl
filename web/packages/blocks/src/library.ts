@@ -90,6 +90,8 @@ export interface Block {
   readonly emits?: number;
   /** Average colour, "#rrggbb": how it draws where textures don't. */
   readonly color: string;
+  /** Not offered by the block picker: the app draws with it itself (the undecided look). */
+  readonly hidden?: boolean;
 }
 
 export interface Library {

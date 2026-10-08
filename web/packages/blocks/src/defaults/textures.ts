@@ -230,6 +230,26 @@ const sandstoneBottom: Painter = (c) => {
 };
 
 /** Clear panes in a frame lit from the top left, with two glints. */
+/**
+ * The undecided look: a pale placeholder panel (a frame and faint diagonal hatching) that the
+ * semantic's hint colour tints, so a build before any block is chosen still reads as
+ * blocks, each semantic its own colour, and never as a real material.
+ */
+const undecided: Painter = (c) => {
+  const base = hex("#f4f4f2");
+  const hatch = hex("#dcdcd8");
+  const frame = hex("#b9b9b4");
+  for (let y = 0; y < SIZE; y++)
+    for (let x = 0; x < SIZE; x++) {
+      const edge = x === 0 || y === 0 || x === SIZE - 1 || y === SIZE - 1;
+      const inner = x === 1 || y === 1 || x === SIZE - 2 || y === SIZE - 2;
+      if (edge) c.set(x, y, frame);
+      else if (inner) c.set(x, y, shade(base, 1.02));
+      else if ((x + y) % 6 === 0) c.set(x, y, hatch);
+      else c.set(x, y, shade(base, 0.98 + c.rand() * 0.03));
+    }
+};
+
 const glass: Painter = (c) => {
   const light = hex("#e4f1f3");
   const dim = hex("#a5c2c7");
@@ -356,6 +376,7 @@ const PAINTERS: Readonly<Record<string, Painter>> = {
   glowstone,
   terracotta: flat("#97604a", 0.05),
   oak_leaves: leaves,
+  undecided,
   white_concrete: concrete("#d0d5d6"),
   light_gray_concrete: concrete("#7e7e75"),
   gray_concrete: concrete("#383b3f"),

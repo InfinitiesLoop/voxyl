@@ -24,6 +24,7 @@ interface TopBarProps {
   onDev: () => void;
   palettesOpen: boolean;
   onPalettes: () => void;
+  onHome: () => void;
   keysOpen: boolean;
   onKeys: () => void;
 }
@@ -55,6 +56,7 @@ export function TopBar({
   onDev,
   palettesOpen,
   onPalettes,
+  onHome,
   keysOpen,
   onKeys,
 }: TopBarProps) {
@@ -77,7 +79,17 @@ export function TopBar({
   };
   return (
     <header className="topbar">
-      <strong className="brand">Voxyl</strong>
+      <button
+        type="button"
+        className="brand"
+        title="Home: your builds, palettes and blocks"
+        onClick={click(onHome)}
+      >
+        Voxyl
+      </button>
+      <button type="button" title="Your builds, palettes and blocks" onClick={click(onHome)}>
+        Home
+      </button>
       <button
         type="button"
         className="project-title"

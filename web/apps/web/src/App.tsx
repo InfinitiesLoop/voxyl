@@ -2,6 +2,7 @@ import { CITY_THEMES } from "@voxyl/fixtures";
 import type { LightingMode, ProjectEntry } from "@voxyl/session";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type BenchResult, runBench } from "./bench/bench.ts";
+import { Home } from "./editor/Home.tsx";
 import { HotbarBar } from "./editor/HotbarBar.tsx";
 import { Inventory } from "./editor/Inventory.tsx";
 import { KeysPanel } from "./editor/KeysPanel.tsx";
@@ -35,7 +36,7 @@ import {
 } from "./worlds.ts";
 
 export interface Settings {
-  /** A sample's kind, or a saved project as "saved:<id>". */
+  /** A sample's kind, a saved project as "saved:<id>", or "" for none (Home). */
   world: WorldSource;
   chunk: number;
   /** The city theme of the sample builds (CITY_THEMES). */
@@ -65,7 +66,7 @@ function readTime(params: URLSearchParams): number {
 function readSettings(): Settings {
   const params = new URLSearchParams(location.search);
   const requested = params.get("world") ?? "";
-  const world = sampleKind(requested) || savedId(requested) ? requested : "city-1m";
+  const world = sampleKind(requested) || savedId(requested) ? requested : "";
   const chunk = Number(params.get("chunk"));
   // "palette" is the name earlier versions used.
   const themeName = params.get("theme") ?? params.get("palette");
@@ -88,7 +89,7 @@ const PALETTES_KEY = "voxyl.palettes";
 
 function writeSettings(s: Settings): void {
   const params = new URLSearchParams({
-    world: s.world,
+    ...(s.world !== "" && { world: s.world }),
     chunk: String(s.chunk),
     theme: CITY_THEMES[s.theme]?.name.toLowerCase() ?? "concrete",
     lighting: s.lighting,
@@ -131,6 +132,8 @@ export function App() {
   const [palettesOpen, setPalettesOpen] = useState(
     () => localStorage.getItem(PALETTES_KEY) !== "0",
   );
+  /** Home: where the app opens when the link names no build, and the top bar's Home. */
+  const [homeOpen, setHomeOpen] = useState(() => readSettings().world === "");
   /** The key bindings panel. */
   const [keysOpen, setKeysOpen] = useState(false);
   const closeKeys = useCallback(() => setKeysOpen(false), []);
@@ -223,7 +226,7 @@ export function App() {
   // the looks it was saved with, and the picker follows them.
   const appliedTheme = useRef(settings.theme);
   useEffect(() => {
-    if (!engine) return;
+    if (!engine || source === "") return;
     const id = savedId(source);
     if (id !== null && id === justSaved.current) return;
     justSaved.current = null;
@@ -271,12 +274,14 @@ export function App() {
       const entry = await engine.world.request({ type: "importProject", bytes });
       await refreshProjects();
       setSettings((s) => ({ ...s, world: savedSource(entry.id) }));
+      setHomeOpen(false);
     },
     create: async () => {
       if (!engine) return;
       const entry = await engine.world.request({ type: "createProject", name: "New build" });
       await refreshProjects();
       setSettings((s) => ({ ...s, world: savedSource(entry.id) }));
+      setHomeOpen(false);
     },
     rename: async (name: string) => {
       if (!engine) return;
@@ -297,7 +302,12 @@ export function App() {
       await engine.world.request({ type: "deleteProject", id });
       await refreshProjects();
       // The open project is gone: show a sample instead.
-      if (savedId(settings.world) === id) setSettings((s) => ({ ...s, world: "city-1m" }));
+      if (savedId(settings.world) === id) {
+        engine.unload();
+        setInfo(null);
+        setSettings((s) => ({ ...s, world: "" }));
+        setHomeOpen(true);
+      }
     },
   };
 
@@ -325,6 +335,10 @@ export function App() {
       await refreshLibraries();
     },
   };
+
+  useEffect(() => {
+    if (engine) engine.paused = homeOpen;
+  }, [engine, homeOpen]);
 
   useEffect(() => {
     engine?.setBrightness(brightness / 100);
@@ -390,6 +404,7 @@ export function App() {
           onDev={toggleDev}
           palettesOpen={palettesOpen}
           onPalettes={togglePalettes}
+          onHome={() => setHomeOpen(true)}
           keysOpen={keysOpen}
           onKeys={() => setKeysOpen((open) => !open)}
         />
@@ -413,6 +428,26 @@ export function App() {
         libraries={libraries}
         library={library}
       />
+      {engine && homeOpen && (
+        <Home
+          engine={engine}
+          projects={projects}
+          openName={source !== "" && info ? info.name : null}
+          onBack={() => setHomeOpen(false)}
+          onOpen={(id) => {
+            setSettings((s) => ({ ...s, world: savedSource(id) }));
+            setHomeOpen(false);
+          }}
+          onNew={() => void project.create()}
+          onSample={(kind) => {
+            setSettings((s) => ({ ...s, world: kind }));
+            setHomeOpen(false);
+          }}
+          project={project}
+          libraries={libraries}
+          library={library}
+        />
+      )}
       {(loading || benchStep) && <div className="banner">{benchStep ?? loading}…</div>}
       {bench && <BenchPanel result={bench} onClose={() => setBench(null)} />}
     </div>

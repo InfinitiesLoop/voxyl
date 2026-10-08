@@ -107,6 +107,11 @@ const browser = await chromium.launch({
 let failed = 0;
 try {
   const page = await browser.newPage({ viewport: { width: WIDTH, height: HEIGHT } });
+  // The world alone: the palette drawer closed (it narrows the panes), one pane.
+  await page.addInitScript(() => {
+    localStorage.setItem("voxyl.palettes", "0");
+    localStorage.removeItem("voxyl.layout");
+  });
   for (const scene of SCENES.filter((s) => s.name.includes(filter))) {
     const start = Date.now();
     const problems: string[] = [];
@@ -162,7 +167,11 @@ async function render(page: Page, scene: Scene): Promise<Buffer> {
     { timeout: 600_000 },
   );
   await page.addStyleTag({
-    content: ".hud, .hint { display: none !important; }",
+    // The world only: no pane bars (the pane then fills its rectangle), compass, hotbar or HUD.
+    content:
+      ".hud, .view-bar, .topbar, .pane-corner { display: none !important; }" +
+      ".hotbar, .crosshair { visibility: hidden !important; }" +
+      ".pane { box-shadow: none !important; }",
   });
   await page.evaluate(async (pose) => {
     const engine = (window as unknown as { __voxylEngine: EngineHandle }).__voxylEngine;
@@ -178,7 +187,7 @@ async function render(page: Page, scene: Scene): Promise<Buffer> {
     await engine.whenIdle();
     for (let i = 0; i < 4; i++) await engine.nextFrame();
   }, scene.pose ?? null);
-  const selector = scene.view === "2d" ? ".grid-pane canvas" : ".viewport canvas";
+  const selector = scene.view === "2d" ? ".grid-canvas" : ".viewport canvas";
   // The 2D view refetches its slice shortly after the world settles.
   if (scene.view === "2d") await page.waitForTimeout(500);
   return page.locator(selector).first().screenshot();

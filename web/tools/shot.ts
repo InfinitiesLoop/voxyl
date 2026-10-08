@@ -38,7 +38,9 @@ try {
     if (m.type() === "error" || m.type() === "warning") problems.push(`[${m.type()}] ${m.text()}`);
   });
   page.on("pageerror", (e) => problems.push(`[pageerror] ${e.message}`));
-  const url = query ? `${base}/?${query}` : base;
+  // With no world named the app opens on Home; the shot is of a world, so name one.
+  const named = /(^|&)world=/.test(query) ? query : `world=city-1m${query ? `&${query}` : ""}`;
+  const url = `${base}/?${named}`;
   await page.goto(url);
   // Ready once the world is meshed and no banner (generating, lighting) is up. If that never
   // happens, still report what the page shows: the console usually says why.

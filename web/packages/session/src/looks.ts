@@ -30,6 +30,8 @@ import { type LightMaterials, packEmission } from "@voxyl/light";
 import { FACES, type ModelFaces, type ModelShape } from "@voxyl/mesher";
 import { slotName } from "@voxyl/shapes";
 
+/** The block an undecided look draws with, tinted by its hint colour (never offered). */
+export const UNDECIDED_BLOCK = "voxyl:undecided";
 /** How an undecided semantic with no hint colour draws. */
 export const UNDECIDED_COLOR = "#8a8f98";
 /** Light level of a glowing look. */
@@ -175,6 +177,19 @@ export function intentColor(semantic: SemanticId): [number, number, number] {
   return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
 }
 
+/** The undecided placeholder cube, tinted with a look's hint colour, if the defaults are here. */
+function undecidedOf(look: Look, blocks?: BlockMaterials): CompiledBlock | null {
+  if (!blocks) return null;
+  const block = compileBlock(blocks.libraries, UNDECIDED_BLOCK, IDENTITY);
+  if (!block?.cube) return null;
+  const tint = look.tint ?? UNDECIDED_COLOR;
+  return {
+    ...block,
+    color: tint,
+    cube: block.cube.map((face) => face && { ...face, tint }),
+  };
+}
+
 /** A look's colour: its block's average colour if a library has the block, else its tint. */
 export function lookColor(look: Look, blocks?: BlockMaterials): string {
   return blockOf(look, IDENTITY, blocks)?.color ?? look.tint ?? UNDECIDED_COLOR;
@@ -220,7 +235,9 @@ export function stateLooks(
         ? (parts.map((p) => lookOf(p.semantic)).find((l) => l.glow) ??
           lookOf(parts[0]?.semantic ?? 0))
         : lookOf(state.semantic);
-    const block = parts.length > 0 ? null : blockOf(look, state.rotation, blocks);
+    const named = parts.length > 0 ? null : blockOf(look, state.rotation, blocks);
+    // Undecided (no block, or one no library here has): the placeholder panel in its colour.
+    const block = parts.length > 0 ? null : (named ?? undecidedOf(look, blocks));
     const color =
       parts.length > 0 ? lookColor(look, blocks) : (block?.color ?? lookColor(look, blocks));
     const rgb = Number.parseInt(color.slice(1), 16);
@@ -232,7 +249,7 @@ export function stateLooks(
     opaque[id] = parts.length > 0 || block?.transparent ? 0 : 1;
     const level = look.glow ? GLOW_LEVEL : (block?.emits ?? 0);
     if (level > 0) emission[id] = packEmission(color, level);
-    if (!block || !blocks || !look.block) continue;
+    if (!block || !blocks) continue;
     const at = id * FACE_SLOTS;
     if (block.cube) {
       block.cube.forEach((face, f) => {
@@ -241,6 +258,7 @@ export function stateLooks(
       if (block.cube.some((face) => face?.alpha !== "opaque")) clear[id] = 1;
       continue;
     }
+    if (!look.block) continue;
     const shape = compileShape(blocks.libraries, look.block, state.rotation);
     if (!shape) continue;
     // Its faces by side, for parts drawn in this look; then a slot per material its model's

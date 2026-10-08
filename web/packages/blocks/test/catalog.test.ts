@@ -59,7 +59,10 @@ describe("block search", () => {
 
   it("lists the default set, and icons show a cube's top or a pane's glass", () => {
     const { hits, matched } = searchBlocks(libraries, { query: "" });
-    expect(matched).toBe(Object.keys(library.blocks).length);
+    // Every block but the hidden undecided placeholder.
+    const offered = Object.values(library.blocks).filter((b) => !b.hidden);
+    expect(matched).toBe(offered.length);
+    expect(hits.some((h) => h.ref === "voxyl:undecided")).toBe(false);
     expect(hits.length).toBe(matched);
     expect(blockIcon(library, block("oak_planks"))).toEqual(library.textures.oak_planks?.rgba);
     expect(blockIcon(library, block("oak_log"))).toEqual(library.textures.oak_log_top?.rgba);

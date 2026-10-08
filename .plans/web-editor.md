@@ -323,7 +323,40 @@ there is a point worth orbiting.
      than Godot's modal slice-select (a plane to steer and confirm): the 2D view itself is the
      preview. Every 2D view now records what it shows, and each draws the **other 2D views'
      slices** across it as amber one-cell bands (a slice parallel to it draws nothing).
-  5. Home and shared palettes, 6. inventory and block chooser, 7. 2D editing: in progress.
+  5. **Home, shared palettes, descriptions, a textured start.**
+     - **Home** (`editor/Home.tsx`) is where the app opens when the link names no build, and
+       the top bar's Home (or the Voxyl mark) goes back to it. Tabs: **Builds** (new, import,
+       samples, each saved build with its size and age, open, export, delete; with none yet,
+       "Start building" goes straight into a new build), **Palettes** (shared palettes: new,
+       edit, duplicate, delete) and **Blocks** (the default set and imported jars: browse,
+       import, remove). The 3D view stops drawing while Home covers it. Deleting the open
+       build goes back to Home. Prefabs join Home with step 4.
+     - **Shared palettes** live in OPFS (`PaletteStore`, `packages/session/src/palettes.ts`,
+       tested): one JSON record each, and saving changed content bumps its version. A build's
+       drawer **Shares** a palette (a copy, with what each semantic resolves to now, keyed by
+       semantic id so sharing again matches) and **Uses a shared palette** (a `palette_sync`
+       linked copy; if the build has a palette of that name the copy is "Name (shared)").
+       A linked copy says its version and offers **Update to vN** when the shared one is
+       newer: a build never changes by itself. Not done: turning the shared-from palette
+       itself into a linked copy (it needs a core command to rebase a palette's semantics
+       onto a linked copy's); recorded as a follow-up.
+     - **What it is for**: a semantic's description is edited in the drawer and in Home's
+       palette editor (`describeSemantic`, a `semantic_update`; empty clears it).
+     - **New builds start on blocks**: the starter semantics map to the voxyl default set
+       (Base stone bricks, Wall white concrete, Floor oak planks, Roof grey concrete, Trim
+       quartz, Accent cyan concrete, Glass, Light glowstone, Detail oak log), each with a
+       description. **Undecided is still a state** (principle 5), but it no longer draws as a
+       flat colour: an undecided look draws as a voxyl placeholder panel (a frame and faint
+       hatching, `voxyl:undecided`, hidden from the picker) tinted with its hint colour, so a
+       build before any block is chosen still reads as blocks, each semantic its own colour.
+     - **Golden images regenerated** (they were stale since the editor shell: the view now
+       sits under the top bar, 640×320). The tool now hides the chrome and closes the palette
+       drawer; the 2D capture uses `.grid-canvas`.
+     - **Fixed on the way:** the moon disc drew a faint dotted line along the great circle
+       90° from the moon at night (its edge width blew up there), and the ground grid now
+       also fades as a whole once cells are below a pixel in the crowded direction, so lines
+       running away from the camera no longer fan into a bright band at the horizon.
+  6. inventory and block chooser, 7. 2D editing: in progress.
 
 ## Cross-project resources (what is planned, and what is not)
 

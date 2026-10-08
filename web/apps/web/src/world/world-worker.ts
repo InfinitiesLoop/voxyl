@@ -27,6 +27,9 @@ import {
   describeState,
   LibraryStore,
   type LightingMode,
+  lookColor,
+  newPaletteKey,
+  PaletteStore,
   ProjectStore,
   stateLooks,
   WorldSession,
@@ -48,10 +51,12 @@ import {
   addSemanticCommand,
   aim,
   clearSelectionCommand,
+  describeSemanticCommand,
   eraseCommand,
   fillBoxCommand,
   fillSelectionCommand,
   historyState,
+  linkPaletteCommand,
   newProject,
   paletteInfo,
   placeCommand,
@@ -65,6 +70,7 @@ import {
   semanticOfState,
   setCellCommand,
   setLookCommand,
+  sharedFromPalette,
   stepCommand,
 } from "./editing.ts";
 import { OpfsFolder } from "./opfs-folder.ts";
@@ -112,6 +118,7 @@ interface MeshPort {
 
 const store = new ProjectStore(new OpfsFolder("voxyl"));
 const libraryStore = new LibraryStore(new OpfsFolder("voxyl"));
+const paletteStore = new PaletteStore(new OpfsFolder("voxyl"));
 let session: WorldSession | null = null;
 let project: Project | null = null;
 /** The id the open project is saved under, or null for an unsaved sample. */
@@ -324,6 +331,41 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       libraries.delete(command.id);
       librariesChanged();
       return null;
+    case "sharedPalettes": {
+      await librariesLoaded;
+      return (await paletteStore.list()).map((p) => ({
+        key: p.key,
+        name: p.name,
+        description: p.description ?? "",
+        version: p.version,
+        updated: p.updated,
+        from: p.from ?? null,
+        count: p.semantics.length,
+        colors: p.semantics.map((s) => lookColor(s.look ?? {}, blocks)),
+      }));
+    }
+    case "sharedPalette":
+      return paletteStore.load(command.key);
+    case "saveSharedPalette":
+      return paletteStore.save(command.palette);
+    case "deleteSharedPalette":
+      await paletteStore.delete(command.key);
+      return null;
+    case "sharePalette": {
+      const open = openProject();
+      const spec = sharedFromPalette(open, command.palette, newPaletteKey());
+      const stored = await paletteStore.save({ ...spec, from: open.settings.name });
+      return stored.key;
+    }
+    case "linkPalette": {
+      const shared = await paletteStore.load(command.key);
+      if (!shared) throw new Error("That shared palette is gone");
+      return runEdit(linkPaletteCommand(openProject(), shared)) >= 0;
+    }
+    case "describeSemantic":
+      return (
+        runEdit(describeSemanticCommand(openProject(), command.semantic, command.description)) >= 0
+      );
     case "edges":
       edgesOn = command.on;
       session?.setEdges(edgesOn);

@@ -12,6 +12,7 @@ const info = (
   palette,
   ...(base !== undefined && { base }),
   name,
+  description: "",
   color: "#808080",
   glow: false,
   ownLook: {},

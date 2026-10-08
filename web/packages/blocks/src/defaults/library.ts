@@ -234,6 +234,7 @@ export function buildDefaultLibrary(): Library {
   ])
     cube(name);
   cube("glass", "glass", { transparent: true });
+  cube("undecided", "undecided", { hidden: true });
   cube("glowstone", "glowstone", { emits: 15 });
   cube("oak_leaves", "oak_leaves", { transparent: true });
 

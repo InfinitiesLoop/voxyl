@@ -41,6 +41,9 @@ const MINOR_PER_HEIGHT = 3;
  */
 const CROWD_START = 0.12;
 const CROWD_END = 0.4;
+/** Cells per pixel (in the most crowded direction) where the whole grid starts and ends fading. */
+const FAN_START = 0.6;
+const FAN_END = 2.5;
 /**
  * Line colour and strength by night and by day (day lines are dark, so a pale sky shows them).
  * Blending happens in linear light, so a faint pale line on black comes out much brighter
@@ -103,7 +106,12 @@ export class GroundGrid {
 
       const minorAlpha = mix(float(NIGHT_ALPHA.minor), float(DAY_ALPHA.minor), daylight);
       const majorAlpha = mix(float(NIGHT_ALPHA.major), float(DAY_ALPHA.major), daylight);
-      const alpha = max(minor.mul(minorAlpha), major.mul(majorAlpha)).mul(fade);
+      // Lines running away from the camera stay sparse across but fan together toward the
+      // vanishing point: once cells shrink below about a pixel in the crowded direction,
+      // everything fades, majors too.
+      const cellFw = fwidth(xz);
+      const far = smoothstep(FAN_END, FAN_START, max(cellFw.x, cellFw.y));
+      const alpha = max(minor.mul(minorAlpha), major.mul(majorAlpha)).mul(fade).mul(far);
       const rgb = mix(vec3(...NIGHT_RGB), vec3(...DAY_RGB), daylight);
       return vec4(rgb, alpha);
     })();

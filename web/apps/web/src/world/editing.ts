@@ -19,6 +19,7 @@ import {
   regionStats,
   type SemanticArg,
   type SemanticId,
+  type SharedPalette,
   sideOf,
   stateInput,
   stateJSON,
@@ -423,6 +424,85 @@ function lookLabel(name: string, before: Look | undefined, after: Look | null): 
   return `Change ${name}'s look`;
 }
 
+/** The command that sets what a semantic is for (empty clears it), or null if unchanged. */
+export function describeSemanticCommand(
+  project: Project,
+  ref: SemanticArg,
+  description: string,
+): Command | null {
+  const text = description.trim().slice(0, 400);
+  const id = typeof ref === "number" ? ref : ref.base;
+  if (!project.semantics.has(id)) return null;
+  const current = project.semantics.resolve(id).description ?? "";
+  if (typeof ref === "number" && text === current) return null;
+  const name = project.semantics.nameOf(id);
+  return {
+    id: commandId(),
+    kind: "semantic_update",
+    source: EDITOR_SOURCE,
+    label: `Describe ${name}`,
+    args: { semantic: ref, description: text === "" ? null : text },
+  };
+}
+
+/**
+ * A project palette as a shared palette, for "Share as a palette": everything it can place,
+ * with its names, descriptions, forms and looks as they resolve now (inherited ones included),
+ * keyed by semantic id so sharing it again matches the same semantics.
+ */
+export function sharedFromPalette(
+  project: Project,
+  palette: PaletteId,
+  key: string,
+): Omit<SharedPalette, "version"> {
+  const registry = project.semantics;
+  const p = registry.palette(palette);
+  return {
+    key,
+    name: p.name,
+    semantics: registry.offers(palette).map((offer) => {
+      const id = offer.id ?? offer.base ?? NO_SEMANTIC;
+      const resolved = registry.resolve(id);
+      return {
+        key: `s${id}`,
+        name: offer.name,
+        ...(resolved.description && { description: resolved.description }),
+        ...(resolved.form && { form: resolved.form }),
+        ...(Object.keys(resolved.look).length > 0 && { look: resolved.look }),
+      };
+    }),
+  };
+}
+
+/**
+ * The command that brings a shared palette in as a linked copy, or re-syncs the copy. A
+ * project palette with the same name keeps it: the copy is called "Name (shared)".
+ */
+export function linkPaletteCommand(project: Project, shared: SharedPalette): Command {
+  const taken = new Set(
+    project.semantics
+      .palettes()
+      .filter((p) => p.linked?.key !== shared.key)
+      .map((p) => p.name),
+  );
+  let name = shared.name;
+  for (let n = 1; taken.has(name); n++)
+    name = n === 1 ? `${shared.name} (shared)` : `${shared.name} (shared ${n})`;
+  return {
+    id: commandId(),
+    kind: "palette_sync",
+    source: EDITOR_SOURCE,
+    label: `Use ${shared.name} (v${shared.version})`,
+    args: {
+      key: shared.key,
+      version: shared.version,
+      name,
+      ...(shared.description !== undefined && { description: shared.description }),
+      semantics: shared.semantics.map((s) => ({ ...s })),
+    },
+  };
+}
+
 /** The command that renames the project, or null if the name is empty or the same. */
 export function renameCommand(project: Project, name: string): Command | null {
   const trimmed = name.trim();
@@ -466,6 +546,8 @@ export interface SemanticInfo {
   readonly palette: PaletteId;
   readonly base?: SemanticId;
   readonly name: string;
+  /** What it is for, in words (inherited like the name). */
+  readonly description: string;
   /** "#rrggbb": its block's average colour, else its tint. */
   readonly color: string;
   readonly glow: boolean;
@@ -480,6 +562,9 @@ export interface PaletteInfo {
   readonly name: string;
   /** A linked copy of a shared palette (read-only in the project). */
   readonly linked: boolean;
+  /** For a linked copy: the shared palette's key and the version the copy has. */
+  readonly linkedKey?: string;
+  readonly linkedVersion?: number;
   readonly extends?: PaletteId;
   /** What it can place: its own semantics, then ones it derives from its ancestors. */
   readonly semantics: readonly SemanticInfo[];
@@ -497,10 +582,14 @@ export function paletteInfo(project: Project, blocks?: BlockMaterials): PaletteI
     id: palette.id,
     name: palette.name,
     linked: palette.linked !== undefined,
+    ...(palette.linked && {
+      linkedKey: palette.linked.key,
+      linkedVersion: palette.linked.version,
+    }),
     ...(palette.extends !== undefined && { extends: palette.extends }),
     semantics: registry.offers(palette.id).map((offer): SemanticInfo => {
       const id = offer.id ?? offer.base ?? NO_SEMANTIC;
-      const { look } = registry.resolve(id);
+      const { look, description } = registry.resolve(id);
       const ref: SemanticArg =
         offer.id !== undefined ? offer.id : { palette: palette.id, base: offer.base ?? 0 };
       const base = offer.id !== undefined ? registry.get(offer.id).base : offer.base;
@@ -510,6 +599,7 @@ export function paletteInfo(project: Project, blocks?: BlockMaterials): PaletteI
         palette: palette.id,
         ...(base !== undefined && { base }),
         name: offer.name,
+        description: description ?? "",
         color: lookColor(look, blocks),
         glow: look.glow === true,
         ...(look.block !== undefined && { block: look.block }),
@@ -520,23 +610,74 @@ export function paletteInfo(project: Project, blocks?: BlockMaterials): PaletteI
 }
 
 /**
- * The semantics a new project starts with: undecided (no block yet, principle 5), each with
- * a hint colour so they tell apart. Names are intent, for any kind of voxel build.
+ * The semantics a new project starts with, each with a block from the voxyl default set so a
+ * first build looks like something, and a description of what it is for (what an agent or a
+ * teammate reads). Names are intent, for any kind of voxel build. Changing a look never
+ * touches a cell (principle 3); clearing the block leaves the semantic undecided, drawn in
+ * its hint colour (principle 5).
  */
 export const STARTER_SEMANTICS: readonly {
   name: string;
+  description: string;
+  block: string;
   tint: string;
   glow?: boolean;
 }[] = [
-  { name: "Base", tint: "#8d8f94" },
-  { name: "Wall", tint: "#d9d4c7" },
-  { name: "Floor", tint: "#9a7b5a" },
-  { name: "Roof", tint: "#5b6470" },
-  { name: "Trim", tint: "#f2f2ef" },
-  { name: "Accent", tint: "#22b8cf" },
-  { name: "Glass", tint: "#a9d8e8" },
-  { name: "Light", tint: "#ffd36b", glow: true },
-  { name: "Detail", tint: "#6b4f3a" },
+  {
+    name: "Base",
+    description: "Foundations and plinths: what the build stands on",
+    block: "voxyl:stone_bricks",
+    tint: "#8d8f94",
+  },
+  {
+    name: "Wall",
+    description: "The main body of walls and the outer shell",
+    block: "voxyl:white_concrete",
+    tint: "#d9d4c7",
+  },
+  {
+    name: "Floor",
+    description: "Floors, decks and walkways",
+    block: "voxyl:oak_planks",
+    tint: "#9a7b5a",
+  },
+  {
+    name: "Roof",
+    description: "Roofs and the tops of things",
+    block: "voxyl:gray_concrete",
+    tint: "#5b6470",
+  },
+  {
+    name: "Trim",
+    description: "Edges, frames, ledges and bands that outline the shape",
+    block: "voxyl:quartz_block",
+    tint: "#f2f2ef",
+  },
+  {
+    name: "Accent",
+    description: "A few standout details in the build's accent colour",
+    block: "voxyl:cyan_concrete",
+    tint: "#22b8cf",
+  },
+  {
+    name: "Glass",
+    description: "Windows and glazing",
+    block: "voxyl:glass",
+    tint: "#a9d8e8",
+  },
+  {
+    name: "Light",
+    description: "Light sources",
+    block: "voxyl:glowstone",
+    tint: "#ffd36b",
+    glow: true,
+  },
+  {
+    name: "Detail",
+    description: "Small features: posts, beams, furniture",
+    block: "voxyl:oak_log",
+    tint: "#6b4f3a",
+  },
 ];
 
 /** A new, empty project with the starter semantics in its root palette. */
@@ -556,7 +697,8 @@ export function newProject(name: string, chunkBits: number): Project {
       args: {
         palette: ROOT_PALETTE,
         name: s.name,
-        look: { tint: s.tint, ...(s.glow && { glow: true }) },
+        description: s.description,
+        look: { block: s.block, tint: s.tint, ...(s.glow && { glow: true }) },
       },
     });
   });

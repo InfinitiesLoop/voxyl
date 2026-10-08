@@ -8,9 +8,15 @@
 // sends about a world is tagged with the world's id, so messages about a world that has since
 // been replaced are dropped.
 
-import type { Look, PaletteId, Region, SemanticArg } from "@voxyl/core";
+import type { Look, PaletteId, Region, SemanticArg, SharedPalette } from "@voxyl/core";
 import type { ModelShape, StateShape } from "@voxyl/mesher";
-import type { LightingMode, LightLayoutUpdate, MeshJob, ProjectEntry } from "@voxyl/session";
+import type {
+  LightingMode,
+  LightLayoutUpdate,
+  MeshJob,
+  ProjectEntry,
+  StoredPalette,
+} from "@voxyl/session";
 import type { SliceAxis } from "../views/plane.ts";
 import type { WorldInfo, WorldSource } from "../worlds.ts";
 import type { Aim, HistoryState, PaletteInfo } from "./editing.ts";
@@ -134,6 +140,19 @@ export type Command =
       width: number;
       height: number;
     }
+  /** The user's shared palettes, most recent first, with a strip of colours each. */
+  | { type: "sharedPalettes" }
+  /** One shared palette, whole. */
+  | { type: "sharedPalette"; key: string }
+  /** Stores a shared palette (new, or over the same key: the version goes up if it changed). */
+  | { type: "saveSharedPalette"; palette: Omit<SharedPalette, "version"> }
+  | { type: "deleteSharedPalette"; key: string }
+  /** Shares a palette of the open project as a new shared palette. Replies with its key. */
+  | { type: "sharePalette"; palette: PaletteId }
+  /** Brings a shared palette into the open project as a linked copy, or re-syncs it. */
+  | { type: "linkPalette"; key: string }
+  /** Sets what a semantic is for. */
+  | { type: "describeSemantic"; semantic: SemanticArg; description: string }
   /** Whether meshes come with feature edges, for the line-drawing render modes. */
   | { type: "edges"; on: boolean }
   /** The project's bounds as cell corners, or null when it is empty. */
@@ -178,6 +197,13 @@ export interface Replies {
   fillBox: number;
   aim: AimView | null;
   toolEdit: boolean;
+  sharedPalettes: SharedPaletteInfo[];
+  sharedPalette: StoredPalette | null;
+  saveSharedPalette: StoredPalette;
+  deleteSharedPalette: null;
+  sharePalette: string;
+  linkPalette: boolean;
+  describeSemantic: boolean;
   edges: null;
   bounds: { min: Vec3; max: Vec3 } | null;
   rotate: boolean;
@@ -311,6 +337,19 @@ export const EMPTY_SELECTION: SelectionView = {
 };
 
 /** Cell states' looks for the renderer (see StateLooks and BlockMaterials). */
+/** A shared palette as Home and the drawer list it. */
+export interface SharedPaletteInfo {
+  readonly key: string;
+  readonly name: string;
+  readonly description: string;
+  readonly version: number;
+  readonly updated: number;
+  readonly from: string | null;
+  readonly count: number;
+  /** Each semantic's colour, in order (the first few make a preview strip). */
+  readonly colors: readonly string[];
+}
+
 export interface LooksUpdate {
   /** StateLooks.colors. */
   readonly colors: Uint8Array;

@@ -6,9 +6,11 @@ import {
   addPaletteCommand,
   addSemanticCommand,
   aim,
+  describeSemanticCommand,
   eraseCommand,
   fillBoxCommand,
   historyState,
+  linkPaletteCommand,
   newProject,
   paletteInfo,
   placeCommand,
@@ -17,6 +19,7 @@ import {
   STARTER_SEMANTICS,
   setCellCommand,
   setLookCommand,
+  sharedFromPalette,
   stepCommand,
 } from "./editing.ts";
 
@@ -146,14 +149,17 @@ describe("edit commands", () => {
 });
 
 describe("newProject", () => {
-  it("starts empty, with undecided starter semantics in the root palette", () => {
+  it("starts empty, with starter semantics on default blocks in the root palette", () => {
     const project = newProject("My build", 6);
     expect(project.settings.name).toBe("My build");
     expect(project.world.cellCount).toBe(0);
     const [root] = paletteInfo(project);
     expect(root?.id).toBe(ROOT_PALETTE);
     expect(root?.semantics.map((s) => s.name)).toEqual(STARTER_SEMANTICS.map((s) => s.name));
-    expect(root?.semantics.every((s) => s.block === undefined)).toBe(true);
+    expect(root?.semantics.every((s) => s.block?.startsWith("voxyl:"))).toBe(true);
+    expect(
+      project.semantics.resolve(project.semantics.byName("Wall") as number).description,
+    ).toMatch(/wall/i);
     expect(root?.semantics.find((s) => s.name === "Light")?.glow).toBe(true);
     expect(root?.semantics.find((s) => s.name === "Wall")?.ownLook.tint).toBe("#d9d4c7");
   });
@@ -239,5 +245,36 @@ describe("placement from the look's block", () => {
 
     project.semantics.update(stone, { form: { placement: PLACEMENTS.log } });
     expect(project.placement(stone).profile).toMatchObject({ pick: "attach" });
+  });
+});
+
+describe("shared palettes", () => {
+  it("shares a palette with its looks and descriptions, and links it into another project", () => {
+    const from = newProject("From", 5);
+    const spec = sharedFromPalette(from, ROOT_PALETTE, "k1");
+    expect(spec.semantics.map((s) => s.name)).toEqual(STARTER_SEMANTICS.map((s) => s.name));
+    expect(spec.semantics.find((s) => s.name === "Wall")?.look?.block).toBe("voxyl:white_concrete");
+    const into = newProject("Into", 5);
+    into.run(linkPaletteCommand(into, { ...spec, version: 1 }));
+    const linked = paletteInfo(into).find((p) => p.linkedKey === "k1");
+    expect(linked?.linked).toBe(true);
+    expect(linked?.linkedVersion).toBe(1);
+    expect(linked?.semantics.find((s) => s.name === "Wall")?.description).toMatch(/wall/i);
+    expect(historyState(into).undo).toBe("Use Main (v1)");
+    // The project already has a Main, so the copy is called Main (shared).
+    expect(linked?.name).toBe("Main (shared)");
+  });
+
+  it("describes a semantic, and clears the description with an empty one", () => {
+    const project = newProject("Test", 5);
+    const command = describeSemanticCommand(project, wall(project), "  The outer skin  ");
+    if (!command) throw new Error("no command");
+    project.run(command);
+    expect(project.semantics.resolve(wall(project)).description).toBe("The outer skin");
+    expect(describeSemanticCommand(project, wall(project), "The outer skin")).toBeNull();
+    const clear = describeSemanticCommand(project, wall(project), "");
+    if (!clear) throw new Error("no command");
+    project.run(clear);
+    expect(project.semantics.resolve(wall(project)).description ?? "").toBe("");
   });
 });

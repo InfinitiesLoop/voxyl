@@ -1,19 +1,27 @@
-import { blockLabel } from "@voxyl/blocks";
 import { ROOT_PALETTE } from "@voxyl/core";
 import { type FormEvent, useEffect, useState } from "react";
 import type { Engine } from "../scene/Engine.ts";
 import type { PaletteInfo, SemanticInfo } from "../world/editing.ts";
-import type { BlockSearch } from "../world/protocol.ts";
+import type { SharedPaletteInfo } from "../world/protocol.ts";
+import { BlockPicker, blockTitle } from "./BlockPicker.tsx";
 import { writeSemanticDrag } from "./drag.ts";
 import { useStore } from "./useStore.ts";
 
 /**
- * The palette drawer: semantics grouped by palette, their looks, and new palettes that
- * inherit. A semantic drags onto the hotbar. Linked palettes stay read-only; extend one
- * to give part of a build its own look.
+ * The palette drawer: semantics grouped by palette, their looks and descriptions, and new
+ * palettes that inherit. A semantic drags onto the hotbar. A palette can be shared (copied to
+ * your palettes, outside the project); a shared palette comes in as a linked copy, read-only
+ * here and updated only when you say so. Extend one to give part of a build its own look.
  */
 export function PaletteDrawer({ engine }: { engine: Engine }) {
   const palettes = useStore(engine.palettes);
+  const [shared, setShared] = useState<SharedPaletteInfo[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
+  const refreshShared = () =>
+    void engine.world.request({ type: "sharedPalettes" }).then(setShared, () => setShared([]));
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refresh when the palettes change
+  useEffect(refreshShared, [engine, palettes]);
+  const linkedKeys = new Set(palettes.flatMap((p) => (p.linkedKey ? [p.linkedKey] : [])));
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,6 +54,7 @@ export function PaletteDrawer({ engine }: { engine: Engine }) {
         )}
       </header>
       {error && <p className="palette-error">{error}</p>}
+      {notice && <p className="palette-note">{notice}</p>}
       {palettes.length === 0 ? (
         <p className="palette-note">Open a project to edit its palettes.</p>
       ) : picking && selected ? (
@@ -73,6 +82,27 @@ export function PaletteDrawer({ engine }: { engine: Engine }) {
       ) : (
         <>
           <div className="palette-scroll">
+            {shared.some((p) => !linkedKeys.has(p.key)) && (
+              <label className="palette-use">
+                Use a shared palette
+                <select
+                  value=""
+                  onChange={(e) => {
+                    const key = e.target.value;
+                    if (key) void run(engine.world.request({ type: "linkPalette", key }));
+                  }}
+                >
+                  <option value="">Choose…</option>
+                  {shared
+                    .filter((p) => !linkedKeys.has(p.key))
+                    .map((p) => (
+                      <option key={p.key} value={p.key}>
+                        {p.name} ({p.count})
+                      </option>
+                    ))}
+                </select>
+              </label>
+            )}
             <AddPalette
               palettes={palettes}
               onAdd={(name, parent) =>
@@ -94,10 +124,29 @@ export function PaletteDrawer({ engine }: { engine: Engine }) {
                     run(engine.world.request({ type: "renamePalette", palette: palette.id, name }))
                   }
                 />
-                {palette.linked && (
-                  <p className="palette-note">
-                    A linked theme. Extend it to give part of the build its own look.
-                  </p>
+                {palette.linked ? (
+                  <LinkedNote
+                    palette={palette}
+                    shared={shared.find((p) => p.key === palette.linkedKey)}
+                    onUpdate={(key) => void run(engine.world.request({ type: "linkPalette", key }))}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="palette-share"
+                    title="Copy this palette to your palettes, so other projects can use it"
+                    onClick={() =>
+                      void engine.world.request({ type: "sharePalette", palette: palette.id }).then(
+                        () => {
+                          setNotice(`${palette.name} is in your palettes now (Home → Palettes).`);
+                          refreshShared();
+                        },
+                        (caught: unknown) => setError(String(caught)),
+                      )
+                    }
+                  >
+                    Share
+                  </button>
                 )}
                 <ul className="semantic-list">
                   {palette.semantics.map((semantic) => (
@@ -158,6 +207,15 @@ export function PaletteDrawer({ engine }: { engine: Engine }) {
                     type: "renameSemantic",
                     semantic: selected.semantic.ref,
                     name,
+                  }),
+                )
+              }
+              onDescribe={(description) =>
+                run(
+                  engine.world.request({
+                    type: "describeSemantic",
+                    semantic: selected.semantic.ref,
+                    description,
                   }),
                 )
               }
@@ -335,12 +393,14 @@ function LookEditor({
   semantic,
   readOnly,
   onRename,
+  onDescribe,
   onLook,
   onChoose,
 }: {
   semantic: SemanticInfo;
   readOnly: boolean;
   onRename: (name: string) => Promise<boolean>;
+  onDescribe: (description: string) => Promise<boolean>;
   onLook: (look: SemanticInfo["ownLook"] | null) => Promise<boolean>;
   onChoose: () => void;
 }) {
@@ -352,6 +412,12 @@ function LookEditor({
     void onRename(trimmed).then((ok) => {
       if (!ok) setName(semantic.name);
     });
+  };
+  const [description, setDescription] = useState(semantic.description);
+  useEffect(() => setDescription(semantic.description), [semantic.description]);
+  const commitDescription = () => {
+    if (description.trim() === semantic.description) return;
+    void onDescribe(description);
   };
   const inherited = semantic.base !== undefined && Object.keys(semantic.ownLook).length === 0;
   return (
@@ -369,6 +435,17 @@ function LookEditor({
           disabled={readOnly}
           onChange={(e) => setName(e.target.value)}
           onBlur={commitName}
+        />
+      </label>
+      <label>
+        What it is for
+        <textarea
+          value={description}
+          rows={2}
+          disabled={readOnly}
+          placeholder="A line on what this is for: teammates and agents read it"
+          onChange={(e) => setDescription(e.target.value)}
+          onBlur={commitDescription}
         />
       </label>
       <div className="look-block">
@@ -421,105 +498,27 @@ function LookEditor({
   );
 }
 
-/** "voxyl:oak_stairs" as "Oak stairs"; another library keeps its name. */
-function blockTitle(ref: string): string {
-  const colon = ref.indexOf(":");
-  const library = colon > 0 ? ref.slice(0, colon) : "";
-  const name = blockLabel(ref);
-  return library === "" || library === "voxyl" ? name : `${name} · ${library}`;
-}
-
-const ICON = 16 * 16 * 4;
-
-function BlockPicker({ engine, onPick }: { engine: Engine; onPick: (ref: string | null) => void }) {
-  const [query, setQuery] = useState("");
-  const [library, setLibrary] = useState("");
-  const [pending, setPending] = useState("");
-  const [result, setResult] = useState<BlockSearch | null>(null);
-  useEffect(() => {
-    const handle = setTimeout(() => setPending(query), 120);
-    return () => clearTimeout(handle);
-  }, [query]);
-  useEffect(() => {
-    let cancel = false;
-    void engine.world
-      .request({
-        type: "findBlocks",
-        query: pending,
-        ...(library !== "" && { library }),
-      })
-      .then((found) => {
-        if (!cancel) setResult(found);
-      })
-      .catch((caught: unknown) => {
-        if (!cancel) console.error(caught);
-      });
-    return () => {
-      cancel = true;
-    };
-  }, [engine, pending, library]);
+/** A linked copy's line: which shared palette and version, and an update when one is newer. */
+function LinkedNote({
+  palette,
+  shared,
+  onUpdate,
+}: {
+  palette: PaletteInfo;
+  shared: SharedPaletteInfo | undefined;
+  onUpdate: (key: string) => void;
+}) {
+  const behind =
+    shared && palette.linkedVersion !== undefined && shared.version > palette.linkedVersion;
   return (
-    <div className="block-picker">
-      <input
-        value={query}
-        placeholder="Search blocks"
-        aria-label="Search blocks"
-        onChange={(e) => setQuery(e.target.value)}
-      />
-      <select aria-label="Library" value={library} onChange={(e) => setLibrary(e.target.value)}>
-        <option value="">All libraries</option>
-        {(result?.libraries ?? []).map((l) => (
-          <option key={l.id} value={l.id}>
-            {l.name}
-          </option>
-        ))}
-      </select>
-      <button type="button" className="undecided" onClick={() => onPick(null)}>
-        No block
-      </button>
-      {result && result.matched > result.hits.length && (
-        <p className="palette-note">
-          Showing {result.hits.length} of {result.matched}. Keep typing.
-        </p>
+    <p className="palette-note">
+      A shared palette (v{palette.linkedVersion ?? 0}), read-only here. Extend it to give part of
+      the build its own look.
+      {behind && (
+        <button type="button" onClick={() => onUpdate(shared.key)}>
+          Update to v{shared.version}
+        </button>
       )}
-      <div className="block-grid">
-        {result?.hits.map((hit, i) => (
-          <button
-            key={hit.ref}
-            type="button"
-            className="block-choice"
-            title={hit.ref}
-            onClick={() => onPick(hit.ref)}
-          >
-            <BlockIcon icons={result.icons} index={i} color={hit.color} />
-            <span>{hit.name}</span>
-          </button>
-        ))}
-      </div>
-    </div>
+    </p>
   );
-}
-
-function BlockIcon({ icons, index, color }: { icons: Uint8Array; index: number; color: string }) {
-  const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
-  useEffect(() => {
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const slice = icons.subarray(index * ICON, index * ICON + ICON);
-    let textured = false;
-    for (let i = 3; i < slice.length; i += 4) {
-      if (slice[i] !== 0) {
-        textured = true;
-        break;
-      }
-    }
-    if (!textured || slice.length < ICON) {
-      ctx.fillStyle = color;
-      ctx.fillRect(0, 0, 16, 16);
-      return;
-    }
-    ctx.putImageData(new ImageData(new Uint8ClampedArray(slice), 16, 16), 0, 0);
-  }, [canvas, icons, index, color]);
-  return <canvas ref={setCanvas} width={16} height={16} className="block-icon" />;
 }

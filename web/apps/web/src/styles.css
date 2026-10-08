@@ -1384,3 +1384,283 @@ kbd {
 .bar-menu-panel {
   min-width: 260px;
 }
+
+/* Home: builds, shared palettes and blocks, outside any project. */
+.home {
+  position: absolute;
+  z-index: 10;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.home-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  height: 48px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.home-tabs {
+  display: flex;
+  gap: 4px;
+  margin-left: 12px;
+}
+
+.home-tabs button {
+  padding: 5px 14px;
+}
+
+.home-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px 24px;
+}
+
+.home-section {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.home-split {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 20px;
+  height: 100%;
+}
+
+.home-list ul {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.home-pane {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.home-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+button.primary {
+  border-color: var(--accent);
+  background: #1d3a42;
+  color: var(--text);
+}
+
+button.big {
+  padding: 10px 22px;
+  font-size: 16px;
+}
+
+.home-quiet {
+  color: var(--text-quiet);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.home-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 460px;
+  margin: 60px auto;
+  text-align: center;
+}
+
+.home-samples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.home-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.home-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.home-card-open {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+  padding: 14px;
+  border: none;
+  background: transparent;
+  text-align: left;
+}
+
+.home-card-name {
+  font-size: 15px;
+}
+
+.home-card-meta {
+  color: var(--text-quiet);
+  font-size: 12px;
+}
+
+.home-card-tools {
+  display: flex;
+  gap: 6px;
+  padding: 0 14px 12px;
+}
+
+.home-palette {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: flex-start;
+  width: 100%;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.home-sub {
+  color: var(--text-quiet);
+}
+
+.home-strip {
+  display: flex;
+  gap: 2px;
+}
+
+.home-chip {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+}
+
+.home-library {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.home-library button {
+  margin-left: auto;
+}
+
+.home-picked {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.palette-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.palette-editor > label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-quiet);
+  font-size: 12px;
+}
+
+.palette-editor input:not([type="color"]):not([type="checkbox"]),
+.palette-editor textarea,
+.look-editor textarea {
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #23272d;
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+
+.palette-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.palette-table th {
+  padding: 4px 6px;
+  color: var(--text-quiet);
+  font-size: 11px;
+  font-weight: 400;
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.palette-table td {
+  padding: 3px 6px;
+  border-top: 1px solid var(--line);
+}
+
+.palette-table td input:not([type="color"]):not([type="checkbox"]) {
+  width: 100%;
+}
+
+.palette-look {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  width: 190px;
+  text-align: left;
+}
+
+.palette-look .swatch {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+
+.palette-use {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+  color: var(--text-quiet);
+  font-size: 12px;
+}
+
+.palette-share {
+  align-self: flex-start;
+  margin: 2px 0 6px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+button.brand {
+  padding: 2px 4px;
+  border: none;
+  background: transparent;
+  font-weight: 700;
+}

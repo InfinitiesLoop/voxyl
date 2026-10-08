@@ -45,7 +45,7 @@ export function searchBlocks(
     if (query.library !== undefined && library.id !== query.library) continue;
     for (const id of Object.keys(library.blocks)) {
       const block = library.blocks[id];
-      if (!block) continue;
+      if (!block || block.hidden) continue;
       const ref = `${library.id}:${id}`;
       const name = blockLabel(ref);
       const score = rank(id, name, terms);

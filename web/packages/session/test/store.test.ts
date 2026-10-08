@@ -171,12 +171,17 @@ describe("stateLooks with blocks", () => {
     expect(materials.takeTextures().rgba.length).toBe(0);
   });
 
-  it("draws looks without blocks, or with blocks no library has, in their tint", () => {
+  it("draws looks without blocks, or with blocks no library has, as the tinted placeholder", () => {
     const project = city("Alpha", 5_000);
     const states = project.world.states;
     const mass = states.intern({ semantic: project.semantics.byName("Mass", 1) as number });
-    const looks = stateLooks(states, project.semantics, blocks());
-    expect(looks.faces.every((m) => m === 0)).toBe(true);
+    const materials = blocks();
+    const looks = stateLooks(states, project.semantics, materials);
+    // Every face is the undecided panel, tinted with the look's colour; no models.
+    const face = looks.faces[mass * FACE_SLOTS] ?? 0;
+    expect(face).toBeGreaterThan(0);
+    const tint = materials.data.subarray(face * MATERIAL_FLOATS + 9, face * MATERIAL_FLOATS + 12);
+    expect([...tint].map((v) => Math.round(v * 255))).toEqual([0x3b, 0x40, 0x48]);
     expect(looks.models.every((m) => m === null)).toBe(true);
     expect([...looks.colors.subarray(mass * 4, mass * 4 + 3)]).toEqual([0x3b, 0x40, 0x48]);
   });

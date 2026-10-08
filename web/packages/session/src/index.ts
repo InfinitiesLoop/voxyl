@@ -17,6 +17,7 @@ export {
   TEXTURE_SIZE,
   UNDECIDED_COLOR,
 } from "./looks.ts";
+export { newPaletteKey, PaletteStore, type StoredPalette } from "./palettes.ts";
 export {
   type LightingMode,
   type MaterialsFor,

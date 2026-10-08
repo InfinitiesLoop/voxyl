@@ -159,9 +159,11 @@ function moonAt(d: V3, u: SkyUniforms) {
   const scale = max(x, 1e-4).mul(MOON_SIZE);
   const p = vec2(dot(d, u.pole).div(scale), dot(d, side).div(scale));
   const r = length(p);
-  const aa = max(fwidth(r), float(1e-4));
+  // Only near the moon: 90 degrees off, the projection blows up and fwidth with it, and an
+  // unclamped edge width drew a faint dotted line along that great circle.
+  const aa = clamp(fwidth(r), float(1e-4), float(0.25));
   const cover = smoothstep(float(1).add(aa), float(1).sub(aa), r).mul(
-    select(x.greaterThan(0), float(1), float(0)),
+    select(x.greaterThan(0.5), float(1), float(0)),
   );
   const cell = clamp(floor(p.mul(4)).add(4), 0, 7);
   const index = uint(cell.y.mul(8).add(cell.x));
