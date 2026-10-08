@@ -1,0 +1,9 @@
+# Ignore Godot import directories at any level
+**/.godot/
+
+# Ignore Node dependencies at any level
+**/node_modules/
+
+# Ignore build and logging output at any level
+**/build/
+**/logs/
