@@ -83,7 +83,7 @@ Minecraft textures can't be hosted, so Phase 2 gets textures two ways:
   - Sample builds (`packages/fixtures/src/themes.ts`): `prepareCityProject` brings a city theme
     in as a linked shared palette ("City", key `voxyl.city`), makes the root palette extend it
     and derives the city's semantics into the root, as a person would. The Theme picker
-    (Concrete, Brick, Undecided) runs `palette_sync` with a newer version of the same shared
+    (Concrete, Brick, Blocks, Minecraft; Undecided was removed 2026-10-08, all are blocks now) runs `palette_sync` with a newer version of the same shared
     palette: looks change, semantic ids and cells don't.
 - **Step 2 done (2026-10-06).** Saved projects.
   - `packages/session/src/store.ts`: `ProjectStore` over a small `Folder` interface (read,
@@ -330,7 +330,7 @@ Minecraft textures can't be hosted, so Phase 2 gets textures two ways:
   [`web-editor.md`](web-editor.md).
   - **Golden images** (`pnpm golden`, `web/tools/golden.ts`): ten scenes in `web/golden/`
     (640×360 PNGs, about 1 MB in all): the block showcase from above, its models row, its
-    orientations, the glowstone room at 21:00 with lighting; the 1M city in Concrete with
+    orientations, the glowstone room at 21:00 with lighting; the 1M city in Concrete (tinted until 2026-10-08, then default blocks) with
     lighting, a Blocks street, a shaped city close-up; the dawn sky and the night rings; and
     the 2D view's plan. Each loads its URL on the dev server, places the camera, waits until
     every mesh and light is on screen, and captures the canvas. Rendering runs on

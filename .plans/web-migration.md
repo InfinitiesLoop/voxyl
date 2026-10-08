@@ -584,7 +584,8 @@ might blow the triangle or memory budget. Tested on the city fixture decorated w
   worker already takes `{ prefab: id }`).
 - **Undecided semantics draw as a shaded colour cube** in the inventory, hotbar and preview
   (`bakeColorIcon`, the same bake as blocks, ref `color:#rrggbb`). They were flat swatches
-  because the default city themes (Concrete, Brick) are colours with no blocks.
+  because the old city themes (Concrete, Brick) were colours with no blocks; they use blocks
+  now (see "Shipped content is on the default blocks").
 - **Inventory footer is one height for every tool** (hint area and the options row are
   reserved), so choosing a tool no longer moves the hotbar.
 - **Seams**: quads are grown by 0.003 cell (`SEAM_OVERLAP`, quad-material.ts). Greedy merging
@@ -595,6 +596,60 @@ might blow the triangle or memory budget. Tested on the city fixture decorated w
   face (Forge Microblocks' overlay, ported from `ShapeCatalog.grid_lines`;
   `placementGrid` in `packages/shapes`, `PlaceGrid` in the scene), beside the existing cyan
   ghost of the part itself.
+
+### Shipped content is on the default blocks (2026-10-08)
+
+The user's call: the app's default state must not lean on colour-only looks. Those only existed
+because there was no default block set to draw with.
+
+- **City themes.** `CITY_THEMES` (`packages/fixtures/src/themes.ts`) is now Concrete (the
+  default, theme 0), Brick, Blocks and Minecraft, and every look in all four names a block.
+  Concrete and Brick are the default set's concrete and brick blocks (cyan concrete for the
+  glow, light gray concrete masses, white concrete trim; dirt, cobblestone, bricks, sandstone,
+  dark oak). The tint-only Concrete and Brick and the "Undecided" theme are gone. A tint stays
+  on each look as the hint colour for where a block isn't available (Minecraft's theme before
+  the jar is imported). `?theme=undecided` now falls back to Concrete.
+- **Already on blocks:** the starter semantics of a new project (`STARTER_SEMANTICS`, Main
+  palette) and the four starter shared palettes (`DEFAULT_PALETTES`). A test now keeps all
+  of these decided and inside the default set (`packages/fixtures/test/themes.test.ts`,
+  `default-palettes.test.ts`).
+- **Undecided is still a state** (principle 5): the placeholder panel, `bakeColorIcon`, the
+  tinted fallback and the schematic report are unchanged. Tests that need a tint-only or an
+  undecided look build one themselves (`store.test.ts`).
+- **Golden images:** `city-concrete` and `parts-close` were regenerated for the new Concrete
+  (textured). On the same run, eight of the ten scenes already differed from their committed
+  images before this change (0.04% to 3% of pixels; the sky and block scenes have nothing to
+  do with themes). Most likely the seam overlap and the editor's earlier changes; not yet
+  reviewed, so `pnpm golden` fails until someone looks at the diffs in `shots/golden/` and
+  updates them.
+
+### Next steps (2026-10-08)
+
+In the order I'd take them. The first two are the user's.
+
+1. **Phase 3 gate: a real hand-build session on the web.** The only thing left of the editor.
+   Build something sizeable, note what gets in the way, and measure that 60 fps and one-frame
+   edits hold while editing. That feedback is round 7.
+2. **Deploy to voxyl.xyz.** Files are ready (`_headers`, `_redirects`, the manual workflow).
+   Needs the user's Cloudflare account, the nameserver change at Squarespace (DNSSEC off
+   first) and the two secrets. Local-only projects need no server, so this can ship before
+   Phase 4.
+3. **Golden images.** Review the eight stale diffs, update the ones that are intended, and find
+   what moved the rest. The gate is meant to catch exactly this.
+4. **Load an exported schematic in Minecraft** (the user's check; never done), and wire the
+   prefab entry point of the export (the worker already takes `{ prefab: id }`).
+5. **Seams beside roof parts**: sloped-part triangles aren't grown by `SEAM_OVERLAP` yet.
+6. **Phase 4, agents on the web**, in this order: the relay and headless host with edit,
+   selection and palette tools first; the tier 1 CPU rasterizer for captures (moved here from
+   Phase 0); capture tiers 2 and 3; connect Claude Code and Codex; the private ChatGPT app.
+   The MCP tool shape wants the intent-level verbs the user asked for (see the Godot memory
+   note), not cell lists; settle that design before porting tools.
+7. **Phase 5, Minecraft import** (modpacks, Chisel variations, schematic import that follows
+   "north is north"), and the open question of the hosted default texture set (the default set
+   is original and procedural today, so this may be answered; confirm).
+8. **Housekeeping:** this file and `src/editor/selection-actions.tsx` contain cp1252 bytes
+   (smart punctuation written by a tool that wasn't UTF-8): the file shows as "Export
+   schematic?" and makes Biome report an internal error. Re-save both as UTF-8.
 
 ### ChatGPT widget research (2026-10-05)
 
@@ -765,8 +820,15 @@ the Phase 4 API can be a Worker on the same zone later.
 - Production deploys from `main` only, after `pnpm check` is green. Other branches get a
   preview URL and do not touch voxyl.xyz.
 
-**As built (2026-10-07), not deployed yet.** Waiting on the user's side of the setup (Cloudflare
-account, the nameserver change at Squarespace, with DNSSEC turned off there first).
+**Cloudflare side is set (2026-10-08), not deployed yet.** Account `cceaac3044c9675286ba0daee9c2e809`
+(infinity88@gmail.com). Pages project `voxyl` (`voxyl.pages.dev`), Direct Upload, production
+branch `main`. Custom domains `voxyl.xyz` and `www.voxyl.xyz` are attached and still pending.
+Proxied CNAMEs for both point at `voxyl.pages.dev`. The zone `7781ca1b01ee907538aae2c3b5c3a54a`
+is still pending: the `.xyz` registry still delegates to `nsa1`?`nsa4.squarespacedns.com`, not
+`julio.ns.cloudflare.com` and `meg.ns.cloudflare.com`. DNSSEC was already turned off at
+Squarespace. Nothing can serve on voxyl.xyz until that nameserver change is visible at the
+registry. GitHub secrets `CLOUDFLARE_PAGES_API_TOKEN` (Pages Edit only) and `CLOUDFLARE_ACCOUNT_ID` are still the
+user's to add before the workflow can deploy.
 
 - `web/apps/web/public/_headers` and `_redirects` ship in `dist/`: immutable cache for
   `assets/`, no-cache for the page, `nosniff`/referrer/permissions headers, `www` to the apex,
@@ -775,8 +837,8 @@ account, the nameserver change at Squarespace, with DNSSEC turned off there firs
 - `.github/workflows/deploy-web.yml` is **manual only** (`workflow_dispatch`). It installs,
   runs `pnpm check`, builds, and runs `wrangler pages deploy` for project `voxyl`. Run from
   `main` it is production; from any other branch it is a preview URL. It needs the Pages
-  project (Direct Upload, production branch `main`) and the secrets `CLOUDFLARE_API_TOKEN`
-  and `CLOUDFLARE_ACCOUNT_ID`. Switching it to run on push to `main` is a one-line change when
+  project (Direct Upload, production branch `main`) and the secrets `CLOUDFLARE_PAGES_API_TOKEN`
+  and `CLOUDFLARE_ACCOUNT_ID`. The Pages token stays separate from a future Workers token. Switching it to run on push to `main` is a one-line change when
   the user wants it.
 - A local deploy still works: `wrangler pages deploy apps/web/dist --project-name voxyl`.
 

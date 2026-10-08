@@ -14,8 +14,9 @@ The CLAUDE.md principles apply unchanged, and they shape the editor:
   agents (Phase 4) and sync all speak the same commands, so undo, history labels and change
   reports come free, and an agent sees exactly what a person did.
 - **The hotbar holds semantics, not blocks** (principle 1). A slot is "Wall" or "Trim"; what
-  it looks like comes from the palettes. A new project starts with undecided semantics, so a
-  whole build can go up before any block is chosen (principle 5).
+  it looks like comes from the palettes. A new project starts with starter semantics on
+  default blocks, and a semantic can still be undecided, so a whole build can go up before any
+  block is chosen (principle 5).
 - **Views are lenses.** The 3D view, the 2D view and every panel read the one project in the
   world worker and send it commands. Editor state that isn't the project (hotbar, camera, tool)
   lives in the app, and later in `editor.json`, never in the project.
@@ -110,9 +111,10 @@ there is a point worth orbiting.
     The crosshair ray rests on the ground plane (the top of layer -1) when it hits nothing,
     so an empty world has somewhere to build. Commands are labelled ("Place Wall") and that
     label is what undo and redo show.
-  - A new project (`New project`) is empty, saved at once, with nine undecided starter
+  - A new project (`New project`) is empty, saved at once, with nine starter
     semantics in the root palette (Base, Wall, Floor, Roof, Trim, Accent, Glass, Light,
-    Detail). Light glows. No block is chosen yet.
+    Detail). Light glows. They began undecided; each now looks like a default-set block (see
+    "New builds start on blocks" below).
   - The hotbar holds nine semantics, filled from the root palette, chosen with 1–9, the
     numpad, the wheel while flying, or a click. Middle click picks the aimed cell's semantic
     into its slot, or into the chosen slot. A re-skin updates colours and names; the slots

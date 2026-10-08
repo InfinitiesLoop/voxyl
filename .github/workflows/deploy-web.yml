@@ -5,8 +5,8 @@
 #
 # One-time setup (see .plans/web-migration.md, "Production (voxyl.xyz)"):
 #   1. Create the Pages project "voxyl" (Direct Upload) with its production branch set to main.
-#   2. Add repository secrets CLOUDFLARE_API_TOKEN (Account > Cloudflare Pages > Edit) and
-#      CLOUDFLARE_ACCOUNT_ID.
+#   2. Add repository secrets CLOUDFLARE_PAGES_API_TOKEN (Account > Pages > Edit only)
+#      and CLOUDFLARE_ACCOUNT_ID. A later Workers deploy gets its own token.
 
 name: Deploy web
 
@@ -52,7 +52,7 @@ jobs:
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
         with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          apiToken: ${{ secrets.CLOUDFLARE_PAGES_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: web
           command: pages deploy apps/web/dist --project-name=voxyl --branch=${{ github.ref_name }}

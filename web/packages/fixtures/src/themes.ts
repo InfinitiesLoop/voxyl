@@ -6,40 +6,44 @@ export const CITY_THEME_KEY = "voxyl.city";
 
 export interface CityTheme {
   readonly name: string;
-  /** Per semantic: a hint colour, a block, and whether it glows. None = undecided. */
+  /**
+   * Per semantic: a hint colour, a block, and whether it glows. A semantic with no look is
+   * undecided; no shipped theme leaves one (see the tests), but a project can.
+   */
   readonly looks: Partial<
     Record<CitySemantic, { readonly tint: string; readonly block?: string; readonly glow?: true }>
   >;
 }
 
 export const CITY_THEMES: readonly CityTheme[] = [
+  // The city's themes are made of the default block set, so a sample is textured out of the
+  // box. The tints are only how a look draws where its block isn't available.
   {
     name: "Concrete",
     looks: {
-      Ground: { tint: "#2c3036" },
-      Road: { tint: "#1b1d21" },
-      Mass: { tint: "#3b4048" },
-      Glass: { tint: "#5f8796" },
-      Trim: { tint: "#c8cdd5" },
-      Roof: { tint: "#545a63" },
-      Glow: { tint: "#22d3ee", glow: true },
+      Ground: { tint: "#373a3f", block: "voxyl:gray_concrete" },
+      Road: { tint: "#1b1d21", block: "voxyl:black_concrete" },
+      Mass: { tint: "#8d8f94", block: "voxyl:light_gray_concrete" },
+      Glass: { tint: "#a9d8e8", block: "voxyl:glass" },
+      Trim: { tint: "#d9d4c7", block: "voxyl:white_concrete" },
+      Roof: { tint: "#373a3f", block: "voxyl:gray_concrete" },
+      Glow: { tint: "#22d3ee", block: "voxyl:cyan_concrete", glow: true },
     },
   },
   {
     name: "Brick",
     looks: {
-      Ground: { tint: "#6b5d4a" },
-      Road: { tint: "#3a3733" },
-      Mass: { tint: "#9a553a" },
-      Glass: { tint: "#cdb98a" },
-      Trim: { tint: "#e6d9bc" },
-      Roof: { tint: "#5b3b2c" },
-      Glow: { tint: "#ffb347", glow: true },
+      Ground: { tint: "#7a5a3a", block: "voxyl:dirt" },
+      Road: { tint: "#6b6b6b", block: "voxyl:cobblestone" },
+      Mass: { tint: "#9a553a", block: "voxyl:bricks" },
+      Glass: { tint: "#c9e3e8", block: "voxyl:glass" },
+      Trim: { tint: "#dbd0a0", block: "voxyl:sandstone" },
+      Roof: { tint: "#4a3623", block: "voxyl:dark_oak_planks" },
+      Glow: { tint: "#ffd27a", block: "voxyl:glowstone", glow: true },
     },
   },
-  { name: "Undecided", looks: {} },
   {
-    // Blocks from the default library; the tints are how it draws where blocks don't.
+    // A mix of the default library's materials.
     name: "Blocks",
     looks: {
       Ground: { tint: "#689c3b", block: "voxyl:grass_block" },

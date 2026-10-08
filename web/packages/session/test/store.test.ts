@@ -1,6 +1,12 @@
 import { DEFAULT_LIBRARY_ID, defaultLibrary } from "@voxyl/blocks";
 import { Project } from "@voxyl/core";
-import { CITY_THEMES, cityThemePalette, generateCity, prepareCityProject } from "@voxyl/fixtures";
+import {
+  CITY_THEMES,
+  type CityTheme,
+  cityThemePalette,
+  generateCity,
+  prepareCityProject,
+} from "@voxyl/fixtures";
 import { describe, expect, it } from "vitest";
 import {
   BlockMaterials,
@@ -12,6 +18,16 @@ import {
   stateLooks,
   TEXTURE_SIZE,
 } from "../src/index.ts";
+
+/** Looks with a colour and no block, and looks with neither: what a project can still have. */
+const TINTED: CityTheme = {
+  name: "Tinted",
+  looks: {
+    Mass: { tint: "#3b4048" },
+    Glow: { tint: "#22d3ee", glow: true },
+  },
+};
+const UNDECIDED: CityTheme = { name: "Undecided", looks: {} };
 
 function city(name: string, cells = 30_000): Project {
   const project = new Project({ chunkBits: 5 });
@@ -125,7 +141,7 @@ describe("stateLooks", () => {
     project.run({
       id: "skin",
       kind: "palette_sync",
-      args: cityThemePalette(CITY_THEMES[2] as never, 2),
+      args: cityThemePalette(UNDECIDED, 2),
     });
     const after = stateLooks(states, project.semantics);
     // Undecided: no glow, the undecided grey.
@@ -173,6 +189,7 @@ describe("stateLooks with blocks", () => {
 
   it("draws looks without blocks, or with blocks no library has, as the tinted placeholder", () => {
     const project = city("Alpha", 5_000);
+    project.run({ id: "skin", kind: "palette_sync", args: cityThemePalette(TINTED, 2) });
     const states = project.world.states;
     const mass = states.intern({ semantic: project.semantics.byName("Mass", 1) as number });
     const materials = blocks();
