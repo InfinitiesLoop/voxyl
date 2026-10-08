@@ -719,8 +719,8 @@ connections and their settings tab.
   both centred, instead of side by side: the two needed ~1250 px and collided in a 1240 px
   card. Checked at 1600×900 and 1100×700.
 - **Inventory layout, second pass (replaces "Inventory footer is a column").** The left column is
-  Prefabs (a button), the tools (one row each: icon and name; scrolls once there are more),
-  then the palettes. The footer is one row: what the tool in hand does and its options (a
+  Prefabs (a button), the palettes, then the tools (one row each: icon and name; scrolls once there are more),
+  The footer is one row: what the tool in hand does and its options (a
   fixed 340x92 px box, so choosing a tool never moves anything), left of the hotbar. The
   footer fell from ~270 px to ~90 px, and the inventory card no longer overflows a 720 px
   window (its grid row is `minmax(0, 1fr)`). Tried and dropped: a dock with the tools as a

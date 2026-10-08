@@ -1439,8 +1439,8 @@ button[aria-pressed="true"] {
   overflow-y: auto;
 }
 
-/* The left column: Prefabs, then the tools, then the palettes. The tools and the palettes
-   scroll on their own, the tools keeping their height as long as the column has it. */
+/* The left column: Prefabs, then the palettes, then the tools. The palettes take what they
+   need and the tools the rest; each scrolls on its own when it runs short. */
 .inventory-side {
   display: flex;
   flex-direction: column;
@@ -1461,13 +1461,14 @@ button[aria-pressed="true"] {
   min-height: 0;
 }
 
-.inventory-tools {
+.inventory-palette-list {
   flex: 0 1 auto;
+  min-height: 72px;
 }
 
-.inventory-palette-list {
-  flex: 1 1 0;
-  min-height: 72px;
+.inventory-tools {
+  flex: 1 1 auto;
+  min-height: 120px;
 }
 
 .inventory-tools .tool-buttons,

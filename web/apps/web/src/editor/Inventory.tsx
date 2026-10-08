@@ -20,7 +20,7 @@ import { useStore } from "./useStore.ts";
  * hotbar: opening selects that slot's semantic and its palette, and choosing another slot
  * does too. Clicking a semantic fills the chosen slot and moves to the next. A search finds
  * semantics by name, what they are for, or block. "+" opens the entry editor. Right-click
- * offers Edit or Delete. The left column holds Prefabs, the tools and the palettes; what the tool in hand does sits beside the hotbar.
+ * offers Edit or Delete. The left column holds Prefabs, the palettes and the tools; what the tool in hand does sits beside the hotbar.
  */
 export function Inventory({ engine }: { engine: Engine }) {
   const open = useStore(engine.inventoryOpen);
@@ -132,10 +132,6 @@ export function Inventory({ engine }: { engine: Engine }) {
             >
               Prefabs
             </button>
-            <section className="inventory-tools">
-              <p className="inventory-side-label">Tools</p>
-              <ToolButtons engine={engine} />
-            </section>
             <section className="inventory-palette-list">
               <p className="inventory-side-label">Palettes</p>
               <div className="inventory-palettes" role="listbox" aria-label="Palettes">
@@ -155,6 +151,10 @@ export function Inventory({ engine }: { engine: Engine }) {
                   </button>
                 ))}
               </div>
+            </section>
+            <section className="inventory-tools">
+              <p className="inventory-side-label">Tools</p>
+              <ToolButtons engine={engine} />
             </section>
           </div>
           {prefabsPage ? (
