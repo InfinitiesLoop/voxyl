@@ -83,6 +83,21 @@ export const KEY_SECTIONS: readonly BindingSection[] = [
     ],
   },
   {
+    id: "paste",
+    title: "Copying and pasting",
+    when: "Anywhere; pasting with the Paste tool, flying",
+    tools: ["paste"],
+    bindings: [
+      other("Copy the selection", ["Ctrl + C"], "also Actions → Copy"),
+      other("Cut the selection", ["Ctrl + X"], "also Actions → Cut"),
+      other("Paste: take the Paste tool", ["Ctrl + V"], "also the inventory"),
+      other("Place the clipboard", ["Right click"], "with Paste in hand"),
+      key("Turn the clipboard", "rotateBlock", "with Paste in hand; Shift turns it back"),
+      key("Mirror the clipboard", "mirrorPaste", "with Paste in hand; also the tool options"),
+      other("Save the selection as a prefab", ["Ctrl + P"], "also Actions → Save as prefab"),
+    ],
+  },
+  {
     id: "select",
     title: "Selecting",
     when: "Select tool, flying",

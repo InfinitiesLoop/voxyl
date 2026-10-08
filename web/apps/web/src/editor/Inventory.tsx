@@ -7,6 +7,7 @@ import { HotbarBar } from "./HotbarBar.tsx";
 import { HOTBAR_SLOTS } from "./hotbar.ts";
 import { BakedIcon, PREVIEW_PX } from "./icons.tsx";
 import { PaletteEntryDialog } from "./PaletteEntry.tsx";
+import { PrefabGrid } from "./prefabs.tsx";
 import { SemanticEditor } from "./SemanticEditor.tsx";
 import { menuAnchor, SemanticMenu, type SemanticMenuTarget } from "./SemanticMenu.tsx";
 import { ShapeIcon } from "./ShapeIcon.tsx";
@@ -27,6 +28,8 @@ export function Inventory({ engine }: { engine: Engine }) {
   const bar = useStore(engine.hotbar.state);
   const held = bar.slots[bar.selected] ?? null;
   const [paletteId, setPaletteId] = useState<number | null>(null);
+  /** The Prefabs page is shown in place of a palette. */
+  const [prefabsPage, setPrefabsPage] = useState(false);
   const [query, setQuery] = useState("");
   const [semanticsOpen, setSemanticsOpen] = useState(false);
   const [menu, setMenu] = useState<SemanticMenuTarget | null>(null);
@@ -39,11 +42,18 @@ export function Inventory({ engine }: { engine: Engine }) {
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   const matches = (s: SemanticInfo) => terms.every((t) => searchText(s).includes(t));
   const shown = terms.length === 0 ? palettes : palettes.filter((p) => p.semantics.some(matches));
-  const palette = shown.find((item) => item.id === paletteId) ?? shown[0];
+  const palette = prefabsPage
+    ? undefined
+    : (shown.find((item) => item.id === paletteId) ?? shown[0]);
 
   useEffect(() => {
     if (palette && paletteId !== palette.id) setPaletteId(palette.id);
   }, [palette, paletteId]);
+
+  // Choosing a semantic (a slot, a click) goes back to the palettes.
+  useEffect(() => {
+    if (!open) setPrefabsPage(false);
+  }, [open]);
 
   useEffect(() => {
     if (!open) {
@@ -112,69 +122,88 @@ export function Inventory({ engine }: { engine: Engine }) {
                 role="option"
                 aria-selected={item.id === palette?.id}
                 className={item.id === palette?.id ? "active" : undefined}
-                onClick={() => setPaletteId(item.id)}
+                onClick={() => {
+                  setPrefabsPage(false);
+                  setPaletteId(item.id);
+                }}
               >
                 {item.name}
               </button>
             ))}
+            <button
+              type="button"
+              role="option"
+              aria-selected={prefabsPage}
+              className={prefabsPage ? "active" : undefined}
+              title="Pieces kept from builds. Click one to paste it."
+              onClick={() => setPrefabsPage(true)}
+            >
+              Prefabs
+            </button>
           </div>
-          <div className="inventory-grid">
-            {semantics.map((semantic) => {
-              const key = semanticKey(semantic);
-              const active = key === heldKey;
-              return (
+          {prefabsPage ? (
+            <div className="inventory-grid inventory-prefabs">
+              <PrefabGrid engine={engine} query={query} manage={false} />
+            </div>
+          ) : (
+            <div className="inventory-grid">
+              {semantics.map((semantic) => {
+                const key = semanticKey(semantic);
+                const active = key === heldKey;
+                return (
+                  <button
+                    key={key}
+                    ref={active ? heldRef : undefined}
+                    type="button"
+                    className={active ? "inventory-swatch selected" : "inventory-swatch"}
+                    aria-pressed={active}
+                    title={[
+                      semantic.name,
+                      semantic.description,
+                      semantic.block ? blockTitle(semantic.block) : "undecided",
+                      semantic.shape ? shapeName(semantic.shape) : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                    onClick={() => {
+                      const chosen = engine.hotbar.state.get().selected;
+                      engine.hotbar.assign(chosen, semantic);
+                      engine.hotbar.select((chosen + 1) % HOTBAR_SLOTS);
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      if (!palette) return;
+                      const at = menuAnchor(e.clientX, e.clientY);
+                      setMenu({ ...at, palette, semantic });
+                    }}
+                  >
+                    <BakedIcon
+                      engine={engine}
+                      block={semantic.block}
+                      color={semantic.color}
+                      className={semantic.glow ? "inventory-icon glow" : "inventory-icon"}
+                    />
+                    {semantic.shape && (
+                      <ShapeIcon shape={semantic.shape} className="inventory-shape" />
+                    )}
+                    <span>{semantic.name}</span>
+                  </button>
+                );
+              })}
+              {palette && !palette.linked && terms.length === 0 && (
                 <button
-                  key={key}
-                  ref={active ? heldRef : undefined}
                   type="button"
-                  className={active ? "inventory-swatch selected" : "inventory-swatch"}
-                  aria-pressed={active}
-                  title={[
-                    semantic.name,
-                    semantic.description,
-                    semantic.block ? blockTitle(semantic.block) : "undecided",
-                    semantic.shape ? shapeName(semantic.shape) : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                  onClick={() => {
-                    const chosen = engine.hotbar.state.get().selected;
-                    engine.hotbar.assign(chosen, semantic);
-                    engine.hotbar.select((chosen + 1) % HOTBAR_SLOTS);
-                  }}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    if (!palette) return;
-                    const at = menuAnchor(e.clientX, e.clientY);
-                    setMenu({ ...at, palette, semantic });
-                  }}
+                  className="inventory-swatch inventory-add"
+                  title={`Add a semantic to ${palette.name}`}
+                  onClick={() => setEditing({ palette, semantic: null })}
                 >
-                  <BakedIcon
-                    engine={engine}
-                    block={semantic.block}
-                    color={semantic.color}
-                    className={semantic.glow ? "inventory-icon glow" : "inventory-icon"}
-                  />
-                  {semantic.shape && (
-                    <ShapeIcon shape={semantic.shape} className="inventory-shape" />
-                  )}
-                  <span>{semantic.name}</span>
+                  <span className="swatch">+</span>
+                  <span>Add</span>
                 </button>
-              );
-            })}
-            {palette && !palette.linked && terms.length === 0 && (
-              <button
-                type="button"
-                className="inventory-swatch inventory-add"
-                title={`Add a semantic to ${palette.name}`}
-                onClick={() => setEditing({ palette, semantic: null })}
-              >
-                <span className="swatch">+</span>
-                <span>Add</span>
-              </button>
-            )}
-            {palette && semantics.length === 0 && terms.length > 0 && <p>No match.</p>}
-          </div>
+              )}
+              {palette && semantics.length === 0 && terms.length > 0 && <p>No match.</p>}
+            </div>
+          )}
           <aside className="inventory-preview">
             {held ? (
               <>

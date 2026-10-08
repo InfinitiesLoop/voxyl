@@ -18,8 +18,10 @@ import {
 import {
   type CellSet,
   type CellStateTable,
+  cutPiece,
   type Command as EditCommand,
   IDENTITY,
+  type Piece,
   type Project,
   raycast,
 } from "@voxyl/core";
@@ -34,6 +36,7 @@ import {
   lookColor,
   newPaletteKey,
   PaletteStore,
+  PrefabStore,
   ProjectStore,
   stateLooks,
   WorldSession,
@@ -51,12 +54,24 @@ import {
   type WorldInfo,
 } from "../worlds.ts";
 import {
+  defaultAnchor,
+  mirrorOf,
+  type PasteArgs,
+  type PieceCells,
+  pieceCells,
+  pieceThumbnail,
+  placedBox,
+  placedPositions,
+} from "./clipboard.ts";
+import {
   type Aim,
   addPaletteCommand,
   addSemanticCommand,
   aim,
   clearSelectionCommand,
+  commandId,
   describeSemanticCommand,
+  EDITOR_SOURCE,
   editSemanticCommand,
   eraseCommand,
   fillBoxCommand,
@@ -88,14 +103,17 @@ import {
   type AimView,
   type BlockPreview,
   type BlockSearch,
+  type ClipboardInfo,
   type Command,
   EMPTY_SELECTION,
   type FromWorld,
   type LibraryInfo,
+  MAX_GHOST_CELLS,
   MAX_PREVIEW_CELLS,
   MAX_SLICE_CELLS,
   type MeshReply,
   type MeshRequest,
+  type PasteGhost,
   type RayHit,
   type Replies,
   type ToWorld,
@@ -122,6 +140,14 @@ const STATS_INTERVAL_MS = 250;
 /** A saved project is saved this long after its last change. */
 const AUTOSAVE_MS = 1500;
 
+interface Clip {
+  readonly piece: Piece;
+  readonly cells: PieceCells;
+  /** r, g, b for each piece semantic, by its 1-based number (index 0 is unused). */
+  readonly colors: Uint8Array;
+  readonly info: ClipboardInfo;
+}
+
 interface MeshPort {
   readonly port: MessagePort;
   load: number;
@@ -130,6 +156,9 @@ interface MeshPort {
 const store = new ProjectStore(new OpfsFolder("voxyl"));
 const libraryStore = new LibraryStore(new OpfsFolder("voxyl"));
 const paletteStore = new PaletteStore(new OpfsFolder("voxyl"));
+const prefabStore = new PrefabStore(new OpfsFolder("voxyl"));
+/** The clipboard: a piece, kept across projects so one can be copied into another. */
+let clipboard: Clip | null = null;
 let session: WorldSession | null = null;
 let project: Project | null = null;
 /** The id the open project is saved under, or null for an unsaved sample. */
@@ -515,6 +544,8 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
         preview,
         ghost,
         aimed: met ? { shape: met.shape, slot: met.slot } : null,
+        pasteGhost:
+          command.paste && target.place ? pasteGhostAt(open, target.place, command.paste) : null,
       } satisfies AimView;
     }
     case "toolEdit": {
@@ -528,6 +559,83 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       };
       return runEdit(toolCommand(openProject(), click, command.semantic, command.dir)) > 0;
     }
+    case "clipboardCopy": {
+      const open = openProject();
+      const selection = open.selection;
+      if (!selection || selection.size === 0) return null;
+      const piece = pieceOfSelection(open, selection);
+      if (!piece) return null;
+      const info = setClipboard(piece, "selection");
+      if (command.cut) runEdit(clearSelectionCommand(open));
+      return info;
+    }
+    case "clipboardInfo":
+      return clipboard?.info ?? null;
+    case "clipboardClear":
+      clipboard = null;
+      return null;
+    case "paste": {
+      const target = aim(world(), command.origin, command.dir, command.reach);
+      if (!clipboard || !target?.place) return 0;
+      const at: Vec3 = [
+        target.place[0] + command.offset[0],
+        target.place[1] + command.offset[1],
+        target.place[2] + command.offset[2],
+      ];
+      const mirror = mirrorOf(command);
+      const from = clipboard.info.from === "selection" ? "" : `${clipboard.info.from}, `;
+      const cells = runEdit({
+        id: commandId(),
+        kind: "paste",
+        source: EDITOR_SOURCE,
+        label: `Paste ${from}${clipboard.info.cells} blocks`,
+        args: {
+          piece: clipboard.piece,
+          at,
+          turn: command.turn,
+          ...(mirror && { mirror }),
+          ...(command.air && { air: true }),
+        },
+      });
+      return Math.max(0, cells);
+    }
+    case "savePrefab": {
+      const open = openProject();
+      const piece =
+        command.from === "clipboard"
+          ? clipboard?.piece
+          : open.selection && open.selection.size > 0
+            ? pieceOfSelection(open, open.selection)
+            : null;
+      if (!piece) {
+        throw new Error(
+          command.from === "clipboard" ? "The clipboard is empty" : "Nothing is selected",
+        );
+      }
+      await librariesLoaded;
+      const colors = pieceColors(piece);
+      const thumb = pieceThumbnail(piece, (n) => colors[n] ?? 0x808080);
+      return prefabStore.save(piece, { name: command.name, tags: command.tags, thumb });
+    }
+    case "prefabs":
+      return prefabStore.list();
+    case "prefabThumb":
+      return prefabStore.thumb(command.id);
+    case "usePrefab": {
+      const piece = await prefabStore.load(command.id);
+      const entry = await prefabStore.entry(command.id);
+      if (!piece || !entry) throw new Error("That prefab is gone");
+      await librariesLoaded;
+      return setClipboard(piece, entry.name);
+    }
+    case "updatePrefab":
+      return prefabStore.update(command.id, {
+        ...(command.name !== undefined && { name: command.name }),
+        ...(command.tags !== undefined && { tags: command.tags }),
+      });
+    case "deletePrefab":
+      await prefabStore.delete(command.id);
+      return null;
     case "rotate": {
       const target = aim(world(), command.origin, command.dir, command.reach);
       return target ? runEdit(rotateCommand(openProject(), target, command.reverse)) > 0 : false;
@@ -626,6 +734,61 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       return runEdit(setCellCommand(project, at, command.id, "Place")) > 0;
     }
   }
+}
+
+/** The selection as a piece anchored at the middle of its footprint, on its floor. */
+function pieceOfSelection(open: Project, selection: CellSet): Piece | null {
+  const b = selection.bounds();
+  if (!b) return null;
+  const [ax, ay, az] = defaultAnchor([b.x1 - b.x0 + 1, b.y1 - b.y0 + 1, b.z1 - b.z0 + 1]);
+  return cutPiece(
+    { world: open.world, semantics: open.semantics, id: open.id, north: open.settings.north },
+    selection,
+    [b.x0 + ax, b.y0 + ay, b.z0 + az],
+  );
+}
+
+/** Each piece semantic's colour as 0xrrggbb, by its 1-based number (index 0 is unused). */
+function pieceColors(piece: Piece): number[] {
+  const out = [0];
+  for (const s of piece.semantics) {
+    out.push(Number.parseInt(lookColor(s.look ?? {}, blocks).slice(1), 16));
+  }
+  return out;
+}
+
+/** Puts a piece in the clipboard (anchored mid-footprint unless it says), and says what it is. */
+function setClipboard(piece: Piece, from: string): ClipboardInfo {
+  const anchored = piece.anchor ? piece : { ...piece, anchor: defaultAnchor(piece.size) };
+  const cells = pieceCells(anchored);
+  const colors = new Uint8Array(anchored.semantics.length * 3 + 3);
+  pieceColors(anchored).forEach((rgb, n) => {
+    colors[n * 3] = (rgb >> 16) & 0xff;
+    colors[n * 3 + 1] = (rgb >> 8) & 0xff;
+    colors[n * 3 + 2] = rgb & 0xff;
+  });
+  const info: ClipboardInfo = { size: anchored.size, cells: cells.semantics.length, from };
+  clipboard = { piece: anchored, cells, colors, info };
+  return info;
+}
+
+/** What a paste of the clipboard would fill with its anchor at `at`. */
+function pasteGhostAt(open: Project, at: Vec3, args: PasteArgs): PasteGhost | null {
+  if (!clipboard) return null;
+  const { piece, cells, colors } = clipboard;
+  const box = placedBox(piece, open.settings.north, at, args);
+  if (cells.semantics.length > MAX_GHOST_CELLS) {
+    return { positions: new Int32Array(0), colors: new Uint8Array(0), ...box };
+  }
+  const positions = placedPositions(piece, cells, open.settings.north, at, args);
+  const rgb = new Uint8Array(cells.semantics.length * 3);
+  for (let i = 0; i < cells.semantics.length; i++) {
+    const n = cells.semantics[i] ?? 0;
+    rgb[i * 3] = colors[n * 3] ?? 128;
+    rgb[i * 3 + 1] = colors[n * 3 + 1] ?? 128;
+    rgb[i * 3 + 2] = colors[n * 3 + 2] ?? 128;
+  }
+  return { positions, colors: rgb, ...box };
 }
 
 /** A block's faces as textures, tinted, for the block chooser's preview. */

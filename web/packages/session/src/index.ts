@@ -18,6 +18,7 @@ export {
   UNDECIDED_COLOR,
 } from "./looks.ts";
 export { newPaletteKey, PaletteStore, type StoredPalette } from "./palettes.ts";
+export { cleanTags, type PrefabEntry, PrefabStore } from "./prefabs.ts";
 export {
   type LightingMode,
   type MaterialsFor,

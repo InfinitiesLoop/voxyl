@@ -17,6 +17,7 @@ import {
 } from "./editor/layout.ts";
 import { PaletteDrawer } from "./editor/PaletteDrawer.tsx";
 import { Panes } from "./editor/Panes.tsx";
+import { PrefabSaveDialog } from "./editor/prefabs.tsx";
 import { SelectionPanel } from "./editor/SelectionPanel.tsx";
 import { SelectionActions } from "./editor/selection-actions.tsx";
 import { Toast } from "./editor/Toast.tsx";
@@ -418,6 +419,7 @@ export function App() {
       {engine && <EditorTools engine={engine} />}
       {engine && <Inventory engine={engine} />}
       {engine && <Toast engine={engine} />}
+      {engine && <PrefabSaveDialog engine={engine} />}
       {engine && keysOpen && <KeysPanel tool={engine.tool.get()} onClose={closeKeys} />}
       {engine && palettesOpen && <PaletteDrawer engine={engine} />}
       <Hud

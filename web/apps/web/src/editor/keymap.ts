@@ -19,6 +19,7 @@ export const KEY_ACTIONS = [
   "inventory",
   "nextTool",
   "rotateBlock",
+  "mirrorPaste",
   "placeOpposite",
   "clearSelection",
   "layerUp",
@@ -48,8 +49,10 @@ export const KEYMAP: Readonly<Record<KeyAction, KeyBinding>> = {
   inventory: { binding: ["KeyE"], alternate: ["Delete"] },
   /** Shift goes back a tool. */
   nextTool: { binding: ["KeyQ"], alternate: ["NumpadMultiply"] },
-  /** Shift turns the other way. */
+  /** Shift turns the other way. With Paste in hand it turns the clipboard instead. */
   rotateBlock: { binding: ["KeyR"], alternate: ["Numpad0"] },
+  /** With Paste in hand: mirror the clipboard, east for west. */
+  mirrorPaste: { binding: ["KeyM"], alternate: ["NumpadDecimal"] },
   /** Held while placing a shaped part: it goes on the far side of the cell (also the mouse thumb buttons). */
   placeOpposite: { binding: ["ControlLeft"], alternate: ["NumpadDivide", "Period"] },
   clearSelection: { binding: ["Backspace"], alternate: [] },

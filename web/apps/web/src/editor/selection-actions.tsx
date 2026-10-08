@@ -25,6 +25,28 @@ interface SelectionAction {
  */
 const ACTIONS: readonly SelectionAction[] = [
   {
+    id: "copy",
+    label: () => "Copy",
+    title:
+      "Copy the selection to the clipboard (Ctrl+C). Ctrl+V then pastes it with the Paste tool.",
+    enabled: (ctx) => ctx.selection.occupied > 0,
+    run: (ctx) => void ctx.engine.copySelection(false),
+  },
+  {
+    id: "cut",
+    label: () => "Cut",
+    title: "Copy the selection, then empty its cells (Ctrl+X).",
+    enabled: (ctx) => ctx.selection.occupied > 0,
+    run: (ctx) => void ctx.engine.copySelection(true),
+  },
+  {
+    id: "prefab",
+    label: () => "Save as prefab…",
+    title: "Keep the selection as a prefab: a named piece you can paste into any build (Ctrl+P).",
+    enabled: (ctx) => ctx.selection.occupied > 0,
+    run: (ctx) => ctx.engine.prefabDialog.set(true),
+  },
+  {
     id: "fill",
     label: (ctx) => (ctx.slotName ? `Fill with ${ctx.slotName}` : "Fill"),
     title: "Write the hotbar semantic into every selected cell.",

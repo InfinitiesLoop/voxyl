@@ -231,7 +231,10 @@ function flatHint(tool: EditorTool, mode: DrawMode): string {
     rect: "Drag a rectangle",
     fill: "Click fills",
   }[mode];
-  const note = tool === "wand" || tool === "column" ? " (the Wand and Build to me work in 3D)" : "";
+  const note =
+    tool === "wand" || tool === "column" || tool === "paste"
+      ? " (the Wand, Build to me and Paste work in 3D)"
+      : "";
   return `${what} · right button erases · middle-drag pans${note}`;
 }
 

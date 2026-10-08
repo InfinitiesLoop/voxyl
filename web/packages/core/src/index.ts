@@ -38,6 +38,7 @@ export {
   MIN_CHUNK_BITS,
   MIN_CHUNK_COORD,
 } from "./coords.ts";
+export { deflate, hash64, inflate } from "./format/bytes.ts";
 export { decodeStorageChunk, encodeStorageChunk, STORAGE_SIZE } from "./format/chunk-codec.ts";
 export { canonicalJSON, loadPrefab, prefabHash, savePrefab } from "./format/prefab.ts";
 export {

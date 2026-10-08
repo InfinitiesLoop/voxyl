@@ -6,14 +6,17 @@ import type { Engine } from "../scene/Engine.ts";
 import type { LibraryInfo, SharedPaletteInfo } from "../world/protocol.ts";
 import { WORLD_KINDS, type WorldKind } from "../worlds.ts";
 import { BlockChooser, BlockChooserDialog, blockTitle } from "./BlockPicker.tsx";
+import { FormCell } from "./FormCell.tsx";
+import { PrefabGrid } from "./prefabs.tsx";
 
-type Tab = "projects" | "palettes" | "blocks";
+type Tab = "projects" | "palettes" | "prefabs" | "blocks";
 const TAB_KEY = "voxyl.homeTab";
 
 function readTab(): Tab {
   try {
     const saved = localStorage.getItem(TAB_KEY);
-    if (saved === "projects" || saved === "palettes" || saved === "blocks") return saved;
+    if (saved === "projects" || saved === "palettes" || saved === "prefabs" || saved === "blocks")
+      return saved;
   } catch {
     // Projects is where most visits start.
   }
@@ -58,6 +61,7 @@ export function Home(props: HomeProps) {
             [
               ["projects", "Builds"],
               ["palettes", "Palettes"],
+              ["prefabs", "Prefabs"],
               ["blocks", "Blocks"],
             ] as const
           ).map(([id, label]) => (
@@ -76,6 +80,7 @@ export function Home(props: HomeProps) {
       <div className={tab === "blocks" ? "home-body home-body-blocks" : "home-body"}>
         {tab === "projects" && <Projects {...props} />}
         {tab === "palettes" && <Palettes engine={props.engine} />}
+        {tab === "prefabs" && <Prefabs engine={props.engine} onUse={props.onBack} />}
         {tab === "blocks" && (
           <Blocks engine={props.engine} libraries={props.libraries} library={props.library} />
         )}
@@ -155,6 +160,28 @@ function Projects({ projects, onOpen, onNew, onSample, project }: HomeProps) {
             ))}
         </ul>
       )}
+    </section>
+  );
+}
+
+/** Prefabs: pieces kept from builds, each a picture. Click one to paste it into the open build. */
+function Prefabs({ engine, onUse }: { engine: Engine; onUse: () => void }) {
+  const [query, setQuery] = useState("");
+  return (
+    <section className="home-section">
+      <div className="home-actions">
+        <input
+          className="inventory-search"
+          value={query}
+          placeholder="Search by name or tag"
+          aria-label="Search prefabs"
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <span className="home-quiet">
+          Select part of a build and press Ctrl+P to keep it here. Click a prefab to paste it.
+        </span>
+      </div>
+      <PrefabGrid engine={engine} query={query} manage onUse={onUse} />
     </section>
   );
 }
@@ -309,6 +336,7 @@ function PaletteEditor({
             <th>Look</th>
             <th>Name</th>
             <th>What it is for</th>
+            <th>Shape</th>
             <th>Fallback</th>
             <th>Glows</th>
             <th />
@@ -334,6 +362,21 @@ function PaletteEditor({
                   value={s.description ?? ""}
                   placeholder="What it is for"
                   onChange={(e) => setSemantic(i, { description: e.target.value })}
+                />
+              </td>
+              <td>
+                <FormCell
+                  form={s.form}
+                  onChange={(form) => {
+                    // Setting a form replaces it whole, so drop the key when it is empty.
+                    const { form: _f, ...rest } = s;
+                    update({
+                      ...palette,
+                      semantics: palette.semantics.map((x, k) =>
+                        k === i ? (form ? { ...rest, form } : rest) : x,
+                      ),
+                    });
+                  }}
                 />
               </td>
               <td>

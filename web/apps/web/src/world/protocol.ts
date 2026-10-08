@@ -14,11 +14,13 @@ import type {
   LightingMode,
   LightLayoutUpdate,
   MeshJob,
+  PrefabEntry,
   ProjectEntry,
   StoredPalette,
 } from "@voxyl/session";
 import type { SliceAxis } from "../views/plane.ts";
 import type { WorldInfo, WorldSource } from "../worlds.ts";
+import type { PasteArgs } from "./clipboard.ts";
 import type { Aim, HistoryState, PaletteInfo, PartGhost } from "./editing.ts";
 import type { BuildTool } from "./tools.ts";
 
@@ -59,7 +61,32 @@ export type AimView = Aim & {
   readonly preview: Int32Array | null;
   readonly ghost: PartGhost | null;
   readonly aimed: { readonly shape: string; readonly slot: number } | null;
+  /** With the Paste tool: the cells the clipboard would fill at this aim. */
+  readonly pasteGhost: PasteGhost | null;
 };
+
+/** What a paste would fill, for the ghost: the cells and their colours, and the box. */
+export interface PasteGhost {
+  /** x, y, z per cell; empty when the piece is too big to draw cell by cell. */
+  readonly positions: Int32Array;
+  /** r, g, b per cell. */
+  readonly colors: Uint8Array;
+  readonly min: Vec3;
+  /** The far corner of the box, exclusive. */
+  readonly max: Vec3;
+}
+
+/** What the clipboard holds, as the editor shows it. */
+export interface ClipboardInfo {
+  readonly size: readonly [number, number, number];
+  /** Cells that hold something (air left out). */
+  readonly cells: number;
+  /** Where it came from: "selection", or the prefab's name. */
+  readonly from: string;
+}
+
+/** The most cells a paste ghost draws one by one. */
+export const MAX_GHOST_CELLS = 60000;
 
 /** At most this many cells are previewed (the click still builds them all). */
 export const MAX_PREVIEW_CELLS = 8192;
@@ -134,7 +161,23 @@ export type Command =
    * Where a ray from the crosshair aims (see editing.ts), and with `tool`, the cells that
    * tool would build there (the preview).
    */
-  | ({ type: "aim"; tool?: ToolArgs; part?: PartArgs } & Ray)
+  | ({ type: "aim"; tool?: ToolArgs; part?: PartArgs; paste?: PasteArgs } & Ray)
+  /** Copies the selection into the clipboard (cut: and empties it). Null with no selection. */
+  | { type: "clipboardCopy"; cut: boolean }
+  /** What the clipboard holds now. */
+  | { type: "clipboardInfo" }
+  | { type: "clipboardClear" }
+  /** Places the clipboard with its anchor where the ray aims. */
+  | ({ type: "paste" } & PasteArgs & Ray)
+  /** Keeps the selection, or the clipboard, as a prefab. */
+  | { type: "savePrefab"; name: string; tags: string[]; from: "selection" | "clipboard" }
+  | { type: "prefabs" }
+  /** A prefab's picture, RGBA (THUMB_SIZE square), or null. */
+  | { type: "prefabThumb"; id: string }
+  /** Puts a prefab in the clipboard. */
+  | { type: "usePrefab"; id: string }
+  | { type: "updatePrefab"; id: string; name?: string; tags?: string[] }
+  | { type: "deletePrefab"; id: string }
   /** Builds with a multi-block tool where the ray aims (see tools.ts). */
   | ({ type: "toolEdit"; semantic: SemanticArg } & ToolArgs & Ray)
   /** Turns the block the ray aims at about the face it hits (Shift: the other way). */
@@ -236,6 +279,17 @@ export type Command =
     };
 
 export interface Replies {
+  clipboardCopy: ClipboardInfo | null;
+  clipboardInfo: ClipboardInfo | null;
+  clipboardClear: null;
+  /** How many cells the paste filled (0 when it could not be placed). */
+  paste: number;
+  savePrefab: PrefabEntry;
+  prefabs: PrefabEntry[];
+  prefabThumb: Uint8Array | null;
+  usePrefab: ClipboardInfo;
+  updatePrefab: PrefabEntry;
+  deletePrefab: null;
   load: WorldInfo;
   lighting: { lightAllMs: number | null };
   libraries: LibraryInfo[];

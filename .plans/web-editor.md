@@ -439,6 +439,42 @@ there is a point worth orbiting.
      - **Not yet seen on screen:** the ghost and aimed-part outline need a pointer-locked 3D view;
        the rules, the ray, the commands and the outline geometry are tested.
 
+  2. **Clipboard and prefabs** (editor step 4).
+     - **Copy, cut, paste.** **Ctrl+C** copies the selection, **Ctrl+X** cuts it, **Ctrl+V** takes
+       the new **Paste** tool (also Actions → Copy and Cut, and the inventory). The clipboard is a
+       core *piece* (`cutPiece`) kept in the world worker, so it survives opening another build
+       and pastes into it: the piece carries its semantics by name and palette, and `paste`
+       maps or creates them (`importSemantics`). Right click places it with the middle of its
+       footprint, on its floor, on the cell aimed at (the anchor, set when it is copied). **R**
+       turns it (Shift back), **M** mirrors it east for west (Num 0 and Num . for the other
+       hand); the tool options also have buttons for both, **Clear what it lands on** (the
+       piece's empty cells clear: `air`), and a shift along x, y and z. A paste is one `paste`
+       command ("Paste 421 blocks"), so it undoes as one step and is what an agent would send;
+       north stays north when the build's north differs from the piece's (`turnsBetween`).
+     - **The ghost** is the piece's cells as translucent cubes in their semantics' colours,
+       with an amber box round them, drawn over the world (`scene/paste-ghost.ts`). The worker
+       sends the cells the paste would fill (`placedPositions`), and a test proves they are
+       exactly the cells a real `paste` fills, for all four turns, mirrored and not. Past
+       60,000 cells it is the box only. The plan said "drawn from a fork" of the world; cubes
+       are cheaper and read just as well, so the fork stays a possible later upgrade.
+     - **Prefabs.** **Ctrl+P** (or Actions → **Save as prefab…**) names and tags the selection
+       (`PrefabStore`, `packages/session/src/prefabs.ts`, tested): a deflated piece, an entry
+       (name, tags, size, blocks, content hash) and a 64×64 picture, in OPFS beside the
+       libraries, outside any build. The picture is a small isometric drawing of the piece in its
+       semantics' colours, made on the world worker (`pieceThumbnail`, tested). **Home →
+       Prefabs** lists them as picture cards (search by name or tag, rename, retag, delete),
+       and the inventory has a **Prefabs** page beside the palettes. Clicking a prefab puts it
+       in the clipboard and takes Paste, so the next right click places it. A prefab is a piece,
+       not yet the saved-project form `savePrefab` makes; Phase 4 pins agents' pastes by hash,
+       and the entry's hash is of the piece.
+     - **Shape on shared palettes.** Home's shared palette editor has the same Shape and Placing
+       controls on each semantic (`FormCell`), so a theme can carry shaped semantics.
+     - Not done: the Paste tool in a 2D view (the 2D bar says it works in 3D), and the Godot
+       app's modal offset panel (the options row has the shift instead).
+     - **Checked on screen** with the browser pane's page driven through `__voxylEngine` (the
+       pane can't lock the pointer): the picture cards, the dialogs, the tool options, and the
+       paste and part ghosts at an aimed cell.
+
 ## Cross-project resources (what is planned, and what is not)
 
 The user asked (2026-10-07) how resources that span projects fit: palettes as a top-level

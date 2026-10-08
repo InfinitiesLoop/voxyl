@@ -23,6 +23,11 @@ export const TOOLS: readonly { id: EditorTool; label: string; hint: string }[] =
     hint: "Right click swaps the block you aim at, and the same blocks touching it within the brush, for the hotbar's, in place.",
   },
   {
+    id: "paste",
+    label: "Paste",
+    hint: "Right click puts the clipboard (or a prefab) with its middle on the cell you aim at. Copy a selection with Ctrl+C first, or pick a prefab in the inventory.",
+  },
+  {
     id: "select",
     label: "Select",
     hint: "Right click two corners of a box; a third click clears. Shift+right click selects the blocks touching the one clicked.",
@@ -30,6 +35,19 @@ export const TOOLS: readonly { id: EditorTool; label: string; hint: string }[] =
 ];
 
 const BRUSHES = [1, 3, 5, 7, 9] as const;
+
+/** The keys for an action, for a tooltip. */
+function keyHint(action: "rotateBlock" | "mirrorPaste"): string {
+  const k = KEYMAP[action];
+  return [...k.binding, ...k.alternate].map(keyLabel).join(" or ");
+}
+
+/** Moves the paste's shift one cell along an axis (0 x, 1 y, 2 z). */
+function nudgePaste(engine: Engine, axis: number, step: number): void {
+  const offset = [...engine.paste.get().offset] as [number, number, number];
+  offset[axis] = (offset[axis] ?? 0) + step;
+  engine.setPaste({ offset });
+}
 
 /** How to switch tools from the keyboard, for the tooltips. */
 function toolKeys(): string {
@@ -47,6 +65,8 @@ export function ToolStrip({ engine }: { engine: Engine }) {
   const brush = useStore(engine.brush);
   const connectAny = useStore(engine.connectAny);
   const farSide = useStore(engine.farSide);
+  const clipboard = useStore(engine.clipboard);
+  const paste = useStore(engine.paste);
   const current = TOOLS.find((item) => item.id === tool);
   return (
     <div className="tool-strip">
@@ -95,6 +115,77 @@ export function ToolStrip({ engine }: { engine: Engine }) {
           />
           Far side for shaped parts ({codesOf("placeOpposite").slice(0, 1).map(keyLabel)} held)
         </label>
+      )}
+      {tool === "paste" && (
+        <div className="tool-options paste-options">
+          <span className="tool-options-label">
+            {clipboard
+              ? `${clipboard.from === "selection" ? "Clipboard" : clipboard.from}: ${clipboard.size.join("×")}, ${clipboard.cells.toLocaleString()} blocks`
+              : "The clipboard is empty"}
+          </span>
+          <button
+            type="button"
+            title={`Turn it a quarter turn (${keyHint("rotateBlock")}; Shift turns it back)`}
+            onClick={blurAfter(() => engine.turnPaste(1))}
+          >
+            Turn ⟳
+          </button>
+          <button
+            type="button"
+            title={`Turn it a quarter turn the other way (Shift + ${keyHint("rotateBlock")})`}
+            onClick={blurAfter(() => engine.turnPaste(-1))}
+          >
+            ⟲
+          </button>
+          <button
+            type="button"
+            aria-pressed={paste.mirror}
+            title={`Mirror it, east for west (${keyHint("mirrorPaste")})`}
+            onClick={blurAfter(() => engine.mirrorPaste())}
+          >
+            Mirror
+          </button>
+          <label title="The clipboard's empty cells clear what they land on">
+            <input
+              type="checkbox"
+              checked={paste.air}
+              onChange={(e) => {
+                engine.setPaste({ air: e.target.checked });
+                e.currentTarget.blur();
+              }}
+            />
+            Clear what it lands on
+          </label>
+          {(["x", "y", "z"] as const).map((axis, i) => (
+            <span key={axis} className="paste-offset" title={`Shift it along ${axis}`}>
+              {axis}
+              <button
+                type="button"
+                aria-label={`${axis} minus`}
+                onClick={blurAfter(() => nudgePaste(engine, i, -1))}
+              >
+                −
+              </button>
+              <output>{paste.offset[i]}</output>
+              <button
+                type="button"
+                aria-label={`${axis} plus`}
+                onClick={blurAfter(() => nudgePaste(engine, i, 1))}
+              >
+                +
+              </button>
+            </span>
+          ))}
+          <button
+            type="button"
+            title="Back to turn 0, no mirror, no shift"
+            onClick={blurAfter(() =>
+              engine.setPaste({ turn: 0, mirror: false, offset: [0, 0, 0] }),
+            )}
+          >
+            Reset
+          </button>
+        </div>
       )}
       {tool === "select" && (
         <label className="tool-options">
@@ -173,5 +264,11 @@ const ICONS: Record<EditorTool, ReactNode> = {
     </>
   ),
   exchange: <path {...stroke} d="M4 8h13l-3.2-3.2M20 16H7l3.2 3.2" />,
+  paste: (
+    <>
+      <rect {...stroke} x="5" y="5" width="14" height="16" rx="2" />
+      <path {...stroke} d="M9 5V3.5h6V5M9 12h6M9 16h4" />
+    </>
+  ),
   select: <rect {...stroke} x="4" y="4" width="16" height="16" rx="1.5" strokeDasharray="3 2" />,
 };

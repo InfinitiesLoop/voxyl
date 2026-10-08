@@ -2207,3 +2207,108 @@ button.brand {
 .semantic-looks .semantic-from {
   margin-left: 8px;
 }
+
+.form-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.form-cell select {
+  max-width: 190px;
+}
+
+/* Pasting and prefabs. */
+.paste-options {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.paste-offset {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+}
+
+.paste-offset output {
+  min-width: 18px;
+  text-align: center;
+  color: var(--text);
+}
+
+.prefab-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.inventory-prefabs {
+  display: block;
+}
+
+.prefab-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.prefab-open {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  width: 100%;
+  padding: 8px;
+  text-align: center;
+}
+
+.prefab-thumb {
+  width: 96px;
+  height: 96px;
+  image-rendering: pixelated;
+}
+
+.prefab-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.prefab-tags {
+  color: var(--text-quiet);
+  font-size: 11px;
+}
+
+.prefab-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.prefab-edit input,
+.prefab-save input {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #23272d;
+  color: var(--text);
+  font: inherit;
+}
+
+.prefab-save {
+  width: min(460px, 100%);
+}
+
+.prefab-save label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-quiet);
+  font-size: 12px;
+}

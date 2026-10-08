@@ -18,8 +18,10 @@ import {
   rememberTool,
 } from "../editor/tool.ts";
 import { orbitDegrees, type ViewSettings } from "../editor/view-options.ts";
+import type { PasteArgs } from "../world/clipboard.ts";
 import type { HistoryState, PaletteInfo } from "../world/editing.ts";
 import {
+  type ClipboardInfo,
   EMPTY_SELECTION,
   type PartArgs,
   type Ray,
@@ -44,6 +46,7 @@ import {
 import { GroundGrid } from "./ground-grid.ts";
 import { LightVolume } from "./light-volume.ts";
 import { PartOutline } from "./part-outline.ts";
+import { PasteGhostView } from "./paste-ghost.ts";
 import { SelectionOutline } from "./SelectionOutline.ts";
 import { Sky } from "./sky.ts";
 import { NOON, skyAt } from "./sky-model.ts";
@@ -173,6 +176,14 @@ export class Engine {
   readonly anchor = new Store<Vec3 | null>(null);
   /** A command the selection panel should say failed, or "". */
   readonly notice = new Store("");
+  /** What the clipboard holds (kept in the world worker, across projects), or null. */
+  readonly clipboard = new Store<ClipboardInfo | null>(null);
+  /** How the Paste tool sets the clipboard down: turn, mirror, air, and a shift. */
+  readonly paste = new Store<PasteArgs>({ turn: 0, mirror: false, offset: [0, 0, 0], air: false });
+  /** Counts changes to the prefab list, so every list showing it asks again. */
+  readonly prefabsRev = new Store(0);
+  /** Asks the screen to open the "Save as a prefab" dialog (Ctrl+P, or Actions). */
+  readonly prefabDialog = new Store(false);
   /** A short line over the hotbar for anything the editor refuses or reports; it fades. */
   readonly toast = new Store<{ readonly text: string; readonly id: number } | null>(null);
   #toastId = 0;
@@ -209,6 +220,8 @@ export class Engine {
   readonly #aimedPart = new PartOutline(0x111111, { overlay: false, opacity: 0.8 });
   /** The part a click would place, drawn over everything. */
   readonly #ghost = new PartOutline(0x8be9ff, { overlay: true });
+  /** The clipboard as it would land where the Paste tool aims. */
+  readonly #pasteGhost = new PasteGhostView();
   readonly #selectionOutline = new SelectionOutline();
   readonly #grid = new GroundGrid();
   readonly #sliceGuide = new SliceGuide();
@@ -267,6 +280,7 @@ export class Engine {
     this.scene.add(this.#toolPreview.object);
     this.scene.add(this.#aimedPart.object);
     this.scene.add(this.#ghost.object);
+    this.scene.add(this.#pasteGhost.object);
     this.scene.add(this.#selectionOutline.object);
     this.scene.add(this.#sliceGuide.object);
     this.scene.fogNode = this.#sky.fog;
@@ -345,6 +359,7 @@ export class Engine {
     chunks.setLighting(this.#lighting);
     this.#chunks = chunks;
     this.#info = info;
+    void this.syncClipboard();
     this.scene.add(chunks.group);
     this.#grid.setOffset(info.grid);
     this.#updateSky();
@@ -659,6 +674,7 @@ export class Engine {
     this.#toolPreview.dispose();
     this.#aimedPart.dispose();
     this.#ghost.dispose();
+    this.#pasteGhost.dispose();
     this.#selectionOutline.dispose();
     this.#sliceGuide.dispose();
     this.#grid.dispose();
@@ -951,6 +967,7 @@ export class Engine {
       this.#toolPreview.show(null);
       this.#aimedPart.show(null);
       this.#ghost.show(null);
+      this.#pasteGhost.show(null);
       this.#aimedFor = "";
       return;
     }
@@ -961,7 +978,8 @@ export class Engine {
     const toward = ray.dir.map((v) => v.toFixed(4)).join();
     const using = tool ? `${tool.tool}${tool.brush}` : "";
     const part = this.#partArgs();
-    const key = `${at} ${toward} ${this.#revision} ${using} ${part ? `${JSON.stringify(part.semantic)}${part.opposite}` : ""}`;
+    const paste = this.tool.get() === "paste" && this.clipboard.get() ? this.paste.get() : null;
+    const key = `${at} ${toward} ${this.#revision} ${using} ${part ? `${JSON.stringify(part.semantic)}${part.opposite}` : ""} ${paste ? JSON.stringify(paste) + this.#clipboardRev : ""}`;
     if (key === this.#aimedFor) return;
     this.#aiming = true;
     this.#aimedFor = key;
@@ -970,7 +988,13 @@ export class Engine {
       this.#aiming = false;
     };
     void this.world
-      .request({ type: "aim", ...ray, ...(tool && { tool }), ...(part && { part }) })
+      .request({
+        type: "aim",
+        ...ray,
+        ...(tool && { tool }),
+        ...(part && { part }),
+        ...(paste && { paste }),
+      })
       .then((aim) => {
         done();
         if (world !== this.#worldId || !this.fly.locked) return;
@@ -979,6 +1003,7 @@ export class Engine {
         this.#target.show(met ? null : aim);
         this.#aimedPart.show(met?.hit ?? null, met?.aimed?.shape, met?.aimed?.slot);
         this.#toolPreview.show(aim?.preview ?? null);
+        this.#pasteGhost.show(aim?.pasteGhost ?? null);
         const ghost = this.tool.get() === "build" ? (aim?.ghost ?? null) : null;
         this.#ghost.show(ghost?.cell ?? null, ghost?.shape, ghost?.slot);
       }, done);
@@ -1076,6 +1101,15 @@ export class Engine {
     };
     if (event.button === 0) {
       void this.world.request({ type: "erase", ...ray }).then(timed);
+    } else if (event.button === 2 && tool === "paste") {
+      if (!this.clipboard.get()) {
+        this.say("The clipboard is empty. Select something and press Ctrl+C, or pick a prefab.");
+        return;
+      }
+      const options = this.paste.get();
+      void this.world
+        .request({ type: "paste", ...options, ...ray })
+        .then((cells) => timed(cells > 0));
     } else if (event.button === 2) {
       const semantic = this.hotbar.current?.ref;
       if (semantic === undefined) return;
@@ -1180,6 +1214,16 @@ export class Engine {
         this.setTool(cycleTool(this.tool.get(), event.shiftKey ? -1 : 1));
         return;
       }
+      if (isKey("rotateBlock", event.code) && this.tool.get() === "paste") {
+        event.preventDefault();
+        this.turnPaste(event.shiftKey ? -1 : 1);
+        return;
+      }
+      if (isKey("mirrorPaste", event.code) && this.tool.get() === "paste") {
+        event.preventDefault();
+        this.mirrorPaste();
+        return;
+      }
       if (isKey("rotateBlock", event.code) && flying) {
         event.preventDefault();
         this.rotateAimed(event.shiftKey);
@@ -1204,6 +1248,24 @@ export class Engine {
       return;
     }
     const ctrl = event.ctrlKey || event.metaKey;
+    if (ctrl && !event.altKey && !event.repeat && this.#info) {
+      if (event.code === "KeyC" || event.code === "KeyX") {
+        event.preventDefault();
+        void this.copySelection(event.code === "KeyX");
+        return;
+      }
+      if (event.code === "KeyV") {
+        event.preventDefault();
+        this.takePaste();
+        return;
+      }
+      if (event.code === "KeyP") {
+        event.preventDefault();
+        if (this.selection.get().cells > 0) this.prefabDialog.set(true);
+        else this.say("Select something first, then Ctrl+P saves it as a prefab.");
+        return;
+      }
+    }
     if (ctrl && (event.code === "KeyZ" || event.code === "KeyY")) {
       event.preventDefault();
       if (event.code === "KeyY" || event.shiftKey) this.redo();
@@ -1345,6 +1407,87 @@ export class Engine {
     const bounds = await this.world.request({ type: "bounds" });
     if (world === this.#worldId) this.#bounds = bounds;
     return bounds;
+  }
+
+  #clipboardRev = 0;
+
+  /** Copies the selection into the clipboard (cut: and empties it). */
+  async copySelection(cut: boolean): Promise<void> {
+    if (!this.#info) return;
+    try {
+      const info = await this.world.request({ type: "clipboardCopy", cut });
+      if (!info) {
+        this.say("Select something first.");
+        return;
+      }
+      this.#setClipboard(info);
+      this.say(`${cut ? "Cut" : "Copied"} ${info.cells} blocks. Ctrl+V pastes.`);
+    } catch (error) {
+      this.say(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  /** Keeps the selection as a prefab. */
+  async savePrefab(name: string, tags: string[]): Promise<void> {
+    const entry = await this.world.request({ type: "savePrefab", name, tags, from: "selection" });
+    this.prefabsRev.set(this.prefabsRev.get() + 1);
+    this.say(`Saved ${entry.name} as a prefab. It is in the inventory and on Home.`);
+  }
+
+  /**
+   * Puts a prefab in the clipboard and takes the Paste tool. The inventory closes (and the
+   * pointer locks again if it was open while flying), so the next click places it.
+   */
+  async pastePrefab(id: string): Promise<void> {
+    try {
+      this.#setClipboard(await this.world.request({ type: "usePrefab", id }));
+      this.setTool("paste");
+      if (this.inventoryOpen.get()) this.toggleInventory();
+    } catch (error) {
+      this.say(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  /** Takes the Paste tool, if the clipboard holds something. */
+  takePaste(): void {
+    if (!this.clipboard.get()) {
+      this.say("The clipboard is empty. Select something and press Ctrl+C, or pick a prefab.");
+      return;
+    }
+    this.setTool("paste");
+  }
+
+  /** Sets what the clipboard holds (or empties it), and redraws the paste ghost. */
+  setClipboard(info: ClipboardInfo | null): void {
+    this.#setClipboard(info);
+  }
+
+  #setClipboard(info: ClipboardInfo | null): void {
+    this.clipboard.set(info);
+    this.#clipboardRev++;
+    this.#aimedFor = "";
+  }
+
+  /** What the clipboard holds in the world worker, after a project opens. */
+  async syncClipboard(): Promise<void> {
+    this.#setClipboard(await this.world.request({ type: "clipboardInfo" }));
+  }
+
+  /** Changes how the Paste tool sets the clipboard down. */
+  setPaste(change: Partial<PasteArgs>): void {
+    this.paste.set({ ...this.paste.get(), ...change });
+    this.#aimedFor = "";
+  }
+
+  /** Turns the clipboard a quarter turn (clockwise from above; `step` -1 the other way). */
+  turnPaste(step: number): void {
+    const turn = (((this.paste.get().turn + step) % 4) + 4) % 4;
+    this.setPaste({ turn });
+  }
+
+  /** Mirrors the clipboard, east for west. */
+  mirrorPaste(): void {
+    this.setPaste({ mirror: !this.paste.get().mirror });
   }
 
   /** Switches the fly tool. A half-chosen box corner is dropped. */

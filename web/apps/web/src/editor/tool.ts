@@ -1,9 +1,10 @@
 // Which tool the fly camera's right click runs. Build places one block; Build to me lays a
 // column toward you; the Wand grows a surface by a layer; Exchange swaps blocks in place;
-// Select marks a box (Shift: the connected blocks). Paste arrives with the clipboard.
+// Paste puts the clipboard (or a prefab) where you aim; Select marks a box (Shift: the
+// connected blocks).
 // Left click removes and middle click picks, whatever the tool.
 
-export const EDITOR_TOOLS = ["build", "column", "wand", "exchange", "select"] as const;
+export const EDITOR_TOOLS = ["build", "column", "wand", "exchange", "paste", "select"] as const;
 export type EditorTool = (typeof EDITOR_TOOLS)[number];
 
 /** The tools that build many blocks a click (world/tools.ts) and use the brush. */
