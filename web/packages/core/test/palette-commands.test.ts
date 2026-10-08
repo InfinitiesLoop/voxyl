@@ -189,3 +189,32 @@ describe("shared palettes (linked copies)", () => {
     expect(() => p.run(cmd("semantic_add", { name: "Lamp", palette: linked }))).toThrow(/linked/);
   });
 });
+
+describe("semantic_remove", () => {
+  it("removes an unused semantic, and undo brings it back", () => {
+    const { p, rail } = factory();
+    p.run(cmd("semantic_remove", { semantic: rail }));
+    expect(p.semantics.has(rail)).toBe(false);
+    expect(p.semantics.byName("Rail", ROOT_PALETTE)).toBeUndefined();
+    const target = p.undoTarget();
+    if (target === null) throw new Error("nothing to undo");
+    p.run(cmd("undo", { target }));
+    expect(p.semantics.has(rail)).toBe(true);
+  });
+
+  it("refuses while cells use it or another palette derives from it", () => {
+    const { p, deck, walkway } = factory();
+    p.run(cmd("fill", { where: { box: [0, 0, 0, 1, 0, 0] }, state: { semantic: deck } }));
+    expect(() => p.run(cmd("semantic_remove", { semantic: deck }))).toThrow(CommandError);
+    p.run(cmd("clear", { where: { box: [0, 0, 0, 1, 0, 0] } }));
+    p.run(
+      cmd("fill", {
+        where: { box: [0, 2, 0, 0, 2, 0] },
+        state: { semantic: { palette: walkway, base: deck } },
+      }),
+    );
+    p.run(cmd("clear", { where: { box: [0, 2, 0, 0, 2, 0] } }));
+    // Walkway's Deck derives from Main's Deck, so Main's can't go.
+    expect(() => p.run(cmd("semantic_remove", { semantic: deck }))).toThrow(/derives/);
+  });
+});

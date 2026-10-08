@@ -1236,7 +1236,7 @@ button[aria-pressed="true"] {
 
 /* The key bindings panel. */
 .keys {
-  position: absolute;
+  position: fixed;
   z-index: 9;
   inset: 0;
   display: grid;
@@ -1663,4 +1663,133 @@ button.brand {
   border: none;
   background: transparent;
   font-weight: 700;
+}
+
+.inventory-search {
+  flex: 0 1 300px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #23272d;
+  color: var(--text);
+  font: inherit;
+}
+
+.inventory-add .swatch {
+  display: grid;
+  place-items: center;
+  background: transparent;
+  color: var(--text-quiet);
+  font-size: 18px;
+}
+
+/* The block chooser: libraries, a searchable grid, and a turning preview. */
+.chooser-card {
+  width: min(1100px, 100%);
+  height: min(720px, 100%);
+}
+
+.chooser {
+  display: grid;
+  flex: 1;
+  grid-template-columns: 170px 1fr 260px;
+  gap: 14px;
+  min-height: 0;
+  height: 100%;
+}
+
+.chooser-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: auto;
+}
+
+.chooser-rail button {
+  text-align: left;
+}
+
+.chooser-main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.chooser-main .block-grid {
+  overflow: auto;
+}
+
+.chooser-search {
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #23272d;
+  color: var(--text);
+  font: inherit;
+}
+
+.chooser-side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  text-align: center;
+}
+
+.chooser-layouts,
+.chooser-commit {
+  display: flex;
+  gap: 4px;
+}
+
+.chooser-commit {
+  flex-direction: column;
+  width: 100%;
+  margin-top: auto;
+}
+
+.cube-stage {
+  display: grid;
+  place-items: center;
+  width: 240px;
+  height: 220px;
+  perspective: 700px;
+}
+
+.cube-spin {
+  position: relative;
+  width: var(--cube);
+  height: var(--cube);
+  transform-style: preserve-3d;
+  animation: cube-spin 14s linear infinite;
+}
+
+.cube {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+}
+
+.cube-face {
+  position: absolute;
+  inset: 0;
+  image-rendering: pixelated;
+  backface-visibility: hidden;
+}
+
+@keyframes cube-spin {
+  from {
+    transform: rotateX(-24deg) rotateY(0deg);
+  }
+  to {
+    transform: rotateX(-24deg) rotateY(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cube-spin {
+    animation: none;
+    transform: rotateX(-24deg) rotateY(35deg);
+  }
 }

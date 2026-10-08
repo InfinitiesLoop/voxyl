@@ -151,6 +151,10 @@ export type Command =
   | { type: "sharePalette"; palette: PaletteId }
   /** Brings a shared palette into the open project as a linked copy, or re-syncs it. */
   | { type: "linkPalette"; key: string }
+  /** Removes a semantic no cell uses. */
+  | { type: "removeSemantic"; semantic: SemanticArg }
+  /** A block's six faces as 16×16 RGBA (mesher order +X, -X, +Y, -Y, +Z, -Z), for previews. */
+  | { type: "blockPreview"; ref: string }
   /** Sets what a semantic is for. */
   | { type: "describeSemantic"; semantic: SemanticArg; description: string }
   /** Whether meshes come with feature edges, for the line-drawing render modes. */
@@ -204,6 +208,8 @@ export interface Replies {
   sharePalette: string;
   linkPalette: boolean;
   describeSemantic: boolean;
+  removeSemantic: boolean;
+  blockPreview: BlockPreview | null;
   edges: null;
   bounds: { min: Vec3; max: Vec3 } | null;
   rotate: boolean;
@@ -337,6 +343,15 @@ export const EMPTY_SELECTION: SelectionView = {
 };
 
 /** Cell states' looks for the renderer (see StateLooks and BlockMaterials). */
+/** A block's faces for the chooser's turning preview. */
+export interface BlockPreview {
+  /** 6 × 16 × 16 RGBA; a face's alpha is all 0 where the block has no texture there. */
+  readonly faces: Uint8Array;
+  /** False for a shape that isn't a whole cube (stairs, slabs): its faces are approximate. */
+  readonly cube: boolean;
+  readonly color: string;
+}
+
 /** A shared palette as Home and the drawer list it. */
 export interface SharedPaletteInfo {
   readonly key: string;

@@ -3,7 +3,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import type { Engine } from "../scene/Engine.ts";
 import type { PaletteInfo, SemanticInfo } from "../world/editing.ts";
 import type { SharedPaletteInfo } from "../world/protocol.ts";
-import { BlockPicker, blockTitle } from "./BlockPicker.tsx";
+import { BlockChooserDialog, blockTitle } from "./BlockPicker.tsx";
 import { writeSemanticDrag } from "./drag.ts";
 import { useStore } from "./useStore.ts";
 
@@ -47,19 +47,15 @@ export function PaletteDrawer({ engine }: { engine: Engine }) {
     <aside className="palette-drawer">
       <header className="palette-head">
         <strong>Palettes</strong>
-        {picking && (
-          <button type="button" onClick={() => setPicking(false)}>
-            Back
-          </button>
-        )}
       </header>
       {error && <p className="palette-error">{error}</p>}
       {notice && <p className="palette-note">{notice}</p>}
-      {palettes.length === 0 ? (
-        <p className="palette-note">Open a project to edit its palettes.</p>
-      ) : picking && selected ? (
-        <BlockPicker
+      {picking && selected && (
+        <BlockChooserDialog
           engine={engine}
+          title={`Block for ${selected.semantic.name}`}
+          current={selected.semantic.block ?? null}
+          onClose={() => setPicking(false)}
           onPick={(ref) => {
             const own = selected.semantic.ownLook;
             if (ref === null && own.block === undefined) {
@@ -79,6 +75,9 @@ export function PaletteDrawer({ engine }: { engine: Engine }) {
             setPicking(false);
           }}
         />
+      )}
+      {palettes.length === 0 ? (
+        <p className="palette-note">Open a project to edit its palettes.</p>
       ) : (
         <>
           <div className="palette-scroll">

@@ -424,6 +424,18 @@ function lookLabel(name: string, before: Look | undefined, after: Look | null): 
   return `Change ${name}'s look`;
 }
 
+/** The command that removes a semantic (refused while cells use it). Null if it is offered only. */
+export function removeSemanticCommand(project: Project, ref: SemanticArg): Command | null {
+  if (typeof ref !== "number" || !project.semantics.has(ref)) return null;
+  return {
+    id: commandId(),
+    kind: "semantic_remove",
+    source: EDITOR_SOURCE,
+    label: `Remove ${project.semantics.nameOf(ref)}`,
+    args: { semantic: ref },
+  };
+}
+
 /** The command that sets what a semantic is for (empty clears it), or null if unchanged. */
 export function describeSemanticCommand(
   project: Project,

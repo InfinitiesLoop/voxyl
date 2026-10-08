@@ -12,6 +12,7 @@ import { resemantic } from "./resemantic.ts";
 import { rotate } from "./rotate.ts";
 import { select } from "./select.ts";
 import { semanticAdd } from "./semantic-add.ts";
+import { semanticRemove } from "./semantic-remove.ts";
 import { semanticUpdate } from "./semantic-update.ts";
 import { set } from "./set.ts";
 import { settings } from "./settings.ts";
@@ -37,5 +38,6 @@ export const COMMANDS: readonly CommandDef[] = [
   paletteSync,
   semanticAdd,
   semanticUpdate,
+  semanticRemove,
   settings,
 ];

@@ -5,7 +5,7 @@ import type { LibraryActions, ProjectActions } from "../Hud.tsx";
 import type { Engine } from "../scene/Engine.ts";
 import type { LibraryInfo, SharedPaletteInfo } from "../world/protocol.ts";
 import { WORLD_KINDS, type WorldKind } from "../worlds.ts";
-import { BlockPicker, blockTitle } from "./BlockPicker.tsx";
+import { BlockChooser, BlockChooserDialog, blockTitle } from "./BlockPicker.tsx";
 
 type Tab = "projects" | "palettes" | "blocks";
 const TAB_KEY = "voxyl.homeTab";
@@ -272,31 +272,21 @@ function PaletteEditor({
       ...palette,
       semantics: palette.semantics.map((s, k) => (k === i ? { ...s, ...patch } : s)),
     });
-  if (picking !== null) {
-    return (
-      <div className="home-pane">
-        <div className="home-actions">
-          <button type="button" onClick={() => setPicking(null)}>
-            Back
-          </button>
-          <span>Block for {palette.semantics[picking]?.name}</span>
-        </div>
-        <BlockPicker
-          engine={engine}
-          onPick={(ref) => {
-            const s = palette.semantics[picking];
-            if (s) {
-              const { block: _b, ...rest } = s.look ?? {};
-              setSemantic(picking, { look: ref ? { ...rest, block: ref } : rest });
-            }
-            setPicking(null);
-          }}
-        />
-      </div>
-    );
-  }
+  const pickingSemantic = picking === null ? undefined : palette.semantics[picking];
   return (
     <div className="home-pane palette-editor">
+      {picking !== null && pickingSemantic && (
+        <BlockChooserDialog
+          engine={engine}
+          title={`Block for ${pickingSemantic.name}`}
+          current={pickingSemantic.look?.block ?? null}
+          onClose={() => setPicking(null)}
+          onPick={(ref) => {
+            const { block: _b, ...rest } = pickingSemantic.look ?? {};
+            setSemantic(picking, { look: ref ? { ...rest, block: ref } : rest });
+          }}
+        />
+      )}
       <label>
         Name
         <input
@@ -436,7 +426,6 @@ function Blocks({
   library: LibraryActions;
 }) {
   const file = useRef<HTMLInputElement>(null);
-  const [picked, setPicked] = useState<string | null>(null);
   return (
     <section className="home-section home-split">
       <div className="home-list">
@@ -476,14 +465,9 @@ function Blocks({
         <p className="home-quiet">
           Imported textures come from your own copy of the game and never leave this browser.
         </p>
-        {picked && (
-          <p className="home-picked">
-            {blockTitle(picked)} · {picked}
-          </p>
-        )}
       </div>
       <div className="home-pane">
-        <BlockPicker engine={engine} undecided={false} onPick={setPicked} />
+        <BlockChooser engine={engine} browse />
       </div>
     </section>
   );

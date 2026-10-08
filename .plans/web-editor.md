@@ -356,7 +356,22 @@ there is a point worth orbiting.
        90° from the moon at night (its edge width blew up there), and the ground grid now
        also fades as a whole once cells are below a pixel in the crowded direction, so lines
        running away from the camera no longer fan into a bright band at the horizon.
-  6. inventory and block chooser, 7. 2D editing: in progress.
+  6. **Inventory and block chooser.**
+     - The inventory has a **search** (a name, what it is for, or a block) across palettes,
+       which narrows the palette list to those with a match; a **"+" tile** adds a semantic to
+       the palette shown; **right-click** removes one. Removing is a new core command,
+       `semantic_remove` (tested): refused while any cell uses the semantic ("re-semantic
+       them first"), while another palette's semantic derives from it, or in a linked palette;
+       it undoes like any other. A tile's tooltip shows what the semantic is for and its block.
+     - **The block chooser** (`editor/BlockPicker.tsx`), after Godot's: libraries down the
+       left (all, or one), a search and icon grid, and a **turning preview** of the block you
+       explore on the right, alone, three in a row or a 3×3 wall, to see how it tiles. It is
+       drawn with CSS 3D from the block's six face textures (a `blockPreview` request), so no
+       second renderer; a non-cube block shows its side textures on a cube. A click explores;
+       "Use this block" or a double-click picks. It opens as a dialog over the page from the
+       drawer's Choose and from Home's palette editor, and Home's Blocks tab is the same
+       chooser for browsing.
+  7. 2D editing: in progress.
 
 ## Cross-project resources (what is planned, and what is not)
 

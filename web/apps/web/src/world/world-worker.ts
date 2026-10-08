@@ -5,6 +5,8 @@
 // OPFS (a ProjectStore), read and written here.
 
 import {
+  compileBlock,
+  compileShape,
   DEFAULT_LIBRARY_ID,
   defaultLibrary,
   type Library,
@@ -16,6 +18,7 @@ import {
   type CellSet,
   type CellStateTable,
   type Command as EditCommand,
+  IDENTITY,
   type Project,
   raycast,
 } from "@voxyl/core";
@@ -60,6 +63,7 @@ import {
   newProject,
   paletteInfo,
   placeCommand,
+  removeSemanticCommand,
   renameCommand,
   renamePaletteCommand,
   renameSemanticCommand,
@@ -76,6 +80,7 @@ import {
 import { OpfsFolder } from "./opfs-folder.ts";
 import {
   type AimView,
+  type BlockPreview,
   type BlockSearch,
   type Command,
   EMPTY_SELECTION,
@@ -362,6 +367,12 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       if (!shared) throw new Error("That shared palette is gone");
       return runEdit(linkPaletteCommand(openProject(), shared)) >= 0;
     }
+    case "removeSemantic":
+      return runEdit(removeSemanticCommand(openProject(), command.semantic)) >= 0;
+    case "blockPreview": {
+      await librariesLoaded;
+      return blockPreview(command.ref);
+    }
     case "describeSemantic":
       return (
         runEdit(describeSemanticCommand(openProject(), command.semantic, command.description)) >= 0
@@ -509,6 +520,31 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       return runEdit(setCellCommand(project, at, command.id, "Place")) > 0;
     }
   }
+}
+
+/** A block's faces as textures, tinted, for the block chooser's preview. */
+function blockPreview(ref: string): BlockPreview | null {
+  const block = compileBlock(libraries, ref, IDENTITY);
+  const shape = block?.cube ? null : compileShape(libraries, ref, IDENTITY);
+  const faces = block?.cube ?? shape?.sides ?? null;
+  if (!block && !shape) return null;
+  const out = new Uint8Array(6 * 1024);
+  faces?.forEach((face, f) => {
+    if (!face) return;
+    const parsed = parseBlockRef(face.texture);
+    const texture = parsed ? libraries.get(parsed.library)?.textures[parsed.block] : undefined;
+    if (texture?.size !== 16) return;
+    const tint = face.tint ? Number.parseInt(face.tint.slice(1), 16) : 0xffffff;
+    const t = [(tint >> 16) & 0xff, (tint >> 8) & 0xff, tint & 0xff];
+    for (let i = 0; i < 256; i++) {
+      for (let c = 0; c < 3; c++)
+        out[f * 1024 + i * 4 + c] = Math.round(
+          ((texture.rgba[i * 4 + c] ?? 0) * (t[c] ?? 255)) / 255,
+        );
+      out[f * 1024 + i * 4 + 3] = texture.rgba[i * 4 + 3] ?? 0;
+    }
+  });
+  return { faces: out, cube: block?.cube != null, color: block?.color ?? "#808080" };
 }
 
 function openProject(): Project {

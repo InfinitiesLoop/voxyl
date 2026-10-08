@@ -322,6 +322,23 @@ export class SemanticRegistry {
     return id;
   }
 
+  /**
+   * Removes a semantic. It must be in a writable palette and nothing may derive from it; the
+   * caller checks that no cell uses it (semantic_remove does). Its id is not reused while
+   * the registry is open.
+   */
+  remove(id: SemanticId): void {
+    const s = this.get(id);
+    this.#checkWritable(s.palette);
+    for (const other of this.#ids()) {
+      if (this.get(other).base !== id) continue;
+      const where = this.palette(this.get(other).palette).name;
+      throw new Error(`${this.nameOf(other)} in ${where} derives from ${this.nameOf(id)}`);
+    }
+    this.#semantics[id] = null;
+    this.#revision++;
+  }
+
   /** The id of a root-palette semantic with this name, adding it if there is none. */
   ensure(name: string, palette: PaletteId = ROOT_PALETTE): SemanticId {
     return this.byName(name, palette) ?? this.add(name, { palette });
