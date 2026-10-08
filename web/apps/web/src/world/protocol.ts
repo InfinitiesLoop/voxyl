@@ -230,7 +230,9 @@ export type Command =
   | { type: "saveSharedPalette"; palette: Omit<SharedPalette, "version"> }
   | { type: "deleteSharedPalette"; key: string }
   /** Shares a palette of the open project as a new shared palette. Replies with its key. */
-  | { type: "sharePalette"; palette: PaletteId }
+  | { type: "sharePalette"; palette: PaletteId; link?: boolean }
+  /** Makes a linked copy an ordinary palette again. */
+  | { type: "unlinkPalette"; palette: PaletteId }
   /** Brings a shared palette into the open project as a linked copy, or re-syncs it. */
   | { type: "linkPalette"; key: string }
   /** A 2D stroke: a semantic into cells (x, y, z triples), or empties them (null). */
@@ -339,6 +341,7 @@ export interface Replies {
   saveSharedPalette: StoredPalette;
   deleteSharedPalette: null;
   sharePalette: string;
+  unlinkPalette: boolean;
   linkPalette: boolean;
   describeSemantic: boolean;
   removeSemantic: boolean;
@@ -508,6 +511,16 @@ export interface SharedPaletteInfo {
   readonly colors: readonly string[];
 }
 
+/** One part of a cell of parts, as the 2D view draws its footprint. */
+export interface PartDraw {
+  /** The colour of the part's semantic, 0xrrggbb. */
+  readonly color: number;
+  /** A microblock's boxes on the 1/8 grid: x0 y0 z0 x1 y1 z1, in eighths of the cell. */
+  readonly boxes: readonly number[];
+  /** A roof's triangles in cell units (0 to 1): nine numbers each. */
+  readonly tris: readonly number[];
+}
+
 export interface LooksUpdate {
   /** StateLooks.colors. */
   readonly colors: Uint8Array;
@@ -515,6 +528,8 @@ export interface LooksUpdate {
   readonly intent: Uint8Array;
   /** Per state, which way it faces, for the 2D view's arrows (flat-edit.ts stateFacings). */
   readonly facing: Uint8Array;
+  /** The parts of every cell state that has any, for the 2D view's footprints. */
+  readonly partDraws: readonly { readonly state: number; readonly parts: readonly PartDraw[] }[];
   /** StateLooks.faces: each state's face materials, and where its model's slots start. */
   readonly faces: Uint32Array;
   /** StateLooks.modelSlots: block models' face materials. */

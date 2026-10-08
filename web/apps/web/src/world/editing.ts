@@ -725,6 +725,52 @@ export function sharedFromPalette(
 }
 
 /**
+ * The command that turns a project palette into the linked copy of the shared palette it was
+ * just shared as (see sharedFromPalette): its own semantics keep their ids and are matched to
+ * the shared ones by the same `s<id>` keys. Null for a palette that can't link (see the
+ * registry's link): one that extends another, derives, or is already linked.
+ */
+export function linkExistingCommand(
+  project: Project,
+  palette: PaletteId,
+  shared: { readonly key: string; readonly version: number; readonly name: string },
+): Command | null {
+  const registry = project.semantics;
+  if (!registry.hasPalette(palette) || !canLink(project, palette)) return null;
+  const keys: Record<string, string> = {};
+  for (const id of registry.semanticsIn(palette)) keys[String(id)] = `s${id}`;
+  return {
+    id: commandId(),
+    kind: "palette_link",
+    source: EDITOR_SOURCE,
+    label: `Share ${registry.palette(palette).name} (v${shared.version})`,
+    args: { palette, key: shared.key, version: shared.version, keys },
+  };
+}
+
+/** Whether a palette can become a linked copy of a shared palette: it stands alone. */
+export function canLink(project: Project, palette: PaletteId): boolean {
+  const registry = project.semantics;
+  const p = registry.palette(palette);
+  if (p.linked || p.extends !== undefined) return false;
+  return registry.semanticsIn(palette).every((s) => registry.get(s).base === undefined);
+}
+
+/** The command that makes a linked copy an ordinary palette again. */
+export function unlinkPaletteCommand(project: Project, palette: PaletteId): Command | null {
+  if (!project.semantics.hasPalette(palette) || !project.semantics.palette(palette).linked) {
+    return null;
+  }
+  return {
+    id: commandId(),
+    kind: "palette_unlink",
+    source: EDITOR_SOURCE,
+    label: `Make ${project.semantics.palette(palette).name} a local copy`,
+    args: { palette },
+  };
+}
+
+/**
  * The command that brings a shared palette in as a linked copy, or re-syncs the copy. A
  * project palette with the same name keeps it: the copy is called "Name (shared)".
  */
@@ -873,6 +919,8 @@ export function placementOf(name: string): PlacementProfile | undefined {
 export interface PaletteInfo {
   readonly id: PaletteId;
   readonly name: string;
+  /** It stands alone (extends nothing, derives nothing), so it can be made a shared palette. */
+  readonly canLink: boolean;
   /** A linked copy of a shared palette (read-only in the project). */
   readonly linked: boolean;
   /** For a linked copy: the shared palette's key and the version the copy has. */
@@ -894,6 +942,7 @@ export function paletteInfo(project: Project, blocks?: BlockMaterials): PaletteI
   return palettes.map((palette) => ({
     id: palette.id,
     name: palette.name,
+    canLink: canLink(project, palette.id),
     linked: palette.linked !== undefined,
     ...(palette.linked && {
       linkedKey: palette.linked.key,

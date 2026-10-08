@@ -1,7 +1,13 @@
 import { PLACEMENTS } from "@voxyl/core";
 import { describe, expect, it } from "vitest";
 import { historyState, newProject } from "./editing.ts";
-import { FACING_UPSIDE_DOWN, fillCells, stateFacings, strokeCommand } from "./flat-edit.ts";
+import {
+  FACING_UPSIDE_DOWN,
+  fillCells,
+  stateFacings,
+  statePartDraws,
+  strokeCommand,
+} from "./flat-edit.ts";
 
 type P = ReturnType<typeof newProject>;
 const id = (p: P, name: string) => p.semantics.byName(name) as number;
@@ -63,5 +69,26 @@ describe("facings", () => {
     expect(facings[cube]).toBe(0);
     expect((facings[stairs] ?? 0) & 7).toBeGreaterThan(0);
     expect((facings[stairs] ?? 0) & FACING_UPSIDE_DOWN).toBe(0);
+  });
+});
+
+describe("part footprints", () => {
+  it("describes each state of parts by its boxes or triangles and its colour, and skips blocks", () => {
+    const p = newProject("Test", 5);
+    const trim = id(p, "Trim");
+    const wall = id(p, "Wall");
+    p.world.set(0, 0, 0, { semantic: wall });
+    p.world.set(1, 0, 0, { parts: [{ semantic: trim, shape: "face2", slot: 0 }] });
+    p.world.set(2, 0, 0, { parts: [{ semantic: trim, shape: "roof_tile", slot: 0 }] });
+    const draws = statePartDraws(p);
+    expect(draws.length).toBe(2);
+    const slab = draws.find((d) => d.parts[0]?.boxes.length === 6);
+    expect(slab?.parts[0]?.boxes).toEqual([0, 0, 0, 8, 2, 8]);
+    expect(slab?.parts[0]?.tris).toEqual([]);
+    const roof = draws.find((d) => (d.parts[0]?.tris.length ?? 0) > 0);
+    expect(roof?.parts[0]?.boxes).toEqual([]);
+    expect(roof?.parts[0]?.tris.length).toBeGreaterThan(0);
+    // The colour is the trim semantic's look colour.
+    expect(slab?.parts[0]?.color).toBeGreaterThan(0);
   });
 });

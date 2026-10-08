@@ -23,6 +23,71 @@ function factory() {
   return { p, deck, rail, walkway };
 }
 
+describe("promoting a palette to a shared one", () => {
+  const link = (p: Project, palette: number, keys: Record<string, string>) =>
+    p.run(cmd("palette_link", { palette, key: "shared-1", version: 1, keys }));
+
+  it("links a palette in place: ids and cells stay, and a sync updates it", () => {
+    const p = new Project();
+    const wall = p.semantics.add("Wall", { look: { tint: "#112233" } });
+    const trim = p.semantics.add("Trim");
+    p.world.setId(3, 0, 3, p.world.states.intern({ semantic: wall }));
+    link(p, ROOT_PALETTE, { [wall]: "w", [trim]: "t" });
+    const linked = p.semantics.palette(ROOT_PALETTE);
+    expect(linked.linked).toEqual({ key: "shared-1", version: 1 });
+    expect(p.world.get(3, 0, 3)?.semantic).toBe(wall);
+    // Read-only now: the shared palette is where it is edited.
+    expect(() => p.run(cmd("semantic_update", { semantic: wall, name: "Shell" }))).toThrow(
+      "shared palette",
+    );
+    // A later version of the shared palette updates the same semantics by key.
+    p.run(
+      cmd("palette_sync", {
+        key: "shared-1",
+        version: 2,
+        name: "Main",
+        semantics: [
+          { key: "w", name: "Shell", look: { tint: "#445566" } },
+          { key: "t", name: "Trim" },
+        ],
+      }),
+    );
+    expect(p.semantics.nameOf(wall)).toBe("Shell");
+    expect(p.semantics.resolve(wall).look.tint).toBe("#445566");
+    expect(p.world.get(3, 0, 3)?.semantic).toBe(wall);
+    expect(p.semantics.size).toBe(2);
+  });
+
+  it("refuses a palette that extends another, derives, is linked, or lacks a key", () => {
+    const p = new Project();
+    const base = p.semantics.add("Base");
+    const child = p.run(cmd("palette_add", { name: "Child", extends: ROOT_PALETTE })).report.created
+      .palettes[0] as number;
+    expect(() => link(p, child, {})).toThrow("extends");
+    p.semantics.derive(child, base);
+    const lone = p.run(cmd("palette_add", { name: "Lone" })).report.created.palettes[0] as number;
+    const own = p.semantics.add("Own", { palette: lone });
+    expect(() => link(p, lone, {})).toThrow("no key");
+    link(p, lone, { [own]: "o" });
+    expect(() => link(p, lone, { [own]: "o" })).toThrow("already a linked copy");
+    const other = p.run(cmd("palette_add", { name: "Other" })).report.created.palettes[0] as number;
+    const x = p.semantics.add("X", { palette: other });
+    expect(() => link(p, other, { [x]: "x" })).toThrow("already linked");
+  });
+
+  it("unlinks a copy into an ordinary palette, and undoes", () => {
+    const p = new Project();
+    const wall = p.semantics.add("Wall");
+    link(p, ROOT_PALETTE, { [wall]: "w" });
+    p.run(cmd("palette_unlink", { palette: ROOT_PALETTE }));
+    expect(p.semantics.palette(ROOT_PALETTE).linked).toBeUndefined();
+    expect(p.semantics.get(wall).sharedKey).toBeUndefined();
+    p.run(cmd("semantic_update", { semantic: wall, name: "Shell" }));
+    expect(p.semantics.nameOf(wall)).toBe("Shell");
+    expect(() => p.run(cmd("palette_unlink", { palette: ROOT_PALETTE }))).toThrow("isn't a linked");
+  });
+});
+
 describe("palette and semantic commands", () => {
   it("derive a semantic on first placement and report it as created", () => {
     const { p, deck, walkway } = factory();

@@ -23,6 +23,7 @@ const info = (
 const palette = (id: number, semantics: SemanticInfo[]): PaletteInfo => ({
   id,
   name: `P${id}`,
+  canLink: true,
   linked: false,
   semantics,
 });

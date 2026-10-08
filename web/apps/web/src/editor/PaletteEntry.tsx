@@ -176,6 +176,12 @@ export function PaletteEntryDialog({
             Glows
           </label>
         </div>
+        {semantic?.base !== undefined && (
+          <p className="palette-note">
+            This semantic comes from another palette. A new name here is this palette's own; to
+            rename it everywhere, use Semantics.
+          </p>
+        )}
         {error && <p className="palette-error">{error}</p>}
         <BlockChooser
           engine={engine}

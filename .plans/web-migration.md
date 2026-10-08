@@ -23,7 +23,11 @@ answers, built them: a keymap, Godot's wand plus Build to me and Exchange, camer
 orbit, render modes with feature edges, slicing from 3D, Home with shared palettes and a
 textured starter palette, the block chooser, and 2D editing (editor step 6). A fourth
 round baked block icons, opened the palette entry editor from the inventory, and recorded
-the production deploy for voxyl.xyz (see "Production (voxyl.xyz)").
+the production deploy for voxyl.xyz (see "Production (voxyl.xyz)"). A fifth round passed, and
+the rest of the editor landed on the user's word: shape selection, placing shaped parts (with a
+ghost), a top-level semantic editor, copy, cut and paste with prefabs, cutaway and isolation,
+project settings, rebindable keys, and 2D part footprints. What remains of Phase 3 is the
+gate's hand-build session (editor-measured performance holds: 60 fps, one-frame edits).
 Reviewed as a Claude Doc
 (https://claude.ai/code/artifact/98f31d14-989b-4c28-a24c-a3d7b8630a21); this file is now the
 working copy. **Keep it (and `web-lighting.md`) up to date as we go**, in the same commit as

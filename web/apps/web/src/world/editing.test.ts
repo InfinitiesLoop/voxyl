@@ -6,11 +6,13 @@ import {
   addPaletteCommand,
   addSemanticCommand,
   aim,
+  canLink,
   describeSemanticCommand,
   editSemanticCommand,
   eraseCommand,
   fillBoxCommand,
   historyState,
+  linkExistingCommand,
   linkPaletteCommand,
   newProject,
   paletteInfo,
@@ -24,6 +26,7 @@ import {
   settingsCommand,
   sharedFromPalette,
   stepCommand,
+  unlinkPaletteCommand,
 } from "./editing.ts";
 
 const wall = (project: ReturnType<typeof newProject>) => project.semantics.byName("Wall") as number;
@@ -449,5 +452,46 @@ describe("project settings", () => {
     project.run(settingsCommand(project, { north: "west" }) as never);
     expect(project.world.getId(1, 2, 3)).toBe(id);
     expect(project.world.cellCount).toBe(1);
+  });
+});
+
+describe("making a palette a shared palette", () => {
+  it("links the palette in place, with the keys sharedFromPalette used, and undoes", () => {
+    const project = newProject("Test", 5);
+    const shared = sharedFromPalette(project, ROOT_PALETTE, "key-1");
+    const command = linkExistingCommand(project, ROOT_PALETTE, {
+      key: "key-1",
+      version: 1,
+      name: "Main",
+    });
+    if (!command) throw new Error("no command");
+    project.run(command);
+    const registry = project.semantics;
+    expect(registry.palette(ROOT_PALETTE).linked).toEqual({ key: "key-1", version: 1 });
+    // Each semantic matches the shared palette's entry by the same key.
+    for (const entry of shared.semantics) {
+      const id = Number(entry.key.slice(1));
+      expect(registry.get(id).sharedKey).toBe(entry.key);
+    }
+    expect(paletteInfo(project)[0]?.linked).toBe(true);
+    project.run(stepCommand(project, "undo") as never);
+    expect(registry.palette(ROOT_PALETTE).linked).toBeUndefined();
+  });
+
+  it("refuses a palette that extends another, and offers the way back for a linked one", () => {
+    const project = newProject("Test", 5);
+    project.run(addPaletteCommand(project, "Walkway", ROOT_PALETTE) as never);
+    const walkway = project.semantics.paletteByName("Walkway")?.id as number;
+    expect(canLink(project, walkway)).toBe(false);
+    expect(canLink(project, ROOT_PALETTE)).toBe(true);
+    expect(linkExistingCommand(project, walkway, { key: "k", version: 1, name: "W" })).toBeNull();
+    expect(unlinkPaletteCommand(project, ROOT_PALETTE)).toBeNull();
+    project.run(
+      linkExistingCommand(project, ROOT_PALETTE, { key: "k", version: 1, name: "Main" }) as never,
+    );
+    const back = unlinkPaletteCommand(project, ROOT_PALETTE);
+    if (!back) throw new Error("no command");
+    project.run(back);
+    expect(project.semantics.palette(ROOT_PALETTE).linked).toBeUndefined();
   });
 });

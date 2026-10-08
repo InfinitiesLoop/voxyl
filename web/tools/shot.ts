@@ -41,6 +41,8 @@ try {
   // With no world named the app opens on Home; the shot is of a world, so name one.
   const named = /(^|&)world=/.test(query) ? query : `world=city-1m${query ? `&${query}` : ""}`;
   const url = `${base}/?${named}`;
+  // The benchmark button lives in the Dev panel, which starts closed in a fresh profile.
+  if (flag("bench")) await page.addInitScript(() => localStorage.setItem("voxyl.dev", "1"));
   await page.goto(url);
   // Ready once the world is meshed and no banner (generating, lighting) is up. If that never
   // happens, still report what the page shows: the console usually says why.

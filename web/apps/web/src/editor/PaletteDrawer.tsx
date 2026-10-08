@@ -138,6 +138,9 @@ export function PaletteDrawer({ engine }: { engine: Engine }) {
                     palette={palette}
                     shared={shared.find((p) => p.key === palette.linkedKey)}
                     onUpdate={(key) => void run(engine.world.request({ type: "linkPalette", key }))}
+                    onLocal={() =>
+                      void run(engine.world.request({ type: "unlinkPalette", palette: palette.id }))
+                    }
                   />
                 ) : (
                   <button
@@ -155,6 +158,33 @@ export function PaletteDrawer({ engine }: { engine: Engine }) {
                     }
                   >
                     Share
+                  </button>
+                )}
+                {!palette.linked && palette.canLink && (
+                  <button
+                    type="button"
+                    className="palette-share"
+                    title="Move this palette to your shared palettes and use it here as a linked copy: it becomes read-only in this build, and you edit it from Home"
+                    onClick={() => {
+                      if (
+                        !confirm(
+                          `Make ${palette.name} a shared palette? It stays in this build as a linked copy you can't edit here: change it from Home → Palettes, and update the builds that use it. Undo brings it back.`,
+                        )
+                      ) {
+                        return;
+                      }
+                      void engine.world
+                        .request({ type: "sharePalette", palette: palette.id, link: true })
+                        .then(
+                          () => {
+                            setNotice(`${palette.name} is a shared palette now (Home → Palettes).`);
+                            refreshShared();
+                          },
+                          (caught: unknown) => setError(String(caught)),
+                        );
+                    }}
+                  >
+                    Make shared
                   </button>
                 )}
                 <ul className="semantic-list">
@@ -512,10 +542,12 @@ function LinkedNote({
   palette,
   shared,
   onUpdate,
+  onLocal,
 }: {
   palette: PaletteInfo;
   shared: SharedPaletteInfo | undefined;
   onUpdate: (key: string) => void;
+  onLocal: () => void;
 }) {
   const behind =
     shared && palette.linkedVersion !== undefined && shared.version > palette.linkedVersion;
@@ -528,6 +560,13 @@ function LinkedNote({
           Update to v{shared.version}
         </button>
       )}
+      <button
+        type="button"
+        title="Stop following the shared palette: this becomes an ordinary palette you edit here"
+        onClick={onLocal}
+      >
+        Make a local copy
+      </button>
     </p>
   );
 }

@@ -79,6 +79,7 @@ import {
   fillBoxCommand,
   fillSelectionCommand,
   historyState,
+  linkExistingCommand,
   linkPaletteCommand,
   newProject,
   paletteInfo,
@@ -99,8 +100,9 @@ import {
   settingsCommand,
   sharedFromPalette,
   stepCommand,
+  unlinkPaletteCommand,
 } from "./editing.ts";
-import { fillCells, stateFacings, strokeCommand } from "./flat-edit.ts";
+import { fillCells, stateFacings, statePartDraws, strokeCommand } from "./flat-edit.ts";
 import { OpfsFolder } from "./opfs-folder.ts";
 import {
   type AimView,
@@ -423,8 +425,12 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       const open = openProject();
       const spec = sharedFromPalette(open, command.palette, newPaletteKey());
       const stored = await paletteStore.save({ ...spec, from: open.settings.name });
+      // Linking turns this palette into the copy of what was just shared: one step to undo.
+      if (command.link) runEdit(linkExistingCommand(open, command.palette, stored));
       return stored.key;
     }
+    case "unlinkPalette":
+      return runEdit(unlinkPaletteCommand(openProject(), command.palette)) >= 0;
     case "linkPalette": {
       const shared = await paletteStore.load(command.key);
       if (!shared) throw new Error("That shared palette is gone");
@@ -1010,6 +1016,7 @@ function postLooks(s: WorldSession): void {
   const materials = blocks.data;
   const textures = blocks.takeTextures();
   const facing = stateFacings(project as Project);
+  const partDraws = statePartDraws(project as Project, blocks);
   post(
     {
       type: "looks",
@@ -1017,6 +1024,7 @@ function postLooks(s: WorldSession): void {
       colors,
       intent,
       facing,
+      partDraws,
       faces,
       modelSlots,
       materials,

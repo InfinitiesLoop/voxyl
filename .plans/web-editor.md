@@ -1,6 +1,6 @@
 # Voxyl Web — Editor (Phase 3)
 
-Status: **Started** (2026-10-07). Phase 2 left a viewer: real projects in OPFS, textures and
+Status: **Every editor feature is built; waiting on the gate's hand-build session** (2026-10-07). Phase 2 left a viewer: real projects in OPFS, textures and
 block models, the sky, a read-only 2D view. Phase 3 makes it an editor. The gate, from
 [`web-migration.md`](web-migration.md): **a real hand-build session done on the web, and the
 performance targets hold while editing.** It runs entirely in the browser, with no server.
@@ -391,7 +391,7 @@ there is a point worth orbiting.
      **View** menu turns the picture left or right and mirrors it (`turnedOrientation`,
      tested). An empty build's plan starts on layer 0. Not done: part footprints drawn
      slot by slot (cells of parts only get a mark).
-- **Next:** the user's review of this round. Then editor step 4 (clipboard and prefabs,
+- **Next (written before the work below; all of it is done now, see Finishing the editor):** the user's review of this round. Then editor step 4 (clipboard and prefabs,
   which also brings the Prefabs tab to Home), step 5 (parts), step 7 (slice and cutaway in
   3D) and the gate.
 
@@ -517,6 +517,40 @@ there is a point worth orbiting.
        are fixed. The slot keys 1 to 9 are fixed too.
      - **Autosave** was already incremental (a save writes only chunk blobs the folder does not
        have, `ProjectStore`), so nothing to add there.
+
+  5. **Footprints in 2D, and promoting a palette.**
+     - **Part footprints in the 2D view.** Zoomed in (14 px a cell and up), a cell of parts draws
+       its parts: a microblock's boxes as rectangles, a roof's triangles as polygons, each in
+       its semantic's colour, nearer ones over farther (`views/footprint.ts`, tested; the world
+       worker sends each state's parts with the looks, `statePartDraws`). Below that size the
+       corner mark stays. It follows the pane's turn and mirror, and works in plans and cuts.
+     - **Make shared / Make a local copy.** On a palette that stands alone (extends nothing,
+       derives nothing), **Make shared** in the drawer saves it to your shared palettes and turns
+       it into the linked copy of what it just saved, in one undoable step (`palette_link`, a
+       core command: ids and cells stay, the semantics are matched to the shared ones by key, so
+       a later update lands in place). A linked copy has **Make a local copy** (`palette_unlink`).
+       A palette that extends another can't be promoted (a linked copy has no parents), and the
+       button isn't offered; **Share** still copies it.
+     - **Rename wording.** An inherited semantic's entry dialog now says a new name there is that
+       palette's own, and that **Semantics** renames it everywhere.
+  6. **The gate's performance half, measured** (headless Edge, B580, 1280×860, 5M-cell city,
+     lighting on, `pnpm shot "world=city-5m&lighting=volume" --bench`, after all of the above):
+     frame 16.7 ms p50 / 16.8 ms p95 (60 fps), 3.7 ms main thread, GPU 3.1 ms p50; **single
+     edits visible in one frame** (16.7 ms p50, 22.5 ms p95); roof-hole open/close 17 ms; 100k
+     fill 0.4 s, 1M fill 2.0 s (as before). Cutaway on the same city: lifting the whole roof
+     (every chunk above the camera remeshes) 0.7 s; nudging a face, or toggling it, 0.5 to 0.7 s;
+     a 60×40×60 notch you would adjust by hand 33 ms (two frames); clearing 0.5 s.
+     (`tools/shot.ts --bench` now opens the Dev panel itself; in a fresh profile it starts
+     closed.)
+
+- **The gate is yours:** a real hand-build session on the web, with the keys and the new tools
+  (Paste, shapes, the cutaway). The measured half holds (item 6). What I could not check from here
+  is the feel: the part ghost and the paste ghost were seen only through a page driven by script
+  (the browser pane can't lock the pointer), so the first pointer-locked session is the real
+  test of aiming at parts.
+- **Left, deliberately:** the Paste tool in a 2D view; the face grid Godot draws on the aimed face
+  to show the part zones (the ghost shows the result instead); Godot's modal paste offset panel
+  (the options row has the shift); animated textures, clouds and the placement pop (Polish).
 
 ## Cross-project resources (what is planned, and what is not)
 

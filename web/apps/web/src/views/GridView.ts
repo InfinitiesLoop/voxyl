@@ -11,6 +11,7 @@ import type { Engine } from "../scene/Engine.ts";
 import type { SliceWindow } from "../scene/slice-guide.ts";
 import { FACING_PARTS, FACING_UPSIDE_DOWN } from "../world/flat-edit.ts";
 import { MAX_SLICE_CELLS, type Vec3 } from "../world/protocol.ts";
+import { footprint } from "./footprint.ts";
 import {
   type Orientation,
   orientationFor,
@@ -45,6 +46,8 @@ const SELECTION_DIM = "rgb(103 232 249 / 0.35)";
 const ERASE_LINE = "rgb(248 113 113 / 0.9)";
 /** Facing arrows and part marks show from this many CSS pixels a cell. */
 const GLYPH_PX = 12;
+/** From this many CSS pixels a cell, a cell of parts draws its parts, not a corner mark. */
+const FOOTPRINT_PX = 14;
 
 /** How the Build tools draw in a 2D view (the 2D bar's Draw menu). */
 export type DrawMode = "pencil" | "line" | "rect" | "fill";
@@ -424,6 +427,8 @@ export class GridView {
 
     if (f && f.axis === this.#axis && f.depth === this.#depth && cols > 0 && rows > 0) {
       const looks = this.#engine.looks;
+      const facing = this.#engine.facing;
+      const showFootprints = px >= FOOTPRINT_PX * ratio;
       const image = this.#image;
       image.width = cols;
       image.height = rows;
@@ -444,7 +449,9 @@ export class GridView {
             if (i >= 0 && j >= 0 && i < f.width && j < f.height) {
               const id = f.ids[i + j * f.width] ?? 0;
               const under = f.below[i + j * f.width] ?? 0;
-              if (id !== 0) {
+              if (id !== 0 && showFootprints && ((facing[id] ?? 0) & FACING_PARTS) !== 0) {
+                // Its parts are drawn over the background, so the empty part of the cell shows.
+              } else if (id !== 0) {
                 r = looks[id * 4] ?? 0;
                 g = looks[id * 4 + 1] ?? 0;
                 b = looks[id * 4 + 2] ?? 0;
@@ -958,6 +965,29 @@ export class GridView {
         ctx.strokeStyle = "rgb(0 0 0 / 0.75)";
         ctx.fillStyle = "rgb(255 255 255 / 0.9)";
         if (bits & FACING_PARTS) {
+          const drawn =
+            px >= FOOTPRINT_PX * (window.devicePixelRatio || 1)
+              ? this.#engine.partDraws.get(id)
+              : undefined;
+          if (drawn) {
+            for (const shape of footprint(drawn, this.#axis, o)) {
+              ctx.beginPath();
+              shape.points.forEach(([fs, ft], n) => {
+                const px0 = x + fs * px;
+                const py0 = y + ft * px;
+                if (n === 0) ctx.moveTo(px0, py0);
+                else ctx.lineTo(px0, py0);
+              });
+              ctx.closePath();
+              ctx.fillStyle = `#${shape.color.toString(16).padStart(6, "0")}`;
+              ctx.fill();
+              if (shape.outline) {
+                ctx.strokeStyle = "rgb(0 0 0 / 0.55)";
+                ctx.stroke();
+              }
+            }
+            continue;
+          }
           ctx.beginPath();
           ctx.moveTo(x + px * 0.62, y + px * 0.15);
           ctx.lineTo(x + px * 0.85, y + px * 0.15);

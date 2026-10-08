@@ -24,6 +24,7 @@ import {
   type ClipboardInfo,
   EMPTY_SELECTION,
   type PartArgs,
+  type PartDraw,
   type Ray,
   type SelectionView,
   type ToolArgs,
@@ -261,6 +262,7 @@ export class Engine {
   /** StateLooks.colors for the world on screen. */
   #looks: Uint8Array = new Uint8Array(0);
   #facing: Uint8Array = new Uint8Array(0);
+  #partDraws = new Map<number, readonly PartDraw[]>();
   /** Counts world changes seen (meshes, light, looks), so other views know to refresh. */
   #revision = 0;
   #lighting: LightingMode = "off";
@@ -421,6 +423,11 @@ export class Engine {
   /** Redoes the latest undone step, if there is one. */
   redo(): void {
     void this.world.request({ type: "redo" });
+  }
+
+  /** The parts of each cell state that has any, for the 2D view's footprints. */
+  get partDraws(): ReadonlyMap<number, readonly PartDraw[]> {
+    return this.#partDraws;
   }
 
   /** Per state, which way it faces (flat-edit.ts stateFacings), for the 2D view's arrows. */
@@ -740,6 +747,7 @@ export class Engine {
     if (message.type === "looks") {
       this.#looks = message.colors;
       this.#facing = message.facing;
+      this.#partDraws = new Map(message.partDraws.map((d) => [d.state, d.parts]));
     }
     if (message.type !== "idle") this.#revision++;
     const chunks = this.#chunks;

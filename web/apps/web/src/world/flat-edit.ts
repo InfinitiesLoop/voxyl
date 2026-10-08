@@ -13,9 +13,48 @@ import {
   sideOf,
   upOf,
 } from "@voxyl/core";
+import { type BlockMaterials, lookColor } from "@voxyl/session";
+import { archTriangles, isExclusive, microBoxes } from "@voxyl/shapes";
 import { planeToWorld, type SliceAxis } from "../views/plane.ts";
 import { commandId, EDITOR_SOURCE, semanticIdOf } from "./editing.ts";
-import type { Vec3 } from "./protocol.ts";
+import type { PartDraw, Vec3 } from "./protocol.ts";
+
+/**
+ * What each cell state with parts is made of, for the 2D view to draw as footprints: per part,
+ * its colour and its boxes (microblocks) or triangles (roofs). States of whole blocks are left
+ * out.
+ */
+export function statePartDraws(
+  project: Project,
+  blocks?: BlockMaterials,
+): { state: number; parts: PartDraw[] }[] {
+  const states = project.world.states;
+  const colors = new Map<number, number>();
+  const colorOf = (semantic: number): number => {
+    let color = colors.get(semantic);
+    if (color === undefined) {
+      color = project.semantics.has(semantic)
+        ? Number.parseInt(lookColor(project.semantics.resolve(semantic).look, blocks).slice(1), 16)
+        : 0x808080;
+      colors.set(semantic, color);
+    }
+    return color;
+  };
+  const out: { state: number; parts: PartDraw[] }[] = [];
+  for (let id = 1; id <= states.size; id++) {
+    const state = states.get(id);
+    if (!state || state.parts.length === 0) continue;
+    out.push({
+      state: id,
+      parts: state.parts.map((part) => ({
+        color: colorOf(part.semantic),
+        boxes: isExclusive(part.shape) ? [] : microBoxes(part.shape, part.slot).flat(),
+        tris: isExclusive(part.shape) ? archTriangles(part.shape, part.slot) : [],
+      })),
+    });
+  }
+  return out;
+}
 
 /** Most cells one stroke or fill may change. */
 export const MAX_FLAT_CELLS = 65536;

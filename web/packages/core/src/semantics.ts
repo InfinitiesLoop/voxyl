@@ -269,6 +269,61 @@ export class SemanticRegistry {
     }
   }
 
+  /**
+   * Makes an ordinary palette the linked copy of the shared palette `linked.key`, with each of
+   * its own semantics (`keys`, by id) matched to the shared one of that key. Ids, and so cells,
+   * stay put. Refused for a palette that extends another, or has a semantic derived from
+   * another palette's: a linked copy has no parents.
+   */
+  link(
+    id: PaletteId,
+    linked: { readonly key: string; readonly version: number },
+    keys: ReadonlyMap<SemanticId, string>,
+  ): void {
+    const p = this.palette(id);
+    if (p.linked) throw new Error(`${p.name} is already a linked copy`);
+    if (p.extends !== undefined) {
+      throw new Error(`${p.name} extends ${this.palette(p.extends).name}; a shared palette can't`);
+    }
+    if (this.palettes().some((other) => other.linked?.key === linked.key)) {
+      throw new Error("A palette is already linked to that shared palette");
+    }
+    const own = this.semanticsIn(id);
+    for (const s of own) {
+      if (this.get(s).base !== undefined) {
+        throw new Error(`${this.nameOf(s)} is derived from another palette's semantic`);
+      }
+      if (!keys.get(s)) throw new Error(`${this.nameOf(s)} has no key in the shared palette`);
+    }
+    const seen = new Set<string>();
+    for (const s of own) {
+      const key = keys.get(s) as string;
+      if (seen.has(key)) throw new Error(`Two semantics share the key ${key}`);
+      seen.add(key);
+    }
+    for (const s of own) {
+      this.#semantics[s] = freezeSemantic({ ...this.get(s), sharedKey: keys.get(s) as string });
+    }
+    this.#palettes[id] = freezePalette({
+      ...p,
+      linked: { key: linked.key, version: linked.version },
+    });
+    this.#revision++;
+  }
+
+  /** Makes a linked copy an ordinary palette again. Its semantics keep their ids and looks. */
+  unlink(id: PaletteId): void {
+    const p = this.palette(id);
+    if (!p.linked) throw new Error(`${p.name} isn't a linked copy`);
+    const { linked: _, ...rest } = p;
+    this.#palettes[id] = freezePalette(rest as Palette);
+    for (const s of this.semanticsIn(id)) {
+      const { sharedKey: __, ...entry } = this.get(s);
+      this.#semantics[s] = freezeSemantic(entry as Semantic);
+    }
+    this.#revision++;
+  }
+
   #checkWritable(palette: PaletteId): void {
     const p = this.palette(palette);
     if (p.linked && !this.#syncing) {
