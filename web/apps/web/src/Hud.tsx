@@ -1,11 +1,11 @@
 import { CITY_THEMES } from "@voxyl/fixtures";
 import type { ProjectEntry } from "@voxyl/session";
 import { useRef } from "react";
-import type { Settings } from "./App.tsx";
 import type { BenchResult, Distribution } from "./bench/bench.ts";
 import type { Backend, EngineStats } from "./scene/Engine.ts";
+import type { Settings } from "./settings-url.ts";
 import type { LibraryInfo } from "./world/protocol.ts";
-import { CHUNK_SIZES, savedSource, WORLD_KINDS, type WorldInfo } from "./worlds.ts";
+import { savedSource, WORLD_KINDS, type WorldInfo } from "./worlds.ts";
 
 const ms = (v: number | null | undefined, digits = 1) =>
   v === null || v === undefined ? "–" : `${v.toFixed(digits)} ms`;
@@ -84,20 +84,6 @@ export function Hud({
               !projects.some((p) => savedSource(p.id) === settings.world) && (
                 <option value={settings.world}>{info?.name ?? "Project"}</option>
               )}
-          </select>
-        </label>
-        <label>
-          Chunk
-          <select
-            value={settings.chunk}
-            disabled={busy}
-            onChange={(e) => onSettings({ ...settings, chunk: Number(e.target.value) })}
-          >
-            {CHUNK_SIZES.map((s) => (
-              <option key={s} value={s}>
-                {s}³
-              </option>
-            ))}
           </select>
         </label>
         <label>

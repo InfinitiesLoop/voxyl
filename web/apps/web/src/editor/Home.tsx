@@ -55,7 +55,10 @@ export function Home(props: HomeProps) {
   return (
     <div className="home">
       <header className="home-head">
-        <strong className="brand">Voxyl</strong>
+        <strong className="brand">
+          <img className="brand-mark" src="/conduit-pillar.png" alt="" />
+          Voxyl
+        </strong>
         <nav className="home-tabs" aria-label="Home">
           {(
             [
@@ -93,74 +96,91 @@ function Projects({ projects, onOpen, onNew, onSample, project }: HomeProps) {
   const file = useRef<HTMLInputElement>(null);
   const [samples, setSamples] = useState(false);
   return (
-    <section className="home-section">
-      <div className="home-actions">
-        <button type="button" className="primary" onClick={onNew}>
-          New build
-        </button>
-        <button type="button" onClick={() => file.current?.click()}>
-          Import a .voxyl file…
-        </button>
-        <button type="button" aria-expanded={samples} onClick={() => setSamples(!samples)}>
-          Samples
-        </button>
-        <input
-          ref={file}
-          type="file"
-          accept=".voxyl"
-          hidden
-          onChange={(e) => {
-            const chosen = e.target.files?.[0];
-            e.target.value = "";
-            if (chosen) void project.import(chosen);
-          }}
-        />
-      </div>
-      {samples && (
-        <div className="home-samples">
-          {WORLD_KINDS.map((w) => (
-            <button key={w.kind} type="button" onClick={() => onSample(w.kind)}>
-              {w.label}
-            </button>
-          ))}
-        </div>
-      )}
-      {projects.length === 0 ? (
-        <div className="home-empty">
-          <p>No builds in this browser yet.</p>
-          <button type="button" className="primary big" onClick={onNew}>
-            Start building
+    <>
+      <Horizon />
+      <section className="home-section">
+        <div className="home-actions">
+          <button type="button" className="primary" onClick={onNew}>
+            New build
           </button>
-          <p className="home-quiet">
-            A new build starts with a few semantics (Wall, Floor, Roof, …) already on blocks. Change
-            any of them later without touching what you built.
-          </p>
+          <button type="button" onClick={() => file.current?.click()}>
+            Import a .voxyl file…
+          </button>
+          <button type="button" aria-expanded={samples} onClick={() => setSamples(!samples)}>
+            Samples
+          </button>
+          <input
+            ref={file}
+            type="file"
+            accept=".voxyl"
+            hidden
+            onChange={(e) => {
+              const chosen = e.target.files?.[0];
+              e.target.value = "";
+              if (chosen) void project.import(chosen);
+            }}
+          />
         </div>
-      ) : (
-        <ul className="home-cards">
-          {[...projects]
-            .sort((a, b) => b.savedAt - a.savedAt)
-            .map((p) => (
-              <li key={p.id} className="home-card">
-                <button type="button" className="home-card-open" onClick={() => onOpen(p.id)}>
-                  <strong className="home-card-name">{p.name}</strong>
-                  <span className="home-card-meta">
-                    {p.cells.toLocaleString()} cells · {sizeLabel(p.bytes)} · {ago(p.savedAt)}
-                  </span>
-                </button>
-                <span className="home-card-tools">
-                  <button type="button" onClick={() => void project.export(p.id, p.name)}>
-                    Export
-                  </button>
-                  <button type="button" onClick={() => void project.delete(p.id, p.name)}>
-                    Delete
-                  </button>
-                </span>
-              </li>
+        {samples && (
+          <div className="home-samples">
+            {WORLD_KINDS.map((w) => (
+              <button key={w.kind} type="button" onClick={() => onSample(w.kind)}>
+                {w.label}
+              </button>
             ))}
-        </ul>
-      )}
-    </section>
+          </div>
+        )}
+        {projects.length === 0 ? (
+          <div className="home-empty">
+            <p>No builds in this browser yet.</p>
+            <button type="button" className="primary big" onClick={onNew}>
+              Start building
+            </button>
+            <p className="home-quiet">
+              A new build starts with a few semantics (Wall, Floor, Roof, …) already on blocks.
+              Change any of them later without touching what you built.
+            </p>
+          </div>
+        ) : (
+          <ul className="home-cards">
+            {[...projects]
+              .sort((a, b) => b.savedAt - a.savedAt)
+              .map((p) => (
+                <li key={p.id} className="home-card">
+                  <button type="button" className="home-card-open" onClick={() => onOpen(p.id)}>
+                    <strong className="home-card-name">{p.name}</strong>
+                    <span className="home-card-meta">
+                      {p.cells.toLocaleString()} cells · {sizeLabel(p.bytes)} · {ago(p.savedAt)}
+                    </span>
+                  </button>
+                  <span className="home-card-tools">
+                    <button type="button" onClick={() => void project.export(p.id, p.name)}>
+                      Export
+                    </button>
+                    <button type="button" onClick={() => void project.delete(p.id, p.name)}>
+                      Delete
+                    </button>
+                  </span>
+                </li>
+              ))}
+          </ul>
+        )}
+      </section>
+    </>
+  );
+}
+
+/** The conduit pillar, standing on a grid that runs out to the horizon. */
+function Horizon() {
+  return (
+    <div className="horizon">
+      <div className="horizon-sky" />
+      <div className="horizon-ground">
+        <div className="horizon-floor" />
+      </div>
+      <img className="horizon-pillar" src="/conduit-pillar.png" alt="" />
+      <p className="horizon-caption">Build first. Decide later.</p>
+    </div>
   );
 }
 

@@ -32,7 +32,8 @@ export const WORLD_KINDS: readonly { kind: WorldKind; label: string }[] = [
   { kind: "parts-20m", label: "Shaped city, 20M cells" },
 ];
 
-export const CHUNK_SIZES = [16, 32, 64, 128] as const;
+/** Runtime mesh chunks. 64³ measured as the best single size, so it isn't a setting. */
+export const CHUNK_SIZE = 64;
 
 /**
  * What to show: a generated sample (its WorldKind) or a saved project, written "saved:<id>".

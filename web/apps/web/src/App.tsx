@@ -1,5 +1,4 @@
-import { CITY_THEMES } from "@voxyl/fixtures";
-import type { LightingMode, ProjectEntry } from "@voxyl/session";
+import type { ProjectEntry } from "@voxyl/session";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type BenchResult, runBench } from "./bench/bench.ts";
 import { download } from "./download.ts";
@@ -9,14 +8,7 @@ import { HotbarBar } from "./editor/HotbarBar.tsx";
 import { Inventory } from "./editor/Inventory.tsx";
 import { clearBlockIcons } from "./editor/icons.tsx";
 import { KeysPanel } from "./editor/KeysPanel.tsx";
-import {
-  focusedPane,
-  type LayoutPreset,
-  type LayoutState,
-  presetFromParams,
-  readLayout,
-  saveLayout,
-} from "./editor/layout.ts";
+import { focusedPane, type LayoutState, readLayout, saveLayout } from "./editor/layout.ts";
 import { PaletteDrawer } from "./editor/PaletteDrawer.tsx";
 import { Panes } from "./editor/Panes.tsx";
 import { PasteOverlay } from "./editor/PasteOverlay.tsx";
@@ -28,90 +20,33 @@ import { TopBar } from "./editor/TopBar.tsx";
 import { useStore } from "./editor/useStore.ts";
 import { BenchPanel, Hud } from "./Hud.tsx";
 import { type Backend, Engine, type EngineStats } from "./scene/Engine.ts";
-import { NOON, wrapHours } from "./scene/sky-model.ts";
+import { readSettings, type Settings, settingsQuery } from "./settings-url.ts";
 import type { LibraryInfo } from "./world/protocol.ts";
-import {
-  CHUNK_SIZES,
-  sampleKind,
-  savedId,
-  savedSource,
-  WORLD_KINDS,
-  type WorldInfo,
-  type WorldSource,
-} from "./worlds.ts";
+import { CHUNK_SIZE, savedId, savedSource, WORLD_KINDS, type WorldInfo } from "./worlds.ts";
 
-export interface Settings {
-  /** A sample's kind, a saved project as "saved:<id>", or "" for none (Home). */
-  world: WorldSource;
-  chunk: number;
-  /** The city theme of the sample builds (CITY_THEMES). */
-  theme: number;
-  lighting: LightingMode;
-  /** Time of day in hours, 0 (midnight) to 24; 12 is noon. */
-  time: number;
-  /** Minecraft's Brightness, 0 (Moody) to 100 (Bright); 50 is its default. */
-  brightness: number;
-  /** Which arrangement of panes is showing. Each pane's kind and time live with the layout. */
-  layout: LayoutPreset;
-}
-
-function percent(value: string | null, fallback: number): number {
-  const n = Number(value ?? fallback);
-  return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : fallback;
-}
-
-/** `time` in hours; earlier versions had `daylight`, 0 (midnight) to 100 (noon). */
-function readTime(params: URLSearchParams): number {
-  const time = Number(params.get("time") ?? Number.NaN);
-  if (Number.isFinite(time)) return wrapHours(time);
-  if (params.has("daylight")) return (percent(params.get("daylight"), 100) / 100) * NOON;
-  return NOON;
-}
-
-function readSettings(): Settings {
-  const params = new URLSearchParams(location.search);
-  const requested = params.get("world") ?? "";
-  const world = sampleKind(requested) || savedId(requested) ? requested : "";
-  const chunk = Number(params.get("chunk"));
-  // "palette" is the name earlier versions used.
-  const themeName = params.get("theme") ?? params.get("palette");
-  const theme = CITY_THEMES.findIndex((t) => t.name.toLowerCase() === themeName);
-  const lighting = params.get("lighting");
-  return {
-    world,
-    chunk: (CHUNK_SIZES as readonly number[]).includes(chunk) ? chunk : 64,
-    theme: Math.max(0, theme),
-    // "on" and "vertex" are from earlier versions; any lighting now means the light volume.
-    lighting: lighting === null || lighting === "off" ? "off" : "volume",
-    time: readTime(params),
-    brightness: percent(params.get("brightness"), 50),
-    layout: presetFromParams(params) ?? "single",
-  };
-}
+export type { Settings };
 
 const DEV_KEY = "voxyl.dev";
 const PALETTES_KEY = "voxyl.palettes";
 
-function writeSettings(s: Settings): void {
-  const params = new URLSearchParams({
-    ...(s.world !== "" && { world: s.world }),
-    chunk: String(s.chunk),
-    theme: CITY_THEMES[s.theme]?.name.toLowerCase() ?? "concrete",
-    lighting: s.lighting,
-    time: String(s.time),
-    brightness: String(s.brightness),
-    layout: s.layout,
-  });
-  history.replaceState(null, "", `?${params}`);
+/** Puts the current link in the address bar. Home, and a build at every default, stay clean. */
+function syncAddress(settings: Settings, home: boolean): void {
+  const qs = settingsQuery(settings, home);
+  const next = `${location.pathname}${qs ? `?${qs}` : ""}${location.hash}`;
+  if (`${location.pathname}${location.search}${location.hash}` !== next) {
+    history.replaceState(null, "", next);
+  }
 }
 
 export function App() {
   const hostRef = useRef<HTMLDivElement>(null);
   const [engine, setEngine] = useState<Engine | null>(null);
   const [backend, setBackend] = useState<Backend | null>(null);
-  const [settings, setSettings] = useState(readSettings);
+  const [settings, setSettings] = useState(() =>
+    readSettings(new URLSearchParams(location.search)),
+  );
   const [layout, setLayout] = useState<LayoutState>(() =>
-    readLayout(readSettings().time, new URLSearchParams(location.search)),
+    readLayout(settings.time, new URLSearchParams(location.search)),
   );
   /** Work in progress, shown in the banner (latest last); the controls wait for it. */
   const [tasks, setTasks] = useState<string[]>(["Starting renderer"]);
@@ -138,7 +73,7 @@ export function App() {
     () => localStorage.getItem(PALETTES_KEY) !== "0",
   );
   /** Home: where the app opens when the link names no build, and the top bar's Home. */
-  const [homeOpen, setHomeOpen] = useState(() => readSettings().world === "");
+  const [homeOpen, setHomeOpen] = useState(() => settings.world === "");
   /** The key bindings panel. */
   const [keysOpen, setKeysOpen] = useState(false);
   const closeKeys = useCallback(() => setKeysOpen(false), []);
@@ -197,7 +132,7 @@ export function App() {
     });
   }, [engine]);
 
-  useEffect(() => writeSettings(settings), [settings]);
+  useEffect(() => syncAddress(settings, homeOpen), [settings, homeOpen]);
 
   // The focused 3D pane's time is the one a link records. The other panes stay in storage.
   useEffect(() => {
@@ -214,7 +149,7 @@ export function App() {
   // regenerates the world: it only goes to setTheme below, a palette_sync of looks.
   const themeRef = useRef(settings.theme);
   themeRef.current = settings.theme;
-  const { world: source, chunk: chunkSize, theme, lighting, brightness } = settings;
+  const { world: source, theme, lighting, brightness } = settings;
 
   const refreshProjects = useCallback(async () => {
     if (engine) setProjects(await engine.world.request({ type: "projects" }));
@@ -235,8 +170,8 @@ export function App() {
     void refreshLibraries();
   }, [refreshLibraries]);
 
-  // Generate a sample or open a saved project when the source or chunk size changes. Both
-  // happen (and, with lighting on, light) in the world worker, so the page stays responsive.
+  // Generate a sample or open a saved project when the source changes. Both happen (and, with
+  // lighting on, light) in the world worker, so the page stays responsive.
   // A sample that was just saved is already on screen: only the source changed.
   const justSaved = useRef<string | null>(null);
   // Only a theme the user picks is applied (as a palette_sync); opening a saved project keeps
@@ -248,9 +183,9 @@ export function App() {
     if (id !== null && id === justSaved.current) return;
     justSaved.current = null;
     setBench(null);
-    const sample = WORLD_KINDS.find((w) => w.kind === sampleKind(source));
+    const sample = WORLD_KINDS.find((w) => w.kind === source);
     const label = sample ? `Generating ${sample.label}` : "Opening the project";
-    const work = engine.load(source, chunkSize, themeRef.current).then((loaded) => {
+    const work = engine.load(source, CHUNK_SIZE, themeRef.current).then((loaded) => {
       if (!loaded) return;
       setInfo(loaded);
       // The theme picker shows what the project looks like; picking another re-skins it.
@@ -263,7 +198,7 @@ export function App() {
     track(label, work);
     // reloads only asks for the same source again.
     void reloads;
-  }, [engine, source, chunkSize, track, reloads]);
+  }, [engine, source, track, reloads]);
 
   useEffect(() => {
     if (!engine || theme === appliedTheme.current) return;

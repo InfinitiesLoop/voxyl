@@ -53,7 +53,7 @@ default, waits for the world to mesh, and prints console problems, the HUD and t
 count, plus a screenshot in `shots/`. Add a query and `--bench` to run the benchmark too:
 
 ```bash
-pnpm shot "world=city-5m&chunk=64&lighting=volume" --bench
+pnpm shot "world=city-5m&lighting=volume" --bench
 ```
 
 This is how changes get checked against exactly what `pnpm dev` serves, React's development
@@ -72,8 +72,8 @@ new renders, `pnpm golden sky` runs only matching scenes. A full run takes about
   GPU bricks, per-face light) on the city.
 - `pnpm bench:light [cells ...]`: full relight, light memory, the light bricks faces read and
   their copy cost, and incremental relights for single edits, a roof hole and big fills.
-- In the app, pick a world, chunk size and lighting (also in the URL, e.g.
-  `?world=city-5m&chunk=64&lighting=volume&time=0&brightness=50`; `world=parts-5m` is
+- In the app, pick a world and lighting (also in the URL, e.g.
+  `?world=city-5m&lighting=volume&time=0`; `world=parts-5m` is
   the same city decorated with shaped parts) and press **Run
   benchmark**: a scripted flight (frame, main-thread and GPU time), 100 single-cell edits, a
   roof hole and 100k/1M box fills, measured to the frame they appear. The result can be

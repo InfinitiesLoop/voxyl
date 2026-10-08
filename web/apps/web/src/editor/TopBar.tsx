@@ -1,7 +1,7 @@
 import { type MouseEvent, useEffect, useRef, useState } from "react";
-import type { Settings } from "../App.tsx";
 import type { Engine } from "../scene/Engine.ts";
 import { clockLabel } from "../scene/sky-model.ts";
+import type { Settings } from "../settings-url.ts";
 import type { WorldInfo } from "../worlds.ts";
 import { type LayoutPreset, type LayoutState, withPreset } from "./layout.ts";
 import { ProjectSettingsDialog } from "./ProjectSettings.tsx";
@@ -87,6 +87,7 @@ export function TopBar({
         title="Home: your builds, palettes and blocks"
         onClick={click(onHome)}
       >
+        <img className="brand-mark" src="/conduit-pillar.png" alt="" />
         Voxyl
       </button>
       <button type="button" title="Your builds, palettes and blocks" onClick={click(onHome)}>

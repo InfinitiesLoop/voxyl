@@ -821,15 +821,21 @@ the Phase 4 API can be a Worker on the same zone later.
 - Production deploys from `main` only, after `pnpm check` is green. Other branches get a
   preview URL and do not touch voxyl.xyz.
 
-**Cloudflare side is set (2026-10-08), not deployed yet.** Account `cceaac3044c9675286ba0daee9c2e809`
+**First production deploy is live (2026-10-08).** Account `cceaac3044c9675286ba0daee9c2e809`
 (infinity88@gmail.com). Pages project `voxyl` (`voxyl.pages.dev`), Direct Upload, production
 branch `main`. Custom domains `voxyl.xyz` and `www.voxyl.xyz` are attached; they validate once a
 deployment exists. Proxied CNAMEs for both point at `voxyl.pages.dev`. The zone
-`7781ca1b01ee907538aae2c3b5c3a54a` is live: checked 2026-10-08, `voxyl.xyz` resolves through
-`julio.ns.cloudflare.com` and `meg.ns.cloudflare.com` and answers with Cloudflare's own 522
-(nothing to serve yet), so the Squarespace nameserver change took. The user has added the GitHub
-secrets `CLOUDFLARE_PAGES_API_TOKEN` (Pages Edit only) and `CLOUDFLARE_ACCOUNT_ID` (not
-verifiable from here: `gh` is installed but needs the user's `gh auth login`).
+`7781ca1b01ee907538aae2c3b5c3a54a` is live: `voxyl.xyz` resolves through
+`julio.ns.cloudflare.com` and `meg.ns.cloudflare.com`. The first Pages deploy is serving the
+site. The user has added the GitHub
+secrets `CLOUDFLARE_PAGES_API_TOKEN` (Pages Edit only) and `CLOUDFLARE_ACCOUNT_ID`.
+
+**Follow-up the same day, before showing the site.** The address bar only keeps settings that
+aren't the defaults: `world`, plus `theme`, `lighting`, `time`, `brightness` and `layout` when
+they differ. Home is a clean URL. Mesh chunks are fixed at 64³ (the size measured as the best
+single setting); the dev panel no longer offers another. The home page uses a Godot snapshot of
+the conduit pillar as the mark, standing on a receding voxel grid, and the same picture is the
+favicon.
 
 **Readiness check (2026-10-08).** The workflow is on `origin/main` (it must be, for Run workflow
 to appear). `pnpm check` is green and `pnpm --filter @voxyl/web build` makes a 2.3 MB `dist/`
