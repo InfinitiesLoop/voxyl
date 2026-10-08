@@ -83,7 +83,7 @@ export function unpackEdgeBits(e: number): number {
   }
 }
 
-function packEdgeBits(e: number, bits: number): number {
+export function packEdgeBits(e: number, bits: number): number {
   switch (e >> 2) {
     case 0:
       return (e & 0xc) | (bits >> 1);

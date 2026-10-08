@@ -8,7 +8,7 @@
 // sends about a world is tagged with the world's id, so messages about a world that has since
 // been replaced are dropped.
 
-import type { Look, PaletteId, Region, SemanticArg, SharedPalette } from "@voxyl/core";
+import type { Form, Look, PaletteId, Region, SemanticArg, SharedPalette } from "@voxyl/core";
 import type { ModelShape, StateShape } from "@voxyl/mesher";
 import type {
   LightingMode,
@@ -19,7 +19,7 @@ import type {
 } from "@voxyl/session";
 import type { SliceAxis } from "../views/plane.ts";
 import type { WorldInfo, WorldSource } from "../worlds.ts";
-import type { Aim, HistoryState, PaletteInfo } from "./editing.ts";
+import type { Aim, HistoryState, PaletteInfo, PartGhost } from "./editing.ts";
 import type { BuildTool } from "./tools.ts";
 
 /** The most cells one slice request may ask for. */
@@ -44,8 +44,22 @@ export interface ToolArgs {
   readonly camera: Vec3;
 }
 
-/** An aim, and the cells (x, y, z, ...) the tool in hand would build there, if any. */
-export type AimView = Aim & { readonly preview: Int32Array | null };
+/** A shaped semantic in hand: the part it would place at the aim (see partGhost). */
+export interface PartArgs {
+  readonly semantic: SemanticArg;
+  /** The modifier that puts the part on the far side of the cell. */
+  readonly opposite: boolean;
+}
+
+/**
+ * An aim, the cells (x, y, z, ...) the tool in hand would build there, if any, the part that
+ * would be placed (the ghost), and the shape and slot of the part the ray met.
+ */
+export type AimView = Aim & {
+  readonly preview: Int32Array | null;
+  readonly ghost: PartGhost | null;
+  readonly aimed: { readonly shape: string; readonly slot: number } | null;
+};
 
 /** At most this many cells are previewed (the click still builds them all). */
 export const MAX_PREVIEW_CELLS = 8192;
@@ -69,7 +83,14 @@ export type Command =
   /** Renames the open project (a settings command, so it undoes). */
   | { type: "rename"; name: string }
   /** Adds a semantic to a palette, optionally with a description and a look. */
-  | { type: "addSemantic"; palette: PaletteId; name: string; description?: string; look?: Look }
+  | {
+      type: "addSemantic";
+      palette: PaletteId;
+      name: string;
+      description?: string;
+      look?: Look;
+      form?: Form;
+    }
   /** Renames a semantic and sets its description and look, in one step. */
   | {
       type: "editSemantic";
@@ -77,6 +98,7 @@ export type Command =
       name: string;
       description: string;
       look: Look | null;
+      form?: Form | null;
     }
   /** Renames a semantic, deriving it first when the palette only offers it. */
   | { type: "renameSemantic"; semantic: SemanticArg; name: string }
@@ -112,13 +134,13 @@ export type Command =
    * Where a ray from the crosshair aims (see editing.ts), and with `tool`, the cells that
    * tool would build there (the preview).
    */
-  | ({ type: "aim"; tool?: ToolArgs } & Ray)
+  | ({ type: "aim"; tool?: ToolArgs; part?: PartArgs } & Ray)
   /** Builds with a multi-block tool where the ray aims (see tools.ts). */
   | ({ type: "toolEdit"; semantic: SemanticArg } & ToolArgs & Ray)
   /** Turns the block the ray aims at about the face it hits (Shift: the other way). */
   | ({ type: "rotate"; reverse: boolean } & Ray)
   /** Places a semantic where the ray aims, turned as its placement profile picks. */
-  | ({ type: "place"; semantic: SemanticArg } & Ray)
+  | ({ type: "place"; semantic: SemanticArg; opposite?: boolean } & Ray)
   /** Empties the cell the ray aims at. */
   | ({ type: "erase" } & Ray)
   /** Sets the selection to a region (null clears it). Not an undo step. */

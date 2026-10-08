@@ -5,6 +5,7 @@ import type { PaletteInfo, SemanticInfo } from "../world/editing.ts";
 import type { SharedPaletteInfo } from "../world/protocol.ts";
 import { BlockChooserDialog, blockTitle } from "./BlockPicker.tsx";
 import { writeSemanticDrag } from "./drag.ts";
+import { SemanticEditor } from "./SemanticEditor.tsx";
 import { useStore } from "./useStore.ts";
 
 /**
@@ -24,6 +25,7 @@ export function PaletteDrawer({ engine }: { engine: Engine }) {
   const linkedKeys = new Set(palettes.flatMap((p) => (p.linkedKey ? [p.linkedKey] : [])));
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
+  const [semanticsOpen, setSemanticsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const selected = findSemantic(palettes, selectedKey);
 
@@ -47,7 +49,15 @@ export function PaletteDrawer({ engine }: { engine: Engine }) {
     <aside className="palette-drawer">
       <header className="palette-head">
         <strong>Palettes</strong>
+        <button
+          type="button"
+          title="The project's list of semantics: names, what they are for, shapes, and how each palette looks them"
+          onClick={() => setSemanticsOpen(true)}
+        >
+          Semantics
+        </button>
       </header>
+      {semanticsOpen && <SemanticEditor engine={engine} onClose={() => setSemanticsOpen(false)} />}
       {error && <p className="palette-error">{error}</p>}
       {notice && <p className="palette-note">{notice}</p>}
       {picking && selected && (

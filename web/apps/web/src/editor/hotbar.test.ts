@@ -16,6 +16,8 @@ const info = (
   color: "#808080",
   glow: false,
   ownLook: {},
+  ownForm: {},
+  placement: "auto",
 });
 
 const palette = (id: number, semantics: SemanticInfo[]): PaletteInfo => ({

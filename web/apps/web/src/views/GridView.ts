@@ -698,6 +698,8 @@ export class GridView {
       return;
     }
     const semantic = this.#engine.hotbar.current?.ref;
+    // A shaped semantic is placed in 3D, one part at a time; drawing here builds whole blocks.
+    if (event.button === 0 && this.#engine.refuseShaped()) return;
     if (tool === "exchange" && event.button === 0) {
       if (semantic === undefined) return;
       this.#engine.edit2d(

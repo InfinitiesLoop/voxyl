@@ -65,6 +65,7 @@ import {
   linkPaletteCommand,
   newProject,
   paletteInfo,
+  partGhost,
   placeCommand,
   removeSemanticCommand,
   renameCommand,
@@ -293,6 +294,7 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
           addSemanticCommand(openProject(), command.palette, command.name, {
             ...(command.description !== undefined && { description: command.description }),
             ...(command.look !== undefined && { look: command.look }),
+            ...(command.form !== undefined && { form: command.form }),
           }),
         ) >= 0
       );
@@ -303,6 +305,7 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
             name: command.name,
             description: command.description,
             look: command.look,
+            ...(command.form !== undefined && { form: command.form }),
           }),
         ) >= 0
       );
@@ -501,7 +504,18 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
         preview = new Int32Array(shown * 3);
         for (let i = 0; i < shown; i++) preview.set(cells[i] as Vec3, i * 3);
       }
-      return { ...target, preview } satisfies AimView;
+      const open = openProject();
+      const ghost = command.part
+        ? partGhost(open, target, command.part.semantic, command.part.opposite)
+        : null;
+      const state = target.part ? world().states.get(target.id) : null;
+      const met = target.part ? state?.parts[target.part.index] : undefined;
+      return {
+        ...target,
+        preview,
+        ghost,
+        aimed: met ? { shape: met.shape, slot: met.slot } : null,
+      } satisfies AimView;
     }
     case "toolEdit": {
       const target = aim(world(), command.origin, command.dir, command.reach);
@@ -521,7 +535,11 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
     case "place": {
       const target = aim(world(), command.origin, command.dir, command.reach);
       if (!target) return false;
-      return runEdit(placeCommand(openProject(), target, command.semantic, command.dir)) > 0;
+      return (
+        runEdit(
+          placeCommand(openProject(), target, command.semantic, command.dir, command.opposite),
+        ) > 0
+      );
     }
     case "erase": {
       const target = aim(world(), command.origin, command.dir, command.reach);
@@ -563,7 +581,8 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       const hit = raycast(world(), [...command.origin], [...command.dir], command.reach);
       if (!hit) return null;
       const state = world().states.get(hit.id);
-      const semanticId = state ? semanticOfState(state) : 0;
+      const met = hit.part ? state?.parts[hit.part.index] : undefined;
+      const semanticId = met ? met.semantic : state ? semanticOfState(state) : 0;
       return {
         cell: hit.cell,
         normal: hit.normal,

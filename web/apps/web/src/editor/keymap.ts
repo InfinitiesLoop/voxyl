@@ -19,6 +19,7 @@ export const KEY_ACTIONS = [
   "inventory",
   "nextTool",
   "rotateBlock",
+  "placeOpposite",
   "clearSelection",
   "layerUp",
   "layerDown",
@@ -49,6 +50,8 @@ export const KEYMAP: Readonly<Record<KeyAction, KeyBinding>> = {
   nextTool: { binding: ["KeyQ"], alternate: ["NumpadMultiply"] },
   /** Shift turns the other way. */
   rotateBlock: { binding: ["KeyR"], alternate: ["Numpad0"] },
+  /** Held while placing a shaped part: it goes on the far side of the cell (also the mouse thumb buttons). */
+  placeOpposite: { binding: ["ControlLeft"], alternate: ["NumpadDivide", "Period"] },
   clearSelection: { binding: ["Backspace"], alternate: [] },
   layerUp: { binding: ["BracketRight"], alternate: ["PageUp"] },
   layerDown: { binding: ["BracketLeft"], alternate: ["PageDown"] },

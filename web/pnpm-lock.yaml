@@ -208,6 +208,9 @@ importers:
       '@voxyl/session':
         specifier: workspace:*
         version: link:../../packages/session
+      '@voxyl/shapes':
+        specifier: workspace:*
+        version: link:../../packages/shapes
       react:
         specifier: ^19.3.0
         version: 19.3.0

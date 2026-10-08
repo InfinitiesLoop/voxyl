@@ -19,6 +19,7 @@ import { PaletteDrawer } from "./editor/PaletteDrawer.tsx";
 import { Panes } from "./editor/Panes.tsx";
 import { SelectionPanel } from "./editor/SelectionPanel.tsx";
 import { SelectionActions } from "./editor/selection-actions.tsx";
+import { Toast } from "./editor/Toast.tsx";
 import { ToolBadge } from "./editor/Tools.tsx";
 import { TopBar } from "./editor/TopBar.tsx";
 import { useStore } from "./editor/useStore.ts";
@@ -416,6 +417,7 @@ export function App() {
       )}
       {engine && <EditorTools engine={engine} />}
       {engine && <Inventory engine={engine} />}
+      {engine && <Toast engine={engine} />}
       {engine && keysOpen && <KeysPanel tool={engine.tool.get()} onClose={closeKeys} />}
       {engine && palettesOpen && <PaletteDrawer engine={engine} />}
       <Hud

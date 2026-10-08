@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { Engine } from "../scene/Engine.ts";
-import { KEYMAP, keyLabel } from "./keymap.ts";
+import { codesOf, KEYMAP, keyLabel } from "./keymap.ts";
 import { type EditorTool, usesBrush } from "./tool.ts";
 import { useStore } from "./useStore.ts";
 import { blurAfter } from "./ViewBar.tsx";
@@ -46,6 +46,7 @@ export function ToolStrip({ engine }: { engine: Engine }) {
   const tool = useStore(engine.tool);
   const brush = useStore(engine.brush);
   const connectAny = useStore(engine.connectAny);
+  const farSide = useStore(engine.farSide);
   const current = TOOLS.find((item) => item.id === tool);
   return (
     <div className="tool-strip">
@@ -78,6 +79,22 @@ export function ToolStrip({ engine }: { engine: Engine }) {
             </button>
           ))}
         </div>
+      )}
+      {tool === "build" && (
+        <label
+          className="tool-options"
+          title="A shaped part (a cover, strip, roof tile ...) goes on the far side of the cell it would land in. Holding the key or a mouse thumb button does the same while it is down."
+        >
+          <input
+            type="checkbox"
+            checked={farSide}
+            onChange={(e) => {
+              engine.setFarSide(e.target.checked);
+              e.currentTarget.blur();
+            }}
+          />
+          Far side for shaped parts ({codesOf("placeOpposite").slice(0, 1).map(keyLabel)} held)
+        </label>
       )}
       {tool === "select" && (
         <label className="tool-options">

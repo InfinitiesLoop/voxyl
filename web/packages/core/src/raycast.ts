@@ -1,3 +1,4 @@
+import { hitPart } from "@voxyl/shapes";
 import { EMPTY_ID } from "./cell-state.ts";
 import type { World } from "./world.ts";
 
@@ -8,12 +9,21 @@ export interface RayHit {
   readonly normal: readonly [number, number, number];
   readonly id: number;
   readonly distance: number;
+  /** Where the ray met the cell's geometry, in world coordinates. */
+  readonly point: readonly [number, number, number];
+  /**
+   * For a cell of parts: which part the ray met (an index into its state's parts) and the
+   * outward side of the face it hit. A whole block has none.
+   */
+  readonly part?: { readonly index: number; readonly side: number };
 }
 
 /**
  * Walks a ray through the grid one cell at a time (Amanatides and Woo) and returns the first
  * occupied cell within `maxDistance`. Cell [x, y, z] spans x..x+1 on each axis. `dir` need not
- * be normalised; distance is measured in units of its length.
+ * be normalised; distance is measured in units of its length. A cell of parts is only hit
+ * where the ray meets one of them (a slab leaves the rest of its cell open), and the hit says
+ * which.
  */
 export function raycast(
   world: World,
@@ -45,7 +55,33 @@ export function raycast(
     }
     const id = world.getId(x, y, z);
     if (id !== EMPTY_ID) {
-      return { cell: [x, y, z], normal, id, distance: t };
+      const state = world.states.get(id);
+      if (!state || state.parts.length === 0) {
+        return {
+          cell: [x, y, z],
+          normal,
+          id,
+          distance: t,
+          point: [ox + dx * t, oy + dy * t, oz + dz * t],
+        };
+      }
+      const local: [number, number, number] = [ox - x, oy - y, oz - z];
+      let best: { index: number; side: number; t: number } | null = null;
+      state.parts.forEach((part, index) => {
+        const hit = hitPart(part.shape, part.slot, local, dir, maxDistance);
+        if (hit && (best === null || hit.t < best.t)) best = { index, side: hit.side, t: hit.t };
+      });
+      if (best !== null) {
+        const found: { index: number; side: number; t: number } = best;
+        return {
+          cell: [x, y, z],
+          normal,
+          id,
+          distance: found.t,
+          point: [ox + dx * found.t, oy + dy * found.t, oz + dz * found.t],
+          part: { index: found.index, side: found.side },
+        };
+      }
     }
     if (tMaxX <= tMaxY && tMaxX <= tMaxZ) {
       t = tMaxX;

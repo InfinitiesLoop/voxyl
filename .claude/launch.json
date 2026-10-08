@@ -6,6 +6,12 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--dir", "web/apps/web", "exec", "vite", "--port", "5174", "--strictPort"],
       "port": 5174
+    },
+    {
+      "name": "web-dev-5199",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--dir", "web/apps/web", "exec", "vite", "--port", "5199", "--strictPort"],
+      "port": 5199
     }
   ]
 }

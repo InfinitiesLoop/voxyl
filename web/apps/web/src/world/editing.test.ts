@@ -14,6 +14,7 @@ import {
   linkPaletteCommand,
   newProject,
   paletteInfo,
+  partGhost,
   placeCommand,
   renameCommand,
   renameSemanticCommand,
@@ -303,5 +304,118 @@ describe("shared palettes", () => {
     if (!clear) throw new Error("no command");
     project.run(clear);
     expect(project.semantics.resolve(wall(project)).description ?? "").toBe("");
+  });
+});
+
+describe("shaped semantics place parts", () => {
+  /** A project whose Trim is a Strip, and a Deck of whole blocks under it. */
+  function shaped() {
+    const project = newProject("Test", 5);
+    const trim = project.semantics.byName("Trim") as number;
+    project.run({
+      id: "form",
+      kind: "semantic_update",
+      args: { semantic: trim, form: { shape: "face1" } },
+    });
+    const deck = wall(project);
+    project.world.setId(0, 0, 0, project.world.states.intern({ semantic: deck }));
+    return { project, trim };
+  }
+
+  it("lays a cover against the face that was clicked, in the cell beside it", () => {
+    const { project, trim } = shaped();
+    const top = aim(project.world, [0.5, 5, 0.5], [0, -1, 0], 100);
+    if (!top) throw new Error("no aim");
+    const place = placeCommand(project, top, trim, [0, -1, 0]);
+    if (!place) throw new Error("no command");
+    expect(place.label).toBe("Place Trim");
+    project.run(place);
+    const state = project.world.get(0, 1, 0);
+    expect(state?.semantic).toBe(0);
+    expect(state?.parts).toEqual([{ semantic: trim, shape: "face1", slot: 0 }]);
+    expect(historyState(project).undo).toBe("Place Trim");
+  });
+
+  it("shows the same part as a ghost, and the opposite modifier moves it", () => {
+    const { project, trim } = shaped();
+    const top = aim(project.world, [0.5, 5, 0.5], [0, -1, 0], 100);
+    if (!top) throw new Error("no aim");
+    expect(partGhost(project, top, trim, false)).toEqual({
+      cell: [0, 1, 0],
+      shape: "face1",
+      slot: 0,
+    });
+    expect(partGhost(project, top, trim, true)).toEqual({
+      cell: [0, 1, 0],
+      shape: "face1",
+      slot: 1,
+    });
+    // A semantic with no shape has no ghost.
+    expect(partGhost(project, top, wall(project), false)).toBeNull();
+  });
+
+  it("adds to the parts already in the cell, and refuses a taken slot", () => {
+    const { project, trim } = shaped();
+    const top = aim(project.world, [0.5, 5, 0.5], [0, -1, 0], 100);
+    if (!top) throw new Error("no aim");
+    project.run(placeCommand(project, top, trim, [0, -1, 0]) as never);
+    // Aiming down again now meets the cover (at the bottom of the cell above), so a second
+    // cover of the same slot is refused rather than duplicated.
+    const again = aim(project.world, [0.5, 5, 0.5], [0, -1, 0], 100);
+    if (!again) throw new Error("no aim");
+    expect(again.part).toBeDefined();
+    const second = placeCommand(project, again, trim, [0, -1, 0]);
+    if (second) project.run(second);
+    expect(project.world.get(0, 1, 0)?.parts.length).toBeLessThanOrEqual(2);
+    expect(new Set(project.world.get(0, 1, 0)?.parts.map((p) => p.slot)).size).toBe(
+      project.world.get(0, 1, 0)?.parts.length,
+    );
+  });
+
+  it("removes only the part that was aimed at", () => {
+    const { project, trim } = shaped();
+    const accent = project.semantics.byName("Accent") as number;
+    project.run({
+      id: "cell",
+      kind: "set",
+      args: {
+        states: [
+          {
+            parts: [
+              { semantic: trim, shape: "face1", slot: 0 },
+              { semantic: accent, shape: "face1", slot: 1 },
+            ],
+          },
+        ],
+        cells: [4, 0, 4, 0],
+      },
+    });
+    // From above, the ray meets the cover against the top (slot 1, the Accent one).
+    const target = aim(project.world, [4.5, 6, 4.5], [0, -1, 0], 100);
+    if (!target) throw new Error("no aim");
+    const command = eraseCommand(project, target);
+    expect(command?.label).toBe("Remove Accent");
+    project.run(command as never);
+    expect(project.world.get(4, 0, 4)?.parts).toEqual([
+      { semantic: trim, shape: "face1", slot: 0 },
+    ]);
+    // Removing the last part empties the cell.
+    const next = aim(project.world, [4.5, 6, 4.5], [0, -1, 0], 100);
+    if (!next) throw new Error("no aim");
+    project.run(eraseCommand(project, next) as never);
+    expect(project.world.getId(4, 0, 4)).toBe(EMPTY_ID);
+  });
+
+  it("puts a shaped part on the ground plane", () => {
+    const { project, trim } = shaped();
+    const ground = aim(project.world, [6.5, 5, 6.5], [0, -1, 0], 100);
+    if (!ground) throw new Error("no aim");
+    expect(ground.hit).toBeNull();
+    const place = placeCommand(project, ground, trim, [0, -1, 0]);
+    if (!place) throw new Error("no command");
+    project.run(place);
+    expect(project.world.get(6, 0, 6)?.parts).toEqual([
+      { semantic: trim, shape: "face1", slot: 0 },
+    ]);
   });
 });

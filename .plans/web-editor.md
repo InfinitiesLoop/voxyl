@@ -395,6 +395,50 @@ there is a point worth orbiting.
   which also brings the Prefabs tab to Home), step 5 (parts), step 7 (slice and cutaway in
   3D) and the gate.
 
+- **Finishing the editor (2026-10-07).** The user passed round 5 and asked for every remaining
+  editor feature, in parts, each its own commit. Parts so far:
+  1. **Shapes and the semantic editor.**
+     - **Shape selection.** A semantic's form names the shape it places (`Form.shape`), and the
+       entry dialog has a **Shape** picker (`ShapePicker`: Whole block, then Microblocks,
+       Roofing, Slopes, each with a small isometric picture from `editor/shape-icon.ts`,
+       tested) and a **Placing** select for whole blocks (from the block, or a preset: cube,
+       faces the player, stairs, slab, log, facing, torch, hopper). The shape is intent, so it
+       sits on the semantic and no palette changes it (web-core.md, section 2). `semantic_update`
+       now rejects a form naming an unknown shape. A semantic that inherits a shape can pick
+       another but can't go back to whole blocks (forms merge, as looks do).
+     - **Placing parts** (editor step 5, the placing half). `packages/shapes/src/placement.ts` is
+       Forge Microblocks' placement ported (the Godot `ShapePlacement`): the click's face and
+       where on it pick the slot (a face zone, a corner quadrant, an edge zone, a centred post),
+       an inner face of a thin part places into the same cell, and ArchitectureCraft's
+       `orientOnPlacement` turns roof shapes toward the click and lines them up with a
+       neighbouring roof. All of it is pure and tested (`packages/shapes/test/placement.test.ts`).
+       `raycast` now meets a cell of parts only where the ray touches a part (`hitPart`: boxes for
+       microblocks, triangles for roofs), and says which part and which face, so a slab leaves the
+       rest of its cell open to aim through. Right click places the hotbar semantic's part; **left
+       click removes only the part aimed at**; middle click picks that part's semantic. The aim
+       outlines the part it meets rather than the cell, and a cyan **ghost** (drawn over everything)
+       shows the part a click would place.
+     - **The far side.** A shaped part can go on the far side of its cell (FMP's `opposite`).
+       Hold **Left Ctrl** (alternate Num / or .) or a **mouse thumb button**, or tick **Far side**
+       in the inventory's Build options. A click while Ctrl is held cancels the sprint tap.
+     - **Whole-block tools refuse a shaped semantic** (Build to me, Wand, Exchange, 2D drawing)
+       with a line over the hotbar (`engine.say`, the new `Toast`), rather than put a cube where a
+       cover was meant. Shaped parts are placed with Build in a 3D view. Not done: part footprints
+       drawn slot by slot in 2D, and the face grid Godot draws on the aimed face.
+     - **Semantic editor** (`SemanticEditor`, from **Semantics** in the palette drawer and the
+       inventory): the project's semantics once each, however many palettes offer them. It edits
+       what belongs to the semantic (name, what it is for, shape, placing) in one place, and shows
+       a table of every palette that can place it with the look each gives it (choose a block, or
+       use the inherited look). Cells hold ids, so renaming touches no cell and no palette. This is
+       the "top-level semantic editor" of the cross-project proposal below (item 4). The model
+       underneath is unchanged: a semantic still lives in one palette (its group), and other
+       palettes derive it to override a look.
+     - **Fixed on the way.** Dialogs taller than their content wants (the entry dialog) were
+       centred in a grid track as tall as the content, so on a window under about 1300 px they
+       slid off the bottom. The `.keys` track is now the window's size.
+     - **Not yet seen on screen:** the ghost and aimed-part outline need a pointer-locked 3D view;
+       the rules, the ray, the commands and the outline geometry are tested.
+
 ## Cross-project resources (what is planned, and what is not)
 
 The user asked (2026-10-07) how resources that span projects fit: palettes as a top-level

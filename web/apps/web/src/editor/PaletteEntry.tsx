@@ -1,9 +1,15 @@
-import type { Look } from "@voxyl/core";
+import type { Form, Look } from "@voxyl/core";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Engine } from "../scene/Engine.ts";
-import type { PaletteInfo, SemanticInfo } from "../world/editing.ts";
+import {
+  type PaletteInfo,
+  PLACEMENT_CHOICES,
+  placementOf,
+  type SemanticInfo,
+} from "../world/editing.ts";
 import { BlockChooser } from "./BlockPicker.tsx";
+import { ShapePicker } from "./ShapePicker.tsx";
 
 /**
  * New or edit a palette entry, the way the Godot app does: a name (already filled in) and
@@ -28,6 +34,13 @@ export function PaletteEntryDialog({
   const [block, setBlock] = useState<string | null>(semantic?.block ?? null);
   const [glow, setGlow] = useState(semantic?.glow ?? false);
   const [tint, setTint] = useState(semantic?.ownLook.tint ?? semantic?.color ?? "#9aa0a8");
+  const [shape, setShape] = useState<string | null>(semantic?.shape ?? null);
+  const [placement, setPlacement] = useState(semantic?.placement ?? "auto");
+  // A semantic that derives from another keeps the shape it inherits: forms only merge.
+  const inheritsShape =
+    semantic?.base !== undefined &&
+    semantic.shape !== undefined &&
+    semantic.ownForm.shape === undefined;
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -52,6 +65,12 @@ export function PaletteEntryDialog({
       ...(glow ? { glow: true } : {}),
       tint,
     };
+    // The form this semantic sets itself: the shape, or how whole blocks turn.
+    const profile = shape === null && placement !== "auto" ? placementOf(placement) : undefined;
+    const form: Form = { ...(shape ? { shape } : {}), ...(profile ? { placement: profile } : {}) };
+    const formChanged = creating
+      ? Object.keys(form).length > 0
+      : (semantic.shape ?? null) !== shape || semantic.placement !== placement;
     setBusy(true);
     const work = creating
       ? engine.world.request({
@@ -60,6 +79,7 @@ export function PaletteEntryDialog({
           name: trimmed,
           ...(description.trim() !== "" && { description: description.trim() }),
           look,
+          ...(Object.keys(form).length > 0 && { form }),
         })
       : engine.world.request({
           type: "editSemantic",
@@ -67,6 +87,7 @@ export function PaletteEntryDialog({
           name: trimmed,
           description,
           look,
+          ...(formChanged && { form: Object.keys(form).length > 0 ? form : null }),
         });
     void work.then(
       () => onClose(),
@@ -118,6 +139,28 @@ export function PaletteEntryDialog({
               onChange={(e) => setDescription(e.target.value)}
             />
           </label>
+          <div className="entry-shape">
+            <span>Shape</span>
+            <ShapePicker shape={shape} onChange={setShape} wholeBlockLocked={inheritsShape} />
+          </div>
+          {shape === null && (
+            <label>
+              Placing
+              <select
+                aria-label="Placing"
+                title="How whole blocks of this turn when placed. By default, as the block it looks like does."
+                value={placement}
+                onChange={(e) => setPlacement(e.target.value)}
+              >
+                {PLACEMENT_CHOICES.map((choice) => (
+                  <option key={choice.id} value={choice.id}>
+                    {choice.label}
+                  </option>
+                ))}
+                {placement === "custom" && <option value="custom">Custom</option>}
+              </select>
+            </label>
+          )}
           <label>
             Colour
             <input

@@ -9,9 +9,13 @@ import {
   type CellState,
   type Command,
   EMPTY_ID,
+  type Form,
   type Look,
   NO_SEMANTIC,
   type PaletteId,
+  type Part,
+  PLACEMENTS,
+  type PlacementProfile,
   Project,
   type Region,
   ROOT_PALETTE,
@@ -26,6 +30,7 @@ import {
   type World,
 } from "@voxyl/core";
 import { type BlockMaterials, lookColor } from "@voxyl/session";
+import { type PartPlacement, resolvePlacement, sideFromNormal } from "@voxyl/shapes";
 import type { Vec3 } from "./protocol.ts";
 
 /** Who the editor's commands say they are from, in the history. */
@@ -43,6 +48,10 @@ export interface Aim {
   readonly face: Vec3;
   /** How far up the face the ray meets it, 0 (bottom) to 1 (top). */
   readonly hitY: number;
+  /** Where the ray met it, in world coordinates. */
+  readonly point?: Vec3;
+  /** For a cell of parts: the part the ray met, and the outward side of the face it hit. */
+  readonly part?: { readonly index: number; readonly side: number };
 }
 
 /**
@@ -65,6 +74,8 @@ export function aim(world: World, origin: Vec3, dir: Vec3, reach: number): Aim |
       place: inside ? null : [x + nx, y + ny, z + nz],
       face: hit.normal,
       hitY: ny === 0 ? Math.min(1, Math.max(0, pointY - y)) : ny > 0 ? 1 : 0,
+      point: hit.point,
+      ...(hit.part && { part: hit.part }),
     };
   }
   // The ground: only looking down at it from above, within reach.
@@ -73,7 +84,14 @@ export function aim(world: World, origin: Vec3, dir: Vec3, reach: number): Aim |
   if (t > reach) return null;
   const place: Vec3 = [Math.floor(origin[0] + d[0] * t), 0, Math.floor(origin[2] + d[2] * t)];
   if (world.getId(...place) !== EMPTY_ID) return null; // the ray passed through it: not ground
-  return { hit: null, id: EMPTY_ID, place, face: [0, 1, 0], hitY: 1 };
+  return {
+    hit: null,
+    id: EMPTY_ID,
+    place,
+    face: [0, 1, 0],
+    hitY: 1,
+    point: [origin[0] + d[0] * t, 0, origin[2] + d[2] * t],
+  };
 }
 
 /** The semantic a state is picked as: its block's, or its first part's. */
@@ -100,19 +118,24 @@ export function commandId(): string {
 
 /**
  * The command that places `ref` where the aim says, turned as the semantic's placement
- * profile picks from the click, or null if there is nowhere to place.
+ * profile picks from the click, or null if there is nowhere to place. A semantic whose form
+ * names a shape places a part of that shape instead (see partPlacement); `opposite` is the
+ * modifier that puts it on the far side.
  */
 export function placeCommand(
   project: Project,
   target: Aim,
   ref: SemanticArg,
   look: Vec3,
+  opposite = false,
 ): Command | null {
+  const semantic = semanticIdOf(project, ref);
+  if (!project.semantics.has(semantic)) return null;
+  const shape = project.semantics.resolve(semantic).form.shape;
+  if (shape !== undefined) return placePartCommand(project, target, ref, shape, opposite);
   if (!target.place) return null;
   // A full cell stays: placement fills empty space, the way a click against a solid face does.
   if (project.world.getId(...target.place) !== EMPTY_ID) return null;
-  const semantic = semanticIdOf(project, ref);
-  if (!project.semantics.has(semantic)) return null;
   const rotation = project.placement(semantic).pick({
     face: target.face,
     look,
@@ -127,10 +150,152 @@ export function placeCommand(
   };
 }
 
-/** The command that empties the cell aimed at, or null if the aim is on the ground. */
+/** The parts of a cell for the placement rules: [] when empty, null for a whole block. */
+function partsAt(world: World, cell: Vec3): readonly Part[] | null {
+  if (
+    !world.layout.isWorldCoord(cell[0]) ||
+    !world.layout.isWorldCoord(cell[1]) ||
+    !world.layout.isWorldCoord(cell[2])
+  ) {
+    return null;
+  }
+  const state = world.get(...cell);
+  if (!state) return [];
+  return state.parts.length > 0 ? state.parts : null;
+}
+
+/**
+ * Where a part of `shape` would land for the aim: the cell and the slot, from where on which
+ * face the ray met. Aiming at the ground treats the plane as the top of a block under it.
+ */
+export function partPlacement(
+  project: Project,
+  target: Aim,
+  semantic: SemanticId,
+  shape: string,
+  opposite: boolean,
+): PartPlacement | null {
+  const point = target.point;
+  if (!point) return null;
+  let cell: Vec3;
+  let side: number;
+  if (target.hit) {
+    cell = target.hit;
+    if (target.part) side = target.part.side;
+    else if (target.face[0] === 0 && target.face[1] === 0 && target.face[2] === 0) return null;
+    else side = sideFromNormal(target.face);
+  } else if (target.place) {
+    cell = [target.place[0], target.place[1] - 1, target.place[2]];
+    side = 1;
+  } else {
+    return null;
+  }
+  const vhit: Vec3 = [point[0] - cell[0], point[1] - cell[1], point[2] - cell[2]];
+  return resolvePlacement(
+    { parts: (c) => partsAt(project.world, c) },
+    semantic,
+    shape,
+    cell,
+    vhit,
+    side,
+    opposite,
+  );
+}
+
+/** A cell of parts as the arguments of a set: the parts it keeps, or null when none are left. */
+function partsState(
+  state: CellState,
+  parts: readonly Part[] | readonly PartArg[],
+): StateArg | null {
+  if (parts.length === 0) return null;
+  return {
+    parts: parts.map((p) => ({ semantic: p.semantic, shape: p.shape, slot: p.slot })),
+    ...(Object.keys(state.tags).length > 0 && { tags: state.tags }),
+  };
+}
+
+interface PartArg {
+  readonly semantic: SemanticArg;
+  readonly shape: string;
+  readonly slot: number;
+}
+
+/** A set command's state: parts and tags (the whole-block form is built inline). */
+interface StateArg {
+  readonly parts: readonly PartArg[];
+  readonly tags?: CellState["tags"];
+}
+
+function placePartCommand(
+  project: Project,
+  target: Aim,
+  ref: SemanticArg,
+  shape: string,
+  opposite: boolean,
+): Command | null {
+  const semantic = semanticIdOf(project, ref);
+  const placed = partPlacement(project, target, semantic, shape, opposite);
+  if (!placed) return null;
+  const existing = project.world.get(...placed.cell);
+  const parts: PartArg[] = [
+    ...(existing?.parts ?? []).map((p) => ({ semantic: p.semantic, shape: p.shape, slot: p.slot })),
+    { semantic: ref, shape, slot: placed.slot },
+  ];
+  const state = partsState(existing ?? EMPTY_STATE, parts);
+  return {
+    id: commandId(),
+    kind: "set",
+    source: EDITOR_SOURCE,
+    label: `Place ${project.semantics.nameOf(semantic)}`,
+    args: { states: [state], cells: [...placed.cell, 0] },
+  };
+}
+
+const EMPTY_STATE: CellState = { semantic: NO_SEMANTIC, rotation: 0, tags: {}, parts: [] };
+
+/** What a placement would put down: a shape in a slot of a cell, for the ghost. */
+export interface PartGhost {
+  readonly cell: Vec3;
+  readonly shape: string;
+  readonly slot: number;
+}
+
+/** The part the semantic would place at the aim, or null (no shape, or nowhere to put it). */
+export function partGhost(
+  project: Project,
+  target: Aim,
+  ref: SemanticArg,
+  opposite: boolean,
+): PartGhost | null {
+  const semantic = semanticIdOf(project, ref);
+  if (!project.semantics.has(semantic)) return null;
+  const shape = project.semantics.resolve(semantic).form.shape;
+  if (shape === undefined) return null;
+  const placed = partPlacement(project, target, semantic, shape, opposite);
+  return placed ? { cell: placed.cell, shape, slot: placed.slot } : null;
+}
+
+/**
+ * The command that empties the cell aimed at, or null if the aim is on the ground. In a cell
+ * of parts it takes out only the part the ray met.
+ */
 export function eraseCommand(project: Project, target: Aim): Command | null {
   if (!target.hit) return null;
   const state = project.world.states.get(target.id);
+  if (state && state.parts.length > 0 && target.part) {
+    const gone = state.parts[target.part.index];
+    if (gone) {
+      const left = state.parts.filter((_, i) => i !== target.part?.index);
+      const name = project.semantics.nameOf(gone.semantic);
+      return {
+        id: commandId(),
+        kind: "set",
+        source: EDITOR_SOURCE,
+        label: name ? `Remove ${name}` : "Remove",
+        args: { states: [partsState(state, left)], cells: [...target.hit, 0] },
+      };
+    }
+  }
   const name = state ? project.semantics.nameOf(semanticOfState(state)) : "";
   return {
     id: commandId(),
@@ -307,7 +472,7 @@ export function addSemanticCommand(
   project: Project,
   palette: PaletteId,
   name: string,
-  extras?: { readonly description?: string; readonly look?: Look },
+  extras?: { readonly description?: string; readonly look?: Look; readonly form?: Form },
 ): Command | null {
   const trimmed = name.trim();
   if (trimmed === "" || trimmed.length > 80 || !project.semantics.hasPalette(palette)) return null;
@@ -323,6 +488,9 @@ export function addSemanticCommand(
       palette,
       ...(description ? { description } : {}),
       ...(look && (look.block || look.glow || look.tint) ? { look } : {}),
+      ...(extras?.form && (extras.form.shape || extras.form.placement)
+        ? { form: extras.form }
+        : {}),
     },
   };
 }
@@ -334,7 +502,13 @@ export function addSemanticCommand(
 export function editSemanticCommand(
   project: Project,
   ref: SemanticArg,
-  fields: { readonly name: string; readonly description: string; readonly look: Look | null },
+  fields: {
+    readonly name: string;
+    readonly description: string;
+    readonly look: Look | null;
+    /** The form the semantic sets itself (undefined leaves it alone, null drops it). */
+    readonly form?: Form | null;
+  },
 ): Command | null {
   const name = fields.name.trim();
   if (name === "" || name.length > 80) return null;
@@ -344,7 +518,8 @@ export function editSemanticCommand(
   const nameSame = name === project.semantics.nameOf(id);
   const descSame = description === (project.semantics.resolve(id).description ?? "");
   const lookSame = sameLook(storedLook(project, ref), fields.look);
-  if (nameSame && descSame && lookSame) return null;
+  const formSame = fields.form === undefined || sameForm(storedForm(project, ref), fields.form);
+  if (nameSame && descSame && lookSame && formSame) return null;
   return {
     id: commandId(),
     kind: "semantic_update",
@@ -355,6 +530,7 @@ export function editSemanticCommand(
       ...(nameSame ? {} : { name }),
       ...(descSame ? {} : { description: description === "" ? null : description }),
       ...(lookSame ? {} : { look: fields.look }),
+      ...(formSame ? {} : { form: fields.form }),
     },
   };
 }
@@ -444,6 +620,20 @@ function storedLook(project: Project, ref: SemanticArg): Look | undefined {
     .semanticsIn(ref.palette)
     .find((s) => project.semantics.get(s).base === ref.base);
   return own === undefined ? undefined : project.semantics.get(own).look;
+}
+
+/** The form a semantic stores itself, or none when it doesn't exist yet or inherits all of it. */
+function storedForm(project: Project, ref: SemanticArg): Form | undefined {
+  if (typeof ref === "number")
+    return project.semantics.has(ref) ? project.semantics.get(ref).form : undefined;
+  const own = project.semantics
+    .semanticsIn(ref.palette)
+    .find((s) => project.semantics.get(s).base === ref.base);
+  return own === undefined ? undefined : project.semantics.get(own).form;
+}
+
+function sameForm(before: Form | undefined, after: Form | null): boolean {
+  return JSON.stringify(before ?? {}) === JSON.stringify(after ?? {});
 }
 
 function sameLook(before: Look | undefined, after: Look | null): boolean {
@@ -607,6 +797,40 @@ export interface SemanticInfo {
   readonly block?: string;
   /** The look it sets itself. Empty when it inherits the whole look. */
   readonly ownLook: Look;
+  /** The shape it places as parts (resolved, so inherited), or none for whole blocks. */
+  readonly shape?: string;
+  /** The form it sets itself. Empty when it inherits all of it. */
+  readonly ownForm: Form;
+  /** How whole blocks of it may be turned, as a preset name; see placementName. */
+  readonly placement: string;
+}
+
+/** The placing presets a semantic can pick, by name, with what each does. */
+export const PLACEMENT_CHOICES: readonly { readonly id: string; readonly label: string }[] = [
+  { id: "auto", label: "From the block it looks like" },
+  { id: "cube", label: "Any way: a plain cube" },
+  { id: "horizontal", label: "Faces the player, four ways" },
+  { id: "stairs", label: "Stairs: faces the player, up or down" },
+  { id: "slab", label: "Slab: up or down" },
+  { id: "log", label: "Log: along the face clicked" },
+  { id: "facing", label: "Points toward the player" },
+  { id: "torch", label: "Torch: attaches to a face" },
+  { id: "hopper", label: "Hopper: points into a face" },
+];
+
+/** The preset a placement profile is: "auto" for none, "custom" when it matches no preset. */
+export function placementName(profile: PlacementProfile | undefined): string {
+  if (profile === undefined) return "auto";
+  const wanted = JSON.stringify(profile);
+  for (const [name, preset] of Object.entries(PLACEMENTS)) {
+    if (JSON.stringify(preset) === wanted) return name;
+  }
+  return "custom";
+}
+
+/** The profile a preset name means, or undefined for "auto". */
+export function placementOf(name: string): PlacementProfile | undefined {
+  return (PLACEMENTS as Record<string, PlacementProfile>)[name];
 }
 
 export interface PaletteInfo {
@@ -641,11 +865,12 @@ export function paletteInfo(project: Project, blocks?: BlockMaterials): PaletteI
     ...(palette.extends !== undefined && { extends: palette.extends }),
     semantics: registry.offers(palette.id).map((offer): SemanticInfo => {
       const id = offer.id ?? offer.base ?? NO_SEMANTIC;
-      const { look, description } = registry.resolve(id);
+      const { look, description, form } = registry.resolve(id);
       const ref: SemanticArg =
         offer.id !== undefined ? offer.id : { palette: palette.id, base: offer.base ?? 0 };
       const base = offer.id !== undefined ? registry.get(offer.id).base : offer.base;
-      const ownLook = offer.id !== undefined ? registry.get(offer.id).look : undefined;
+      const stored = offer.id !== undefined ? registry.get(offer.id) : undefined;
+      const ownLook = stored?.look;
       return {
         ref,
         palette: palette.id,
@@ -656,6 +881,9 @@ export function paletteInfo(project: Project, blocks?: BlockMaterials): PaletteI
         glow: look.glow === true,
         ...(look.block !== undefined && { block: look.block }),
         ownLook: ownLook ?? {},
+        ...(form.shape !== undefined && { shape: form.shape }),
+        ownForm: stored?.form ?? {},
+        placement: placementName(form.placement),
       };
     }),
   }));

@@ -1,10 +1,11 @@
 import { boxOf, type Region, type SemanticArg } from "@voxyl/core";
 import type { LightingMode } from "@voxyl/session";
+import { shapeName } from "@voxyl/shapes";
 import * as THREE from "three/webgpu";
 import { bearingOf } from "../editor/compass.ts";
 import { grouped, nudgedBox } from "../editor/counts.ts";
 import { Hotbar } from "../editor/hotbar.ts";
-import { isKey } from "../editor/keymap.ts";
+import { codesOf, isKey } from "../editor/keymap.ts";
 import { boxLines } from "../editor/outline.ts";
 import { Store } from "../editor/store.ts";
 import {
@@ -20,6 +21,7 @@ import { orbitDegrees, type ViewSettings } from "../editor/view-options.ts";
 import type { HistoryState, PaletteInfo } from "../world/editing.ts";
 import {
   EMPTY_SELECTION,
+  type PartArgs,
   type Ray,
   type SelectionView,
   type ToolArgs,
@@ -41,6 +43,7 @@ import {
 } from "./framing.ts";
 import { GroundGrid } from "./ground-grid.ts";
 import { LightVolume } from "./light-volume.ts";
+import { PartOutline } from "./part-outline.ts";
 import { SelectionOutline } from "./SelectionOutline.ts";
 import { Sky } from "./sky.ts";
 import { NOON, skyAt } from "./sky-model.ts";
@@ -154,6 +157,14 @@ export class Engine {
   readonly tool = new Store<EditorTool>(readTool());
   /** Build to me's square and Exchange's reach: 1 is one block, 3 a 3×3. Remembered. */
   readonly brush = new Store<number>(readBrush());
+  /**
+   * Places a shaped part on the far side of the cell (the inventory's Far side toggle). Held
+   * keys and the mouse thumb buttons flip it for as long as they are down.
+   */
+  readonly farSide = new Store(false);
+  /** Keys held down, and the mouse thumb buttons, for the far-side modifier. */
+  readonly #held = new Set<string>();
+  #thumb = false;
   /** Shift+right-click with Select takes touching blocks of any kind, not only the one clicked. */
   readonly connectAny = new Store(false);
   /** The project's selection, for the panel and the outline. */
@@ -162,6 +173,9 @@ export class Engine {
   readonly anchor = new Store<Vec3 | null>(null);
   /** A command the selection panel should say failed, or "". */
   readonly notice = new Store("");
+  /** A short line over the hotbar for anything the editor refuses or reports; it fades. */
+  readonly toast = new Store<{ readonly text: string; readonly id: number } | null>(null);
+  #toastId = 0;
   /** The inventory overlay. E toggles it; opening releases the pointer. */
   readonly inventoryOpen = new Store(false);
   /** Closing the inventory locks the pointer again when it was open in fly mode. */
@@ -191,6 +205,10 @@ export class Engine {
   readonly #target = new TargetOutline();
   /** What a multi-block tool would build where the crosshair aims. */
   readonly #toolPreview = new CellBoxes(0x8be9ff);
+  /** The part the crosshair is on, in a cell of parts. */
+  readonly #aimedPart = new PartOutline(0x111111, { overlay: false, opacity: 0.8 });
+  /** The part a click would place, drawn over everything. */
+  readonly #ghost = new PartOutline(0x8be9ff, { overlay: true });
   readonly #selectionOutline = new SelectionOutline();
   readonly #grid = new GroundGrid();
   readonly #sliceGuide = new SliceGuide();
@@ -247,6 +265,8 @@ export class Engine {
     this.scene.add(this.#grid.group);
     this.scene.add(this.#target.object);
     this.scene.add(this.#toolPreview.object);
+    this.scene.add(this.#aimedPart.object);
+    this.scene.add(this.#ghost.object);
     this.scene.add(this.#selectionOutline.object);
     this.scene.add(this.#sliceGuide.object);
     this.scene.fogNode = this.#sky.fog;
@@ -262,6 +282,11 @@ export class Engine {
     canvas.addEventListener("wheel", (e) => this.#onWheel(e), { signal, passive: false });
     canvas.addEventListener("contextmenu", (e) => e.preventDefault(), { signal });
     document.addEventListener("keydown", (e) => this.#onKey(e), { signal });
+    document.addEventListener("keydown", (e) => this.#held.add(e.code), { signal });
+    document.addEventListener("keyup", (e) => this.#held.delete(e.code), { signal });
+    window.addEventListener("blur", () => this.#clearHeld(), { signal });
+    document.addEventListener("pointerlockchange", () => this.#clearHeld(), { signal });
+    canvas.addEventListener("mouseup", (e) => this.#onMouseUp(e), { signal });
     // One core for this thread, one for the world worker, the rest mesh.
     const meshWorkers = Math.min(8, Math.max(2, (navigator.hardwareConcurrency || 4) - 2));
     this.world = new WorldClient(meshWorkers, (message) => this.#onWorld(message));
@@ -632,6 +657,8 @@ export class Engine {
     this.fly.dispose();
     this.#target.dispose();
     this.#toolPreview.dispose();
+    this.#aimedPart.dispose();
+    this.#ghost.dispose();
     this.#selectionOutline.dispose();
     this.#sliceGuide.dispose();
     this.#grid.dispose();
@@ -922,6 +949,8 @@ export class Engine {
     if (!this.fly.locked || !this.#info || this.#autopilot) {
       this.#target.show(null);
       this.#toolPreview.show(null);
+      this.#aimedPart.show(null);
+      this.#ghost.show(null);
       this.#aimedFor = "";
       return;
     }
@@ -931,7 +960,8 @@ export class Engine {
     const at = ray.origin.map((v) => v.toFixed(3)).join();
     const toward = ray.dir.map((v) => v.toFixed(4)).join();
     const using = tool ? `${tool.tool}${tool.brush}` : "";
-    const key = `${at} ${toward} ${this.#revision} ${using}`;
+    const part = this.#partArgs();
+    const key = `${at} ${toward} ${this.#revision} ${using} ${part ? `${JSON.stringify(part.semantic)}${part.opposite}` : ""}`;
     if (key === this.#aimedFor) return;
     this.#aiming = true;
     this.#aimedFor = key;
@@ -939,12 +969,65 @@ export class Engine {
     const done = () => {
       this.#aiming = false;
     };
-    void this.world.request({ type: "aim", ...ray, ...(tool && { tool }) }).then((aim) => {
-      done();
-      if (world !== this.#worldId || !this.fly.locked) return;
-      this.#target.show(aim);
-      this.#toolPreview.show(aim?.preview ?? null);
-    }, done);
+    void this.world
+      .request({ type: "aim", ...ray, ...(tool && { tool }), ...(part && { part }) })
+      .then((aim) => {
+        done();
+        if (world !== this.#worldId || !this.fly.locked) return;
+        // In a cell of parts the outline hugs the part met, not the whole cell.
+        const met = aim?.aimed && aim.hit ? aim : null;
+        this.#target.show(met ? null : aim);
+        this.#aimedPart.show(met?.hit ?? null, met?.aimed?.shape, met?.aimed?.slot);
+        this.#toolPreview.show(aim?.preview ?? null);
+        const ghost = this.tool.get() === "build" ? (aim?.ghost ?? null) : null;
+        this.#ghost.show(ghost?.cell ?? null, ghost?.shape, ghost?.slot);
+      }, done);
+  }
+
+  /** Shows a line over the hotbar for a few seconds. */
+  say(text: string): void {
+    const id = ++this.#toastId;
+    this.toast.set({ text, id });
+    setTimeout(() => {
+      if (this.#toastId === id) this.toast.set(null);
+    }, 4000);
+  }
+
+  /**
+   * The tools that build whole blocks (Build to me, the Wand, Exchange, 2D drawing) refuse a
+   * shaped semantic and say so, rather than put a full cube where a cover was meant.
+   */
+  refuseShaped(): boolean {
+    const current = this.hotbar.current;
+    if (!current?.shape) return false;
+    this.say(
+      `${current.name} places a ${shapeName(current.shape).toLowerCase()}, one part at a time. Use Build in a 3D view; this tool builds whole blocks.`,
+    );
+    return true;
+  }
+
+  /** Whether a shaped part goes on the far side: the toggle, flipped by a held key or button. */
+  get opposite(): boolean {
+    const held = this.#thumb || codesOf("placeOpposite").some((code) => this.#held.has(code));
+    return this.farSide.get() !== held;
+  }
+
+  /** Flips the Far side toggle (the inventory's button). */
+  setFarSide(on: boolean): void {
+    this.farSide.set(on);
+    this.#aimedFor = ""; // the ghost moves
+  }
+
+  #clearHeld(): void {
+    this.#held.clear();
+    this.#thumb = false;
+  }
+
+  /** The semantic in hand and the far-side modifier, for the aim's ghost; null in other tools. */
+  #partArgs(): PartArgs | null {
+    const current = this.hotbar.current;
+    if (!current || this.tool.get() !== "build") return null;
+    return { semantic: current.ref, opposite: this.opposite };
   }
 
   /** The multi-block tool in hand, for an aim's preview or a click, or null. */
@@ -959,6 +1042,13 @@ export class Engine {
   #onMouseDown(event: MouseEvent): void {
     if (this.#autopilot || !this.fly.locked) return;
     event.preventDefault();
+    // A click while Ctrl is held makes Ctrl a modifier, so letting go does not sprint.
+    this.fly.cancelTap();
+    if (event.button >= 3) {
+      this.#thumb = true; // the thumb buttons place on the far side while held
+      this.#aimedFor = "";
+      return;
+    }
     if (!this.#info) return;
     const ray = this.#ray();
     const tool = this.tool.get();
@@ -990,10 +1080,20 @@ export class Engine {
       const semantic = this.hotbar.current?.ref;
       if (semantic === undefined) return;
       const args = this.#toolArgs();
+      if (args && this.refuseShaped()) return;
       if (args)
         void this.world.request({ type: "toolEdit", semantic, ...args, ...ray }).then(timed);
-      else void this.world.request({ type: "place", semantic, ...ray }).then(timed);
+      else
+        void this.world
+          .request({ type: "place", semantic, opposite: this.opposite, ...ray })
+          .then(timed);
     }
+  }
+
+  #onMouseUp(event: MouseEvent): void {
+    if (event.button < 3) return;
+    this.#thumb = false;
+    this.#aimedFor = "";
   }
 
   /** With a free cursor: drag the view to turn the camera, click it to fly. */

@@ -1,3 +1,4 @@
+import { shapeName } from "@voxyl/shapes";
 import { useEffect, useRef, useState } from "react";
 import type { Engine } from "../scene/Engine.ts";
 import type { PaletteInfo, SemanticInfo } from "../world/editing.ts";
@@ -6,7 +7,9 @@ import { HotbarBar } from "./HotbarBar.tsx";
 import { HOTBAR_SLOTS } from "./hotbar.ts";
 import { BakedIcon, PREVIEW_PX } from "./icons.tsx";
 import { PaletteEntryDialog } from "./PaletteEntry.tsx";
+import { SemanticEditor } from "./SemanticEditor.tsx";
 import { menuAnchor, SemanticMenu, type SemanticMenuTarget } from "./SemanticMenu.tsx";
+import { ShapeIcon } from "./ShapeIcon.tsx";
 import { ToolStrip } from "./Tools.tsx";
 import { useStore } from "./useStore.ts";
 
@@ -25,6 +28,7 @@ export function Inventory({ engine }: { engine: Engine }) {
   const held = bar.slots[bar.selected] ?? null;
   const [paletteId, setPaletteId] = useState<number | null>(null);
   const [query, setQuery] = useState("");
+  const [semanticsOpen, setSemanticsOpen] = useState(false);
   const [menu, setMenu] = useState<SemanticMenuTarget | null>(null);
   const [editing, setEditing] = useState<{
     palette: PaletteInfo;
@@ -88,6 +92,13 @@ export function Inventory({ engine }: { engine: Engine }) {
             onChange={(e) => setQuery(e.target.value)}
           />
           <span>Click to load the chosen slot · right-click to edit or delete · Esc closes</span>
+          <button
+            type="button"
+            title="Every semantic of the project in one list: rename, describe, shape, and how each palette looks them"
+            onClick={() => setSemanticsOpen(true)}
+          >
+            Semantics
+          </button>
           <button type="button" onClick={() => engine.toggleInventory()}>
             Close
           </button>
@@ -122,6 +133,7 @@ export function Inventory({ engine }: { engine: Engine }) {
                     semantic.name,
                     semantic.description,
                     semantic.block ? blockTitle(semantic.block) : "undecided",
+                    semantic.shape ? shapeName(semantic.shape) : "",
                   ]
                     .filter(Boolean)
                     .join(" · ")}
@@ -143,6 +155,9 @@ export function Inventory({ engine }: { engine: Engine }) {
                     color={semantic.color}
                     className={semantic.glow ? "inventory-icon glow" : "inventory-icon"}
                   />
+                  {semantic.shape && (
+                    <ShapeIcon shape={semantic.shape} className="inventory-shape" />
+                  )}
                   <span>{semantic.name}</span>
                 </button>
               );
@@ -191,6 +206,7 @@ export function Inventory({ engine }: { engine: Engine }) {
         </footer>
       </div>
       <SemanticMenu engine={engine} target={menu} onClose={() => setMenu(null)} />
+      {semanticsOpen && <SemanticEditor engine={engine} onClose={() => setSemanticsOpen(false)} />}
       {editing && (
         <PaletteEntryDialog
           engine={engine}

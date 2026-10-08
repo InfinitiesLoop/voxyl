@@ -6,6 +6,8 @@ export {
   archSlot,
   archTriangles,
 } from "./arch.ts";
+export { SHAPE_PAGES, type ShapePage, shapeName } from "./catalog.ts";
+export { hitPart, type PartHit } from "./hit.ts";
 export {
   type Box8,
   CENTER_SLOT,
@@ -18,6 +20,19 @@ export {
   sideOf,
 } from "./micro.ts";
 export { SIDE_NAMES, slotFromName, slotName, slotNames } from "./names.ts";
+export {
+  hitSlot,
+  oppositeSlot,
+  orientFromHit,
+  orientOnPlacement,
+  type PartPlacement,
+  type PlacementWorld,
+  resolvePlacement,
+  SIDE_VECTORS,
+  sideFromNormal,
+  usesOpposite,
+  type Vec3,
+} from "./placement.ts";
 export {
   isExclusive,
   isValidSlot,

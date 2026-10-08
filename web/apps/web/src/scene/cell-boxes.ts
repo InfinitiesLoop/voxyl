@@ -1,7 +1,7 @@
 import * as THREE from "three/webgpu";
 
 /** A cell's twelve edges as corner offsets, two points each. */
-const EDGES: readonly (readonly [number, number, number])[] = [
+export const BOX_EDGES: readonly (readonly [number, number, number])[] = [
   [0, 0, 0],
   [1, 0, 0],
   [0, 1, 0],
@@ -66,13 +66,13 @@ export class CellBoxes {
     }
     const lo = INSET;
     const hi = 1 - INSET;
-    const points = new Float32Array((cells.length / 3) * EDGES.length * 3);
+    const points = new Float32Array((cells.length / 3) * BOX_EDGES.length * 3);
     let k = 0;
     for (let i = 0; i < cells.length; i += 3) {
       const x = cells[i] ?? 0;
       const y = cells[i + 1] ?? 0;
       const z = cells[i + 2] ?? 0;
-      for (const [ex, ey, ez] of EDGES) {
+      for (const [ex, ey, ez] of BOX_EDGES) {
         points[k++] = x + (ex ? hi : lo);
         points[k++] = y + (ey ? hi : lo);
         points[k++] = z + (ez ? hi : lo);

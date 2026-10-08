@@ -1293,6 +1293,9 @@ button[aria-pressed="true"] {
   z-index: 9;
   inset: 0;
   display: grid;
+  /* One track as big as the window, so a card's percentage height means the window's and a
+     card taller than its content wants is not centred in a track taller than the window. */
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
   place-items: center;
   padding: 48px;
 }
@@ -1954,4 +1957,253 @@ button.brand {
   inset: 0;
   image-rendering: pixelated;
   backface-visibility: hidden;
+}
+
+/* Shapes: the picker in the entry dialog, and the small pictures of shapes. */
+:root {
+  --shape-top: #cfd5dc;
+  --shape-right: #8f98a3;
+  --shape-left: #5f6770;
+}
+
+.shape-icon {
+  flex: none;
+  width: 36px;
+  height: 36px;
+}
+
+.shape-icon .shade-0 {
+  fill: var(--shape-top);
+}
+
+.shape-icon .shade-1 {
+  fill: var(--shape-right);
+}
+
+.shape-icon .shade-2 {
+  fill: var(--shape-left);
+}
+
+.shape-block {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border: 2px solid var(--text-quiet);
+  border-radius: 3px;
+}
+
+.entry-shape {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.shape-picker {
+  position: relative;
+}
+
+.shape-current,
+.shape-option {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  text-align: left;
+}
+
+.shape-pop {
+  position: absolute;
+  z-index: 14;
+  top: calc(100% + 4px);
+  left: 0;
+  width: min(560px, 90vw);
+  max-height: min(60vh, 520px);
+  padding: 8px 10px 10px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #21242a;
+  box-shadow: 0 8px 28px rgb(0 0 0 / 0.5);
+}
+
+.shape-pop h4 {
+  margin: 10px 0 4px;
+  color: var(--text-quiet);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.shape-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 4px;
+}
+
+.shape-option[aria-selected="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.inventory-swatch {
+  position: relative;
+}
+
+.inventory-shape {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 20px;
+  height: 20px;
+  opacity: 0.9;
+}
+
+/* One line over the hotbar for what the editor refuses or reports. */
+.toast {
+  position: fixed;
+  z-index: 11;
+  bottom: 96px;
+  left: 50%;
+  max-width: min(640px, 90vw);
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgb(26 29 34 / 0.94);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.35;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+/* The semantic editor: the project's list of semantics, and one's palette mappings. */
+.semantic-card {
+  width: min(1100px, 100%);
+  height: min(720px, 100%);
+}
+
+.semantic-body {
+  display: grid;
+  flex: 1;
+  grid-template-columns: 300px 1fr;
+  gap: 16px;
+  min-height: 0;
+}
+
+.semantic-index {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.semantic-index-list {
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.semantic-index > input,
+.semantic-add-row input,
+.semantic-detail :where(input:not([type="color"]):not([type="checkbox"]), textarea) {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #23272d;
+  color: var(--text);
+  font: inherit;
+}
+
+.semantic-add-row {
+  display: flex;
+  gap: 6px;
+}
+
+.semantic-add-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.semantic-shape {
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+}
+
+.semantic-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  overflow: auto;
+}
+
+.semantic-detail label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-quiet);
+  font-size: 12px;
+}
+
+.semantic-detail h3 {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+.semantic-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  align-items: center;
+}
+
+.semantic-form label {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.semantic-looks {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.semantic-looks th {
+  padding: 4px 8px;
+  color: var(--text-quiet);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.semantic-looks td {
+  padding: 6px 8px;
+  border-top: 1px solid var(--line);
+}
+
+.semantic-look {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.semantic-look-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.semantic-foot {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: auto;
+}
+
+.semantic-looks .semantic-from {
+  margin-left: 8px;
 }

@@ -74,6 +74,11 @@ export const KEY_SECTIONS: readonly BindingSection[] = [
       other("Remove the aimed block", ["Left click"]),
       other("Pick the aimed semantic", ["Middle click"], "into the hotbar"),
       key("Turn the aimed block", "rotateBlock", "Shift turns it the other way"),
+      key(
+        "Place a shaped part on the far side",
+        "placeOpposite",
+        "hold; also a mouse thumb button, or the inventory's Far side",
+      ),
       key("Slice the 2D view here", "sliceHere", "Shift turns the slice; also 3D aim in a 2D bar"),
     ],
   },

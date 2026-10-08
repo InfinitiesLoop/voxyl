@@ -231,6 +231,11 @@ export class FlyCamera {
     else this.#keys.delete(event.code);
   }
 
+  /** A mouse button went down while a tap key was held: it is a modifier now, not a tap. */
+  cancelTap(): void {
+    this.#tapping = null;
+  }
+
   #sprintStep(): void {
     this.#sprint = Math.min(this.#sprint + 1, 2);
   }

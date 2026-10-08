@@ -4,6 +4,7 @@
 // context. Undo, ids, change reports, previews and validation are generic (see project.ts), so
 // a command never deals with them.
 
+import { isKnownShape } from "@voxyl/shapes";
 import { z } from "zod";
 import type { Box } from "../box.ts";
 import type { CellSet } from "../cellset.ts";
@@ -124,7 +125,11 @@ export type CellStateArg = z.output<typeof CellStateArg>;
 export const NameArg = z.string().trim().min(1).max(80);
 
 export const FormArg = z.strictObject({
-  shape: z.string().min(1).optional(),
+  shape: z
+    .string()
+    .min(1)
+    .refine(isKnownShape, { message: "a known shape, like edge1 or roof_tile" })
+    .optional(),
   placement: PlacementArg.optional(),
 });
 
