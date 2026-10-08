@@ -1,0 +1,58 @@
+# Deploys the web app to Cloudflare Pages. Manual only for now: run it from the Actions tab.
+#
+# Run from `main` and it is a production deploy (voxyl.xyz). Run from any other branch and
+# it is a preview deploy at <branch>.voxyl.pages.dev, which never touches voxyl.xyz.
+#
+# One-time setup (see .plans/web-migration.md, "Production (voxyl.xyz)"):
+#   1. Create the Pages project "voxyl" (Direct Upload) with its production branch set to main.
+#   2. Add repository secrets CLOUDFLARE_API_TOKEN (Account > Cloudflare Pages > Edit) and
+#      CLOUDFLARE_ACCOUNT_ID.
+
+name: Deploy web
+
+on:
+  workflow_dispatch:
+
+# One deploy per branch at a time; a newer run waits rather than racing the older one.
+concurrency:
+  group: deploy-web-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      # The pnpm version comes from "packageManager" in web/package.json.
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      # Nothing ships unless the checks are green.
+      - run: pnpm check
+
+      - run: pnpm --filter @voxyl/web build
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: web
+          command: pages deploy apps/web/dist --project-name=voxyl --branch=${{ github.ref_name }}

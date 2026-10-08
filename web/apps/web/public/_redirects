@@ -1,0 +1,8 @@
+# Cloudflare Pages redirects (copied into dist/ by Vite). First match wins.
+
+# www goes to the apex. Needs www.voxyl.xyz added as a custom domain on the Pages project.
+https://www.voxyl.xyz/* https://voxyl.xyz/:splat 301
+
+# Single-page app: any other path serves the app, so a future route survives a refresh.
+# Real files (assets, favicon) are served first; this only catches what isn't one.
+/* /index.html 200

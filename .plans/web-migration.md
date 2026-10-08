@@ -733,10 +733,20 @@ the Phase 4 API can be a Worker on the same zone later.
 - Production deploys from `main` only, after `pnpm check` is green. Other branches get a
   preview URL and do not touch voxyl.xyz.
 
-**Until a workflow exists.** There is no GitHub Actions file yet. A first deploy is local:
-`pnpm check && pnpm --filter @voxyl/web build` in `web/`, then
-`wrangler pages deploy apps/web/dist --project-name voxyl`. The follow-up is a workflow that
-does that on `main` and uploads previews for pull requests. `pnpm dev` is unchanged.
+**As built (2026-10-07), not deployed yet.** Waiting on the user's side of the setup (Cloudflare
+account, the nameserver change at Squarespace, with DNSSEC turned off there first).
+
+- `web/apps/web/public/_headers` and `_redirects` ship in `dist/`: immutable cache for
+  `assets/`, no-cache for the page, `nosniff`/referrer/permissions headers, `www` to the apex,
+  and the SPA fallback. There is no CSP yet; add one once the app's blob workers and WebGPU
+  needs are listed, since a wrong one breaks the app.
+- `.github/workflows/deploy-web.yml` is **manual only** (`workflow_dispatch`). It installs,
+  runs `pnpm check`, builds, and runs `wrangler pages deploy` for project `voxyl`. Run from
+  `main` it is production; from any other branch it is a preview URL. It needs the Pages
+  project (Direct Upload, production branch `main`) and the secrets `CLOUDFLARE_API_TOKEN`
+  and `CLOUDFLARE_ACCOUNT_ID`. Switching it to run on push to `main` is a one-line change when
+  the user wants it.
+- A local deploy still works: `wrangler pages deploy apps/web/dist --project-name voxyl`.
 
 ## Risks and open questions
 
