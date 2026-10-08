@@ -5,7 +5,7 @@
 
 export type PaneKind = "3d" | "2d";
 
-export type ShowId = "grid" | "slice" | "compass" | "cameras";
+export type ShowId = "grid" | "slice" | "compass" | "cameras" | "details";
 
 export interface ShowOption {
   readonly id: ShowId;
@@ -43,6 +43,14 @@ export const SHOW_OPTIONS: readonly ShowOption[] = [
     label: "Compass",
     title: "Which way the project's north is",
     kinds: ["3d", "2d"],
+    default: true,
+  },
+  {
+    id: "details",
+    label: "Block details",
+    title:
+      "The semantic you are looking at, the palette it resolves to, the block it is assigned, the block library, and whether it glows",
+    kinds: ["3d"],
     default: true,
   },
 ];

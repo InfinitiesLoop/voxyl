@@ -144,6 +144,7 @@ export function ToolBadge({ engine }: { engine: Engine }) {
       onClick={blurAfter(() => engine.toggleInventory())}
     >
       <ToolIcon id={tool} />
+      <span className="tool-badge-name">{current?.label}</span>
       {usesBrush(tool) && brush > 1 && <span className="tool-badge-brush">{brush}</span>}
     </button>
   );

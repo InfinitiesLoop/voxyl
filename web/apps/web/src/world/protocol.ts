@@ -18,7 +18,7 @@ import type {
   SharedPalette,
 } from "@voxyl/core";
 import type { ModelShape, StateShape } from "@voxyl/mesher";
-import type { ExportReport, MaterialRow, SemanticRow } from "@voxyl/schematic";
+import type { ExportReport, SemanticRow } from "@voxyl/schematic";
 import type {
   CellBox,
   LightingMode,
@@ -30,7 +30,7 @@ import type {
 } from "@voxyl/session";
 import type { SliceAxis } from "../views/plane.ts";
 import type { WorldInfo, WorldSource } from "../worlds.ts";
-import type { PasteArgs } from "./clipboard.ts";
+import type { PasteArgs, PieceSurface } from "./clipboard.ts";
 import type { Aim, HistoryState, PaletteInfo, PartGhost, PartGrid } from "./editing.ts";
 import type { BuildTool } from "./tools.ts";
 
@@ -75,6 +75,8 @@ export type AimView = Aim & {
   readonly aimed: { readonly shape: string; readonly slot: number } | null;
   /** With the Paste tool: the cells the clipboard would fill at this aim (or at `paste.at`). */
   readonly pasteGhost: PasteGhost | null;
+  /** The semantic the ray met (a part's, or the block's), or null on the ground. */
+  readonly semantic: number | null;
 };
 
 /** What a paste would fill, for the ghost: the cells and their colours, and the box. */
@@ -99,17 +101,48 @@ export interface SchematicArgs {
   readonly trim: boolean;
 }
 
-/** What an export would hold, for the dialog that offers it. */
-export interface SchematicPlan {
-  /** A file name for it (no extension). */
+/** One semantic of a piece, for the include list of the dialogs that take a piece apart. */
+export interface RegionSemantic {
+  /** The piece's 1-based semantic number (what `exclude` takes). */
+  readonly semantic: number;
   readonly name: string;
-  readonly semantics: SemanticRow[];
-  readonly materials: MaterialRow[];
-  /** The material list as plain text, for the clipboard. */
-  readonly materialText: string;
-  /** Block names for the list, by reference. */
-  readonly labels: Readonly<Record<string, string>>;
-  readonly report: ExportReport;
+  /** Its colour, "#rrggbb". */
+  readonly color: string;
+  /** Cells and parts that use it. */
+  readonly count: number;
+  /** Whole blocks of it. */
+  readonly blocks: number;
+  /** Parts of it, by shape id. */
+  readonly parts: Readonly<Record<string, number>>;
+  /** Whether it can be written as a Minecraft block, and which block its look names. */
+  readonly status: SemanticRow["status"];
+  readonly block: string | null;
+}
+
+/**
+ * What a piece (the selection, the whole build, a saved prefab) holds and what would be kept
+ * of it, for the dialogs that save it as a prefab, write it as a schematic or just show it.
+ * One shape for all three, so they read alike.
+ */
+export interface RegionPlan {
+  /** A name to start from (no extension). */
+  readonly name: string;
+  /** Which of the piece's own directions is the real north. */
+  readonly north: Direction;
+  /** Every semantic in the source, busiest first: the include list. */
+  readonly semantics: RegionSemantic[];
+  /** The box of what is kept, and the cells in it. */
+  readonly size: readonly [number, number, number];
+  readonly cells: number;
+  /** What is kept, by the block each semantic's look names (the manifest's Blocks tab). */
+  readonly materials: SelectionRow[];
+  /** What is kept, to draw turning. */
+  readonly surface: PieceSurface;
+  /** Only when asked for: what the Schematica file would be. */
+  readonly schematic?: {
+    readonly materialText: string;
+    readonly report: ExportReport;
+  };
 }
 
 /** What the clipboard holds, as the editor shows it. */
@@ -210,7 +243,19 @@ export type Command =
   /** What a locked paste (`at` set) would fill, for the ghost while the cursor is free. */
   | ({ type: "pasteGhost" } & PasteArgs)
   /** Keeps the selection, or the clipboard, as a prefab. */
-  | { type: "savePrefab"; name: string; tags: string[]; from: "selection" | "clipboard" }
+  | {
+      type: "savePrefab";
+      name: string;
+      tags: string[];
+      from: "selection" | "clipboard";
+      /** Piece semantic numbers to leave out, and whether to shrink the box to what is left. */
+      exclude?: readonly number[];
+      trim?: boolean;
+      /** Where a paste puts it: the middle of its floor (the default) or its lowest corner. */
+      handle?: "bottom-center" | "bottom-corner";
+      /** Delete the prefabs of this name (any case) once this one is saved. */
+      replace?: boolean;
+    }
   | { type: "prefabs" }
   /** A prefab's picture, RGBA (THUMB_SIZE square), or null. */
   | { type: "prefabThumb"; id: string }
@@ -302,8 +347,8 @@ export type Command =
    * block is transparent. At most 8, so a bake stays a short pause on the world worker.
    */
   | { type: "bakeIcons"; refs: readonly string[]; size?: number }
-  /** What a schematic export of `source` would hold (counts, what is left out), without writing it. */
-  | ({ type: "schematicPlan" } & SchematicArgs)
+  /** What `source` holds and what would be kept of it (and, with `schematic`, what a schematic export would write), without writing anything. */
+  | ({ type: "regionPlan"; schematic: boolean } & SchematicArgs)
   /** The gzipped Schematica file for `source`. Rejects when nothing can be written. */
   | ({ type: "schematicFile" } & SchematicArgs)
   /** Sets what a semantic is for. */
@@ -389,7 +434,7 @@ export interface Replies {
   rotateAt: boolean;
   blockPreview: BlockPreview | null;
   bakeIcons: { readonly size: number; readonly icons: Uint8Array };
-  schematicPlan: SchematicPlan;
+  regionPlan: RegionPlan;
   schematicFile: {
     readonly name: string;
     readonly bytes: Uint8Array;

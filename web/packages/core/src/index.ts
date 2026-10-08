@@ -53,10 +53,12 @@ export {
 export { type StateJSON, stateInput, stateJSON } from "./format/state-json.ts";
 export {
   cutPiece,
+  filterPiece,
   forEachPieceCell,
   importSemantics,
   type Piece,
   PieceArg,
+  type PieceFilter,
   type PieceSemantic,
   pieceCellCount,
 } from "./piece.ts";

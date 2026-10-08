@@ -6,6 +6,7 @@ import {
   addPaletteCommand,
   addSemanticCommand,
   aim,
+  aimedSemantic,
   canLink,
   describeSemanticCommand,
   editSemanticCommand,
@@ -52,6 +53,35 @@ describe("aim", () => {
     const target = aim(project.world, [3.5, 0.75, 10], [0, 0, -1], 100);
     expect(target).toMatchObject({ hit: [3, 0, 3], id, place: [3, 0, 4], face: [0, 0, 1] });
     expect(target?.hitY).toBeCloseTo(0.75);
+    expect(aimedSemantic(project.world, target as Aim)).toBe(wall(project));
+  });
+
+  it("names nothing on the ground, and the part the ray meets in a cell of parts", () => {
+    const project = newProject("Test", 5);
+    const ground = aim(project.world, [0.5, 5, 0.5], [0, -1, 0], 100);
+    if (!ground) throw new Error("no aim");
+    expect(aimedSemantic(project.world, ground)).toBeNull();
+
+    const trim = project.semantics.byName("Trim") as number;
+    const accent = project.semantics.byName("Accent") as number;
+    project.run({
+      id: "cell",
+      kind: "set",
+      args: {
+        states: [
+          {
+            parts: [
+              { semantic: trim, shape: "face1", slot: 0 },
+              { semantic: accent, shape: "face1", slot: 1 },
+            ],
+          },
+        ],
+        cells: [4, 0, 4, 0],
+      },
+    });
+    const target = aim(project.world, [4.5, 6, 4.5], [0, -1, 0], 100);
+    if (!target) throw new Error("no aim");
+    expect(aimedSemantic(project.world, target)).toBe(accent);
   });
 });
 

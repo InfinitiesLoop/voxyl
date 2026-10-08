@@ -3,6 +3,7 @@ import { type MouseEvent, useEffect, useMemo, useState } from "react";
 import type { Engine } from "../scene/Engine.ts";
 import type { PaletteInfo } from "../world/editing.ts";
 import type { SelectionRow, SelectionView } from "../world/protocol.ts";
+import { ActionIcon, type ActionIconId } from "./action-icons.tsx";
 import { useStore } from "./useStore.ts";
 
 interface ActionContext {
@@ -15,17 +16,28 @@ interface SelectionAction {
   readonly id: string;
   readonly label: (ctx: ActionContext) => string;
   readonly title: string;
+  /** Actions with an icon sit on the selection panel's toolbar; the rest are under "Actions". */
+  readonly icon?: ActionIconId;
   readonly enabled: (ctx: ActionContext) => boolean;
   readonly run: (ctx: ActionContext) => void;
 }
 
 /**
- * Things to do to the cells in the selection. Add one here when a new operation arrives;
- * the selection panel stays about the shape of the region.
+ * Things to do to the cells in the selection. Add one here when a new operation arrives; the
+ * selection panel shows the ones with an icon along its top and keeps the rest in a list.
  */
 const ACTIONS: readonly SelectionAction[] = [
   {
+    id: "cut",
+    icon: "cut",
+    label: () => "Cut",
+    title: "Cut: copy the selection to the clipboard, then empty its cells (Ctrl+X).",
+    enabled: (ctx) => ctx.selection.occupied > 0,
+    run: (ctx) => void ctx.engine.copySelection(true),
+  },
+  {
     id: "copy",
+    icon: "copy",
     label: () => "Copy",
     title:
       "Copy the selection to the clipboard (Ctrl+C). Ctrl+V then pastes it with the Paste tool.",
@@ -33,11 +45,22 @@ const ACTIONS: readonly SelectionAction[] = [
     run: (ctx) => void ctx.engine.copySelection(false),
   },
   {
-    id: "cut",
-    label: () => "Cut",
-    title: "Copy the selection, then empty its cells (Ctrl+X).",
+    id: "prefab",
+    icon: "prefab",
+    label: () => "Save as prefab",
+    title:
+      "Save as prefab: keep the selection as a named piece you can paste into any build (Ctrl+P).",
     enabled: (ctx) => ctx.selection.occupied > 0,
-    run: (ctx) => void ctx.engine.copySelection(true),
+    run: (ctx) => ctx.engine.regionDialog.set({ kind: "prefab" }),
+  },
+  {
+    id: "schematic",
+    icon: "schematic",
+    label: () => "Export schematic",
+    title:
+      "Export as a schematic: write the selection as a Schematica file for Minecraft. Semantics become the blocks their looks name, only in the file.",
+    enabled: (ctx) => ctx.selection.occupied > 0,
+    run: (ctx) => ctx.engine.regionDialog.set({ kind: "schematic", source: "selection" }),
   },
   {
     id: "cut-away",
@@ -54,21 +77,6 @@ const ACTIONS: readonly SelectionAction[] = [
       "Hide every cell outside the selection's box in the 3D views, to check exactly what is selected.",
     enabled: (ctx) => ctx.selection.cells > 0,
     run: (ctx) => ctx.engine.setIsolate(!ctx.engine.isolate.get()),
-  },
-  {
-    id: "prefab",
-    label: () => "Save as prefab…",
-    title: "Keep the selection as a prefab: a named piece you can paste into any build (Ctrl+P).",
-    enabled: (ctx) => ctx.selection.occupied > 0,
-    run: (ctx) => ctx.engine.prefabDialog.set(true),
-  },
-  {
-    id: "schematic",
-    label: () => "Export schematic�",
-    title:
-      "Write the selection as a Schematica file for Minecraft. Semantics become the blocks their looks name, only in the file.",
-    enabled: (ctx) => ctx.selection.occupied > 0,
-    run: (ctx) => ctx.engine.schematicDialog.set("selection"),
   },
   {
     id: "fill",
@@ -93,37 +101,62 @@ const ACTIONS: readonly SelectionAction[] = [
   },
 ];
 
-/** A menu of operations on the current selection. Hidden until something is selected. */
-export function SelectionActions({ engine }: { engine: Engine }) {
+function useActionContext(engine: Engine): ActionContext {
   const selection = useStore(engine.selection);
-  const notice = useStore(engine.notice);
   const hotbar = useStore(engine.hotbar.state);
-  const palettes = useStore(engine.palettes);
-  // The isolate label follows this, so the menu redraws when it changes.
+  // The isolate label follows this, so the list redraws when it changes.
   useStore(engine.isolate);
+  const slot = hotbar.slots[hotbar.selected] ?? null;
+  return { engine, selection, slotName: slot?.name ?? null };
+}
+
+const click = (action: () => void) => (event: MouseEvent<HTMLButtonElement>) => {
+  action();
+  event.currentTarget.blur();
+};
+
+/** Cut, copy, save as prefab and export as a schematic: icons, with the description as the tooltip. */
+export function SelectionToolbar({ engine }: { engine: Engine }) {
+  const ctx = useActionContext(engine);
+  return (
+    <div className="selection-toolbar" role="toolbar" aria-label="Selection">
+      {ACTIONS.filter((action) => action.icon).map((action) => (
+        <button
+          key={action.id}
+          type="button"
+          className="selection-tool"
+          aria-label={action.label(ctx)}
+          disabled={!action.enabled(ctx)}
+          title={action.title}
+          onClick={click(() => action.run(ctx))}
+        >
+          {action.icon && <ActionIcon id={action.icon} />}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** The rest of what can be done to the selection, folded away until asked for. */
+export function SelectionActions({ engine }: { engine: Engine }) {
+  const ctx = useActionContext(engine);
+  const palettes = useStore(engine.palettes);
+  const hotbar = useStore(engine.hotbar.state);
   const [open, setOpen] = useState(false);
   const slot = hotbar.slots[hotbar.selected] ?? null;
-  const ctx: ActionContext = {
-    engine,
-    selection,
-    slotName: slot?.name ?? null,
-  };
-
-  if (selection.cells === 0) return null;
-
-  const click = (action: () => void) => (event: MouseEvent<HTMLButtonElement>) => {
-    action();
-    event.currentTarget.blur();
-  };
-
   return (
-    <div className="actions-menu">
-      <button type="button" aria-expanded={open} onClick={click(() => setOpen((value) => !value))}>
-        Actions
+    <div className="selection-more">
+      <button
+        type="button"
+        className="selection-more-toggle"
+        aria-expanded={open}
+        onClick={click(() => setOpen((value) => !value))}
+      >
+        {open ? "▾" : "▸"} More actions
       </button>
       {open && (
-        <div className="actions-panel">
-          {ACTIONS.map((action) => (
+        <div className="selection-more-list">
+          {ACTIONS.filter((action) => !action.icon).map((action) => (
             <button
               key={action.id}
               type="button"
@@ -134,8 +167,7 @@ export function SelectionActions({ engine }: { engine: Engine }) {
               {action.label(ctx)}
             </button>
           ))}
-          <Resemantic engine={engine} selection={selection} palettes={palettes} slot={slot} />
-          {notice !== "" && <p className="selection-notice">{notice}</p>}
+          <Resemantic engine={engine} selection={ctx.selection} palettes={palettes} slot={slot} />
         </div>
       )}
     </div>

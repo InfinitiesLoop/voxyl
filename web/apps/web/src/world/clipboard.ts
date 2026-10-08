@@ -12,6 +12,7 @@ import {
   placementMatrix,
   turnsBetween,
 } from "@voxyl/core";
+import { isKnownShape } from "@voxyl/shapes";
 import type { Vec3 } from "./protocol.ts";
 
 /** Where a paste goes and how the piece sits there: what the Paste tool's options say. */
@@ -244,6 +245,196 @@ export function pieceThumbnail(
     }
   }
   return out;
+}
+
+/** The most surface cells a dialog's preview draws. Past this it says the piece is too big. */
+export const MAX_SURFACE_CELLS = 400_000;
+/**
+ * The most shaped parts a preview draws as their own geometry (each is a few dozen triangles).
+ * Parts past this are drawn as whole cubes instead, which still shows where they are.
+ */
+export const MAX_SURFACE_PARTS = 40_000;
+
+/** The shaped parts of a piece's surface, one entry per part, in the same order in each array. */
+export interface SurfaceParts {
+  /** x, y, z of the cell each part sits in, from the piece's corner. */
+  readonly positions: Int32Array;
+  /** r, g, b per part. */
+  readonly colors: Uint8Array;
+  readonly shapes: readonly string[];
+  readonly slots: Uint8Array;
+}
+
+/** The cells of a piece you can see from outside, to draw it turning in a dialog. */
+export interface PieceSurface {
+  readonly size: readonly [number, number, number];
+  /** x, y, z per whole-cube cell, from the piece's corner. */
+  readonly positions: Int32Array;
+  /** r, g, b per cube. */
+  readonly colors: Uint8Array;
+  /** Cells that hold shaped parts, drawn as the parts themselves rather than as cubes. */
+  readonly parts: SurfaceParts;
+  /** Cells the piece holds (air left out), including those hidden inside. */
+  readonly cells: number;
+  /** False when there are more visible cells than `MAX_SURFACE_CELLS`; none are listed then. */
+  readonly drawn: boolean;
+}
+
+const NO_PARTS: SurfaceParts = {
+  positions: new Int32Array(0),
+  colors: new Uint8Array(0),
+  shapes: [],
+  slots: new Uint8Array(0),
+};
+
+/** The surface of a piece with nothing in it. */
+export function emptySurface(): PieceSurface {
+  return {
+    size: [0, 0, 0],
+    positions: new Int32Array(0),
+    colors: new Uint8Array(0),
+    parts: NO_PARTS,
+    cells: 0,
+    drawn: true,
+  };
+}
+
+/** What a cell state shows: a cube of one semantic, or the shaped parts it holds. */
+type StateLook =
+  | { readonly kind: "cube"; readonly semantic: number }
+  | { readonly kind: "parts"; readonly parts: readonly (readonly [number, string, number])[] };
+
+/**
+ * The cells of a piece with at least one face open to the outside (or to air inside it), with
+ * their colours. Cells buried in the middle are left out: a preview that turns is only a
+ * picture of the surface, and a big piece has far fewer of those than cells. A cell that
+ * holds shaped parts is listed as those parts (never as a cube) and does not hide its
+ * neighbours' faces, since it fills only part of its cell. A shape the catalog doesn't know
+ * draws as a cube, as it does in the editor.
+ */
+export function pieceSurface(
+  piece: Piece,
+  colorOf: (semantic: number) => number,
+  cap = MAX_SURFACE_CELLS,
+  partCap = MAX_SURFACE_PARTS,
+): PieceSurface {
+  const [w, h, d] = piece.size;
+  const looks = new Map<number, StateLook | null>();
+  const lookOf = (n: number): StateLook | null => {
+    let look = looks.get(n);
+    if (look === undefined) {
+      const state = piece.states[n - 1];
+      const known = (state?.[3] ?? []).filter(([, shape]) => isKnownShape(shape));
+      if (known.length > 0) look = { kind: "parts", parts: known };
+      else {
+        const semantic =
+          state === null || state === undefined ? 0 : (state[3]?.[0]?.[0] ?? state[0]);
+        look = semantic === 0 ? null : { kind: "cube", semantic };
+      }
+      looks.set(n, look);
+    }
+    return look;
+  };
+
+  let count = 0;
+  let partCount = 0;
+  const cubes: number[] = []; // x, y, z, semantic
+  const shaped: { x: number; y: number; z: number; look: StateLook & { kind: "parts" } }[] = [];
+  const grid = new Uint8Array(w * h * d);
+  forEachPieceCell(piece, (x, y, z, n) => {
+    const look = lookOf(n);
+    if (!look) return;
+    count++;
+    if (look.kind === "parts") {
+      shaped.push({ x, y, z, look });
+      partCount += look.parts.length;
+    } else {
+      cubes.push(x, y, z, look.semantic);
+      grid[x + w * (z + d * y)] = 1;
+    }
+  });
+  // Too many parts to model each: they stand in as cubes of their first part's colour.
+  const asCubes = partCount > partCap;
+  if (asCubes) {
+    for (const { x, y, z, look } of shaped) {
+      cubes.push(x, y, z, look.parts[0]?.[0] ?? 0);
+      grid[x + w * (z + d * y)] = 1;
+    }
+  }
+  const solid = (x: number, y: number, z: number): boolean =>
+    x >= 0 && y >= 0 && z >= 0 && x < w && y < h && z < d && grid[x + w * (z + d * y)] === 1;
+  const keep: number[] = [];
+  for (let i = 0; i < cubes.length; i += 4) {
+    const x = cubes[i] ?? 0;
+    const y = cubes[i + 1] ?? 0;
+    const z = cubes[i + 2] ?? 0;
+    if (
+      !solid(x - 1, y, z) ||
+      !solid(x + 1, y, z) ||
+      !solid(x, y - 1, z) ||
+      !solid(x, y + 1, z) ||
+      !solid(x, y, z - 1) ||
+      !solid(x, y, z + 1)
+    ) {
+      keep.push(i);
+    }
+  }
+  const shownParts = asCubes ? 0 : partCount;
+  if (keep.length + shownParts > cap) {
+    return {
+      size: piece.size,
+      positions: new Int32Array(0),
+      colors: new Uint8Array(0),
+      parts: NO_PARTS,
+      cells: count,
+      drawn: false,
+    };
+  }
+  const rgb = new Map<number, number>();
+  const colorFor = (semantic: number): number => {
+    let color = rgb.get(semantic);
+    if (color === undefined) {
+      color = colorOf(semantic);
+      rgb.set(semantic, color);
+    }
+    return color;
+  };
+  const positions = new Int32Array(keep.length * 3);
+  const colors = new Uint8Array(keep.length * 3);
+  keep.forEach((i, k) => {
+    positions[k * 3] = cubes[i] ?? 0;
+    positions[k * 3 + 1] = cubes[i + 1] ?? 0;
+    positions[k * 3 + 2] = cubes[i + 2] ?? 0;
+    const color = colorFor(cubes[i + 3] ?? 0);
+    colors[k * 3] = (color >> 16) & 0xff;
+    colors[k * 3 + 1] = (color >> 8) & 0xff;
+    colors[k * 3 + 2] = color & 0xff;
+  });
+
+  let parts = NO_PARTS;
+  if (shownParts > 0) {
+    const partPositions = new Int32Array(shownParts * 3);
+    const partColors = new Uint8Array(shownParts * 3);
+    const shapes: string[] = [];
+    const slots = new Uint8Array(shownParts);
+    let k = 0;
+    for (const { x, y, z, look } of shaped) {
+      for (const [semantic, shape, slot] of look.parts) {
+        partPositions[k * 3] = x;
+        partPositions[k * 3 + 1] = y;
+        partPositions[k * 3 + 2] = z;
+        const color = colorFor(semantic);
+        partColors[k * 3] = (color >> 16) & 0xff;
+        partColors[k * 3 + 1] = (color >> 8) & 0xff;
+        partColors[k * 3 + 2] = color & 0xff;
+        shapes.push(shape);
+        slots[k] = slot;
+        k++;
+      }
+    }
+    parts = { positions: partPositions, colors: partColors, shapes, slots };
+  }
+  return { size: piece.size, positions, colors, parts, cells: count, drawn: true };
 }
 
 /** Fills a convex quad (corners in order) with a colour, a pixel at a time. */

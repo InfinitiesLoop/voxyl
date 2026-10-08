@@ -6,6 +6,7 @@ import type { Block, Element, Face, Library, McSide, Model, Texture, Variant } f
 import { DEFAULT_TEXTURE_KEYS, paintTexture } from "./textures.ts";
 
 export const DEFAULT_LIBRARY_ID = "voxyl";
+export const DEFAULT_LIBRARY_NAME = "Voxyl defaults";
 
 const SIDES: readonly McSide[] = ["down", "up", "north", "south", "west", "east"];
 
@@ -322,7 +323,7 @@ export function buildDefaultLibrary(): Library {
     color: colorOf("glass"),
   };
 
-  return { id: DEFAULT_LIBRARY_ID, name: "Voxyl defaults", blocks, models, textures };
+  return { id: DEFAULT_LIBRARY_ID, name: DEFAULT_LIBRARY_NAME, blocks, models, textures };
 }
 
 let shared: Library | null = null;

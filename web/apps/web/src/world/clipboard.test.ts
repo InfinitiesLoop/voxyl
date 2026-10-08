@@ -6,6 +6,7 @@ import {
   type PasteArgs,
   pasteMatrix,
   pieceCells,
+  pieceSurface,
   pieceThumbnail,
   placedBox,
   placedPositions,
@@ -158,5 +159,81 @@ describe("a piece's picture", () => {
     const reds = new Set<number>();
     for (let i = 0; i < rgba.length; i += 4) if (rgba[i + 3] === 255) reds.add(rgba[i] as number);
     expect([...reds].sort((a, b) => b - a)).toEqual([255, 199, 148]);
+  });
+});
+
+describe("pieceSurface", () => {
+  it("lists every cell of a thin piece with its colour", () => {
+    const surface = pieceSurface(lPiece(), (n) => (n === 1 ? 0xff0000 : 0x00ff00));
+    expect(surface.drawn).toBe(true);
+    expect(surface.cells).toBe(5);
+    expect(surface.positions.length).toBe(15);
+    expect(surface.colors.length).toBe(15);
+  });
+
+  it("leaves out a cell buried on all six sides", () => {
+    const project = newProject("Cube", 5);
+    const wall = project.semantics.byName("Wall") as number;
+    const state = project.world.states.intern({ semantic: wall });
+    for (let x = 0; x < 3; x++)
+      for (let y = 0; y < 3; y++) for (let z = 0; z < 3; z++) project.world.setId(x, y, z, state);
+    const piece = cutPiece(
+      { world: project.world, semantics: project.semantics, north: project.settings.north },
+      CellSet.ofBox({ x0: 0, y0: 0, z0: 0, x1: 2, y1: 2, z1: 2 }),
+    ) as Piece;
+    const surface = pieceSurface(piece, () => 0x808080);
+    expect(surface.cells).toBe(27);
+    expect(surface.positions.length / 3).toBe(26);
+  });
+
+  it("lists a cell of parts as its parts, not as a cube", () => {
+    const piece: Piece = {
+      size: [2, 1, 1],
+      north: "north",
+      semantics: [{ name: "Wall", palette: "Root" }],
+      states: [
+        [1, 0],
+        [0, 0, {}, [[1, "face4", 0]]],
+      ],
+      cells: [1, 1, 2, 1],
+    };
+    const surface = pieceSurface(piece, () => 0x102030);
+    expect(surface.cells).toBe(2);
+    expect(surface.positions.length / 3).toBe(1);
+    expect(Array.from(surface.parts.positions)).toEqual([1, 0, 0]);
+    expect(surface.parts.shapes).toEqual(["face4"]);
+    expect(Array.from(surface.parts.colors)).toEqual([0x10, 0x20, 0x30]);
+  });
+
+  it("draws a shape the catalog lacks as a cube", () => {
+    const piece: Piece = {
+      size: [1, 1, 1],
+      north: "north",
+      semantics: [{ name: "Wall", palette: "Root" }],
+      states: [[0, 0, {}, [[1, "no_such_shape", 0]]]],
+      cells: [1, 1],
+    };
+    const surface = pieceSurface(piece, () => 0);
+    expect(surface.positions.length / 3).toBe(1);
+    expect(surface.parts.slots.length).toBe(0);
+  });
+
+  it("falls back to cubes past the part cap", () => {
+    const piece: Piece = {
+      size: [2, 1, 1],
+      north: "north",
+      semantics: [{ name: "Wall", palette: "Root" }],
+      states: [[0, 0, {}, [[1, "face4", 0]]]],
+      cells: [1, 2],
+    };
+    const surface = pieceSurface(piece, () => 0, 100, 1);
+    expect(surface.parts.slots.length).toBe(0);
+    expect(surface.positions.length / 3).toBe(2);
+  });
+
+  it("draws nothing, and says so, past the cap", () => {
+    const surface = pieceSurface(lPiece(), () => 0, 2);
+    expect(surface.drawn).toBe(false);
+    expect(surface.positions.length).toBe(0);
   });
 });

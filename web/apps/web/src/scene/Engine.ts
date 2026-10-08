@@ -21,6 +21,7 @@ import { orbitDegrees, type ViewSettings } from "../editor/view-options.ts";
 import type { PasteArgs } from "../world/clipboard.ts";
 import type { HistoryState, PaletteInfo } from "../world/editing.ts";
 import {
+  type AimView,
   type ClipboardInfo,
   EMPTY_SELECTION,
   type PartArgs,
@@ -133,6 +134,22 @@ export type Autopilot = (seconds: number) => {
   target: THREE.Vector3Like;
 };
 
+/** Which region dialog is open, and what it is about. */
+export type RegionDialogState =
+  /** Keep the selection as a prefab. */
+  | { readonly kind: "prefab" }
+  /** Write the selection, the whole build or a prefab as a Schematica file. */
+  | { readonly kind: "schematic"; readonly source: SchematicSource }
+  /** Look at a saved prefab: its picture, contents and what can be done with it. */
+  | { readonly kind: "details"; readonly id: string };
+
+/** What the crosshair is on. A part also names its shape and slot, for the preview. */
+export interface LookedAt {
+  readonly semantic: number;
+  readonly shape?: string;
+  readonly slot?: number;
+}
+
 /**
  * Owns the renderer, scene, camera and frame loop. The world itself lives in the world
  * worker (see WorldClient); a ChunkRenderer draws what it sends. React draws the HUD around
@@ -199,12 +216,17 @@ export class Engine {
   readonly pasteLock = new Store<Vec3 | null>(null);
   /** The pointer is locked to the view (flying), for the paste panel to tell its two modes. */
   readonly flying = new Store(false);
+  /** What the crosshair is on, for the block-details readout, or null. */
+  readonly lookedAt = new Store<LookedAt | null>(null);
+  /** Imported block libraries, so the readout can name the one a block comes from. */
+  readonly libraries = new Store<readonly { readonly id: string; readonly name: string }[]>([]);
   /** Counts changes to the prefab list, so every list showing it asks again. */
   readonly prefabsRev = new Store(0);
-  /** Asks the screen to open the "Save as a prefab" dialog (Ctrl+P, or Actions). */
-  readonly prefabDialog = new Store(false);
-  /** The schematic export dialog: what it is cut from, or null while closed. */
-  readonly schematicDialog = new Store<SchematicSource | null>(null);
+  /**
+   * The dialog that takes a region apart (save as a prefab, export as a schematic, a prefab's
+   * details), or null while closed. Ctrl+P opens the first.
+   */
+  readonly regionDialog = new Store<RegionDialogState | null>(null);
   /** A short line over the hotbar for anything the editor refuses or reports; it fades. */
   readonly toast = new Store<{ readonly text: string; readonly id: number } | null>(null);
   #toastId = 0;
@@ -392,6 +414,7 @@ export class Engine {
     this.#selectionOutline.show(new Float32Array(0));
     this.notice.set("");
     this.#target.show(null);
+    this.lookedAt.set(null);
     const info = await this.world.request({ type: "load", world: id, source, chunkSize, theme });
     if (id !== this.#worldId || this.#disposed) return null;
     // The worker sends nothing about this world before its reply, so nothing was missed.
@@ -436,6 +459,7 @@ export class Engine {
     this.#info = null;
     this.palettes.set([]);
     this.hotbar.clear();
+    this.lookedAt.set(null);
     this.selection.set(EMPTY_SELECTION);
   }
 
@@ -1034,6 +1058,7 @@ export class Engine {
       this.#aimedPart.show(null);
       this.#ghost.show(null);
       this.#placeGrid.show(null);
+      this.lookedAt.set(null);
       this.#aimedFor = "";
       this.#updateFrozenPaste();
       return;
@@ -1071,6 +1096,7 @@ export class Engine {
         // In a cell of parts the outline hugs the part met, not the whole cell.
         const met = aim?.aimed && aim.hit ? aim : null;
         this.#target.show(met ? null : aim);
+        this.#showLookedAt(aim);
         this.#aimedPart.show(met?.hit ?? null, met?.aimed?.shape, met?.aimed?.slot);
         this.#toolPreview.show(aim?.preview ?? null);
         this.#pasteGhost.show(aim?.pasteGhost ?? null);
@@ -1079,6 +1105,25 @@ export class Engine {
         this.#ghost.show(ghost?.cell ?? null, ghost?.shape, ghost?.slot);
         this.#placeGrid.show(this.tool.get() === "build" ? (aim?.grid ?? null) : null);
       }, done);
+  }
+
+  /** Remembers the semantic (and part) under the crosshair, skipping a repeat. */
+  #showLookedAt(aim: AimView | null): void {
+    const next: LookedAt | null = aim?.semantic
+      ? {
+          semantic: aim.semantic,
+          ...(aim.aimed ? { shape: aim.aimed.shape, slot: aim.aimed.slot } : {}),
+        }
+      : null;
+    const current = this.lookedAt.get();
+    if (
+      current?.semantic === next?.semantic &&
+      current?.shape === next?.shape &&
+      current?.slot === next?.slot
+    ) {
+      return;
+    }
+    this.lookedAt.set(next);
   }
 
   /** Shows a line over the hotbar for a few seconds. */
@@ -1351,7 +1396,7 @@ export class Engine {
       }
       if (event.code === "KeyP") {
         event.preventDefault();
-        if (this.selection.get().cells > 0) this.prefabDialog.set(true);
+        if (this.selection.get().cells > 0) this.regionDialog.set({ kind: "prefab" });
         else this.say("Select something first, then Ctrl+P saves it as a prefab.");
         return;
       }
@@ -1604,8 +1649,23 @@ export class Engine {
   }
 
   /** Keeps the selection as a prefab. */
-  async savePrefab(name: string, tags: string[]): Promise<void> {
-    const entry = await this.world.request({ type: "savePrefab", name, tags, from: "selection" });
+  async savePrefab(
+    name: string,
+    tags: string[],
+    options: {
+      exclude?: readonly number[];
+      trim?: boolean;
+      handle?: "bottom-center" | "bottom-corner";
+      replace?: boolean;
+    } = {},
+  ): Promise<void> {
+    const entry = await this.world.request({
+      type: "savePrefab",
+      name,
+      tags,
+      from: "selection",
+      ...options,
+    });
     this.prefabsRev.set(this.prefabsRev.get() + 1);
     this.say(`Saved ${entry.name} as a prefab. It is in the inventory and on Home.`);
   }

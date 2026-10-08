@@ -1,29 +1,23 @@
-import { type MouseEvent, useState } from "react";
+import type { MouseEvent } from "react";
 import type { Engine } from "../scene/Engine.ts";
-import type { SelectionRow } from "../world/protocol.ts";
-import { countText, grouped, stacks } from "./counts.ts";
+import { grouped } from "./counts.ts";
+import { Manifest } from "./Manifest.tsx";
+import { SelectionActions, SelectionToolbar } from "./selection-actions.tsx";
 import type { EditorTool } from "./tool.ts";
 import { useStore } from "./useStore.ts";
 
-const MODE_KEY = "voxyl.countMode";
-
 /**
- * What the selection holds, and how to change its shape. Open while Select is the
- * tool and something is selected. Things done *to* the cells live in the actions menu.
+ * The selection and everything to do with it: what it holds, cut / copy / save as prefab /
+ * export along the top, how to change its shape, and the other actions. Open while Select is
+ * the tool and something is selected.
  */
 export function SelectionPanel({ engine, tool }: { engine: Engine; tool: EditorTool }) {
   const selection = useStore(engine.selection);
   const anchor = useStore(engine.anchor);
   const notice = useStore(engine.notice);
-  const [mode, setMode] = useState<"semantics" | "blocks">(() =>
-    localStorage.getItem(MODE_KEY) === "blocks" ? "blocks" : "semantics",
-  );
-  const [copied, setCopied] = useState(false);
-
   if (tool !== "select") return null;
   if (selection.cells === 0 && anchor === null) return null;
 
-  const rows = mode === "semantics" ? selection.semantics : selection.materials;
   const click = (action: () => void) => (event: MouseEvent<HTMLButtonElement>) => {
     action();
     event.currentTarget.blur();
@@ -43,6 +37,7 @@ export function SelectionPanel({ engine, tool }: { engine: Engine; tool: EditorT
         <strong>Selection</strong>
         {selection.bounds && <span>{sizeOf(selection.bounds)}</span>}
       </header>
+      {selection.cells > 0 && <SelectionToolbar engine={engine} />}
       {selection.cells === 0 && anchor && (
         <p className="selection-lead">
           First corner at {anchor.join(", ")}. Right-click the opposite corner.
@@ -55,49 +50,12 @@ export function SelectionPanel({ engine, tool }: { engine: Engine; tool: EditorT
             {selection.occupied !== selection.cells && ` · ${grouped(selection.occupied)} filled`}
             {!selection.exact && " · outline shows the box around them"}
           </p>
-          <div className="selection-mode">
-            <button
-              type="button"
-              className={mode === "semantics" ? "active" : undefined}
-              onClick={click(() => {
-                localStorage.setItem(MODE_KEY, "semantics");
-                setMode("semantics");
-                setCopied(false);
-              })}
-            >
-              Semantics
-            </button>
-            <button
-              type="button"
-              className={mode === "blocks" ? "active" : undefined}
-              onClick={click(() => {
-                localStorage.setItem(MODE_KEY, "blocks");
-                setMode("blocks");
-                setCopied(false);
-              })}
-            >
-              Blocks
-            </button>
-            <button
-              type="button"
-              onClick={click(() => {
-                void navigator.clipboard.writeText(listText(selection.bounds, rows)).then(
-                  () => setCopied(true),
-                  () => setCopied(false),
-                );
-              })}
-            >
-              {copied ? "Copied" : "Copy"}
-            </button>
-          </div>
-          <div className="selection-scroll">
-            {rows.map((row) => (
-              <Row key={`${row.semantic}:${row.name}:${row.detail ?? ""}`} row={row} />
-            ))}
-            {rows.length === 0 && selection.occupied > 0 && (
-              <p className="selection-lead">Nothing in it.</p>
-            )}
-          </div>
+          <Manifest
+            title={selection.bounds ? sizeOf(selection.bounds) : "Selection"}
+            semantics={selection.semantics}
+            materials={selection.materials}
+            empty={selection.occupied > 0 ? "Nothing in it." : undefined}
+          />
         </>
       )}
       <div className="selection-actions">
@@ -149,6 +107,7 @@ export function SelectionPanel({ engine, tool }: { engine: Engine; tool: EditorT
           ))}
         </div>
       )}
+      {selection.cells > 0 && <SelectionActions engine={engine} />}
       <button
         type="button"
         className="selection-deselect"
@@ -159,23 +118,6 @@ export function SelectionPanel({ engine, tool }: { engine: Engine; tool: EditorT
       </button>
       {notice !== "" && <p className="selection-notice">{notice}</p>}
     </aside>
-  );
-}
-
-function Row({ row }: { row: SelectionRow }) {
-  const breakdown = stacks(row.count);
-  return (
-    <div className="selection-row">
-      <span className="selection-swatch" style={{ background: row.color }} />
-      <span className="selection-name">
-        {row.name}
-        {row.detail && <small>{row.detail}</small>}
-      </span>
-      <span className="selection-count">
-        {grouped(row.count)}
-        {breakdown !== "" && <small>{breakdown}</small>}
-      </span>
-    </div>
   );
 }
 
@@ -201,16 +143,4 @@ function Face({
 
 function sizeOf(bounds: readonly [number, number, number, number, number, number]): string {
   return `${bounds[3] - bounds[0] + 1} × ${bounds[4] - bounds[1] + 1} × ${bounds[5] - bounds[2] + 1}`;
-}
-
-function listText(
-  bounds: readonly [number, number, number, number, number, number] | null,
-  rows: readonly SelectionRow[],
-): string {
-  const lines = [bounds ? sizeOf(bounds) : "Selection"];
-  for (const row of rows) {
-    const name = row.detail ? `${row.name} (${row.detail})` : row.name;
-    lines.push(`${name}\t${countText(row.count)}`);
-  }
-  return lines.join("\n");
 }

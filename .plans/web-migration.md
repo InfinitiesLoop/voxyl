@@ -576,7 +576,7 @@ might blow the triangle or memory budget. Tested on the city fixture decorated w
   lists, and the include list per semantic. Semantics become blocks only inside the export;
   what can't be written (undecided, no identity, shape with no mod equivalent) is reported and
   left as air. North is north: the file is turned so the build's north ends on -Z. 20 tests.
-- **UI**: "Export schematic…" in the selection's Actions, and "Export as a schematic…" in the
+- **UI**: "Export schematicâ€¦" in the selection's Actions, and "Export as a schematicâ€¦" in the
   Project dialog (whole build). The dialog ticks semantics in and out, shows the report and
   the material list (copyable), and downloads `<project>.schematic`. Verified in the browser
   on `world=blocks` (1,590 cells, 30 kinds of block, a valid gzipped file). Not yet loaded in
@@ -588,10 +588,11 @@ might blow the triangle or memory budget. Tested on the city fixture decorated w
   now (see "Shipped content is on the default blocks").
 - **Inventory footer is one height for every tool** (hint area and the options row are
   reserved), so choosing a tool no longer moves the hotbar.
-- **Seams**: quads are grown by 0.003 cell (`SEAM_OVERLAP`, quad-material.ts). Greedy merging
-  leaves T-junctions, and the rasteriser leaves sub-pixel gaps there that show what is behind
-  the wall, worst in dark rooms. Sloped-part triangles aren't grown yet; if holes remain
-  beside roof parts, that is the next place to look.
+- **Seams (corrected 2026-10-08)**: the pinholes were not T-junction cracks. They were texture
+  reads falling into the next tile of the atlas at every cell edge (uv clamped to 0.9999, which
+  a GPU rounds up to the next tile). The shader now clamps to the centres of the edge texels at
+  the mip level in use, and quads are no longer grown (`SEAM_OVERLAP` is gone). The evidence,
+  and what to try if cracks ever show, are in `web-editor.md`, "Feedback, seventh round".
 - **Placement grid**: with a microblock in hand, the shape's zones are drawn on the aimed
   face (Forge Microblocks' overlay, ported from `ShapeCatalog.grid_lines`;
   `placementGrid` in `packages/shapes`, `PlaceGrid` in the scene), beside the existing cyan
@@ -638,18 +639,18 @@ In the order I'd take them. The first two are the user's.
    what moved the rest. The gate is meant to catch exactly this.
 4. **Load an exported schematic in Minecraft** (the user's check; never done), and wire the
    prefab entry point of the export (the worker already takes `{ prefab: id }`).
-5. **Seams beside roof parts**: sloped-part triangles aren't grown by `SEAM_OVERLAP` yet.
-6. **Phase 4, agents on the web**, in this order: the relay and headless host with edit,
+5. **Phase 4, agents on the web**, in this order: the relay and headless host with edit,
    selection and palette tools first; the tier 1 CPU rasterizer for captures (moved here from
    Phase 0); capture tiers 2 and 3; connect Claude Code and Codex; the private ChatGPT app.
    The MCP tool shape wants the intent-level verbs the user asked for (see the Godot memory
    note), not cell lists; settle that design before porting tools.
-7. **Phase 5, Minecraft import** (modpacks, Chisel variations, schematic import that follows
+6. **Phase 5, Minecraft import**: pre-1.8 and GTNH import is planned in `web-editor.md` ("Gate item: pre-1.8 and GTNH import") and is part of the editor gate. Also modpacks, Chisel variations, schematic import that follows
    "north is north"), and the open question of the hosted default texture set (the default set
    is original and procedural today, so this may be answered; confirm).
-8. **Housekeeping:** this file and `src/editor/selection-actions.tsx` contain cp1252 bytes
-   (smart punctuation written by a tool that wasn't UTF-8): the file shows as "Export
-   schematic?" and makes Biome report an internal error. Re-save both as UTF-8.
+7. **Housekeeping:** the cp1252 bytes in `selection-actions.tsx`, `ProjectSettings.tsx` and this
+   file are UTF-8 now (2026-10-08). Re-take the golden images (`pnpm golden --update`): they
+   predate the ground grid's longer fade, and `city-concrete` now differs where the old one
+   had pinholes.
 
 ### ChatGPT widget research (2026-10-05)
 
@@ -822,13 +823,22 @@ the Phase 4 API can be a Worker on the same zone later.
 
 **Cloudflare side is set (2026-10-08), not deployed yet.** Account `cceaac3044c9675286ba0daee9c2e809`
 (infinity88@gmail.com). Pages project `voxyl` (`voxyl.pages.dev`), Direct Upload, production
-branch `main`. Custom domains `voxyl.xyz` and `www.voxyl.xyz` are attached and still pending.
-Proxied CNAMEs for both point at `voxyl.pages.dev`. The zone `7781ca1b01ee907538aae2c3b5c3a54a`
-is still pending: the `.xyz` registry still delegates to `nsa1`?`nsa4.squarespacedns.com`, not
-`julio.ns.cloudflare.com` and `meg.ns.cloudflare.com`. DNSSEC was already turned off at
-Squarespace. Nothing can serve on voxyl.xyz until that nameserver change is visible at the
-registry. GitHub secrets `CLOUDFLARE_PAGES_API_TOKEN` (Pages Edit only) and `CLOUDFLARE_ACCOUNT_ID` are still the
-user's to add before the workflow can deploy.
+branch `main`. Custom domains `voxyl.xyz` and `www.voxyl.xyz` are attached; they validate once a
+deployment exists. Proxied CNAMEs for both point at `voxyl.pages.dev`. The zone
+`7781ca1b01ee907538aae2c3b5c3a54a` is live: checked 2026-10-08, `voxyl.xyz` resolves through
+`julio.ns.cloudflare.com` and `meg.ns.cloudflare.com` and answers with Cloudflare's own 522
+(nothing to serve yet), so the Squarespace nameserver change took. The user has added the GitHub
+secrets `CLOUDFLARE_PAGES_API_TOKEN` (Pages Edit only) and `CLOUDFLARE_ACCOUNT_ID` (not
+verifiable from here: `gh` is installed but needs the user's `gh auth login`).
+
+**Readiness check (2026-10-08).** The workflow is on `origin/main` (it must be, for Run workflow
+to appear). `pnpm check` is green and `pnpm --filter @voxyl/web build` makes a 2.3 MB `dist/`
+with `_headers` and `_redirects` in it; the three.js chunk for the region dialog's preview is
+split off. One change: the deploy step runs `pnpm dlx wrangler@4 pages deploy` itself instead of
+`cloudflare/wrangler-action`, because the action installs wrangler into the checkout with the
+package manager, and this is a pnpm workspace. What could still stop the first run is outside
+the repo: a wrong secret value, or a token without Pages Edit on this account. The first run is
+best a preview (a branch other than `main`), then `main` for production.
 
 - `web/apps/web/public/_headers` and `_redirects` ship in `dist/`: immutable cache for
   `assets/`, no-cache for the page, `nosniff`/referrer/permissions headers, `www` to the apex,

@@ -3,6 +3,7 @@ import { FACE_SLOTS, SIDE_SLOTS, TEXTURE_SIZE } from "@voxyl/session";
 import {
   abs,
   attribute,
+  ceil,
   clamp,
   cross,
   Discard,
@@ -54,9 +55,6 @@ export const EMISSIVE_ALPHA = 0;
 
 /** The packed light the light volume stores in light-blocking cells (LightEngine OPAQUE_LIGHT). */
 const OPAQUE_LIGHT = 0xffff;
-
-/** How far a quad is grown past its edges, in sixteenths of a cell (0.003 of a cell). */
-const SEAM_OVERLAP = 0.05;
 
 const unit = (axis: number, sign = 1) =>
   new THREE.Vector3(axis === 0 ? sign : 0, axis === 1 ? sign : 0, axis === 2 ? sign : 0);
@@ -135,13 +133,9 @@ function surface(kind: SurfaceKind) {
     const corner = positionGeometry.xy;
     const u = uniformArray<"vec3">(FACE_U, "vec3").element(face);
     const v = uniformArray<"vec3">(FACE_V, "vec3").element(face);
-    // Each quad is grown by a hair on all sides. Greedy merging leaves T-junctions (a long
-    // edge against two short ones), and the rasteriser doesn't cover both the same way, so
-    // pixels fall in the sliver between and show what is behind the wall. A hair of overlap
-    // closes them; coplanar neighbours agree, so nothing else shows.
     const position = a.xyz
-      .add(u.mul(corner.x.mul(b.x.add(2 * SEAM_OVERLAP)).sub(SEAM_OVERLAP)))
-      .add(v.mul(corner.y.mul(b.y.add(2 * SEAM_OVERLAP)).sub(SEAM_OVERLAP)))
+      .add(u.mul(corner.x.mul(b.x)))
+      .add(v.mul(corner.y.mul(b.y)))
       .div(QUAD_UNITS);
     const normal = uniformArray<"vec3">(FACE_NORMAL, "vec3").element(face);
     return { position, normal, id: b.z, slot: b.w };
@@ -222,8 +216,17 @@ function surfaceColor(sources: ColorSources, s: ReturnType<typeof surface>): THR
   const whole = vec2(dot(u.xyz, p).add(u.w), dot(v.xyz, p).add(v.w)).mul(TEXTURE_SIZE);
   const footprint = max(length(dFdx(whole)), length(dFdy(whole)));
   const lod = clamp(log2(max(footprint, 1)), 0, MAX_TEXTURE_LOD);
-  // Within the tile, clamped so a texel on its far edge never reads the next tile.
-  const uv = clamp(vec2(dot(u.xyz, q).add(u.w), dot(v.xyz, q).add(v.w)), 0, 0.9999);
+  // Within the tile, clamped to the centres of its edge texels (at the mip level in use), so
+  // the far edge never reads the next tile. Clamping to just short of the edge isn't enough:
+  // a GPU rounds a texel coordinate to a few fractional bits before it picks the texel, and
+  // 15.998 rounds up to the next tile's 0. That put a dot of another block's colour on every
+  // cell edge, worst on a dark block beside a pale one in the atlas.
+  const margin = pow(float(2), ceil(lod)).div(2 * TEXTURE_SIZE);
+  const uv = clamp(
+    vec2(dot(u.xyz, q).add(u.w), dot(v.xyz, q).add(v.w)),
+    margin,
+    float(1).sub(margin),
+  );
   const tile = extra.x.round();
   const corner = vec2(tile.mod(ATLAS_COLUMNS), floor(tile.div(ATLAS_COLUMNS)));
   const atlasUv = corner.add(uv).div(vec2(ATLAS_COLUMNS, blocks.atlasRows));

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import type { CameraPreset, Engine, ViewFrame } from "../scene/Engine.ts";
 import { GridPane } from "../views/GridPane.tsx";
 import type { WorldInfo } from "../worlds.ts";
+import { BlockDetails } from "./BlockDetails.tsx";
 import { Compass } from "./Compass.tsx";
 import { northHeading } from "./compass.ts";
 import { KEYMAP, keyLabel } from "./keymap.ts";
@@ -191,6 +192,9 @@ export function Panes({
                   }}
                 >
                   {index === focus && locked && <div className="crosshair" />}
+                  {index === focus && locked && pane.show.details && (
+                    <BlockDetails engine={engine} />
+                  )}
                   {pane.show.compass && (
                     <div className="pane-corner">
                       <Compass

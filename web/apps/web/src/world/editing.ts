@@ -102,6 +102,19 @@ export function aim(
   };
 }
 
+/**
+ * The semantic the crosshair is on: the part the ray met, or the block's. Null on the ground,
+ * or when the cell has no semantic. A lens reads the name and look from the palettes.
+ */
+export function aimedSemantic(world: World, target: Aim): SemanticId | null {
+  if (!target.hit) return null;
+  const state = world.states.get(target.id);
+  if (!state) return null;
+  const met = target.part ? state.parts[target.part.index] : undefined;
+  const id = met ? met.semantic : semanticOfState(state);
+  return id === NO_SEMANTIC ? null : id;
+}
+
 /** The semantic a state is picked as: its block's, or its first part's. */
 export function semanticOfState(state: CellState): SemanticId {
   return state.parts[0]?.semantic ?? state.semantic;

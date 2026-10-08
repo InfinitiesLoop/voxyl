@@ -20,10 +20,8 @@ import {
 import { PaletteDrawer } from "./editor/PaletteDrawer.tsx";
 import { Panes } from "./editor/Panes.tsx";
 import { PasteOverlay } from "./editor/PasteOverlay.tsx";
-import { PrefabSaveDialog } from "./editor/prefabs.tsx";
-import { SchematicDialog } from "./editor/SchematicDialog.tsx";
+import { RegionDialog } from "./editor/RegionDialog.tsx";
 import { SelectionPanel } from "./editor/SelectionPanel.tsx";
-import { SelectionActions } from "./editor/selection-actions.tsx";
 import { Toast } from "./editor/Toast.tsx";
 import { ToolBadge } from "./editor/Tools.tsx";
 import { TopBar } from "./editor/TopBar.tsx";
@@ -227,7 +225,10 @@ export function App() {
   }, [refreshProjects]);
 
   const refreshLibraries = useCallback(async () => {
-    if (engine) setLibraries(await engine.world.request({ type: "libraries" }));
+    if (!engine) return;
+    const list = await engine.world.request({ type: "libraries" });
+    setLibraries(list);
+    engine.libraries.set(list);
   }, [engine]);
 
   useEffect(() => {
@@ -434,8 +435,7 @@ export function App() {
       {engine && <Inventory engine={engine} />}
       {engine && <Toast engine={engine} />}
       {engine && <CutawayPanel engine={engine} />}
-      {engine && <PrefabSaveDialog engine={engine} />}
-      {engine && <SchematicDialog engine={engine} />}
+      {engine && <RegionDialog engine={engine} />}
       {engine && keysOpen && <KeysPanel tool={engine.tool.get()} onClose={closeKeys} />}
       {engine && palettesOpen && <PaletteDrawer engine={engine} />}
       <Hud
@@ -482,10 +482,5 @@ export function App() {
 /** The selection panel and its actions. The panel follows the tool in hand. */
 function EditorTools({ engine }: { engine: Engine }) {
   const tool = useStore(engine.tool);
-  return (
-    <>
-      <SelectionPanel engine={engine} tool={tool} />
-      <SelectionActions engine={engine} />
-    </>
-  );
+  return <SelectionPanel engine={engine} tool={tool} />;
 }

@@ -1,6 +1,5 @@
 import type { PrefabEntry } from "@voxyl/session";
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import type { Engine } from "../scene/Engine.ts";
 import { THUMB_SIZE } from "../world/clipboard.ts";
 import { useStore } from "./useStore.ts";
@@ -93,8 +92,8 @@ export function PrefabGrid({
   if (list.length === 0) {
     return (
       <p className="home-quiet">
-        No prefabs yet. Select part of a build and press Ctrl+P (or Actions → Save as prefab) to
-        keep it here, ready to place in any build.
+        No prefabs yet. Select part of a build and press Ctrl+P (or use the prefab button on the
+        selection panel) to keep it here, ready to place in any build.
       </p>
     );
   }
@@ -122,6 +121,13 @@ export function PrefabGrid({
               <PrefabEdit engine={engine} entry={entry} onDone={() => setEditing(null)} />
             ) : (
               <span className="home-card-tools">
+                <button
+                  type="button"
+                  title="Look at it turning, see what it holds, export it as a schematic"
+                  onClick={() => engine.regionDialog.set({ kind: "details", id: entry.id })}
+                >
+                  Details
+                </button>
                 <button type="button" onClick={() => setEditing(entry.id)}>
                   Rename
                 </button>
@@ -202,104 +208,5 @@ function PrefabEdit({
         </button>
       </span>
     </form>
-  );
-}
-
-/** "Save as a prefab": a name and tags for the selection. Opens from Ctrl+P or Actions. */
-export function PrefabSaveDialog({ engine }: { engine: Engine }) {
-  const open = useStore(engine.prefabDialog);
-  const selection = useStore(engine.selection);
-  const [name, setName] = useState("");
-  const [tags, setTags] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const close = () => engine.prefabDialog.set(false);
-
-  useEffect(() => {
-    if (!open) return;
-    setName("");
-    setTags("");
-    setError(null);
-    setBusy(false);
-    const key = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.stopPropagation();
-      engine.prefabDialog.set(false);
-    };
-    document.addEventListener("keydown", key, true);
-    return () => document.removeEventListener("keydown", key, true);
-  }, [open, engine]);
-
-  if (!open) return null;
-  const save = () => {
-    if (name.trim() === "") return;
-    setBusy(true);
-    void engine.savePrefab(name, tags.split(",")).then(close, (caught: unknown) => {
-      setBusy(false);
-      setError(caught instanceof Error ? caught.message : String(caught));
-    });
-  };
-  const [w, h, d] = selection.bounds
-    ? [
-        selection.bounds[3] - selection.bounds[0] + 1,
-        selection.bounds[4] - selection.bounds[1] + 1,
-        selection.bounds[5] - selection.bounds[2] + 1,
-      ]
-    : [0, 0, 0];
-  return createPortal(
-    <div className="keys">
-      <button type="button" className="keys-backdrop" aria-label="Close" onClick={close} />
-      <form
-        className="keys-card prefab-save"
-        role="dialog"
-        aria-label="Save as a prefab"
-        onSubmit={(e) => {
-          e.preventDefault();
-          save();
-        }}
-      >
-        <header>
-          <strong>Save as a prefab</strong>
-          <span />
-          <button type="button" onClick={close}>
-            Close
-          </button>
-        </header>
-        <p className="home-sub">
-          The {selection.occupied.toLocaleString()} blocks in the selection ({w}×{h}×{d}), with
-          their semantics. A prefab pastes into any build, and takes the build's own look for each
-          semantic it already has.
-        </p>
-        <label>
-          Name
-          <input
-            value={name}
-            aria-label="Name"
-            // biome-ignore lint/a11y/noAutofocus: the dialog opens so the name can be typed
-            autoFocus
-            onChange={(e) => setName(e.target.value)}
-          />
-        </label>
-        <label>
-          Tags
-          <input
-            value={tags}
-            aria-label="Tags, separated by commas"
-            placeholder="tower, factory, …"
-            onChange={(e) => setTags(e.target.value)}
-          />
-        </label>
-        {error && <p className="palette-error">{error}</p>}
-        <footer className="entry-actions">
-          <button type="button" onClick={close}>
-            Cancel
-          </button>
-          <button type="submit" className="primary" disabled={busy || name.trim() === ""}>
-            Save
-          </button>
-        </footer>
-      </form>
-    </div>,
-    document.body,
   );
 }

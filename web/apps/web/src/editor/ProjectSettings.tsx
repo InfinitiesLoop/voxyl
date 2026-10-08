@@ -145,10 +145,10 @@ export function ProjectSettingsDialog({
             title="Write the whole build as a Schematica file for Minecraft"
             onClick={() => {
               onClose();
-              engine.schematicDialog.set("build");
+              engine.regionDialog.set({ kind: "schematic", source: "build" });
             }}
           >
-            Export as a schematic…
+            Export as a schematicâ€¦
           </button>
         </div>
       </div>

@@ -1,6 +1,6 @@
 # Voxyl Web — Editor (Phase 3)
 
-Status: **Every editor feature is built; waiting on the gate's hand-build session** (2026-10-07). Phase 2 left a viewer: real projects in OPFS, textures and
+Status: **Every editor feature is built; waiting on the gate's hand-build session** (2026-10-07), plus, added 2026-10-08, a plan for pre-1.8 and GTNH import that the gate now includes ("Gate item: pre-1.8 and GTNH import"; nothing of it is built). Phase 2 left a viewer: real projects in OPFS, textures and
 block models, the sky, a read-only 2D view. Phase 3 makes it an editor. The gate, from
 [`web-migration.md`](web-migration.md): **a real hand-build session done on the web, and the
 performance targets hold while editing.** It runs entirely in the browser, with no server.
@@ -96,6 +96,8 @@ The 3D view fills the window. Around it, all overlays:
    autosave that writes only chunks changed since the last save.
 9. **The gate.** A real hand-build session, and the performance targets measured while
    editing.
+   Since 2026-10-08 it also includes the plan for pre-1.8 and GTNH import (at the end of this
+   file) being accepted; the import itself is Phase 5 work.
 
 Orbit (turning about a point rather than in place) comes with selection (step 3), where
 there is a point worth orbiting.
@@ -728,3 +730,224 @@ connections and their settings tab.
   window (its grid row is `minmax(0, 1fr)`). Tried and dropped: a dock with the tools as a
   3x2 grid beside the hotbar (buttons too small), and tools under the preview (right column
   crowded). Checked at 1600x900, 1280x720 and 1280x520.
+- **Block details (2026-10-08).** While flying, the focused 3D view shows a small readout
+  centered at the top of the picture: the semantic you are looking at, the palette that
+  semantic lives in (the one its look resolves through, so a derived Wall says Walkway rather
+  than Main), the block it is assigned (or Undecided), the block library that block comes from
+  (Voxyl defaults, or an imported library's own name), and "Glowing" when its look glows. A
+  part shows that part's semantic, and its picture is the part on its own in the semantic's
+  colour; a whole block's picture is the block's model. Show → Block details turns it off per
+  pane (on by default). It reads the palettes; it is a lens.
+
+## Feedback, seventh round (2026-10-08)
+
+Before the gate. Everything here is built and `pnpm check` is green (59 files, 492 tests).
+
+- **One selection panel.** The separate Actions menu is gone. Cut, Copy, Save as prefab and
+  Export schematic are icon buttons across the top of the selection panel, each with its
+  description as the tooltip (`SelectionToolbar`, `action-icons.tsx`). The rest (cut away,
+  show only the selection, fill, replace, clear, re-semantic) sit under "More actions" in the
+  same panel. The panel opens with the Select tool; with another tool in hand the keys
+  (Ctrl+X, C, P) do the same as before.
+- **The "weird character".** `selection-actions.tsx` and `ProjectSettings.tsx` held a lone
+  cp1252 byte where "…" was meant (the housekeeping item in web-migration.md). Both are UTF-8
+  now, and Biome no longer reports an internal error on them.
+- **Tool badge = hotbar slot.** The active-tool box left of the hotbar is a slot's size
+  (76 px wide), shows the tool's name under its icon, and the slots stretch to one height so
+  the badge lines up with them whatever a slot's name does.
+- **One dialog for taking a region apart** (`RegionDialog.tsx`, `engine.regionDialog`).
+  Save as prefab, Export as a schematic (the selection, the whole build or a prefab) and a
+  prefab's new **Details** (Home → Prefabs) are the same dialog with different fields and a
+  different last step:
+  - right: what would be **kept**, turning (drag) and zooming (wheel): the visible cells as lit
+    cubes in their semantics' colours, inside the box (`PiecePreview.tsx`: three's WebGL
+    renderer, loaded when a dialog first opens, on a canvas of its own). **Shaped parts draw
+    as their real shapes** (see "Previews draw shaped parts" below).
+  - left: the include list is the selection panel's own **Manifest** (`Manifest.tsx`):
+    Semantics | Blocks tabs, counts with stacks, Copy. In Semantics a tick per row leaves a
+    semantic out (All / None); Blocks reads what is kept by the block each look names. In a
+    schematic the Blocks tab is the Minecraft material list, and a row says why it is left out.
+  - **Shrink the box to what is kept** turns itself on when something is unticked, until set
+    by hand (Godot's rule). Prefab fields: name (a free "Prefab N" to start), handle (bottom
+    centre or bottom corner), tags. Saving over a name that exists says so, and the button
+    reads Replace. A prefab saved with semantics left out stores only what is kept
+    (`filterPiece` in core: the parts of a cell are filtered, unused semantics dropped and the
+    rest renumbered).
+  - the worker answers all of it with one `regionPlan` request (`schematic: true` adds the
+    file's report and material text). `schematicPlan` and the two old dialogs are gone.
+- **Previews draw shaped parts** (2026-10-08). The prefab, schematic and details previews drew
+  a cell of parts as a whole cube of its first part's colour. Now `pieceSurface` lists a cell
+  that holds parts as those parts (`PieceSurface.parts`: cell, shape, slot, colour per part),
+  never as a cube, and a parts cell no longer counts as solid for hiding its neighbours' faces.
+  `partMesh` (`part-mesh.ts`) builds their triangles from the same two sources the editor
+  draws from: `microBoxes` (a box each) and `archTriangles` (roofs, slopes), flat shaded in the
+  part's semantic colour, in one mesh beside the instanced cubes. A shape the catalog doesn't
+  know still draws as a cube, as the mesher does. A piece with more than `MAX_SURFACE_PARTS`
+  (40,000) parts draws them as cubes again rather than building millions of triangles; past
+  `MAX_SURFACE_CELLS` it still says "too big to draw". Tests: `pieceSurface` (parts listed,
+  unknown shape as cube, fallback), `partMesh` (box = 12 triangles of the right thickness,
+  winding agrees with normals, roofs stay in their cell, sRGB to linear). Checked in the dev
+  server with a probe page of slab, roof tiles, post and hollow panel: all read as their
+  shapes. Model-based shapes (stairs and fences from a look's block model, not parts) still
+  draw as cubes in the preview.
+- **Pinholes: the cause was not the mesh.** Reproduced on the 5x5 patch of dark blocks seen
+  from straight above (headless Edge, `world=city-1m`): 1-pixel dots in a dotted line along
+  every cell edge, a *pale* colour (127,127,118, light grey concrete). Growing the quads 20
+  times as far changed nothing, hiding the ground grid changed nothing, removing the alpha
+  discard changed nothing, and flat colours instead of textures removed them. So they were
+  texture reads that fell into the neighbouring tile of the atlas. The shader clamped a tile's
+  uv to 0.9999, but a GPU rounds a texel coordinate to a few fractional bits before it chooses
+  the texel, so 15.998 of 16 became the next tile's 0. A dark block beside a pale one in the
+  atlas shows it most. **Fix:** clamp to the centres of the edge texels at the mip level in use
+  (`margin` in `surfaceColor`, quad-material.ts). The dots are gone in flat, volume-lit and
+  night views. **`SEAM_OVERLAP` (growing every quad by 0.003 cell) is removed**: it never
+  fixed this, and when lit its sliver reads the neighbouring cell's light. With it removed, a
+  64x48 wall of random dark and grey blocks over a pale back wall (as many T-junctions as the
+  greedy mesher makes) shows no pale pixel at two distances. Headless SwiftShader may not show
+  what a real GPU does, so if cracks come back on the user's, the repro is that wall, and the
+  fix to try is splitting long edges at their T-junctions in the mesher, not growing quads.
+  The golden images were already out of date (the grid fade changed after they were taken:
+  `sky-dawn` differs only along the ground grid). `city-concrete` now differs in 0.16% of
+  pixels, scattered one-pixel dots along cell edges: the pinholes the old golden had.
+  Re-take the goldens (`pnpm golden --update`) once the user has looked.
+- **Deploy.** Checked for the user, see "Production (voxyl.xyz)" in web-migration.md. The
+  workflow no longer goes through `cloudflare/wrangler-action`; it runs `wrangler@4` itself.
+  `gh` is installed (winget, 2.102.0) but not signed in: `gh auth login` is the user's.
+
+## Gate item: pre-1.8 and GTNH import (plan, nothing built)
+
+The user (2026-10-08): add pre-1.8 import and every GTNH healer the Godot app has to the editor
+gate, so people can import from GTNH. Full parity with Godot's features; the implementation is
+greenfield. This is the plan, to be built as Phase 5 work and checked at this gate.
+
+### What Godot does (the features to match)
+
+| Piece | Godot | What it does |
+| --- | --- | --- |
+| Sources | `MCDirSource`, `MCZipSource`, `MCMultiSource`, `MCInstallLocations` | A folder, a jar or zip (central directory read, entries inflated on demand), or many at once, with the known launcher install folders offered |
+| 1.8+ JSON import | `MCImporter` | Blockstates, parent-resolved models, textures, animation strips, tints. The web has this for a vanilla jar (`packages/mc-import`, 1.13+ only) |
+| NEI roster | `NeiRosterImporter` | Pre-1.8 mods have no models, so NEI's own Data Dumps give the confirmed list: `item.csv` (which registry names are blocks, and their mod), `itempanel.csv` (every real subtype: registry, meta, display name) and `block.csv` (every registered block's numeric id, which schematic export needs) |
+| Narrow texture attach | `NeiRosterImporter._attach_texture` | For each confirmed (registry, meta), look in the mod's own `textures/blocks/` and vanilla's shared domain for a file whose name correlates with the registry and, for a packed meta, its number; face suffixes (top, side, bottom, front…) pick faces. No match, or an ambiguous one, means the entry is **dropped**, never guessed; drops are counted per mod |
+| Texture ingest | `MCTexImport` | Copy pixels, average colour, transparency class, `.mcmeta` animation |
+| Healer framework | `MCImportExtension`, `MCHealContext` | A mod-specific pass after a namespace imports, with a toolkit: ensure, composite, crop and solid textures, add a cube or pane, confirm a registry+meta identity, remove blocks, read a text file beside the source. Healed blocks are keyed by registry+meta, so a re-run updates them in place |
+| GTNH pack healer | `GTNHExtension` | Below |
+| Panes | `PaneGeometry` | The five-model multipart a connecting pane needs, lifted from a vanilla pane |
+| Chisel table | `ChiselVariations` | Chisel's meta to texture mapping, decompiled once from its bytecode, group by group, with three groups left out as ambiguous |
+| Saw whitelist | `MicroblocksCfgImporter` | ForgeMultipart's `microblocks.cfg`: which blocks the saw can cut, so an export can warn |
+| Torches | `GTNHExtension._flag_attachments` | Torch-like blocks get the attachment flag (real torch geometry and metadata) |
+
+What `GTNHExtension` heals (one pack script, many namespaces):
+
+- **Shared junk strip** (gregtech, ggfab, etfuturum, catwalks, chisel, ProjRed|Illumination,
+  ExtraUtilities, Ztones): delete blocks whose textures are all GregTech overlays (`*_GLOW`,
+  `ARROW_*`, `PIPE_RESTRICTOR*`, `*_SIGN`, cover overlays). Healed blocks are never touched.
+- **GregTech**: tier casings (ULV to UIV) from `iconsets/MACHINE_<TIER>_{SIDE,TOP,BOTTOM}`;
+  every basic machine, per tier (LV to UMV) and in an Active variant, composited from the hull
+  and the machine's transparent `OVERLAY_<FACE>[_ACTIVE]`; named from `GregTech.lang`
+  (`gt.blockmachines.basicmachine.<folder>.tier.<NN>.name`, with two folder aliases); the
+  cubes this supersedes are removed. GregTech metas can exceed 15 and are stored as they are.
+- **Et Futurum**: concrete and concrete powder, 16 packed metas in vanilla dye order, each a
+  colour-prefixed file in vanilla's shared domain.
+- **Catwalks**: four sturdy rails, support column, builder's scaffold, catwalk (plain, and
+  taped, which is a separate block) and caged ladder, as cube stand-ins (real shapes are
+  future work in Godot too).
+- **Chisel**: every group in the variations table, resolved to a file by a fallback chain
+  (bare, group prefix, side+top pair, `-ctmv`/`-ctmh` pair), about 97% of the table; names
+  from Chisel's lang, including the dyed glass families' own key shape; glass panes, iron bars
+  and the 16 stained panes get real pane geometry; a few controller-icon crops.
+- **ProjectRed Illumination**: the lamp, 32 metas (16 colours, normal and inverted).
+- **Extra Utilities**: Lapis Caelestis, 16 solid colours synthesised (the art is blank).
+- **Ztones**: the three flat lamps drawn as a 0.1-thick ceiling plate.
+- **Attachments** (minecraft, GalacticraftCore, BloodArsenal, and the packs above): torches.
+
+### How the web version does it
+
+Greenfield, in `packages/mc-import` (no DOM or Node APIs; it runs in a worker and writes to
+OPFS libraries), keeping what the web already decided:
+
+- **Output is a `Library`** (blocks, models, textures) per namespace, with the identity in
+  `Block.mc` (`registry`, `meta`, `orient`, `legacyId`, `sawable`), which already exists and
+  already feeds schematic export. Nothing of Minecraft enters a cell, a semantic or a palette
+  (principles 1, 3 and 4). A pre-1.8 block is a cube model with per-face textures, one library
+  block per (registry, meta), named from its display name.
+- **Sources** (`sources/`): one `AssetSource` interface (namespaces, list, has, bytes, text,
+  image). A zip source reads a `File`'s central directory by slicing it (a GTNH `mods/` folder
+  is 300+ jars: only directories are read up front, entries on demand); a directory source over
+  a `FileSystemDirectoryHandle` with a `webkitdirectory` fallback; a multi-source. **The user
+  picks one folder, the launcher instance.** The scan finds `mods/`, `versions/<v>/<v>.jar`,
+  `resourcepacks/`, `config/` (for `microblocks.cfg` and `GregTech/GregTech.lang`, which Godot
+  finds by walking up from the source) and the NEI `dumps/` folder. The handle is kept
+  (IndexedDB), so a re-import asks for permission rather than for the folder again.
+- **Pre-1.8** (`legacy/`): `nei.ts` (the three CSVs), `roster.ts` (the confirmed entries),
+  `attach.ts` (tokenizer, base tokens, face suffixes and the narrow match, ported with tests
+  from the Godot cases), `bind.ts` (a cube from resolved faces), `microblocks-cfg.ts`. Same
+  rule as Godot: no confirmed match means the entry is left out and counted.
+- **Healers** (`extensions/`): `Extension { handles(ns), heal(ctx) }` and a `HealContext` over
+  RGBA arrays in memory (`composite`, `crop`, `solid`, `addCube`, `addPane`, `confirm`,
+  `remove`, `siblingText`, `existingFor`), so they are pure functions that test in Node with no
+  canvas. Libraries hold raw RGBA, so there is no PNG encode step as there is in Godot. One
+  file per mod (`gregtech.ts`, `etfuturum.ts`, `catwalks.ts`, `chisel.ts`, `projred.ts`,
+  `extrautils.ts`, `ztones.ts`), plus `junk.ts`, `attachments.ts`, `panes.ts` (the pane boxes
+  become a blockstate `multipart`, which the mesher already evaluates), a `gtnh.ts` that
+  registers them as a pack, and the Chisel table as a data file (`chisel-variations.ts`).
+  Tables (tiers, dye colours, lamp colours, lang key shapes) stay data, so a later pack is a
+  new file, not a change to the framework.
+- **Run it** (`import-service.ts`): plan (what the sources offer), select, run with progress
+  and cancel, in an import worker beside the world worker; results land per namespace library,
+  warnings listed per mod. The UI is Home → Blocks → "Import Minecraft": one entry point and
+  two routes chosen by what it finds (a 1.13+ jar: today's path; a legacy instance: the NEI
+  route, which says how to make the dumps and refuses a folder without `block.csv`, as Godot
+  does).
+- **Not ported until the editor has them**: torch *geometry and placement* (the web has no
+  attachment kinds yet; the heal records the flag on the block and nothing reads it until that
+  feature lands) and animated textures (Polish).
+
+### Order, and how each step is proven
+
+1. Sources and a zip reader with random access. A probe opens the user's real GTNH 2.9
+   instance (`%APPDATA%/PrismLauncher/instances/GTNH 2.9 Beta 2`) and reports time and memory.
+2. Move today's modern-jar import onto the sources, with no change in behaviour (existing tests).
+3. NEI roster to plain cubes. **Parity harness**: the Godot importer, run headless on the same
+   instance, writes a manifest (registry, meta, display, texture refs, drop reasons) per mod;
+   the web importer must produce the same manifest, and each difference is read and either
+   fixed or recorded as intended. This is also the proof for every later step.
+4. Healer framework, junk strip, attachments flag, `microblocks.cfg`.
+5. GregTech (casings, machines, lang), then Et Futurum, Catwalks, ProjectRed, Extra Utilities
+   and Ztones, each against the manifest.
+6. Chisel with its table and pane geometry, then the dyed glass names.
+7. The import UI. Schematic export of a GTNH build checked against the Godot export of the
+   same build (ids, metas, legacy ids), including a GregTech machine over 15 and an `orient`
+   block.
+
+**The gate for this item:** the user's own GTNH 2.9 instance imports in the browser without
+freezing the editor; per-mod counts match Godot's manifest, or each difference is explained;
+twelve blocks the user picks look like the game; and the exported schematic of a small build
+loads in the game. Schematic *import* (with "north is north") stays a separate Phase 5 step and
+must follow `turnsBetween`.
+
+### Decided with the user (2026-10-08)
+
+1. **Whole instance folder only**, not single jars and zips. Simpler to explain.
+2. **Chisel table: port it as data**, and leave a comment on the table saying it was decompiled
+   once and its extractor is not in the repo (so the next Chisel build means redoing that by
+   hand). No `tools/` extractor for now.
+3. **Healers stay code.** Fold the table-shaped ones into data only if a second pack wants
+   them.
+
+### Added to the import UI (not built)
+
+- **Common locations.** The folder step offers places people keep Minecraft: the vanilla
+  `.minecraft` (and its `versions/`), CurseForge instances, Prism Launcher instances (and
+  MultiMC), by platform (Windows `%APPDATA%`, macOS `~/Library/Application Support`, Linux
+  `~/.minecraft`, `~/.local/share/PrismLauncher`). A browser can't read those paths itself:
+  the File System Access picker takes a `startIn` of a well-known directory (`documents`,
+  `downloads`...), not an arbitrary path, so the picker opens at the nearest well-known one
+  and the dialog shows the exact path to paste or navigate to, with a copy button. Prism and
+  CurseForge instance folders are listed by name once the user has picked their `instances/`
+  root once (the handle is remembered).
+- **Remember the last folder, everywhere a folder is asked for.** Any dialog that asks for a
+  folder (importer, schematic or prefab export where a directory is chosen) starts the picker
+  where the last one was, per purpose: pass the stored `FileSystemDirectoryHandle` as
+  `startIn` (the picker also supports an `id` that remembers a directory by itself, which is
+  the cheap first step) and keep the handle in IndexedDB beside the importer's. Falls back
+  quietly where the picker has no `startIn` (the `webkitdirectory` fallback can't).

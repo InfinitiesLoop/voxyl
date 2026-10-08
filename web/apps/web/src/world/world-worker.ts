@@ -22,6 +22,7 @@ import {
   type CellStateTable,
   cutPiece,
   type Command as EditCommand,
+  filterPiece,
   IDENTITY,
   MAX_REGION_CELLS,
   type Piece,
@@ -61,6 +62,7 @@ import {
   stateLooks,
   WorldSession,
 } from "@voxyl/session";
+import { shapeName } from "@voxyl/shapes";
 import { outlineOf } from "../editor/outline.ts";
 import { planeToWorld } from "../views/plane.ts";
 import {
@@ -75,10 +77,12 @@ import {
 } from "../worlds.ts";
 import {
   defaultAnchor,
+  emptySurface,
   mirrorOf,
   type PasteArgs,
   type PieceCells,
   pieceCells,
+  pieceSurface,
   pieceThumbnail,
   placedBox,
   placedPositions,
@@ -89,6 +93,7 @@ import {
   addPaletteCommand,
   addSemanticCommand,
   aim,
+  aimedSemantic,
   clearSelectionCommand,
   commandId,
   describeSemanticCommand,
@@ -143,6 +148,7 @@ import {
   type RayHit,
   type Replies,
   type SchematicSource,
+  type SelectionRow,
   type ToWorld,
   type Vec3,
 } from "./protocol.ts";
@@ -639,6 +645,7 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
           grid: null,
           aimed: null,
           pasteGhost: pasteGhostAt(openProject(), at, command.paste),
+          semantic: null,
         } satisfies AimView;
       }
       let preview: Int32Array | null = null;
@@ -661,6 +668,7 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
         ghost,
         grid,
         aimed: met ? { shape: met.shape, slot: met.slot } : null,
+        semantic: aimedSemantic(world(), target),
         pasteGhost: command.paste
           ? (() => {
               const at = command.paste.at ?? target.place;
@@ -737,25 +745,91 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
         );
       }
       await librariesLoaded;
-      const colors = pieceColors(piece);
-      const thumb = pieceThumbnail(piece, (n) => colors[n] ?? 0x808080);
-      return prefabStore.save(piece, { name: command.name, tags: command.tags, thumb });
+      const filtered = filterPiece(piece, {
+        exclude: new Set(command.exclude ?? []),
+        trim: command.trim === true,
+      });
+      if (!filtered) throw new Error("Nothing is left to save");
+      const anchor =
+        command.handle === "bottom-corner"
+          ? ([0, 0, 0] as const)
+          : command.handle === "bottom-center" || filtered !== piece
+            ? defaultAnchor(filtered.size)
+            : null;
+      const kept = anchor ? { ...filtered, anchor } : filtered;
+      const colors = pieceColors(kept);
+      const thumb = pieceThumbnail(kept, (n) => colors[n] ?? 0x808080);
+      const entry = await prefabStore.save(kept, { name: command.name, tags: command.tags, thumb });
+      if (command.replace) {
+        const same = command.name.trim().toLowerCase();
+        for (const other of await prefabStore.list()) {
+          if (other.id !== entry.id && other.name.trim().toLowerCase() === same) {
+            await prefabStore.delete(other.id);
+          }
+        }
+      }
+      return entry;
     }
-    case "schematicPlan": {
+    case "regionPlan": {
       const { piece, name } = await schematicPiece(command.source);
       const exclude = new Set(command.exclude);
       const identify = identifyBlock();
-      const options = { identify, exclude, trim: command.trim };
-      const materials = materialRows(piece, identify, exclude);
-      const labels: Record<string, string> = {};
-      for (const row of materials) if (row.block) labels[row.block] = blockLabel(row.block);
+      const colors = pieceColors(piece);
+      const css = (color: number | undefined) =>
+        `#${(color ?? 0x808080).toString(16).padStart(6, "0")}`;
+      const semantics = semanticRows(piece, identify).map((row) => ({
+        semantic: row.semantic,
+        name: row.name,
+        color: css(colors[row.semantic]),
+        count: row.count,
+        blocks: row.blocks,
+        parts: row.parts,
+        status: row.status,
+        block: row.block,
+      }));
+      const kept = filterPiece(piece, { exclude, trim: command.trim });
+      const keptColors = kept ? pieceColors(kept) : [];
+      const surface = kept ? pieceSurface(kept, (n) => keptColors[n] ?? 0x808080) : emptySurface();
+      const colorOfName = new Map<string, string>();
+      for (const [i, semantic] of (kept?.semantics ?? []).entries()) {
+        colorOfName.set(semantic.name, css(keptColors[i + 1]));
+      }
+      const materials = kept ? materialRows(kept, identify) : [];
+      const numberOfName = new Map<string, number>();
+      for (const [i, semantic] of (kept?.semantics ?? []).entries()) {
+        numberOfName.set(semantic.name, i + 1);
+      }
       return {
         name,
-        semantics: semanticRows(piece, identify),
-        materials,
-        materialText: materialText(materials, blockLabel),
-        labels,
-        report: planExport(piece, { ...options, dryRun: true }).report,
+        north: piece.north,
+        semantics,
+        size: kept?.size ?? ([0, 0, 0] as const),
+        cells: surface.cells,
+        materials: materials.map((row): SelectionRow => {
+          const names = Object.keys(row.semantics);
+          const first = names[0] ?? "";
+          const detail = [
+            row.shape ? `${shapeName(row.shape)}${row.glow ? " (glow)" : ""}` : "",
+            row.block && names.length > 1 ? names.join(", ") : "",
+          ]
+            .filter((part) => part !== "")
+            .join(" · ");
+          return {
+            semantic: numberOfName.get(first) ?? 0,
+            name: row.block ? blockLabel(row.block) : `Undecided (${names.join(", ")})`,
+            color: colorOfName.get(first) ?? "#808080",
+            count: row.count,
+            ...(detail !== "" && { detail }),
+          };
+        }),
+        surface,
+        ...(command.schematic && {
+          schematic: {
+            materialText: materialText(materials, blockLabel),
+            report: planExport(piece, { identify, exclude, trim: command.trim, dryRun: true })
+              .report,
+          },
+        }),
       };
     }
     case "schematicFile": {
