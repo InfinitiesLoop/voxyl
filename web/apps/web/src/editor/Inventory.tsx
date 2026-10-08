@@ -11,7 +11,7 @@ import { PrefabGrid } from "./prefabs.tsx";
 import { SemanticEditor } from "./SemanticEditor.tsx";
 import { menuAnchor, SemanticMenu, type SemanticMenuTarget } from "./SemanticMenu.tsx";
 import { ShapeIcon } from "./ShapeIcon.tsx";
-import { ToolStrip } from "./Tools.tsx";
+import { ToolButtons, ToolNotes } from "./Tools.tsx";
 import { useStore } from "./useStore.ts";
 
 /**
@@ -20,7 +20,7 @@ import { useStore } from "./useStore.ts";
  * hotbar: opening selects that slot's semantic and its palette, and choosing another slot
  * does too. Clicking a semantic fills the chosen slot and moves to the next. A search finds
  * semantics by name, what they are for, or block. "+" opens the entry editor. Right-click
- * offers Edit or Delete. The tools sit beside its hotbar.
+ * offers Edit or Delete. The left column holds Prefabs, the tools and the palettes; what the tool in hand does sits beside the hotbar.
  */
 export function Inventory({ engine }: { engine: Engine }) {
   const open = useStore(engine.inventoryOpen);
@@ -122,32 +122,40 @@ export function Inventory({ engine }: { engine: Engine }) {
           </button>
         </header>
         <div className="inventory-body">
-          <div className="inventory-palettes" role="listbox" aria-label="Palettes">
-            {shown.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                role="option"
-                aria-selected={item.id === palette?.id}
-                className={item.id === palette?.id ? "active" : undefined}
-                onClick={() => {
-                  setPrefabsPage(false);
-                  setPaletteId(item.id);
-                }}
-              >
-                {item.name}
-              </button>
-            ))}
+          <div className="inventory-side">
             <button
               type="button"
-              role="option"
-              aria-selected={prefabsPage}
-              className={prefabsPage ? "active" : undefined}
+              className="inventory-prefabs-button"
+              aria-pressed={prefabsPage}
               title="Pieces kept from builds. Click one to paste it."
               onClick={() => setPrefabsPage(true)}
             >
               Prefabs
             </button>
+            <section className="inventory-tools">
+              <p className="inventory-side-label">Tools</p>
+              <ToolButtons engine={engine} />
+            </section>
+            <section className="inventory-palette-list">
+              <p className="inventory-side-label">Palettes</p>
+              <div className="inventory-palettes" role="listbox" aria-label="Palettes">
+                {shown.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    role="option"
+                    aria-selected={!prefabsPage && item.id === palette?.id}
+                    className={!prefabsPage && item.id === palette?.id ? "active" : undefined}
+                    onClick={() => {
+                      setPrefabsPage(false);
+                      setPaletteId(item.id);
+                    }}
+                  >
+                    {item.name}
+                  </button>
+                ))}
+              </div>
+            </section>
           </div>
           {prefabsPage ? (
             <div className="inventory-grid inventory-prefabs">
@@ -238,7 +246,7 @@ export function Inventory({ engine }: { engine: Engine }) {
           </aside>
         </div>
         <footer className="inventory-foot">
-          <ToolStrip engine={engine} />
+          <ToolNotes engine={engine} />
           <HotbarBar hotbar={engine.hotbar} engine={engine} />
         </footer>
       </div>

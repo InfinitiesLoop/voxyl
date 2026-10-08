@@ -43,35 +43,40 @@ function toolKeys(): string {
 }
 
 /**
- * The tools, inside the inventory beside its hotbar (as in the Godot app): the pointer stays
- * with the view while flying, and Q (or Num *) steps through them. Below the buttons, what
- * the tool in hand does, and its options.
+ * The tools, inside the inventory (as in the Godot app): the pointer stays with the view
+ * while flying, and Q (or Num *) steps through them.
  */
-export function ToolStrip({ engine }: { engine: Engine }) {
+export function ToolButtons({ engine }: { engine: Engine }) {
+  const tool = useStore(engine.tool);
+  return (
+    <div className="tool-buttons" role="toolbar" aria-label="Tools">
+      {TOOLS.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          aria-label={item.label}
+          aria-pressed={tool === item.id}
+          title={`${item.label}. ${item.hint} (${toolKeys()} steps through the tools)`}
+          onClick={blurAfter(() => engine.setTool(item.id))}
+        >
+          <ToolIcon id={item.id} />
+          <span className="tool-name">{item.label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** What the tool in hand does, and its options. */
+export function ToolNotes({ engine }: { engine: Engine }) {
   const tool = useStore(engine.tool);
   const brush = useStore(engine.brush);
   const connectAny = useStore(engine.connectAny);
   const farSide = useStore(engine.farSide);
   const current = TOOLS.find((item) => item.id === tool);
   return (
-    <div className="tool-strip">
-      <div className="tool-strip-buttons" role="toolbar" aria-label="Tools">
-        {TOOLS.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            aria-label={item.label}
-            aria-pressed={tool === item.id}
-            title={`${item.label}. ${item.hint} (${toolKeys()} steps through the tools)`}
-            onClick={blurAfter(() => engine.setTool(item.id))}
-          >
-            <ToolIcon id={item.id} />
-            <span className="tool-strip-name">{item.label}</span>
-          </button>
-        ))}
-      </div>
-      <p className="tool-strip-hint">{current?.hint}</p>
-      {/* One row tall whatever the tool, so choosing tools never moves the hotbar. */}
+    <div className="tool-notes">
+      <p className="tool-hint">{current?.hint}</p>
       <div className="tool-options-slot">
         {usesBrush(tool) && (
           <div className="tool-options">

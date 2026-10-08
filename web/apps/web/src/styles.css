@@ -989,6 +989,7 @@ button[aria-pressed="true"] {
   z-index: 8;
   inset: 0;
   display: grid;
+  grid-template-rows: minmax(0, 1fr);
   place-items: center;
   padding: 28px;
 }
@@ -1336,27 +1337,35 @@ button[aria-pressed="true"] {
   height: 22px;
 }
 
-/* The inventory's footer: the tools over the hotbar (side by side they need too much width). */
+/* The inventory's footer: the hotbar, with what the tool in hand does beside it. */
 .inventory-foot {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px 16px;
   align-items: center;
+  justify-content: center;
   padding-top: 10px;
   border-top: 1px solid var(--line);
 }
 
-.tool-strip {
+.tool-notes {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  width: min(560px, 100%);
+  gap: 4px;
+  min-width: 0;
+}
+
+/* A fixed size, so choosing a tool (a longer hint, a row of options) never moves the hotbar. */
+.inventory-foot .tool-notes {
+  flex: none;
+  width: 340px;
+  height: 92px;
 }
 
 .tool-options-slot {
   display: flex;
   align-items: center;
-  height: 26px;
+  min-height: 26px;
 }
 
 .tool-options {
@@ -1385,43 +1394,95 @@ button[aria-pressed="true"] {
   font-weight: 600;
 }
 
-.tool-strip-buttons {
+/* Tools as a vertical list: an icon and its name on one line. */
+.tool-buttons {
   display: flex;
-  gap: 4px;
-}
-
-.tool-strip-buttons button {
-  display: flex;
-  flex: 1;
   flex-direction: column;
   gap: 4px;
+}
+
+.tool-buttons button {
+  flex: none;
+  display: flex;
+  gap: 8px;
   align-items: center;
-  justify-content: center;
   min-width: 0;
-  height: 68px;
-  padding: 4px 2px;
+  height: 36px;
+  padding: 0 8px;
+  text-align: left;
 }
 
-.tool-strip-buttons .tool-icon {
-  width: 32px;
-  height: 32px;
+.tool-buttons .tool-icon {
+  flex: none;
+  width: 22px;
+  height: 22px;
 }
 
-.tool-strip-name {
-  max-width: 100%;
-  font-size: 11px;
-  line-height: 1.1;
-  text-align: center;
+.tool-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* The longest hint (Paste) fits, so the strip is one height for every tool. */
-.tool-strip-hint {
-  height: 5.2em;
-  overflow-y: auto;
+.tool-hint {
   margin: 0;
   color: var(--text-quiet);
   font-size: 11.5px;
   line-height: 1.3;
+}
+
+.inventory-foot .tool-hint {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* The left column: Prefabs, then the tools, then the palettes. The tools and the palettes
+   scroll on their own, the tools keeping their height as long as the column has it. */
+.inventory-side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 160px;
+  min-height: 0;
+}
+
+.inventory-prefabs-button {
+  flex: none;
+  text-align: left;
+}
+
+.inventory-tools,
+.inventory-palette-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.inventory-tools {
+  flex: 0 1 auto;
+}
+
+.inventory-palette-list {
+  flex: 1 1 0;
+  min-height: 72px;
+}
+
+.inventory-tools .tool-buttons,
+.inventory-palette-list .inventory-palettes {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.inventory-side-label {
+  margin: 0 0 4px;
+  color: var(--text-quiet);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 /* The key bindings panel. */
