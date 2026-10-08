@@ -505,10 +505,185 @@ button[aria-pressed="true"] {
 }
 
 .palette-scroll {
+  display: flex;
   flex: 1;
+  flex-direction: column;
+  gap: 18px;
   min-height: 0;
   overflow: auto;
   padding: 10px 12px 88px;
+}
+
+.palette-heading,
+.palette-new-part h4,
+.palette-new-form h4 {
+  margin: 0 0 6px;
+  color: var(--text-quiet);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.palette-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.palette-row,
+.palette-offer {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #1f2328;
+}
+
+.palette-row-main,
+.palette-offer {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+}
+
+.palette-row-name {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+}
+
+.palette-title {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--text);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-meta {
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--text-quiet);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-offer-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.palette-link {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  color: #4b5563;
+}
+
+.palette-link svg {
+  width: 16px;
+  height: 16px;
+}
+
+.palette-link.on {
+  color: #60a5fa;
+}
+
+.palette-remove {
+  flex: none;
+  padding: 1px 6px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-quiet);
+}
+
+.palette-remove:hover {
+  color: #f0a8a8;
+}
+
+.palette-row-detail {
+  padding: 2px 8px 8px 34px;
+}
+
+.palette-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.palette-actions button {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+.palette-detail-note {
+  margin: 6px 0 0;
+  color: var(--text-quiet);
+  font-size: 12px;
+}
+
+.palette-new {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgb(18 20 24 / 0.7);
+}
+
+.palette-new-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.palette-new-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.palette-new-form h4 {
+  margin: 0;
+}
+
+.palette-new-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--text-quiet);
+  font-size: 12px;
+}
+
+.palette-new-form select {
+  max-width: 100%;
+  font: inherit;
+}
+
+.palette-new-form button {
+  align-self: flex-start;
+}
+
+.palette-offer-note {
+  margin: 0;
+  color: var(--text-quiet);
+  font-size: 12px;
 }
 
 .palette-note,
@@ -522,25 +697,9 @@ button[aria-pressed="true"] {
   color: #f0a8a8;
 }
 
-.palette-add,
-.semantic-add,
-.look-block,
-.palette-name {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-
-.palette-add,
-.semantic-add {
-  margin: 8px 0;
-}
-
-.palette-add input,
 .semantic-add input,
-.look-editor input[type="text"],
-.look-editor input:not([type="color"]):not([type="checkbox"]),
-.palette-name input,
+.palette-row input,
+.palette-new-form input,
 .block-picker input {
   flex: 1;
   min-width: 0;
@@ -552,39 +711,9 @@ button[aria-pressed="true"] {
   padding: 4px 6px;
 }
 
-.palette-add select,
-.block-picker select {
-  max-width: 140px;
-  font: inherit;
-}
-
-.palette-section {
-  margin-top: 12px;
-  padding-top: 8px;
-  border-top: 1px solid var(--line);
-}
-
-.palette-name {
-  margin-bottom: 6px;
-}
-
-.name-button {
-  background: transparent;
-  border-color: transparent;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.extends,
 .semantic-from {
   color: var(--text-quiet);
   font-size: 11px;
-}
-
-.semantic-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
 }
 
 .semantic-row {
@@ -614,28 +743,9 @@ button[aria-pressed="true"] {
   color: var(--text);
 }
 
-.look-editor {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px 14px;
-  border-top: 1px solid var(--line);
-  background: rgb(18 20 24 / 0.92);
-}
-
-.look-editor label {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.look-block-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.block-picker select {
+  max-width: 140px;
+  font: inherit;
 }
 
 .look-glow {
@@ -1238,7 +1348,7 @@ button[aria-pressed="true"] {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  width: min(420px, 46vw);
+  width: min(500px, 50vw);
 }
 
 .tool-options {
@@ -1273,12 +1383,27 @@ button[aria-pressed="true"] {
 }
 
 .tool-strip-buttons button {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  padding: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  height: 68px;
+  padding: 4px 2px;
+}
+
+.tool-strip-buttons .tool-icon {
+  width: 32px;
+  height: 32px;
+}
+
+.tool-strip-name {
+  max-width: 100%;
+  font-size: 11px;
+  line-height: 1.1;
+  text-align: center;
 }
 
 .tool-strip-hint {
@@ -1664,8 +1789,7 @@ button.big {
 }
 
 .palette-editor input:not([type="color"]):not([type="checkbox"]),
-.palette-editor textarea,
-.look-editor textarea {
+.palette-editor textarea {
   padding: 5px 8px;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -1712,22 +1836,6 @@ button.big {
   flex: none;
   width: 18px;
   height: 18px;
-}
-
-.palette-use {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-bottom: 10px;
-  color: var(--text-quiet);
-  font-size: 12px;
-}
-
-.palette-share {
-  align-self: flex-start;
-  margin: 2px 0 6px;
-  padding: 2px 8px;
-  font-size: 12px;
 }
 
 button.brand {
@@ -2221,22 +2329,136 @@ button.brand {
   max-width: 190px;
 }
 
-/* Pasting and prefabs. */
-.paste-options {
-  flex-wrap: wrap;
-  row-gap: 4px;
+/* Pasting and prefabs. The paste panel is small and sits in the corner, so the result stays
+   in view while it is adjusted. */
+.paste-overlay {
+  position: absolute;
+  z-index: 6;
+  right: 12px;
+  bottom: 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 300px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
 }
 
-.paste-offset {
-  display: inline-flex;
+.paste-overlay header {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.paste-title {
+  color: #fbbf24;
+  font-size: 13px;
+}
+
+.paste-name {
+  overflow: hidden;
+  color: var(--text-quiet);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.paste-overlay.quiet {
   gap: 2px;
+  background: rgb(26 29 34 / 0.78);
+  pointer-events: none;
+}
+
+.paste-state,
+.paste-keys {
+  color: var(--text-quiet);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.paste-locked {
+  color: #fbbf24;
+}
+
+.paste-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.paste-row.offsets {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.paste-row output {
+  min-width: 18px;
+  text-align: center;
+}
+
+.paste-row label {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  color: var(--text-quiet);
+}
+
+.paste-overlay button {
+  padding: 3px 9px;
+  font-size: 12px;
+}
+
+.paste-offset button {
+  width: 32px;
+  height: 28px;
+  padding: 0;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.paste-overlay footer {
+  display: flex;
+  gap: 4px;
+  justify-content: space-between;
+}
+
+/* One row per axis: a coloured letter, then minus, the shift, plus. */
+.paste-offset {
+  display: grid;
+  grid-template-columns: 22px 32px 1fr 32px;
+  gap: 6px;
   align-items: center;
 }
 
+.paste-offset .axis {
+  font-weight: 700;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.paste-offset .axis.x {
+  color: #f87171;
+}
+
+.paste-offset .axis.y {
+  color: #4ade80;
+}
+
+.paste-offset .axis.z {
+  color: #60a5fa;
+}
+
 .paste-offset output {
-  min-width: 18px;
+  min-width: 0;
   text-align: center;
   color: var(--text);
+  font-size: 13px;
 }
 
 .prefab-grid {

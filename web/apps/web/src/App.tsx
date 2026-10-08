@@ -18,6 +18,7 @@ import {
 } from "./editor/layout.ts";
 import { PaletteDrawer } from "./editor/PaletteDrawer.tsx";
 import { Panes } from "./editor/Panes.tsx";
+import { PasteOverlay } from "./editor/PasteOverlay.tsx";
 import { PrefabSaveDialog } from "./editor/prefabs.tsx";
 import { SelectionPanel } from "./editor/SelectionPanel.tsx";
 import { SelectionActions } from "./editor/selection-actions.tsx";
@@ -400,6 +401,7 @@ export function App() {
         {engine && (
           <Panes engine={engine} info={info} layout={layout} onLayout={setLayout} locked={locked} />
         )}
+        {engine && <PasteOverlay engine={engine} />}
         {engine && (
           <HotbarBar hotbar={engine.hotbar} engine={engine} aside={<ToolBadge engine={engine} />} />
         )}

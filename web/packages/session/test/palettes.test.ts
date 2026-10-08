@@ -32,3 +32,26 @@ describe("PaletteStore", () => {
     await expect(store.save({ ...palette, key: "../x" })).rejects.toThrow();
   });
 });
+
+describe("PaletteStore.seed", () => {
+  const starters = [
+    { key: "starter-a", name: "A", semantics: [{ key: "w", name: "Wall" }] },
+    { key: "starter-b", name: "B", semantics: [{ key: "w", name: "Wall" }] },
+  ];
+
+  it("puts the starters in once, and a deleted one stays deleted", async () => {
+    const store = new PaletteStore(new MemoryFolder());
+    await store.seed(starters);
+    expect((await store.list()).map((p) => p.key).sort()).toEqual(["starter-a", "starter-b"]);
+    await store.delete("starter-a");
+    await store.seed(starters);
+    expect((await store.list()).map((p) => p.key)).toEqual(["starter-b"]);
+  });
+
+  it("leaves a palette the user already has under the same key alone", async () => {
+    const store = new PaletteStore(new MemoryFolder());
+    await store.save({ key: "starter-a", name: "Mine", semantics: [] });
+    await store.seed(starters);
+    expect((await store.load("starter-a"))?.name).toBe("Mine");
+  });
+});

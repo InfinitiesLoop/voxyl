@@ -25,7 +25,13 @@ import {
   type Project,
   raycast,
 } from "@voxyl/core";
-import { CITY_THEME_KEY, cityThemeOf, cityThemePalette } from "@voxyl/fixtures";
+import {
+  CITY_PARTS,
+  CITY_THEME_KEY,
+  cityThemeOf,
+  cityThemePalette,
+  partKey,
+} from "@voxyl/fixtures";
 import { importJar } from "@voxyl/mc-import";
 import type { ModelShape, StateShape } from "@voxyl/mesher";
 import {
@@ -65,6 +71,7 @@ import {
   placedBox,
   placedPositions,
 } from "./clipboard.ts";
+import { DEFAULT_PALETTES } from "./default-palettes.ts";
 import {
   type Aim,
   addPaletteCommand,
@@ -85,6 +92,7 @@ import {
   paletteInfo,
   partGhost,
   placeCommand,
+  removePaletteCommand,
   removeSemanticCommand,
   renameCommand,
   renamePaletteCommand,
@@ -240,7 +248,7 @@ function changed(): void {
   if (autosave !== null) clearTimeout(autosave);
   autosave = setTimeout(() => {
     autosave = null;
-    if (project && saved !== null) void store.save(project).catch(reportSaveError);
+    autosaveNow();
   }, AUTOSAVE_MS);
 }
 
@@ -248,12 +256,54 @@ function reportSaveError(error: unknown): void {
   console.error("Saving the project failed", error);
 }
 
+/** Lets commands that arrived while a save was working run before it carries on. */
+function breathe(): Promise<void> {
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => {
+      channel.port1.close();
+      resolve();
+    };
+    channel.port2.postMessage(null);
+  });
+}
+
+// An autosave in flight, and whether the project changed again while it ran.
+let autosaving: Promise<void> | null = null;
+let autosaveAgain = false;
+
+/**
+ * Saves a snapshot of the project (a fork shares its chunks) in slices, so a big build's save
+ * doesn't hold up the next command, an undo most of all.
+ */
+function autosaveNow(): void {
+  if (autosaving) {
+    autosaveAgain = true;
+    return;
+  }
+  if (!project || saved === null) return;
+  autosaving = store
+    .save(project.fork(), Date.now(), breathe)
+    .then(() => undefined, reportSaveError)
+    .then(() => {
+      autosaving = null;
+      if (autosaveAgain) {
+        autosaveAgain = false;
+        autosaveNow();
+      }
+    });
+}
+
 /** Saves now if an autosave is waiting (before another project replaces this one). */
 async function flushAutosave(): Promise<void> {
-  if (autosave === null) return;
-  clearTimeout(autosave);
+  const waiting = autosave !== null || autosaveAgain;
+  if (autosave !== null) clearTimeout(autosave);
   autosave = null;
-  if (project && saved !== null) await store.save(project).catch(reportSaveError);
+  autosaveAgain = false;
+  await autosaving;
+  if (waiting && project && saved !== null) {
+    await store.save(project, Date.now(), breathe).catch(reportSaveError);
+  }
 }
 
 async function open(command: Extract<Command, { type: "load" }>): Promise<WorldInfo> {
@@ -315,7 +365,7 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       return open(command);
     case "save": {
       if (!project) throw new Error("no project open");
-      const entry = await store.save(project);
+      const entry = await store.save(project, Date.now(), breathe);
       saved = entry.id;
       return entry;
     }
@@ -354,6 +404,8 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       return runEdit(setLookCommand(openProject(), command.semantic, command.look)) >= 0;
     case "addPalette":
       return runEdit(addPaletteCommand(openProject(), command.name, command.extends)) >= 0;
+    case "removePalette":
+      return runEdit(removePaletteCommand(openProject(), command.palette)) >= 0;
     case "renamePalette":
       return runEdit(renamePaletteCommand(openProject(), command.palette, command.name)) >= 0;
     case "findBlocks": {
@@ -403,6 +455,7 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       return null;
     case "sharedPalettes": {
       await librariesLoaded;
+      await paletteStore.seed(DEFAULT_PALETTES);
       return (await paletteStore.list()).map((p) => ({
         key: p.key,
         name: p.name,
@@ -534,7 +587,12 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       if (!project || !linked?.linked) return { applied: false, relit: false };
       // A newer version of the same shared palette: looks change, semantic ids and cells don't.
       const version = linked.linked.version + 1;
-      const args = cityThemePalette(themeAt(command.theme), version);
+      // A decorated city's parts are in the palette; keep them skinned with the rest.
+      const registry = project.semantics;
+      const parts = registry
+        .semanticsIn(linked.id)
+        .some((id) => registry.get(id).sharedKey === partKey(CITY_PARTS[0]));
+      const args = cityThemePalette(themeAt(command.theme), version, parts);
       const result = project.run({ id: `theme-${version}`, kind: "palette_sync", args });
       if (result.report.registryChanged) changed();
       return { applied: true, relit: session?.setMaterials(materials) ?? false };
@@ -549,7 +607,22 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       );
     case "aim": {
       const target = aim(world(), command.origin, command.dir, command.reach, hiddenNow());
-      if (!target) return null;
+      if (!target) {
+        // A locked paste does not need the ray to land: its ghost stays where it was pinned.
+        const at = command.paste?.at;
+        if (!command.paste || !at) return null;
+        return {
+          hit: null,
+          id: 0,
+          place: null,
+          face: [0, 1, 0],
+          hitY: 0,
+          preview: null,
+          ghost: null,
+          aimed: null,
+          pasteGhost: pasteGhostAt(openProject(), at, command.paste),
+        } satisfies AimView;
+      }
       let preview: Int32Array | null = null;
       if (command.tool) {
         const cells = toolCells(world(), { ...command.tool, aim: target });
@@ -568,8 +641,12 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
         preview,
         ghost,
         aimed: met ? { shape: met.shape, slot: met.slot } : null,
-        pasteGhost:
-          command.paste && target.place ? pasteGhostAt(open, target.place, command.paste) : null,
+        pasteGhost: command.paste
+          ? (() => {
+              const at = command.paste.at ?? target.place;
+              return at ? pasteGhostAt(open, at, command.paste) : null;
+            })()
+          : null,
       } satisfies AimView;
     }
     case "toolEdit": {
@@ -599,12 +676,13 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       clipboard = null;
       return null;
     case "paste": {
-      const target = aim(world(), command.origin, command.dir, command.reach, hiddenNow());
-      if (!clipboard || !target?.place) return 0;
+      const place =
+        command.at ?? aim(world(), command.origin, command.dir, command.reach, hiddenNow())?.place;
+      if (!clipboard || !place) return 0;
       const at: Vec3 = [
-        target.place[0] + command.offset[0],
-        target.place[1] + command.offset[1],
-        target.place[2] + command.offset[2],
+        place[0] + command.offset[0],
+        place[1] + command.offset[1],
+        place[2] + command.offset[2],
       ];
       const mirror = mirrorOf(command);
       const from = clipboard.info.from === "selection" ? "" : `${clipboard.info.from}, `;
@@ -623,6 +701,8 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       });
       return Math.max(0, cells);
     }
+    case "pasteGhost":
+      return command.at ? pasteGhostAt(openProject(), command.at, command) : null;
     case "savePrefab": {
       const open = openProject();
       const piece =

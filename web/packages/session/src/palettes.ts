@@ -15,6 +15,9 @@ const runtime = globalThis as unknown as {
   crypto: { getRandomValues(bytes: Uint8Array): Uint8Array };
 };
 
+/** A file that says the starter palettes were put in (not a palette: it has no .json). */
+const SEEDED = "palettes/starters-v1.seeded";
+
 const SAFE_KEY = /^[a-z0-9_.-]{1,64}$/;
 
 /** A shared palette as stored: the palette, when it last changed, and where it came from. */
@@ -73,6 +76,18 @@ export class PaletteStore {
       new runtime.TextEncoder().encode(JSON.stringify(stored)),
     );
     return stored;
+  }
+
+  /**
+   * Puts starter palettes in the first time it is called on a folder. They are ordinary
+   * palettes after that: one deleted stays deleted, since a marker remembers it was done.
+   */
+  async seed(starters: readonly Omit<SharedPalette, "version">[]): Promise<void> {
+    if (await this.#folder.read(SEEDED)) return;
+    for (const palette of starters) {
+      if (!(await this.load(palette.key))) await this.save(palette);
+    }
+    await this.#folder.write(SEEDED, new runtime.TextEncoder().encode("1"));
   }
 
   async delete(key: string): Promise<void> {

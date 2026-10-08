@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { type Command, CommandError, Project, ROOT_PALETTE, type World } from "../src/index.ts";
+import {
+  type Command,
+  CommandError,
+  Project,
+  ROOT_PALETTE,
+  SemanticRegistry,
+  type World,
+} from "../src/index.ts";
 
 let n = 0;
 const cmd = (kind: string, args: unknown): Command => ({ id: `p${n++}`, kind, args });
@@ -281,5 +288,48 @@ describe("semantic_remove", () => {
     p.run(cmd("clear", { where: { box: [0, 2, 0, 0, 2, 0] } }));
     // Walkway's Deck derives from Main's Deck, so Main's can't go.
     expect(() => p.run(cmd("semantic_remove", { semantic: deck }))).toThrow(/derives/);
+  });
+});
+
+describe("palette_remove", () => {
+  it("takes a palette and its semantics out, and undoes", () => {
+    const { p, walkway } = factory();
+    const lamp = p.semantics.add("Lamp", { palette: walkway });
+    const removed = p.run(cmd("palette_remove", { palette: walkway }));
+    expect(p.semantics.hasPalette(walkway)).toBe(false);
+    expect(p.semantics.has(lamp)).toBe(false);
+    p.run({ id: "undo-remove", kind: "undo", args: { target: removed.id } });
+    expect(p.semantics.hasPalette(walkway)).toBe(true);
+    expect(p.semantics.has(lamp)).toBe(true);
+  });
+
+  it("refuses the main palette, a palette other palettes extend, and one in use", () => {
+    const { p, walkway } = factory();
+    expect(() => p.run(cmd("palette_remove", { palette: ROOT_PALETTE }))).toThrow(CommandError);
+    expect(() => p.run(cmd("palette_remove", { palette: 99 }))).toThrow("Unknown palette");
+    const lamp = p.semantics.add("Lamp", { palette: walkway });
+    p.world.setId(1, 0, 1, p.world.states.intern({ semantic: lamp }));
+    expect(() => p.run(cmd("palette_remove", { palette: walkway }))).toThrow("1 cell uses");
+    p.run(cmd("palette_add", { name: "Roof", extends: walkway }));
+    p.world.setId(1, 0, 1, 0);
+    expect(() => p.run(cmd("palette_remove", { palette: walkway }))).toThrow("extends Walkway");
+  });
+
+  it("removes a linked copy and leaves the project working", () => {
+    const { p } = factory();
+    p.run(
+      cmd("palette_sync", {
+        key: "shared-9",
+        version: 1,
+        name: "Shared",
+        semantics: [{ key: "a", name: "A" }],
+      }),
+    );
+    const shared = p.semantics.paletteByName("Shared")?.id ?? 0;
+    p.run(cmd("palette_remove", { palette: shared }));
+    expect(p.semantics.paletteByName("Shared")).toBeUndefined();
+    const saved = SemanticRegistry.fromJSON(p.semantics.toJSON());
+    expect(saved.paletteByName("Shared")).toBeUndefined();
+    expect(saved.paletteByName("Walkway")).toBeDefined();
   });
 });

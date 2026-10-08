@@ -71,6 +71,14 @@ export function Inventory({ engine }: { engine: Engine }) {
     if (held) setPaletteId(held.palette);
   }, [open, bar.selected, held]);
 
+  const focus = useStore(engine.inventoryFocus);
+  useEffect(() => {
+    if (!open || focus === null) return;
+    setPrefabsPage(false);
+    setPaletteId(focus);
+    engine.inventoryFocus.set(null);
+  }, [open, focus, engine]);
+
   const heldMark = held ? `${bar.selected}:${semanticKey(held)}` : "";
   const shownPalette = palette?.id;
   useEffect(() => {

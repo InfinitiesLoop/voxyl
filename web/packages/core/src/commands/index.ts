@@ -5,6 +5,7 @@ import { fill } from "./fill.ts";
 import { move } from "./move.ts";
 import { paletteAdd } from "./palette-add.ts";
 import { paletteLink, paletteUnlink } from "./palette-link.ts";
+import { paletteRemove } from "./palette-remove.ts";
 import { paletteSync } from "./palette-sync.ts";
 import { paletteUpdate } from "./palette-update.ts";
 import { paste } from "./paste.ts";
@@ -39,6 +40,7 @@ export const COMMANDS: readonly CommandDef[] = [
   paletteSync,
   paletteLink,
   paletteUnlink,
+  paletteRemove,
   semanticAdd,
   semanticUpdate,
   semanticRemove,

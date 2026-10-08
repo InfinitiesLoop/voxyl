@@ -24,6 +24,8 @@ export interface PasteArgs {
   readonly offset: Vec3;
   /** The piece's empty cells clear what they land on. */
   readonly air: boolean;
+  /** Pins the anchor to this cell instead of the cell aimed at (a locked paste). */
+  readonly at?: Vec3;
 }
 
 export const NO_PASTE_TURN: PasteArgs = { turn: 0, mirror: false, offset: [0, 0, 0], air: false };

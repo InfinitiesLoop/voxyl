@@ -78,8 +78,12 @@ export class ProjectStore {
   }
 
   /** Saves a project, writing only blobs the folder doesn't have yet. */
-  async save(project: Project, savedAt = Date.now()): Promise<ProjectEntry> {
-    return this.#write(await saveProject(project), savedAt);
+  async save(
+    project: Project,
+    savedAt = Date.now(),
+    pace?: () => Promise<void>,
+  ): Promise<ProjectEntry> {
+    return this.#write(await saveProject(project, undefined, pace), savedAt);
   }
 
   /** Opens a saved project. */

@@ -1,6 +1,6 @@
 import { Project } from "@voxyl/core";
 import { describe, expect, it } from "vitest";
-import { CITY_SEMANTICS, generateCity } from "../src/index.ts";
+import { CITY_SEMANTICS, CITY_THEMES, generateCity, prepareCityProject } from "../src/index.ts";
 
 /** An order-independent fingerprint of every cell's position and semantic name. */
 function fingerprint(project: Project): number {
@@ -52,5 +52,29 @@ describe("generateCity", () => {
       ).toBe(true);
       expect(names.has(semantics.nameOf(world.states.get(id)?.semantic ?? 0))).toBe(true);
     });
+  });
+});
+
+describe("generateCity with parts", () => {
+  it("gives every shaped part a semantic that places its shape, with the look of its block", () => {
+    const project = new Project();
+    prepareCityProject(project, CITY_THEMES[0] as never, true);
+    generateCity(project, { targetCells: 80_000, parts: true });
+    const { world, semantics } = project;
+    const seen = new Set<string>();
+    world.forEachCell((_x, _y, _z, id) => {
+      for (const part of world.states.get(id)?.parts ?? []) {
+        const resolved = semantics.resolve(part.semantic);
+        expect(resolved.form.shape).toBe(part.shape);
+        seen.add(resolved.name);
+      }
+    });
+    expect(seen.size).toBeGreaterThan(3);
+    const tile = semantics.byName("Roof Tile");
+    const roof = semantics.byName("Roof", 1);
+    expect(tile).toBeDefined();
+    expect(semantics.resolve(tile as number).look.tint).toBe(
+      semantics.resolve(roof as number).look.tint,
+    );
   });
 });

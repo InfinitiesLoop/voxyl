@@ -154,6 +154,27 @@ export class SemanticRegistry {
     return id;
   }
 
+  /**
+   * Removes a palette and its semantics from the registry (the project stops having them; a
+   * shared palette a linked copy came from is untouched). Refused for the root palette and for
+   * one that other palettes extend. The caller checks that no cell uses its semantics
+   * (palette_remove does). Ids are not reused while the registry is open.
+   */
+  removePalette(id: PaletteId): void {
+    const p = this.palette(id);
+    if (id === ROOT_PALETTE) throw new Error(`${p.name} is the project's main palette`);
+    const children = this.palettes().filter((other) => other.extends === id);
+    const first = children[0];
+    if (first) {
+      throw new Error(
+        `${first.name} extends ${p.name}: change what it extends, or remove it first`,
+      );
+    }
+    for (const s of this.semanticsIn(id)) this.#semantics[s] = null;
+    this.#palettes[id] = null;
+    this.#revision++;
+  }
+
   hasPalette(id: PaletteId): boolean {
     return Number.isInteger(id) && id > 0 && this.#palettes[id] != null;
   }

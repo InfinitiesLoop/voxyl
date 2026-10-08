@@ -193,6 +193,10 @@ export class Engine {
   readonly clipboard = new Store<ClipboardInfo | null>(null);
   /** How the Paste tool sets the clipboard down: turn, mirror, air, and a shift. */
   readonly paste = new Store<PasteArgs>({ turn: 0, mirror: false, offset: [0, 0, 0], air: false });
+  /** The cell a locked paste is pinned to (left click toggles it), or null while it follows. */
+  readonly pasteLock = new Store<Vec3 | null>(null);
+  /** The pointer is locked to the view (flying), for the paste panel to tell its two modes. */
+  readonly flying = new Store(false);
   /** Counts changes to the prefab list, so every list showing it asks again. */
   readonly prefabsRev = new Store(0);
   /** Asks the screen to open the "Save as a prefab" dialog (Ctrl+P, or Actions). */
@@ -202,6 +206,8 @@ export class Engine {
   #toastId = 0;
   /** The inventory overlay. E toggles it; opening releases the pointer. */
   readonly inventoryOpen = new Store(false);
+  /** A palette the inventory should show when it opens (the palette list's Open), once. */
+  readonly inventoryFocus = new Store<number | null>(null);
   /** Closing the inventory locks the pointer again when it was open in fly mode. */
   #resumeFly = false;
   /** Set while something (Home) covers every view: frames are skipped. */
@@ -256,6 +262,17 @@ export class Engine {
   /** An aim request in flight, and the camera pose and world revision last aimed for. */
   #aiming = false;
   #aimedFor = "";
+  /** The cell the Paste tool last aimed at: where a paste freezes when the cursor is freed. */
+  #lastPasteAt: Vec3 | null = null;
+  #pasteFrozenFor = "";
+  #pasteFrozenBusy = false;
+  /** The tool Esc goes back to when a paste is cancelled. */
+  #toolBeforePaste: EditorTool = "build";
+  /** The pointer was freed on purpose for the paste panel (so it is not an Esc). */
+  #openingAdjust = false;
+  /** The panel is up with a free cursor, and the pointer was locked before. */
+  #adjusting = false;
+  #wasFlying = false;
   /** A drag of the view with a free cursor. */
   #drag: { x: number; y: number; moved: boolean } | null = null;
   #wheel = 0;
@@ -316,7 +333,7 @@ export class Engine {
     document.addEventListener("keydown", (e) => this.#held.add(e.code), { signal });
     document.addEventListener("keyup", (e) => this.#held.delete(e.code), { signal });
     window.addEventListener("blur", () => this.#clearHeld(), { signal });
-    document.addEventListener("pointerlockchange", () => this.#clearHeld(), { signal });
+    document.addEventListener("pointerlockchange", () => this.#onLockChange(), { signal });
     canvas.addEventListener("mouseup", (e) => this.#onMouseUp(e), { signal });
     // One core for this thread, one for the world worker, the rest mesh.
     const meshWorkers = Math.min(8, Math.max(2, (navigator.hardwareConcurrency || 4) - 2));
@@ -517,6 +534,11 @@ export class Engine {
    * Opens or closes the inventory. Opening releases the pointer so its controls can be
    * used. Closing locks it again when the inventory interrupted fly mode.
    */
+  showPaletteInInventory(palette: number): void {
+    this.inventoryFocus.set(palette);
+    if (!this.inventoryOpen.get()) this.toggleInventory();
+  }
+
   toggleInventory(): void {
     this.#setInventory(!this.inventoryOpen.get());
   }
@@ -1003,8 +1025,8 @@ export class Engine {
       this.#toolPreview.show(null);
       this.#aimedPart.show(null);
       this.#ghost.show(null);
-      this.#pasteGhost.show(null);
       this.#aimedFor = "";
+      this.#updateFrozenPaste();
       return;
     }
     if (this.#aiming) return;
@@ -1014,7 +1036,10 @@ export class Engine {
     const toward = ray.dir.map((v) => v.toFixed(4)).join();
     const using = tool ? `${tool.tool}${tool.brush}` : "";
     const part = this.#partArgs();
-    const paste = this.tool.get() === "paste" && this.clipboard.get() ? this.paste.get() : null;
+    const paste =
+      this.tool.get() === "paste" && this.clipboard.get()
+        ? this.#pasteArgs(this.pasteLock.get())
+        : null;
     const key = `${at} ${toward} ${this.#revision} ${using} ${part ? `${JSON.stringify(part.semantic)}${part.opposite}` : ""} ${paste ? JSON.stringify(paste) + this.#clipboardRev : ""}`;
     if (key === this.#aimedFor) return;
     this.#aiming = true;
@@ -1040,6 +1065,7 @@ export class Engine {
         this.#aimedPart.show(met?.hit ?? null, met?.aimed?.shape, met?.aimed?.slot);
         this.#toolPreview.show(aim?.preview ?? null);
         this.#pasteGhost.show(aim?.pasteGhost ?? null);
+        if (paste && aim?.place) this.#lastPasteAt = aim.place;
         const ghost = this.tool.get() === "build" ? (aim?.ghost ?? null) : null;
         this.#ghost.show(ghost?.cell ?? null, ghost?.shape, ghost?.slot);
       }, done);
@@ -1118,6 +1144,10 @@ export class Engine {
       this.#enqueue(() => (shift ? this.#applyConnected(ray) : this.#applySelect(ray)));
       return;
     }
+    if (event.button === 1 && tool === "paste") {
+      this.openPasteAdjust();
+      return;
+    }
     if (event.button === 1) {
       void this.world.request({ type: "raycast", ...ray }).then((hit) => {
         if (!hit) return;
@@ -1135,17 +1165,12 @@ export class Engine {
       await this.whenIdle();
       this.#lastEditMs = performance.now() - start;
     };
-    if (event.button === 0) {
+    if (event.button === 0 && tool === "paste") {
+      this.togglePasteLock();
+    } else if (event.button === 0) {
       void this.world.request({ type: "erase", ...ray }).then(timed);
     } else if (event.button === 2 && tool === "paste") {
-      if (!this.clipboard.get()) {
-        this.say("The clipboard is empty. Select something and press Ctrl+C, or pick a prefab.");
-        return;
-      }
-      const options = this.paste.get();
-      void this.world
-        .request({ type: "paste", ...options, ...ray })
-        .then((cells) => timed(cells > 0));
+      void this.placePaste().then(timed);
     } else if (event.button === 2) {
       const semantic = this.hotbar.current?.ref;
       if (semantic === undefined) return;
@@ -1235,6 +1260,20 @@ export class Engine {
       return;
     }
     if (isTyping(event.target)) return;
+    if (
+      event.code === "Escape" &&
+      !event.repeat &&
+      this.tool.get() === "paste" &&
+      !this.inventoryOpen.get()
+    ) {
+      // Esc stops pasting. While flying the browser frees the pointer on this same press, so
+      // it is taken back when the key is released.
+      event.preventDefault();
+      const flying = this.fly.locked || this.#adjusting;
+      this.cancelPaste();
+      if (flying) this.#lockOnEscapeUp();
+      return;
+    }
     // The keys are in editor/keymap.ts. Right Ctrl and right Alt fly up, so while flying
     // they may be held with any of these.
     const plain = !event.ctrlKey && !event.metaKey && !event.altKey;
@@ -1591,6 +1630,7 @@ export class Engine {
 
   #setClipboard(info: ClipboardInfo | null): void {
     this.clipboard.set(info);
+    this.pasteLock.set(null);
     this.#clipboardRev++;
     this.#aimedFor = "";
   }
@@ -1606,6 +1646,13 @@ export class Engine {
     this.#aimedFor = "";
   }
 
+  /** Shifts the paste one step along an axis (0 x, 1 y, 2 z). */
+  nudgePaste(axis: number, step: number): void {
+    const offset = [...this.paste.get().offset] as [number, number, number];
+    offset[axis] = (offset[axis] ?? 0) + step;
+    this.setPaste({ offset });
+  }
+
   /** Turns the clipboard a quarter turn (clockwise from above; `step` -1 the other way). */
   turnPaste(step: number): void {
     const turn = (((this.paste.get().turn + step) % 4) + 4) % 4;
@@ -1617,8 +1664,143 @@ export class Engine {
     this.setPaste({ mirror: !this.paste.get().mirror });
   }
 
+  /** What a paste sends: the options, pinned to `at` when it is. */
+  #pasteArgs(at: Vec3 | null): PasteArgs {
+    return at ? { ...this.paste.get(), at } : this.paste.get();
+  }
+
+  /** Where a paste would go now if the cursor is free: its lock, else where it last aimed. */
+  #frozenAnchor(): Vec3 | null {
+    return this.pasteLock.get() ?? this.#lastPasteAt;
+  }
+
+  /** Left click: pins the paste where it is, so you can look around it; again lets it follow. */
+  togglePasteLock(): void {
+    if (this.pasteLock.get()) {
+      this.pasteLock.set(null);
+    } else if (this.#lastPasteAt) {
+      this.pasteLock.set(this.#lastPasteAt);
+    } else {
+      this.say("Aim at something first, then click to pin the paste there.");
+    }
+    this.#aimedFor = "";
+  }
+
+  /**
+   * Puts the clipboard down: where the crosshair aims, or at the pinned cell. Resolves to
+   * whether anything was placed. A pinned paste lets go once it is placed.
+   */
+  async placePaste(): Promise<boolean> {
+    if (!this.clipboard.get()) {
+      this.say("The clipboard is empty. Select something and press Ctrl+C, or pick a prefab.");
+      return false;
+    }
+    const locked = this.fly.locked;
+    const at = locked ? this.pasteLock.get() : this.#frozenAnchor();
+    if (!locked && !at) return false;
+    const cells = await this.world.request({
+      type: "paste",
+      ...this.#pasteArgs(at),
+      ...this.#ray(),
+    });
+    if (cells > 0) this.pasteLock.set(null);
+    return cells > 0;
+  }
+
+  /**
+   * Middle click with the Paste tool: frees the cursor and freezes the paste where it was
+   * aimed, so the panel can turn, mirror and shift it while you watch the result.
+   */
+  openPasteAdjust(): void {
+    if (!this.clipboard.get()) {
+      this.say("The clipboard is empty. Select something and press Ctrl+C, or pick a prefab.");
+      return;
+    }
+    this.#adjusting = true;
+    this.#openingAdjust = this.fly.locked;
+    this.fly.unlock();
+  }
+
+  /** Back to flying from the paste panel. */
+  closePasteAdjust(): void {
+    this.#adjusting = false;
+    this.fly.lock();
+  }
+
+  /** Esc: stop pasting. The tool in hand before comes back; the clipboard stays. */
+  cancelPaste(): void {
+    if (this.tool.get() !== "paste") return;
+    this.setPaste({ offset: [0, 0, 0] });
+    this.setTool(this.#toolBeforePaste);
+    this.#updateFrozenPaste();
+  }
+
+  /** Takes the pointer back when Esc is released: it cannot be asked for in the key press. */
+  #lockOnEscapeUp(): void {
+    const lock = (event: KeyboardEvent) => {
+      if (event.code !== "Escape") return;
+      document.removeEventListener("keyup", lock, true);
+      this.fly.lock();
+    };
+    document.addEventListener("keyup", lock, true);
+    // If the key was already up, or never reports, the listener must not wait for a later Esc.
+    setTimeout(() => document.removeEventListener("keyup", lock, true), 1500);
+  }
+
+  #onLockChange(): void {
+    this.#clearHeld();
+    const flying = this.fly.locked;
+    this.flying.set(flying);
+    const was = this.#wasFlying;
+    this.#wasFlying = flying;
+    if (flying) {
+      this.#adjusting = false;
+      return;
+    }
+    if (!was) return;
+    const voluntary = this.#openingAdjust || this.inventoryOpen.get() || !document.hasFocus();
+    this.#openingAdjust = false;
+    // The pointer left on its own while pasting: the Esc the browser keeps for itself. It
+    // means stop pasting, and the pointer is taken back when the key comes up.
+    if (!voluntary && this.tool.get() === "paste") {
+      this.cancelPaste();
+      this.#lockOnEscapeUp();
+    }
+  }
+
+  /** While the cursor is free, a Paste tool with a clipboard keeps its ghost where it froze. */
+  #updateFrozenPaste(): void {
+    const at = this.tool.get() === "paste" && this.clipboard.get() ? this.#frozenAnchor() : null;
+    if (!at || !this.#info || this.#autopilot) {
+      this.#pasteGhost.show(null);
+      this.#pasteFrozenFor = "";
+      return;
+    }
+    const args = this.#pasteArgs(at);
+    const key = `${JSON.stringify(args)} ${this.#revision} ${this.#clipboardRev}`;
+    if (key === this.#pasteFrozenFor || this.#pasteFrozenBusy) return;
+    this.#pasteFrozenFor = key;
+    this.#pasteFrozenBusy = true;
+    const world = this.#worldId;
+    void this.world.request({ type: "pasteGhost", ...args }).then(
+      (ghost) => {
+        this.#pasteFrozenBusy = false;
+        if (world === this.#worldId && !this.fly.locked) this.#pasteGhost.show(ghost);
+      },
+      () => {
+        this.#pasteFrozenBusy = false;
+      },
+    );
+  }
+
   /** Switches the fly tool. A half-chosen box corner is dropped. */
   setTool(tool: EditorTool): void {
+    const before = this.tool.get();
+    if (tool === "paste" && before !== "paste") this.#toolBeforePaste = before;
+    if (tool !== "paste") {
+      this.pasteLock.set(null);
+      this.#adjusting = false;
+    }
     this.tool.set(tool);
     rememberTool(tool);
     this.#clearAnchor();

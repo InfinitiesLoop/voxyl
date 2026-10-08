@@ -1,5 +1,5 @@
 import { type Project, ROOT_PALETTE, type SemanticRegistry, type SharedPalette } from "@voxyl/core";
-import { CITY_SEMANTICS, type CitySemantic } from "./city.ts";
+import { CITY_PARTS, CITY_SEMANTICS, type CitySemantic, partKey } from "./city.ts";
 
 /** The key every city theme shares, so syncing another theme re-skins the same linked palette. */
 export const CITY_THEME_KEY = "voxyl.city";
@@ -70,18 +70,30 @@ export const CITY_THEMES: readonly CityTheme[] = [
 /**
  * A city theme as a shared palette. Every theme has the same key and semantic keys, so syncing
  * one over another changes looks and nothing else: semantic ids, and so cells, stay put.
- * `version` must grow with each sync (an older version is ignored).
+ * `version` must grow with each sync (an older version is ignored). With `parts`, the shaped
+ * parts of a decorated city come too, each looking like the block it is a part of.
  */
-export function cityThemePalette(theme: CityTheme, version: number): SharedPalette {
+export function cityThemePalette(theme: CityTheme, version: number, parts = false): SharedPalette {
   return {
     key: CITY_THEME_KEY,
     version,
     name: "City",
     description: `The city's looks (${theme.name})`,
-    semantics: CITY_SEMANTICS.map((name) => {
-      const look = theme.looks[name];
-      return { key: name.toLowerCase(), name, ...(look && { look: { ...look } }) };
-    }),
+    semantics: [
+      ...CITY_SEMANTICS.map((name) => {
+        const look = theme.looks[name];
+        return { key: name.toLowerCase(), name, ...(look && { look: { ...look } }) };
+      }),
+      ...(parts ? CITY_PARTS : []).map((part) => {
+        const look = theme.looks[part.of];
+        return {
+          key: partKey(part),
+          name: part.name,
+          form: { shape: part.shape },
+          ...(look && { look: { ...look } }),
+        };
+      }),
+    ],
   };
 }
 
@@ -89,13 +101,14 @@ export function cityThemePalette(theme: CityTheme, version: number): SharedPalet
  * Sets a project up for generateCity the way a person would: the city theme comes in as a
  * linked palette, the project's root palette extends it, and the city's semantics are derived
  * into the root palette (so generateCity finds them there by name). Re-skinning is then one
- * palette_sync of another theme.
+ * palette_sync of another theme. `parts` brings the shaped parts of a decorated city along.
  */
 export function prepareCityProject(
   project: Project,
   theme: CityTheme = CITY_THEMES[0] as CityTheme,
+  parts = false,
 ) {
-  const shared = cityThemePalette(theme, 1);
+  const shared = cityThemePalette(theme, 1, parts);
   project.run({ id: "city-theme", kind: "palette_sync", args: shared });
   const registry = project.semantics;
   const linked = registry.palettes().find((p) => p.linked?.key === CITY_THEME_KEY);
@@ -105,7 +118,8 @@ export function prepareCityProject(
     kind: "palette_update",
     args: { palette: ROOT_PALETTE, extends: linked.id },
   });
-  for (const name of CITY_SEMANTICS) {
+  const names = [...CITY_SEMANTICS, ...(parts ? CITY_PARTS.map((part) => part.name) : [])];
+  for (const name of names) {
     const base = registry.byName(name, linked.id);
     if (base !== undefined) registry.derive(ROOT_PALETTE, base);
   }

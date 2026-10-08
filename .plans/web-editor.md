@@ -671,3 +671,47 @@ connections and their settings tab.
 - The camera menu's slider is labelled **Fly speed**.
 - **Right-click a hotbar slot** (inventory open or not) is the same Edit or Delete.
 
+
+## Feedback, sixth round (2026-10-07)
+
+- **Undo lag was the autosave.** A saved project's autosave (1.5 s after the last edit) ran
+  `saveProject` in one synchronous pass on the world worker, so an undo pressed during it
+  waited for it: measured 810 to 1,500 ms on the 5M-cell sample, 30 to 50 ms otherwise. It now
+  saves a `fork()` (chunks are shared copy-on-write) and `saveProject` takes a `pace` callback
+  it awaits every ~6 ms, so commands in the queue run between slices. Undo during a save is
+  35 to 50 ms again. One autosave runs at a time; an edit during it queues one more.
+- **Shaped sample cities have a semantic per part.** `CITY_PARTS` in `packages/fixtures`: Trim
+  Post, Strip, Pillar, Hollow Cover, Mass Panel, Cover, Roof Tile, Outer Corner, Gabled and Hip
+  Roof Ridge. Each is in the linked City palette with `form.shape` and its block's look, derived
+  into Main, and the parts of the city use them. Middle click on a roof tile now puts "Roof
+  Tile" in the hand, which places the tile, not a cube. Re-skinning keeps them (the theme sync
+  includes them when the palette has them). Plain city samples don't get them.
+- **Paste pins and has its own panel.** Left click with the Paste tool pins the paste at the cell
+  it was aimed at (`PasteArgs.at`; the ghost stays while you fly); again lets it follow. Right
+  click places and lets go of the pin. Middle click frees the cursor and opens `PasteOverlay`: a
+  small panel in the corner (turn, mirror, shift x/y/z, clear what it lands on, Place, Pin, Fly,
+  Cancel) with the ghost frozen where it was aimed, so the result stays in view. While flying
+  it shrinks to a quiet status line. Prefab placement is the same tool, so the same panel.
+  The offsets left the inventory's tool area; it only has the tool's hint now.
+- **Esc stops pasting.** It goes back to the tool held before and keeps the clipboard. In
+  pointer lock the browser takes Esc for itself, so the engine treats an unprompted release of
+  the lock while pasting (window still focused, inventory closed, no panel requested) as that
+  Esc, and asks for the lock back when Esc is released, as the inventory already does. That
+  re-lock on key-up is the part only a real Esc in a real browser proves (synthetic keys don't
+  leave pointer lock): if the browser refuses, a click flies again.
+- **Starter palettes.** Four shared palettes of default-set blocks (Stone and brick, Timber,
+  Concrete, Landscape) are put in the user's palettes once per browser (`PaletteStore.seed`,
+  marked by `palettes/starters-v1.seeded`, so a deleted one stays gone). They show under "Or
+  use one of yours" and in Home → Palettes.
+- **Palettes can be removed from a project.** `palette_remove` (core): refused for Main, for a
+  palette others extend, and while cells use its semantics; undoable. The list asks first and
+  says which palette it is and whether it is a link (the shared palette stays) or only here.
+- **The palette pane is a list.** One row per palette: a link icon (blue when it is a shared
+  palette linked in), the name, semantic count, what it extends, "update available"; a click
+  opens its actions (Open in the inventory, Rename, Share a copy, Make shared, Update, Make a
+  local copy). The semantics and the look editor left the drawer: the inventory and the
+  Semantics editor already do that. Adding is its own card below: a new palette (name, what it
+  builds on) and a list of your shared palettes with Add.
+- **Paste panel and tool strip, roomier.** The panel is 300 px wide with one row per axis: a
+  coloured letter (X red, Y green, Z blue), a 32 px minus, the shift, a 32 px plus. The
+  inventory's tool buttons are 68 px tall with a 32 px icon and the tool's name under it.

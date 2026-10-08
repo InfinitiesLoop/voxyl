@@ -115,7 +115,8 @@ export function buildSample(
     const extent = Math.max(max[0] - min[0], max[2] - min[2]) + 1;
     return { project, framing: { center, extent, top: max[1] } };
   }
-  prepareCityProject(project, theme);
+  const parts = kind.startsWith("parts-");
+  prepareCityProject(project, theme, parts);
   if (kind === "pillar") {
     buildPillar(project);
     return { project, framing: { center: [0, 8, 0], extent: 16, top: 17 } };
@@ -123,7 +124,7 @@ export function buildSample(
   const stats = generateCity(project, {
     targetCells: CITY_TARGETS[kind],
     seed: 1,
-    parts: kind.startsWith("parts-"),
+    parts,
   });
   const center = [
     (stats.min[0] + stats.max[0] + 1) / 2,

@@ -1,18 +1,19 @@
 import { ROOT_PALETTE } from "@voxyl/core";
 import { type FormEvent, useEffect, useState } from "react";
 import type { Engine } from "../scene/Engine.ts";
-import type { PaletteInfo, SemanticInfo } from "../world/editing.ts";
+import type { PaletteInfo } from "../world/editing.ts";
 import type { SharedPaletteInfo } from "../world/protocol.ts";
-import { BlockChooserDialog, blockTitle } from "./BlockPicker.tsx";
-import { writeSemanticDrag } from "./drag.ts";
 import { SemanticEditor } from "./SemanticEditor.tsx";
 import { useStore } from "./useStore.ts";
 
 /**
- * The palette drawer: semantics grouped by palette, their looks and descriptions, and new
- * palettes that inherit. A semantic drags onto the hotbar. A palette can be shared (copied to
- * your palettes, outside the project); a shared palette comes in as a linked copy, read-only
- * here and updated only when you say so. Extend one to give part of a build its own look.
+ * The project's palettes, as a list: each with whether it is a shared palette linked in, what
+ * it extends and how many semantics it holds. What a palette holds is seen and edited in the
+ * inventory (Open), and the semantics all together in the Semantics editor. Below the list is
+ * where a palette is added: a new one, or one of your shared palettes. A palette can be shared
+ * (copied to your palettes, outside the project); a shared palette comes in as a linked copy,
+ * read-only here and updated only when you say so. Extend one to give part of a build its own
+ * look.
  */
 export function PaletteDrawer({ engine }: { engine: Engine }) {
   const palettes = useStore(engine.palettes);
@@ -23,27 +24,22 @@ export function PaletteDrawer({ engine }: { engine: Engine }) {
   // biome-ignore lint/correctness/useExhaustiveDependencies: refresh when the palettes change
   useEffect(refreshShared, [engine, palettes]);
   const linkedKeys = new Set(palettes.flatMap((p) => (p.linkedKey ? [p.linkedKey] : [])));
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [picking, setPicking] = useState(false);
+  const [openId, setOpenId] = useState<number | null>(null);
   const [semanticsOpen, setSemanticsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const selected = findSemantic(palettes, selectedKey);
 
-  const run = async (work: Promise<boolean>): Promise<boolean> => {
+  const run = async (work: Promise<unknown>): Promise<boolean> => {
     try {
       const applied = await work;
-      if (applied) setError(null);
-      return applied;
+      if (applied !== false) setError(null);
+      return applied !== false;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       return false;
     }
   };
 
-  const select = (info: SemanticInfo) => {
-    setPicking(false);
-    setSelectedKey(semanticKey(info));
-  };
+  const addable = shared.filter((p) => !linkedKeys.has(p.key));
 
   return (
     <aside className="palette-drawer">
@@ -60,62 +56,74 @@ export function PaletteDrawer({ engine }: { engine: Engine }) {
       {semanticsOpen && <SemanticEditor engine={engine} onClose={() => setSemanticsOpen(false)} />}
       {error && <p className="palette-error">{error}</p>}
       {notice && <p className="palette-note">{notice}</p>}
-      {picking && selected && (
-        <BlockChooserDialog
-          engine={engine}
-          title={`Block for ${selected.semantic.name}`}
-          current={selected.semantic.block ?? null}
-          onClose={() => setPicking(false)}
-          onPick={(ref) => {
-            const own = selected.semantic.ownLook;
-            if (ref === null && own.block === undefined) {
-              if (selected.semantic.block) {
-                setError("That block is inherited. Pick another, or use the inherited look.");
-              }
-              setPicking(false);
-              return;
-            }
-            void run(
-              engine.world.request({
-                type: "setLook",
-                semantic: selected.semantic.ref,
-                look: nextLook(selected.semantic, ref ? { ...own, block: ref } : omitBlock(own)),
-              }),
-            );
-            setPicking(false);
-          }}
-        />
-      )}
       {palettes.length === 0 ? (
         <p className="palette-note">Open a project to edit its palettes.</p>
       ) : (
-        <>
-          <div className="palette-scroll">
-            {shared.some((p) => !linkedKeys.has(p.key)) && (
-              <label className="palette-use">
-                Use a shared palette
-                <select
-                  value=""
-                  onChange={(e) => {
-                    const key = e.target.value;
-                    if (key) void run(engine.world.request({ type: "linkPalette", key }));
+        <div className="palette-scroll">
+          <section aria-label="Palettes in this project">
+            <h3 className="palette-heading">In this project</h3>
+            <ul className="palette-rows">
+              {palettes.map((palette) => (
+                <PaletteRow
+                  key={palette.id}
+                  palette={palette}
+                  parent={palettes.find((p) => p.id === palette.extends)?.name}
+                  shared={shared.find((p) => p.key === palette.linkedKey)}
+                  open={openId === palette.id}
+                  onToggle={() => setOpenId(openId === palette.id ? null : palette.id)}
+                  onOpenInventory={() => engine.showPaletteInInventory(palette.id)}
+                  onRename={(name) =>
+                    run(engine.world.request({ type: "renamePalette", palette: palette.id, name }))
+                  }
+                  onRemove={() => {
+                    if (!confirm(removeQuestion(palette))) return;
+                    void run(
+                      engine.world.request({ type: "removePalette", palette: palette.id }),
+                    ).then((ok) => {
+                      if (!ok) return;
+                      setOpenId(null);
+                      setNotice(
+                        palette.linked
+                          ? `${palette.name} is out of this project. It is still in your shared palettes.`
+                          : `${palette.name} is removed. Undo brings it back.`,
+                      );
+                    });
                   }}
-                >
-                  <option value="">Choose…</option>
-                  {shared
-                    .filter((p) => !linkedKeys.has(p.key))
-                    .map((p) => (
-                      <option key={p.key} value={p.key}>
-                        {p.name} ({p.count})
-                      </option>
-                    ))}
-                </select>
-              </label>
-            )}
+                  onUpdate={(key) => void run(engine.world.request({ type: "linkPalette", key }))}
+                  onLocal={() =>
+                    void run(engine.world.request({ type: "unlinkPalette", palette: palette.id }))
+                  }
+                  onShare={() =>
+                    void run(
+                      engine.world
+                        .request({ type: "sharePalette", palette: palette.id })
+                        .then(() => {
+                          setNotice(`${palette.name} is in your palettes now (Home → Palettes).`);
+                          refreshShared();
+                        }),
+                    )
+                  }
+                  onMakeShared={() => {
+                    if (!confirm(makeSharedQuestion(palette))) return;
+                    void run(
+                      engine.world
+                        .request({ type: "sharePalette", palette: palette.id, link: true })
+                        .then(() => {
+                          setNotice(`${palette.name} is a shared palette now (Home → Palettes).`);
+                          refreshShared();
+                        }),
+                    );
+                  }}
+                />
+              ))}
+            </ul>
+          </section>
+          <section className="palette-new" aria-label="Add a palette">
+            <h3 className="palette-new-title">Add a palette</h3>
             <AddPalette
               palettes={palettes}
               onAdd={(name, parent) =>
-                void run(
+                run(
                   engine.world.request({
                     type: "addPalette",
                     name,
@@ -124,242 +132,238 @@ export function PaletteDrawer({ engine }: { engine: Engine }) {
                 )
               }
             />
-            {palettes.map((palette) => (
-              <section key={palette.id} className="palette-section">
-                <PaletteName
-                  palette={palette}
-                  parent={palettes.find((p) => p.id === palette.extends)?.name}
-                  onRename={(name) =>
-                    run(engine.world.request({ type: "renamePalette", palette: palette.id, name }))
-                  }
-                />
-                {palette.linked ? (
-                  <LinkedNote
-                    palette={palette}
-                    shared={shared.find((p) => p.key === palette.linkedKey)}
-                    onUpdate={(key) => void run(engine.world.request({ type: "linkPalette", key }))}
-                    onLocal={() =>
-                      void run(engine.world.request({ type: "unlinkPalette", palette: palette.id }))
-                    }
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    className="palette-share"
-                    title="Copy this palette to your palettes, so other projects can use it"
-                    onClick={() =>
-                      void engine.world.request({ type: "sharePalette", palette: palette.id }).then(
-                        () => {
-                          setNotice(`${palette.name} is in your palettes now (Home → Palettes).`);
-                          refreshShared();
-                        },
-                        (caught: unknown) => setError(String(caught)),
-                      )
-                    }
-                  >
-                    Share
-                  </button>
-                )}
-                {!palette.linked && palette.canLink && (
-                  <button
-                    type="button"
-                    className="palette-share"
-                    title="Move this palette to your shared palettes and use it here as a linked copy: it becomes read-only in this build, and you edit it from Home"
-                    onClick={() => {
-                      if (
-                        !confirm(
-                          `Make ${palette.name} a shared palette? It stays in this build as a linked copy you can't edit here: change it from Home → Palettes, and update the builds that use it. Undo brings it back.`,
-                        )
-                      ) {
-                        return;
-                      }
-                      void engine.world
-                        .request({ type: "sharePalette", palette: palette.id, link: true })
-                        .then(
-                          () => {
-                            setNotice(`${palette.name} is a shared palette now (Home → Palettes).`);
-                            refreshShared();
-                          },
-                          (caught: unknown) => setError(String(caught)),
-                        );
-                    }}
-                  >
-                    Make shared
-                  </button>
-                )}
-                <ul className="semantic-list">
-                  {palette.semantics.map((semantic) => (
-                    <li key={semanticKey(semantic)}>
+            <div className="palette-new-part">
+              <h4>Or use one of yours</h4>
+              {addable.length === 0 ? (
+                <p className="palette-offer-note">
+                  {shared.length === 0
+                    ? "You have no shared palettes yet. Share one from the list above, or start from Home → Palettes."
+                    : "Every shared palette you have is already in this project."}
+                </p>
+              ) : (
+                <ul className="palette-rows">
+                  {addable.map((item) => (
+                    <li key={item.key} className="palette-offer">
+                      <span className="palette-offer-text">
+                        <span className="palette-title">{item.name}</span>
+                        <span className="palette-meta">
+                          {item.count} {item.count === 1 ? "semantic" : "semantics"}
+                          {item.description ? ` · ${item.description}` : ""}
+                        </span>
+                      </span>
                       <button
                         type="button"
-                        className={
-                          semanticKey(semantic) === selectedKey
-                            ? "semantic-row selected"
-                            : "semantic-row"
+                        title="Bring it in as a linked copy: read-only here, kept up to date when you say so"
+                        onClick={() =>
+                          void run(engine.world.request({ type: "linkPalette", key: item.key }))
                         }
-                        draggable
-                        aria-pressed={semanticKey(semantic) === selectedKey}
-                        title="Drag onto the hotbar. Double-click fills the chosen slot."
-                        onClick={() => select(semantic)}
-                        onDoubleClick={() =>
-                          engine.hotbar.assign(engine.hotbar.state.get().selected, semantic)
-                        }
-                        onDragStart={(e) => {
-                          if (e.dataTransfer) writeSemanticDrag(e.dataTransfer, semantic);
-                        }}
                       >
-                        <span
-                          className={semantic.glow ? "swatch glow" : "swatch"}
-                          style={{ background: semantic.color }}
-                        />
-                        <span className="semantic-name">{semantic.name}</span>
-                        {semantic.base !== undefined && (
-                          <span className="semantic-from">inherited</span>
-                        )}
+                        Add
                       </button>
                     </li>
                   ))}
                 </ul>
-                {!palette.linked && (
-                  <AddSemantic
-                    onAdd={(name) =>
-                      void run(
-                        engine.world.request({
-                          type: "addSemantic",
-                          palette: palette.id,
-                          name,
-                        }),
-                      )
-                    }
-                  />
-                )}
-              </section>
-            ))}
-          </div>
-          {selected && (
-            <LookEditor
-              semantic={selected.semantic}
-              readOnly={selected.palette.linked}
-              onRename={(name) =>
-                run(
-                  engine.world.request({
-                    type: "renameSemantic",
-                    semantic: selected.semantic.ref,
-                    name,
-                  }),
-                )
-              }
-              onDescribe={(description) =>
-                run(
-                  engine.world.request({
-                    type: "describeSemantic",
-                    semantic: selected.semantic.ref,
-                    description,
-                  }),
-                )
-              }
-              onLook={(look) =>
-                run(
-                  engine.world.request({
-                    type: "setLook",
-                    semantic: selected.semantic.ref,
-                    look,
-                  }),
-                )
-              }
-              onChoose={() => setPicking(true)}
-            />
-          )}
-        </>
+              )}
+            </div>
+          </section>
+        </div>
       )}
     </aside>
   );
 }
 
-function semanticKey(info: SemanticInfo): string {
-  return typeof info.ref === "number" ? `#${info.ref}` : `${info.ref.palette}:${info.ref.base}`;
-}
-
-function findSemantic(
-  palettes: readonly PaletteInfo[],
-  key: string | null,
-): { palette: PaletteInfo; semantic: SemanticInfo } | null {
-  if (key === null) return null;
-  for (const palette of palettes) {
-    const semantic = palette.semantics.find((s) => semanticKey(s) === key);
-    if (semantic) return { palette, semantic };
+/** What removing a palette asks: which palette, and whether a shared one is lost or only left. */
+export function removeQuestion(palette: PaletteInfo): string {
+  if (palette.linked) {
+    return `Remove "${palette.name}" from this project?\n\nIt is a link to one of your shared palettes, so the shared palette is not going away: only this project stops using it. You can add it again from your shared palettes.`;
   }
-  return null;
+  return `Remove "${palette.name}" from this project?\n\nIt is not a shared palette, so it and its semantics are gone from this project. Undo brings it back right after.`;
 }
 
-/** The look without its block, so a semantic goes back to undecided or to what it inherits. */
-function omitBlock(look: SemanticInfo["ownLook"]): SemanticInfo["ownLook"] {
-  return {
-    ...(look.tint !== undefined && { tint: look.tint }),
-    ...(look.glow !== undefined && { glow: look.glow }),
-  };
+function makeSharedQuestion(palette: PaletteInfo): string {
+  return `Make ${palette.name} a shared palette? It stays in this build as a linked copy you can't edit here: change it from Home → Palettes, and update the builds that use it. Undo brings it back.`;
 }
 
-/** What setLook should store. An empty look on a derived semantic goes back to its base. */
-function nextLook(
-  semantic: SemanticInfo,
-  look: SemanticInfo["ownLook"] | null,
-): SemanticInfo["ownLook"] | null {
-  if (look === null || (Object.keys(look).length === 0 && semantic.base !== undefined)) return null;
-  return look;
+function LinkIcon({ linked, title }: { linked: boolean; title: string }) {
+  return (
+    <span
+      className={linked ? "palette-link on" : "palette-link"}
+      role="img"
+      aria-label={title}
+      title={title}
+    >
+      <svg viewBox="0 0 24 24" aria-hidden>
+        <path
+          d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </span>
+  );
 }
 
-function PaletteName({
+function PaletteRow({
   palette,
   parent,
+  shared,
+  open,
+  onToggle,
+  onOpenInventory,
   onRename,
+  onRemove,
+  onUpdate,
+  onLocal,
+  onShare,
+  onMakeShared,
 }: {
   palette: PaletteInfo;
   parent: string | undefined;
+  shared: SharedPaletteInfo | undefined;
+  open: boolean;
+  onToggle: () => void;
+  onOpenInventory: () => void;
   onRename: (name: string) => Promise<boolean>;
+  onRemove: () => void;
+  onUpdate: (key: string) => void;
+  onLocal: () => void;
+  onShare: () => void;
+  onMakeShared: () => void;
 }) {
-  const [editing, setEditing] = useState(false);
+  const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(palette.name);
   useEffect(() => setName(palette.name), [palette.name]);
   const commit = () => {
-    setEditing(false);
+    setRenaming(false);
     const trimmed = name.trim();
     if (trimmed === palette.name) return;
     void onRename(trimmed).then((ok) => {
       if (!ok) setName(palette.name);
     });
   };
+  const own = palette.semantics.filter((s) => typeof s.ref === "number").length;
+  const behind =
+    palette.linked &&
+    shared !== undefined &&
+    palette.linkedVersion !== undefined &&
+    shared.version > palette.linkedVersion;
   return (
-    <div className="palette-name">
-      {editing && !palette.linked ? (
-        <input
-          value={name}
-          aria-label="Palette name"
-          // biome-ignore lint/a11y/noAutofocus: the field exists only because the name was clicked
-          autoFocus
-          onChange={(e) => setName(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") e.currentTarget.blur();
-            if (e.key === "Escape") {
-              setName(palette.name);
-              setEditing(false);
-            }
-          }}
+    <li className={open ? "palette-row open" : "palette-row"}>
+      <div className="palette-row-main">
+        <LinkIcon
+          linked={palette.linked}
+          title={
+            palette.linked
+              ? `A shared palette, linked (v${palette.linkedVersion ?? 0}): read-only here`
+              : "Not shared: only this project has it"
+          }
         />
-      ) : (
-        <button
-          type="button"
-          className="name-button"
-          disabled={palette.linked}
-          title={palette.linked ? palette.name : "Rename"}
-          onClick={() => setEditing(true)}
-        >
-          {palette.name}
-        </button>
+        {renaming && !palette.linked ? (
+          <input
+            value={name}
+            aria-label="Palette name"
+            // biome-ignore lint/a11y/noAutofocus: the field exists only because Rename was clicked
+            autoFocus
+            onChange={(e) => setName(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+              if (e.key === "Escape") {
+                setName(palette.name);
+                setRenaming(false);
+              }
+            }}
+          />
+        ) : (
+          <button
+            type="button"
+            className="palette-row-name"
+            aria-expanded={open}
+            title="Show what you can do with it"
+            onClick={onToggle}
+          >
+            <span className="palette-title">{palette.name}</span>
+            <span className="palette-meta">
+              {own} {own === 1 ? "semantic" : "semantics"}
+              {parent ? ` · extends ${parent}` : ""}
+              {behind ? " · update available" : ""}
+            </span>
+          </button>
+        )}
+        {palette.id !== ROOT_PALETTE && (
+          <button
+            type="button"
+            className="palette-remove"
+            aria-label={`Remove ${palette.name}`}
+            title="Remove it from this project"
+            onClick={onRemove}
+          >
+            ✕
+          </button>
+        )}
+      </div>
+      {open && (
+        <div className="palette-row-detail">
+          <div className="palette-actions">
+            <button
+              type="button"
+              title="See what it holds, and edit it, in the inventory"
+              onClick={onOpenInventory}
+            >
+              Open
+            </button>
+            {!palette.linked && (
+              <button type="button" onClick={() => setRenaming(true)}>
+                Rename
+              </button>
+            )}
+            {palette.linked ? (
+              <>
+                {behind && shared && (
+                  <button type="button" onClick={() => onUpdate(shared.key)}>
+                    Update to v{shared.version}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  title="Stop following the shared palette: this becomes an ordinary palette you edit here"
+                  onClick={onLocal}
+                >
+                  Make a local copy
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  title="Copy this palette to your palettes, so other projects can use it"
+                  onClick={onShare}
+                >
+                  Share a copy
+                </button>
+                {palette.canLink && (
+                  <button
+                    type="button"
+                    title="Move this palette to your shared palettes and use it here as a linked copy: it becomes read-only in this build, and you edit it from Home"
+                    onClick={onMakeShared}
+                  >
+                    Make shared
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+          {palette.linked && (
+            <p className="palette-detail-note">
+              Read-only here. Extend it from a new palette to give part of the build its own look.
+            </p>
+          )}
+        </div>
       )}
-      {parent && <span className="extends">extends {parent}</span>}
-    </div>
+    </li>
   );
 }
 
@@ -368,7 +372,7 @@ function AddPalette({
   onAdd,
 }: {
   palettes: readonly PaletteInfo[];
-  onAdd: (name: string, parent: number | undefined) => void;
+  onAdd: (name: string, parent: number | undefined) => Promise<boolean>;
 }) {
   const [name, setName] = useState("");
   const [parent, setParent] = useState(String(ROOT_PALETTE));
@@ -376,197 +380,35 @@ function AddPalette({
     e.preventDefault();
     const trimmed = name.trim();
     if (trimmed === "") return;
-    onAdd(trimmed, parent === "" ? undefined : Number(parent));
-    setName("");
-  };
-  return (
-    <form className="palette-add" onSubmit={submit}>
-      <input
-        value={name}
-        placeholder="New palette"
-        aria-label="New palette"
-        onChange={(e) => setName(e.target.value)}
-      />
-      <select aria-label="Extends" value={parent} onChange={(e) => setParent(e.target.value)}>
-        <option value="">Extends nothing</option>
-        {palettes.map((p) => (
-          <option key={p.id} value={p.id}>
-            Extends {p.name}
-          </option>
-        ))}
-      </select>
-      <button type="submit" disabled={name.trim() === ""}>
-        Add
-      </button>
-    </form>
-  );
-}
-
-function AddSemantic({ onAdd }: { onAdd: (name: string) => void }) {
-  const [name, setName] = useState("");
-  return (
-    <form
-      className="semantic-add"
-      onSubmit={(e) => {
-        e.preventDefault();
-        const trimmed = name.trim();
-        if (trimmed === "") return;
-        onAdd(trimmed);
-        setName("");
-      }}
-    >
-      <input
-        value={name}
-        placeholder="New semantic"
-        aria-label="New semantic"
-        onChange={(e) => setName(e.target.value)}
-      />
-      <button type="submit" disabled={name.trim() === ""}>
-        Add
-      </button>
-    </form>
-  );
-}
-
-function LookEditor({
-  semantic,
-  readOnly,
-  onRename,
-  onDescribe,
-  onLook,
-  onChoose,
-}: {
-  semantic: SemanticInfo;
-  readOnly: boolean;
-  onRename: (name: string) => Promise<boolean>;
-  onDescribe: (description: string) => Promise<boolean>;
-  onLook: (look: SemanticInfo["ownLook"] | null) => Promise<boolean>;
-  onChoose: () => void;
-}) {
-  const [name, setName] = useState(semantic.name);
-  useEffect(() => setName(semantic.name), [semantic.name]);
-  const commitName = () => {
-    const trimmed = name.trim();
-    if (trimmed === semantic.name) return;
-    void onRename(trimmed).then((ok) => {
-      if (!ok) setName(semantic.name);
+    void onAdd(trimmed, parent === "" ? undefined : Number(parent)).then((ok) => {
+      if (ok) setName("");
     });
   };
-  const [description, setDescription] = useState(semantic.description);
-  useEffect(() => setDescription(semantic.description), [semantic.description]);
-  const commitDescription = () => {
-    if (description.trim() === semantic.description) return;
-    void onDescribe(description);
-  };
-  const inherited = semantic.base !== undefined && Object.keys(semantic.ownLook).length === 0;
   return (
-    <form
-      className="look-editor"
-      onSubmit={(e) => {
-        e.preventDefault();
-        commitName();
-      }}
-    >
+    <form className="palette-new-form" onSubmit={submit}>
+      <h4>Start a new one</h4>
       <label>
         Name
         <input
           value={name}
-          disabled={readOnly}
+          placeholder="Walkway, Night, Cabin…"
           onChange={(e) => setName(e.target.value)}
-          onBlur={commitName}
         />
       </label>
       <label>
-        What it is for
-        <textarea
-          value={description}
-          rows={2}
-          disabled={readOnly}
-          placeholder="A line on what this is for: teammates and agents read it"
-          onChange={(e) => setDescription(e.target.value)}
-          onBlur={commitDescription}
-        />
+        Builds on
+        <select value={parent} onChange={(e) => setParent(e.target.value)}>
+          <option value="">Nothing: starts empty</option>
+          {palettes.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}: its semantics, to re-skin
+            </option>
+          ))}
+        </select>
       </label>
-      <div className="look-block">
-        <span
-          className={semantic.glow ? "swatch glow" : "swatch"}
-          style={{ background: semantic.color }}
-        />
-        <span className="look-block-name">
-          {semantic.block ? blockTitle(semantic.block) : "Undecided"}
-        </span>
-        <button type="button" disabled={readOnly} onClick={onChoose}>
-          Choose
-        </button>
-        {semantic.ownLook.block && (
-          <button
-            type="button"
-            disabled={readOnly}
-            onClick={() => void onLook(nextLook(semantic, omitBlock(semantic.ownLook)))}
-          >
-            Clear
-          </button>
-        )}
-      </div>
-      <label>
-        Fallback colour
-        <input
-          type="color"
-          value={semantic.ownLook.tint ?? semantic.color}
-          disabled={readOnly}
-          title="How it draws when no block is chosen, or this browser doesn't have it"
-          onChange={(e) => void onLook({ ...semantic.ownLook, tint: e.target.value })}
-        />
-      </label>
-      <label className="look-glow">
-        <input
-          type="checkbox"
-          checked={semantic.glow}
-          disabled={readOnly}
-          onChange={(e) => void onLook({ ...semantic.ownLook, glow: e.target.checked })}
-        />
-        Glows
-      </label>
-      {inherited && <p className="palette-note">Using the look it inherits.</p>}
-      {semantic.base !== undefined && Object.keys(semantic.ownLook).length > 0 && !readOnly && (
-        <button type="button" onClick={() => void onLook(null)}>
-          Use the inherited look
-        </button>
-      )}
-    </form>
-  );
-}
-
-/** A linked copy's line: which shared palette and version, and an update when one is newer. */
-function LinkedNote({
-  palette,
-  shared,
-  onUpdate,
-  onLocal,
-}: {
-  palette: PaletteInfo;
-  shared: SharedPaletteInfo | undefined;
-  onUpdate: (key: string) => void;
-  onLocal: () => void;
-}) {
-  const behind =
-    shared && palette.linkedVersion !== undefined && shared.version > palette.linkedVersion;
-  return (
-    <p className="palette-note">
-      A shared palette (v{palette.linkedVersion ?? 0}), read-only here. Extend it to give part of
-      the build its own look.
-      {behind && (
-        <button type="button" onClick={() => onUpdate(shared.key)}>
-          Update to v{shared.version}
-        </button>
-      )}
-      <button
-        type="button"
-        title="Stop following the shared palette: this becomes an ordinary palette you edit here"
-        onClick={onLocal}
-      >
-        Make a local copy
+      <button type="submit" className="primary" disabled={name.trim() === ""}>
+        Create palette
       </button>
-    </p>
+    </form>
   );
 }

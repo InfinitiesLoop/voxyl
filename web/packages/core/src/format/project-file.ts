@@ -46,17 +46,35 @@ export interface SavedProject {
   readonly blobs: ReadonlyMap<string, Uint8Array>;
 }
 
+/** How long a save works before it gives `pace` a turn. */
+const SAVE_SLICE_MS = 6;
+
+/**
+ * Serializes a project. `pace`, when given, is awaited between chunks once the work has run a
+ * few milliseconds, so a worker saving a big build can still answer commands (an undo) while it
+ * does. Pass a project nothing edits meanwhile, such as a fork.
+ */
 export async function saveProject(
   project: Project,
   prefab?: { anchor?: readonly [number, number, number]; size: readonly [number, number, number] },
+  pace?: () => Promise<void>,
 ): Promise<SavedProject> {
+  let sliceStart = Date.now();
+  const breathe = async () => {
+    if (!pace || Date.now() - sliceStart < SAVE_SLICE_MS) return;
+    await pace();
+    sliceStart = Date.now();
+  };
   const world = project.world;
   const L = world.layout;
   const keys = [...world.chunkKeys()].sort((a, b) => a - b);
 
   // Compact state ids: those in use, in old-id order.
   const used = new Set<number>();
-  for (const key of keys) world.chunkByKey(key)?.forEachUsedId((id) => used.add(id));
+  for (const key of keys) {
+    world.chunkByKey(key)?.forEachUsedId((id) => used.add(id));
+    await breathe();
+  }
   const oldIds = [...used].sort((a, b) => a - b);
   const remap = new Uint16Array(world.states.size + 1);
   oldIds.forEach((id, i) => {
@@ -104,6 +122,7 @@ export async function saveProject(
                   storage[to + x] = remap[runtime[from + x] ?? 0] ?? 0;
               }
             store(cx * per + px, cy * per + py, cz * per + pz, storage);
+            await breathe();
           }
     }
   } else {
@@ -132,6 +151,7 @@ export async function saveProject(
             }
       }
       store(sx, sy, sz, storage);
+      await breathe();
     }
   }
   await Promise.all(pending);

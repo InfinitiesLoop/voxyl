@@ -1,10 +1,32 @@
-import type { SemanticId, SemanticRegistry, World } from "@voxyl/core";
+import { ROOT_PALETTE, type SemanticId, type SemanticRegistry, type World } from "@voxyl/core";
 import { archSlot, edgeBetween } from "@voxyl/shapes";
 import { mulberry32 } from "./random.ts";
 
 /** The semantics a generated city uses. Palettes for benchmarks map these. */
 export const CITY_SEMANTICS = ["Ground", "Road", "Mass", "Glass", "Trim", "Roof", "Glow"] as const;
 export type CitySemantic = (typeof CITY_SEMANTICS)[number];
+
+/**
+ * The shaped parts a decorated city is built from, one semantic each (a "Roof Tile" is a Roof
+ * that places the tile shape), so picking a part with the middle button puts that part in the
+ * hand and not a full block. `of` is the whole-block semantic it looks like.
+ */
+export const CITY_PARTS = [
+  { of: "Trim", shape: "edge2", name: "Trim Post" },
+  { of: "Trim", shape: "edge1", name: "Trim Strip" },
+  { of: "Trim", shape: "edge4", name: "Trim Pillar" },
+  { of: "Trim", shape: "hollow1", name: "Trim Hollow Cover" },
+  { of: "Mass", shape: "face2", name: "Mass Panel" },
+  { of: "Mass", shape: "face1", name: "Mass Cover" },
+  { of: "Roof", shape: "roof_tile", name: "Roof Tile" },
+  { of: "Roof", shape: "roof_outer_corner", name: "Roof Outer Corner" },
+  { of: "Roof", shape: "roof_ridge", name: "Gabled Roof Ridge" },
+  { of: "Roof", shape: "roof_smart_ridge", name: "Hip Roof Ridge" },
+] as const;
+export type CityPart = (typeof CITY_PARTS)[number];
+
+/** The key a part has in the city's shared palette. */
+export const partKey = (part: CityPart): string => part.name.toLowerCase().replace(/\s+/g, "-");
 
 /** Where a city is generated: a world and the registry its semantics go in (a Project fits). */
 export interface CityTarget {
@@ -53,7 +75,7 @@ export function generateCity(target: CityTarget, options: CityOptions): CityStat
     CITY_SEMANTICS.map((s) => [s, world.states.intern({ semantic: semantics[s] })]),
   ) as Record<CitySemantic, number>;
 
-  const parts = options.parts ? new PartIds(world, semantics) : null;
+  const parts = options.parts ? new PartIds(world, partSemantics(target.semantics)) : null;
 
   let lots = 0;
   let ring = 0;
@@ -183,12 +205,26 @@ interface Footprint {
   readonly z1: number;
 }
 
+/**
+ * Each part's semantic: the one a prepared project already derived from its city palette, or
+ * (in a bare registry) a new one that places the shape.
+ */
+function partSemantics(registry: SemanticRegistry): Map<string, SemanticId> {
+  return new Map(
+    CITY_PARTS.map((part) => [
+      `${part.of}|${part.shape}`,
+      registry.byName(part.name, ROOT_PALETTE) ??
+        registry.add(part.name, { form: { shape: part.shape } }),
+    ]),
+  );
+}
+
 /** Interned single-part states, by semantic, shape and slot. */
 class PartIds {
   readonly #world: World;
-  readonly #semantics: Record<CitySemantic, SemanticId>;
+  readonly #semantics: ReadonlyMap<string, SemanticId>;
   readonly #ids = new Map<string, number>();
-  constructor(world: World, semantics: Record<CitySemantic, SemanticId>) {
+  constructor(world: World, semantics: ReadonlyMap<string, SemanticId>) {
     this.#world = world;
     this.#semantics = semantics;
   }
@@ -196,9 +232,9 @@ class PartIds {
     const key = `${semantic}|${shape}|${slot}`;
     let id = this.#ids.get(key);
     if (id === undefined) {
-      id = this.#world.states.intern({
-        parts: [{ semantic: this.#semantics[semantic], shape, slot }],
-      });
+      const owner = this.#semantics.get(`${semantic}|${shape}`);
+      if (owner === undefined) throw new Error(`The city has no ${shape} part of ${semantic}`);
+      id = this.#world.states.intern({ parts: [{ semantic: owner, shape, slot }] });
       this.#ids.set(key, id);
     }
     return id;

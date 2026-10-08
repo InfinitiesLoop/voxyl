@@ -602,6 +602,18 @@ export function addPaletteCommand(
   };
 }
 
+/** The command that takes a palette out of the project, or null if there is no such palette. */
+export function removePaletteCommand(project: Project, palette: PaletteId): Command | null {
+  if (!project.semantics.hasPalette(palette)) return null;
+  return {
+    id: commandId(),
+    kind: "palette_remove",
+    source: EDITOR_SOURCE,
+    label: `Remove palette ${project.semantics.palette(palette).name}`,
+    args: { palette },
+  };
+}
+
 /** The command that renames a palette, or null if the name is empty or the same. */
 export function renamePaletteCommand(
   project: Project,

@@ -70,7 +70,7 @@ export type AimView = Aim & {
   readonly preview: Int32Array | null;
   readonly ghost: PartGhost | null;
   readonly aimed: { readonly shape: string; readonly slot: number } | null;
-  /** With the Paste tool: the cells the clipboard would fill at this aim. */
+  /** With the Paste tool: the cells the clipboard would fill at this aim (or at `paste.at`). */
   readonly pasteGhost: PasteGhost | null;
 };
 
@@ -146,6 +146,8 @@ export type Command =
   /** Adds a palette, optionally extending another. */
   | { type: "addPalette"; name: string; extends?: PaletteId }
   | { type: "renamePalette"; palette: PaletteId; name: string }
+  /** Takes a palette out of the project (refused while cells use it, or others extend it). */
+  | { type: "removePalette"; palette: PaletteId }
   /** Blocks from the libraries, for the palette drawer's picker. */
   | { type: "findBlocks"; query: string; library?: string; limit?: number; offset?: number }
   | { type: "deleteProject"; id: string }
@@ -178,6 +180,8 @@ export type Command =
   | { type: "clipboardClear" }
   /** Places the clipboard with its anchor where the ray aims. */
   | ({ type: "paste" } & PasteArgs & Ray)
+  /** What a locked paste (`at` set) would fill, for the ghost while the cursor is free. */
+  | ({ type: "pasteGhost" } & PasteArgs)
   /** Keeps the selection, or the clipboard, as a prefab. */
   | { type: "savePrefab"; name: string; tags: string[]; from: "selection" | "clipboard" }
   | { type: "prefabs" }
@@ -302,6 +306,7 @@ export interface Replies {
   clipboardClear: null;
   /** How many cells the paste filled (0 when it could not be placed). */
   paste: number;
+  pasteGhost: PasteGhost | null;
   savePrefab: PrefabEntry;
   prefabs: PrefabEntry[];
   prefabThumb: Uint8Array | null;
@@ -327,6 +332,7 @@ export interface Replies {
   setLook: boolean;
   addPalette: boolean;
   renamePalette: boolean;
+  removePalette: boolean;
   findBlocks: BlockSearch;
   deleteProject: null;
   importProject: ProjectEntry;
