@@ -658,6 +658,8 @@ button[aria-pressed="true"] {
 .block-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, 104px);
+  /* Explicit: auto rows shrink to nothing under a definite height once there are many. */
+  grid-auto-rows: 104px;
   align-content: start;
   align-items: start;
   justify-content: start;
