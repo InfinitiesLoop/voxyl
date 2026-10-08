@@ -23,6 +23,7 @@ export const KEY_ACTIONS = [
   "layerUp",
   "layerDown",
   "sliceHere",
+  "flatMirror",
 ] as const;
 
 export type KeyAction = (typeof KEY_ACTIONS)[number];
@@ -53,6 +54,8 @@ export const KEYMAP: Readonly<Record<KeyAction, KeyBinding>> = {
   layerDown: { binding: ["BracketLeft"], alternate: ["PageDown"] },
   /** While flying: the 2D view slices through the aimed cell. Shift turns the slice. */
   sliceHere: { binding: ["Tab"], alternate: ["Enter", "NumpadEnter"] },
+  /** Pointer over a 2D view: mirror its picture left to right. */
+  flatMirror: { binding: ["KeyF"], alternate: [] },
 };
 
 /** Whether a key code is bound to an action. */

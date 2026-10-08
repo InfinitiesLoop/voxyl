@@ -151,6 +151,33 @@ export type Command =
   | { type: "sharePalette"; palette: PaletteId }
   /** Brings a shared palette into the open project as a linked copy, or re-syncs it. */
   | { type: "linkPalette"; key: string }
+  /** A 2D stroke: a semantic into cells (x, y, z triples), or empties them (null). */
+  | {
+      type: "paintCells";
+      cells: number[];
+      semantic: SemanticArg | null;
+      face: Vec3;
+      look: Vec3;
+      label: string;
+    }
+  /** A 2D fill from plane cell (u, v) across the layer, within the view's window. */
+  | {
+      type: "fillPlane";
+      axis: SliceAxis;
+      depth: number;
+      u: number;
+      v: number;
+      window: [number, number, number, number];
+      semantic: SemanticArg | null;
+      face: Vec3;
+      look: Vec3;
+    }
+  /** A multi-block tool used on a cell and one of its faces (Exchange in the 2D view). */
+  | ({ type: "toolAt"; at: Vec3; face: Vec3; semantic: SemanticArg } & Omit<ToolArgs, "camera">)
+  /** Turns the block in a cell about one of its faces' axes (R over a 2D view). */
+  | { type: "rotateAt"; at: Vec3; face: Vec3; reverse: boolean }
+  /** The semantic a cell holds (its first part's, for a cell of parts), or null if empty. */
+  | { type: "semanticAt"; at: Vec3 }
   /** Removes a semantic no cell uses. */
   | { type: "removeSemantic"; semantic: SemanticArg }
   /** A block's six faces as 16×16 RGBA (mesher order +X, -X, +Y, -Y, +Z, -Z), for previews. */
@@ -209,6 +236,11 @@ export interface Replies {
   linkPalette: boolean;
   describeSemantic: boolean;
   removeSemantic: boolean;
+  semanticAt: number | null;
+  paintCells: boolean;
+  fillPlane: boolean;
+  toolAt: boolean;
+  rotateAt: boolean;
   blockPreview: BlockPreview | null;
   edges: null;
   bounds: { min: Vec3; max: Vec3 } | null;
@@ -370,6 +402,8 @@ export interface LooksUpdate {
   readonly colors: Uint8Array;
   /** StateLooks.intent: each state's semantic's own colour. */
   readonly intent: Uint8Array;
+  /** Per state, which way it faces, for the 2D view's arrows (flat-edit.ts stateFacings). */
+  readonly facing: Uint8Array;
   /** StateLooks.faces: each state's face materials, and where its model's slots start. */
   readonly faces: Uint32Array;
   /** StateLooks.modelSlots: block models' face materials. */

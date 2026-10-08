@@ -1,12 +1,13 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Compass } from "../editor/Compass.tsx";
 import { compassPoint } from "../editor/compass.ts";
+import type { EditorTool } from "../editor/tool.ts";
 import { useStore } from "../editor/useStore.ts";
-import { BarSpacer, blurAfter, ShowMenu, ViewBar } from "../editor/ViewBar.tsx";
+import { BarMenu, BarSpacer, blurAfter, ChoiceRow, ShowMenu, ViewBar } from "../editor/ViewBar.tsx";
 import type { ShowId, ShowState } from "../editor/view-options.ts";
 import type { Engine } from "../scene/Engine.ts";
 import type { WorldInfo } from "../worlds.ts";
-import { GridView, type GridViewState } from "./GridView.ts";
+import { type DrawMode, GridView, type GridViewState } from "./GridView.ts";
 import { orientationFor, type SliceAxis } from "./plane.ts";
 
 const AXES: readonly { axis: SliceAxis; label: string; depth: string }[] = [
@@ -62,7 +63,9 @@ export function GridPane({
   useEffect(() => {
     if (!info) return;
     const [x, y, z] = info.center;
-    viewRef.current?.focus([x, Math.floor(y) + 1, z], info.extent, info.north, info.grid);
+    // One layer above the base shows a building's ground floor; an empty build starts on layer 0.
+    const layer = info.top === 0 ? 0 : Math.floor(y) + 1;
+    viewRef.current?.focus([x, layer, z], info.extent, info.north, info.grid);
   }, [info]);
 
   useEffect(() => {
@@ -84,6 +87,14 @@ export function GridPane({
 
   const axis = AXES.find((a) => a.axis === state?.axis) ?? AXES[0];
   const hover = state?.hover;
+  const tool = useStore(engine.tool);
+  const [mode, setMode] = useState<DrawMode>("pencil");
+  useEffect(() => {
+    viewRef.current?.setDrawMode(mode);
+  }, [mode]);
+  const turns = state?.turns ?? 0;
+  const mirror = state?.mirror ?? false;
+  const setView = (t: number, m: boolean) => viewRef.current?.setView(t, m);
   const depth = state?.depth ?? 0;
   const step = (delta: number) => viewRef.current?.setDepth(depth + delta);
   return (
@@ -131,10 +142,42 @@ export function GridPane({
         >
           3D aim
         </button>
+        <BarMenu
+          label={DRAW_MODES.find((d) => d.value === mode)?.label ?? "Draw"}
+          title="How Build draws here: left button draws, right button erases"
+        >
+          <ChoiceRow label="Draw" choices={DRAW_MODES} value={mode} onChange={setMode} />
+        </BarMenu>
+        <BarMenu label="View" title="Turn or mirror this view's picture">
+          <span className="bar-choices">
+            <button type="button" onClick={blurAfter(() => setView(turns + 3, mirror))}>
+              Turn left
+            </button>
+            <button type="button" onClick={blurAfter(() => setView(turns + 1, mirror))}>
+              Turn right
+            </button>
+            <button
+              type="button"
+              aria-pressed={mirror}
+              title="Mirror left to right (F)"
+              onClick={blurAfter(() => setView(turns, !mirror))}
+            >
+              Mirror
+            </button>
+            <button
+              type="button"
+              disabled={turns === 0 && !mirror}
+              title="North up again, unmirrored"
+              onClick={blurAfter(() => setView(0, false))}
+            >
+              Reset
+            </button>
+          </span>
+        </BarMenu>
         <ShowMenu kind="2d" show={show} onShow={onShow} />
         <BarSpacer />
         <span className="bar-readout">
-          {hover ? `${hover.at.join(", ")} · ${hover.what}` : "Flat, no lighting"}
+          {hover ? `${hover.at.join(", ")} · ${hover.what}` : flatHint(tool, mode)}
         </span>
       </ViewBar>
       <div className="pane-fill" onPointerDown={onFocus}>
@@ -152,6 +195,32 @@ export function GridPane({
       </div>
     </>
   );
+}
+
+const DRAW_MODES = [
+  { value: "pencil", label: "Pencil", title: "Drag to draw cell by cell" },
+  { value: "line", label: "Line", title: "Drag a straight line" },
+  { value: "rect", label: "Rectangle", title: "Drag a filled rectangle" },
+  {
+    value: "fill",
+    label: "Fill",
+    title: "Fill the touching cells of the same kind on this layer, within the view",
+  },
+] as const satisfies readonly { value: DrawMode; label: string; title: string }[];
+
+/** What the tool in hand does in a 2D view, when the pointer is over nothing. */
+function flatHint(tool: EditorTool, mode: DrawMode): string {
+  if (tool === "select")
+    return "Right-click two corners (on any layers) · Shift+right-click: touching";
+  if (tool === "exchange") return "Click swaps blocks in place · right-drag erases";
+  const what = {
+    pencil: "Drag draws",
+    line: "Drag a line",
+    rect: "Drag a rectangle",
+    fill: "Click fills",
+  }[mode];
+  const note = tool === "wand" || tool === "column" ? " (the Wand and Build to me work in 3D)" : "";
+  return `${what} · right button erases · middle-drag pans${note}`;
 }
 
 /** Plan, then a cut across x, then across z, and round again. */

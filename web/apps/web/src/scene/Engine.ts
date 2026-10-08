@@ -213,6 +213,7 @@ export class Engine {
   #wheel = 0;
   /** StateLooks.colors for the world on screen. */
   #looks: Uint8Array = new Uint8Array(0);
+  #facing: Uint8Array = new Uint8Array(0);
   /** Counts world changes seen (meshes, light, looks), so other views know to refresh. */
   #revision = 0;
   #lighting: LightingMode = "off";
@@ -357,6 +358,11 @@ export class Engine {
   /** Redoes the latest undone step, if there is one. */
   redo(): void {
     void this.world.request({ type: "redo" });
+  }
+
+  /** Per state, which way it faces (flat-edit.ts stateFacings), for the 2D view's arrows. */
+  get facing(): Uint8Array {
+    return this.#facing;
   }
 
   /** Every cell state's look (StateLooks.colors) for the world on screen. */
@@ -634,7 +640,10 @@ export class Engine {
       if (this.#anchor === null) this.#showOutline(message.view.lines);
       return;
     }
-    if (message.type === "looks") this.#looks = message.colors;
+    if (message.type === "looks") {
+      this.#looks = message.colors;
+      this.#facing = message.facing;
+    }
     if (message.type !== "idle") this.#revision++;
     const chunks = this.#chunks;
     if (!chunks) return;
@@ -1300,7 +1309,51 @@ export class Engine {
     if (this.tool.get() !== "select") return;
     const aimed = await this.world.request({ type: "aim", ...ray });
     if (this.tool.get() !== "select") return;
-    const cell = aimed?.hit ?? aimed?.place ?? null;
+    await this.#corner(aimed?.hit ?? aimed?.place ?? null);
+  }
+
+  /**
+   * The Select tool from the 2D view: a corner at a world cell (null, off the grid, clears).
+   * The first corner is shared with the 3D view, so a box can start on one layer, or in 3D,
+   * and end on another.
+   */
+  selectCornerAt(cell: Vec3 | null): void {
+    this.#enqueue(() => this.#corner(cell));
+  }
+
+  /** Shift with the Select tool in the 2D view: the blocks touching a cell (structure). */
+  selectConnectedAt(cell: Vec3): void {
+    this.#enqueue(async () => {
+      const semantic = await this.world.request({ type: "semanticAt", at: cell });
+      if (semantic === null) return;
+      this.#dropAnchor();
+      const seed: [number, number, number] = [cell[0], cell[1], cell[2]];
+      await this.#select(
+        this.connectAny.get()
+          ? { structure: { seed } }
+          : { structure: { seed, semantics: [semantic] } },
+      );
+    });
+  }
+
+  /** Middle click in the 2D view: the semantic in a cell into the hotbar. */
+  pickAt(cell: Vec3): void {
+    void this.world.request({ type: "semanticAt", at: cell }).then((semantic) => {
+      if (semantic === null) return;
+      const info = this.palettes
+        .get()
+        .flatMap((p) => p.semantics)
+        .find((s) => s.ref === semantic);
+      if (info) this.hotbar.pick(info);
+    });
+  }
+
+  /** Runs a 2D edit and reports a refusal in the selection panel's notice. */
+  edit2d(work: Promise<unknown>): void {
+    void this.#run(work);
+  }
+
+  async #corner(cell: Vec3 | null): Promise<void> {
     const selected = this.selection.get().cells > 0;
     if (selected && this.#anchor === null) {
       await this.#select(null);

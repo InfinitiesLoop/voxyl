@@ -371,7 +371,29 @@ there is a point worth orbiting.
        "Use this block" or a double-click picks. It opens as a dialog over the page from the
        drawer's Choose and from Home's palette editor, and Home's Blocks tab is the same
        chooser for browsing.
-  7. 2D editing: in progress.
+  7. **2D editing** (editor step 6, brought forward). In a 2D view the left button draws
+     with the hotbar semantic and the right button erases; how Build draws is the 2D bar's
+     **Draw** menu: Pencil, Line, Rectangle (filled) or Fill (the touching cells of the same
+     kind on the layer, within the view's window). A stroke is previewed in the 2D view while
+     it is drawn and becomes **one `set` command** on release ("Rectangle 6 Wall"), so it is
+     one undo step and what an agent would send (`world/flat-edit.ts`, tested). Blocks face
+     the way the press was from the cell's middle, as Godot did, so dragging stairs right
+     faces them right. **Exchange** works in 2D (the run in the slice's plane, within the
+     brush); the Wand and Build to me stay 3D tools and the bar says so. **Select** takes
+     corners on right-click, shared with 3D, so a box can start on one layer (or in 3D) and
+     end on another; Shift+right-click selects what touches. **Middle click** picks a
+     cell's semantic; panning moved to middle-drag, Space+drag, or left-drag with Select.
+     **R** over a cell turns it about the slice's axis; **F** mirrors the picture. The
+     selection shows on the slice (filled and bright on its layers, a dim outline off them)
+     with the first corner of a box being chosen. Zoomed in, **turnable blocks show their
+     facing** (an arrow in the plane, a diamond out of it, hollow when upside down) and cells
+     of parts a corner mark, from a per-state facing table sent with the looks. The bar's
+     **View** menu turns the picture left or right and mirrors it (`turnedOrientation`,
+     tested). An empty build's plan starts on layer 0. Not done: part footprints drawn
+     slot by slot (cells of parts only get a mark).
+- **Next:** the user's review of this round. Then editor step 4 (clipboard and prefabs,
+  which also brings the Prefabs tab to Home), step 5 (parts), step 7 (slice and cutaway in
+  3D) and the gate.
 
 ## Cross-project resources (what is planned, and what is not)
 
@@ -423,7 +445,10 @@ outside a project; what the app opens on.
 A survey of `scripts/` against the web plans, so differences are chosen, not missed. Items
 the editor steps already cover are listed last.
 
-**Not in any plan yet**
+**Not in any plan yet** (when surveyed). **Status, end of the third round:** every row is
+done (see "Third round, as built" above) except views as tabs (not wanted), making your own
+blocks (dropped), animated textures (Polish), the inventory's Prefabs page (with step 4) and
+part footprints drawn slot by slot in 2D (with step 5).
 
 | Godot feature | Where it lives in Godot | Suggestion |
 | --- | --- | --- |

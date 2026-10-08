@@ -50,6 +50,7 @@ import {
   type WorldInfo,
 } from "../worlds.ts";
 import {
+  type Aim,
   addPaletteCommand,
   addSemanticCommand,
   aim,
@@ -71,12 +72,14 @@ import {
   resemanticSelectionCommand,
   rotateCommand,
   selectCommand,
+  semanticIdOf,
   semanticOfState,
   setCellCommand,
   setLookCommand,
   sharedFromPalette,
   stepCommand,
 } from "./editing.ts";
+import { fillCells, stateFacings, strokeCommand } from "./flat-edit.ts";
 import { OpfsFolder } from "./opfs-folder.ts";
 import {
   type AimView,
@@ -366,6 +369,57 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       const shared = await paletteStore.load(command.key);
       if (!shared) throw new Error("That shared palette is gone");
       return runEdit(linkPaletteCommand(openProject(), shared)) >= 0;
+    }
+    case "paintCells":
+      return (
+        runEdit(
+          strokeCommand(
+            openProject(),
+            command.cells,
+            command.semantic,
+            command.face,
+            command.look,
+            command.label,
+          ),
+        ) > 0
+      );
+    case "fillPlane": {
+      const open = openProject();
+      const { axis, depth, u, v, window } = command;
+      const cells = fillCells(open, axis, depth, u, v, window);
+      const name =
+        command.semantic === null
+          ? "Erase"
+          : open.semantics.nameOf(semanticIdOf(open, command.semantic));
+      const label = `Fill ${cells.length / 3} ${command.semantic === null ? "empty" : name}`;
+      return (
+        runEdit(strokeCommand(open, cells, command.semantic, command.face, command.look, label)) > 0
+      );
+    }
+    case "toolAt": {
+      const open = openProject();
+      const [x, y, z] = command.at;
+      const [fx, fy, fz] = command.face;
+      const target: Aim = {
+        hit: [x, y, z],
+        id: open.world.getId(x, y, z),
+        place: [x + fx, y + fy, z + fz],
+        face: command.face,
+        hitY: 0.5,
+      };
+      const click = { tool: command.tool, brush: command.brush, camera: command.at, aim: target };
+      return runEdit(toolCommand(open, click, command.semantic, command.face)) > 0;
+    }
+    case "rotateAt": {
+      const open = openProject();
+      const id = open.world.getId(...command.at);
+      if (id === 0) return false;
+      const target: Aim = { hit: command.at, id, place: null, face: command.face, hitY: 0.5 };
+      return runEdit(rotateCommand(open, target, command.reverse)) > 0;
+    }
+    case "semanticAt": {
+      const state = world().get(...command.at);
+      return state ? semanticOfState(state) : null;
     }
     case "removeSemantic":
       return runEdit(removeSemanticCommand(openProject(), command.semantic)) >= 0;
@@ -696,14 +750,29 @@ function postLooks(s: WorldSession): void {
   const { colors, intent, faces, modelSlots, clear, models } = stateLooks(states, registry, blocks);
   const materials = blocks.data;
   const textures = blocks.takeTextures();
-  post({ type: "looks", world: worldId, colors, intent, faces, modelSlots, materials, textures }, [
-    colors.buffer,
-    intent.buffer,
-    faces.buffer,
-    modelSlots.buffer,
-    materials.buffer,
-    textures.rgba.buffer,
-  ]);
+  const facing = stateFacings(project as Project);
+  post(
+    {
+      type: "looks",
+      world: worldId,
+      colors,
+      intent,
+      facing,
+      faces,
+      modelSlots,
+      materials,
+      textures,
+    },
+    [
+      colors.buffer,
+      intent.buffer,
+      facing.buffer,
+      faces.buffer,
+      modelSlots.buffer,
+      materials.buffer,
+      textures.rgba.buffer,
+    ],
+  );
   looksPosted = { states: states.size, revision: registry.revision };
   sendLookShapes(s, clear, models);
 }

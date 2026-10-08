@@ -18,7 +18,10 @@ step 4 added multi-pane layouts with per-view time of day, an inventory for load
 hotbar, and selection actions kept apart from the selection panel. A second pass gave each
 pane a toolbar built from shared pieces, 3D camera cones and compasses, the 2D slice drawn in
 3D, a Keys panel, and the tools inside the inventory; `web-editor.md` also lists the gaps from
-the Godot app and a proposal for cross-project palettes, awaiting the user.
+the Godot app and a proposal for cross-project palettes. A third round, on the user's
+answers, built them: a keymap, Godot's wand plus Build to me and Exchange, camera presets and
+orbit, render modes with feature edges, slicing from 3D, Home with shared palettes and a
+textured starter palette, the block chooser, and 2D editing (editor step 6).
 Reviewed as a Claude Doc
 (https://claude.ai/code/artifact/98f31d14-989b-4c28-a24c-a3d7b8630a21); this file is now the
 working copy. **Keep it (and `web-lighting.md`) up to date as we go**, in the same commit as

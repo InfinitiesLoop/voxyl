@@ -1,14 +1,16 @@
 // A 2D view of one slice of the world: a plan of a layer, or a cut across x or z. It is a lens
 // on the world in the world worker (CLAUDE.md principle 2): it asks for the cells it shows and
 // colours them from the same looks table the 3D view uses, and owns nothing about the world.
-// Read-only for now; the editor (Phase 3) adds placing.
+// Edits go to the world worker as commands: a stroke is one command, previewed here while it
+// is drawn.
 
-import type { Direction } from "@voxyl/core";
+import { type Direction, SIDE_VECTORS, SIDES } from "@voxyl/core";
 import * as THREE from "three/webgpu";
 import { isKey } from "../editor/keymap.ts";
 import type { Engine } from "../scene/Engine.ts";
 import type { SliceWindow } from "../scene/slice-guide.ts";
-import { MAX_SLICE_CELLS } from "../world/protocol.ts";
+import { FACING_PARTS, FACING_UPSIDE_DOWN } from "../world/flat-edit.ts";
+import { MAX_SLICE_CELLS, type Vec3 } from "../world/protocol.ts";
 import {
   type Orientation,
   orientationFor,
@@ -16,6 +18,7 @@ import {
   planeToWorld,
   type SliceAxis,
   screenToPlane,
+  turnedOrientation,
   worldToPlane,
 } from "./plane.ts";
 
@@ -34,6 +37,18 @@ const GUIDE_FILL = "rgb(251 191 36 / 0.08)";
 const GUIDE_LINE = "rgb(251 191 36 / 0.7)";
 /** How far a camera's view cone reaches on screen, in CSS pixels, when it looks along the slice. */
 const CONE_PX = 46;
+/** The selection: bright on its layers, a dim outline off them. */
+const SELECTION_FILL = "rgb(103 232 249 / 0.12)";
+const SELECTION_LINE = "rgb(103 232 249 / 0.95)";
+const SELECTION_DIM = "rgb(103 232 249 / 0.35)";
+/** A stroke being drawn; erasing shows red. */
+const ERASE_LINE = "rgb(248 113 113 / 0.9)";
+/** Facing arrows and part marks show from this many CSS pixels a cell. */
+const GLYPH_PX = 12;
+
+/** How the Build tools draw in a 2D view (the 2D bar's Draw menu). */
+export type DrawMode = "pencil" | "line" | "rect" | "fill";
+
 /** How strongly the layer below shows through empty cells. */
 const BELOW = 0.32;
 /** Cells fetched beyond the visible edge, so small pans need no new request. */
@@ -48,6 +63,19 @@ export interface GridViewState {
   readonly cellPx: number;
   /** The cell under the pointer, in world coordinates, and what it holds. */
   readonly hover: { readonly at: readonly [number, number, number]; readonly what: string } | null;
+  /** Quarter turns clockwise and a mirror on top of the slice's own orientation. */
+  readonly turns: number;
+  readonly mirror: boolean;
+}
+
+/** A stroke being drawn: its cells (plane u, v), and how blocks will face. */
+interface Stroke {
+  readonly erase: boolean;
+  readonly mode: DrawMode;
+  readonly start: readonly [number, number];
+  last: [number, number];
+  readonly cells: Map<string, readonly [number, number]>;
+  readonly look: Vec3;
 }
 
 interface Fetched {
@@ -89,7 +117,13 @@ export class GridView {
   #dirty = true;
   #hover: GridViewState["hover"] = null;
   #hoverAsked = "";
-  #drag: { x: number; y: number } | null = null;
+  /** Panning: by the middle button, Space and drag, or left-drag with Select. */
+  #pan: { x: number; y: number; moved: boolean; pick: Vec3 | null } | null = null;
+  #space = false;
+  #stroke: Stroke | null = null;
+  #mode: DrawMode = "pencil";
+  #turns = 0;
+  #mirror = false;
   #frame = 0;
   /** Where the 3D cameras were last drawn. */
   #cameraKey = "";
@@ -115,7 +149,21 @@ export class GridView {
     const c = this.canvas;
     c.addEventListener("pointerdown", (e) => this.#onDown(e), { signal });
     c.addEventListener("pointermove", (e) => this.#onMove(e), { signal });
-    c.addEventListener("pointerup", () => this.#onUp(), { signal });
+    c.addEventListener("pointerup", (e) => this.#onUp(e), { signal });
+    c.addEventListener("contextmenu", (e) => e.preventDefault(), { signal });
+    c.addEventListener(
+      "keyup",
+      (e) => {
+        if (e.code === "Space") this.#space = false;
+      },
+      { signal },
+    );
+    for (const store of [engine.selection, engine.anchor, engine.hotbar.state]) {
+      const off = store.subscribe(() => {
+        this.#dirty = true;
+      });
+      signal.addEventListener("abort", off);
+    }
     c.addEventListener("pointerleave", () => this.#setHover(null), { signal });
     c.addEventListener("wheel", (e) => this.#onWheel(e), { signal, passive: false });
     c.addEventListener("keydown", (e) => this.#onKey(e), { signal });
@@ -128,7 +176,14 @@ export class GridView {
   }
 
   get state(): GridViewState {
-    return { axis: this.#axis, depth: this.#depth, cellPx: this.#cellPx, hover: this.#hover };
+    return {
+      axis: this.#axis,
+      depth: this.#depth,
+      cellPx: this.#cellPx,
+      hover: this.#hover,
+      turns: this.#turns,
+      mirror: this.#mirror,
+    };
   }
 
   /**
@@ -180,6 +235,22 @@ export class GridView {
     this.#changed();
   }
 
+  /** Turns or mirrors the picture, keeping the same cell in the middle. */
+  setView(turns: number, mirror: boolean): void {
+    const centre = this.#centreWorld();
+    this.#turns = ((Math.round(turns) % 4) + 4) % 4;
+    this.#mirror = mirror;
+    this.#setOrientation();
+    const [u, v] = worldToPlane(this.#axis, centre);
+    this.#centerOn(u, v);
+    this.#changed();
+  }
+
+  /** How the Build tools draw here: pencil strokes, lines, rectangles or fills. */
+  setDrawMode(mode: DrawMode): void {
+    this.#mode = mode;
+  }
+
   setDepth(depth: number): void {
     this.#depth = Math.round(depth);
     this.#changed();
@@ -211,7 +282,11 @@ export class GridView {
   }
 
   #setOrientation(): void {
-    this.#orientation = orientationFor(this.#axis, this.#north);
+    this.#orientation = turnedOrientation(
+      orientationFor(this.#axis, this.#north),
+      this.#turns,
+      this.#mirror,
+    );
   }
 
   #centerOn(u: number, v: number): void {
@@ -393,6 +468,9 @@ export class GridView {
     this.#drawGrid(s0, t0, s1, t1, sx, ty, px);
     if (this.#cameras) this.#drawCameras(sx, ty, px);
     this.#drawOtherSlices(sx, ty, px);
+    if (px >= GLYPH_PX * ratio) this.#drawFacings(s0, t0, s1, t1, sx, ty, px);
+    this.#drawSelection(sx, ty, px);
+    this.#drawStroke(sx, ty, px);
     this.#publishGuide(s0, t0, s1, t1);
     if (this.#hover) {
       const [u, v] = worldToPlane(this.#axis, this.#hover.at);
@@ -577,27 +655,167 @@ export class GridView {
     return [s, t];
   }
 
+  /** The plane cell under a pointer, and which way from the cell's middle it is (the look). */
+  #cellAt(event: PointerEvent): { u: number; v: number; look: Vec3 } {
+    const [s, t] = this.#toScreenCell(event);
+    const [u, v] = screenToPlane(this.#orientation, Math.floor(s), Math.floor(t));
+    const fs = s - Math.floor(s) - 0.5;
+    const ft = t - Math.floor(t) - 0.5;
+    // The screen direction nearest the press, as a plane step, as a world direction.
+    const o = this.#orientation;
+    const along = Math.abs(fs) >= Math.abs(ft) ? o.right : o.down;
+    const sign = (Math.abs(fs) >= Math.abs(ft) ? Math.sign(fs) : Math.sign(ft)) || 1;
+    const du = along.onU ? along.sign * sign : 0;
+    const dv = along.onU ? 0 : along.sign * sign;
+    return { u, v, look: planeToWorld(this.#axis, 0, du, dv) };
+  }
+
+  /** The face a 2D edit counts as clicking: the slice's own axis (up, on a plan). */
+  #face(): Vec3 {
+    const face: [number, number, number] = [0, 0, 0];
+    face[this.#axis] = 1;
+    return face;
+  }
+
   #onDown(event: PointerEvent): void {
     this.canvas.focus();
     this.canvas.setPointerCapture(event.pointerId);
-    this.#drag = { x: event.clientX, y: event.clientY };
+    const { u, v, look } = this.#cellAt(event);
+    const at = planeToWorld(this.#axis, this.#depth, u, v);
+    const tool = this.#engine.tool.get();
+    const middle = event.button === 1;
+    const panLeft = event.button === 0 && (this.#space || tool === "select");
+    if (middle || panLeft) {
+      this.#pan = { x: event.clientX, y: event.clientY, moved: false, pick: middle ? at : null };
+      return;
+    }
+    if (!this.#engine.info) return;
+    if (tool === "select") {
+      if (event.button !== 2) return;
+      if (event.shiftKey) this.#engine.selectConnectedAt(at);
+      else this.#engine.selectCornerAt(at);
+      return;
+    }
+    const semantic = this.#engine.hotbar.current?.ref;
+    if (tool === "exchange" && event.button === 0) {
+      if (semantic === undefined) return;
+      this.#engine.edit2d(
+        this.#engine.world.request({
+          type: "toolAt",
+          tool: "exchange",
+          brush: this.#engine.brush.get(),
+          at,
+          face: this.#face(),
+          semantic,
+        }),
+      );
+      return;
+    }
+    if (event.button !== 0 && event.button !== 2) return;
+    const erase = event.button === 2;
+    const mode = tool === "exchange" ? "pencil" : this.#mode;
+    if (mode === "fill") {
+      if (!erase && semantic === undefined) return;
+      const [s0, t0, s1, t1] = this.#visible(0);
+      const [ua, va] = screenToPlane(this.#orientation, s0, t0);
+      const [ub, vb] = screenToPlane(this.#orientation, s1 - 1, t1 - 1);
+      const window: [number, number, number, number] = [
+        Math.min(ua, ub),
+        Math.min(va, vb),
+        Math.max(ua, ub) + 1,
+        Math.max(va, vb) + 1,
+      ];
+      this.#engine.edit2d(
+        this.#engine.world.request({
+          type: "fillPlane",
+          axis: this.#axis,
+          depth: this.#depth,
+          u,
+          v,
+          window,
+          semantic: erase ? null : (semantic ?? null),
+          face: this.#face(),
+          look,
+        }),
+      );
+      return;
+    }
+    if (!erase && semantic === undefined) return;
+    this.#stroke = {
+      erase,
+      mode,
+      start: [u, v],
+      last: [u, v],
+      cells: new Map([[`${u},${v}`, [u, v]]]),
+      look,
+    };
+    this.#dirty = true;
   }
 
   #onMove(event: PointerEvent): void {
-    if (this.#drag) {
-      this.#center[0] -= (event.clientX - this.#drag.x) / this.#cellPx;
-      this.#center[1] -= (event.clientY - this.#drag.y) / this.#cellPx;
-      this.#drag = { x: event.clientX, y: event.clientY };
+    const pan = this.#pan;
+    if (pan) {
+      const dx = event.clientX - pan.x;
+      const dy = event.clientY - pan.y;
+      if (pan.moved || Math.hypot(dx, dy) > 3) {
+        pan.moved = true;
+        this.#center[0] -= dx / this.#cellPx;
+        this.#center[1] -= dy / this.#cellPx;
+        pan.x = event.clientX;
+        pan.y = event.clientY;
+        this.#dirty = true;
+      }
+    }
+    const { u, v } = this.#cellAt(event);
+    const stroke = this.#stroke;
+    if (stroke && (u !== stroke.last[0] || v !== stroke.last[1])) {
+      if (stroke.mode === "pencil") {
+        for (const c of lineCells(stroke.last, [u, v])) stroke.cells.set(`${c[0]},${c[1]}`, c);
+      } else {
+        stroke.cells.clear();
+        const cells =
+          stroke.mode === "line"
+            ? lineCells(stroke.start, [u, v])
+            : rectCells(stroke.start, [u, v]);
+        for (const c of cells) stroke.cells.set(`${c[0]},${c[1]}`, c);
+      }
+      stroke.last = [u, v];
       this.#dirty = true;
     }
-    const [s, t] = this.#toScreenCell(event);
-    const [u, v] = screenToPlane(this.#orientation, Math.floor(s), Math.floor(t));
-    const at = planeToWorld(this.#axis, this.#depth, u, v);
-    void this.#askHover(at);
+    void this.#askHover(planeToWorld(this.#axis, this.#depth, u, v));
   }
 
-  #onUp(): void {
-    this.#drag = null;
+  #onUp(event: PointerEvent): void {
+    const pan = this.#pan;
+    this.#pan = null;
+    if (pan?.pick && !pan.moved && event.button === 1) this.#engine.pickAt(pan.pick);
+    const stroke = this.#stroke;
+    this.#stroke = null;
+    if (!stroke) return;
+    this.#dirty = true;
+    const cells: number[] = [];
+    for (const [u, v] of stroke.cells.values())
+      cells.push(...planeToWorld(this.#axis, this.#depth, u, v));
+    const semantic = stroke.erase ? null : (this.#engine.hotbar.current?.ref ?? null);
+    if (!stroke.erase && semantic === null) return;
+    const what = stroke.erase
+      ? "Erase"
+      : stroke.mode === "pencil"
+        ? "Paint"
+        : stroke.mode === "line"
+          ? "Line"
+          : "Rectangle";
+    const name = stroke.erase ? "" : ` ${this.#engine.hotbar.current?.name ?? ""}`;
+    this.#engine.edit2d(
+      this.#engine.world.request({
+        type: "paintCells",
+        cells,
+        semantic,
+        face: this.#face(),
+        look: stroke.look,
+        label: `${what} ${cells.length / 3}${name}`,
+      }),
+    );
   }
 
   #onWheel(event: WheelEvent): void {
@@ -617,10 +835,163 @@ export class GridView {
   }
 
   #onKey(event: KeyboardEvent): void {
+    if (event.code === "Space") {
+      this.#space = true;
+      event.preventDefault();
+      return;
+    }
+    if (isKey("flatMirror", event.code) && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault();
+      this.setView(this.#turns, !this.#mirror);
+      return;
+    }
+    if (isKey("rotateBlock", event.code) && this.#hover && !event.ctrlKey) {
+      event.preventDefault();
+      this.#engine.edit2d(
+        this.#engine.world.request({
+          type: "rotateAt",
+          at: [this.#hover.at[0], this.#hover.at[1], this.#hover.at[2]],
+          face: this.#face(),
+          reverse: event.shiftKey,
+        }),
+      );
+      return;
+    }
     const step = isKey("layerUp", event.code) ? 1 : isKey("layerDown", event.code) ? -1 : 0;
     if (step === 0) return;
     event.preventDefault();
     this.setDepth(this.#depth + step * (event.shiftKey ? 4 : 1));
+  }
+
+  /**
+   * The selection's bounds on this slice: filled and bright when the layer is inside it,
+   * a dim outline when it lies on other layers. The first corner of a box being chosen shows
+   * as one bright cell on its layer.
+   */
+  #drawSelection(sx: (s: number) => number, ty: (t: number) => number, px: number): void {
+    const ctx = this.#ctx;
+    const ratio = window.devicePixelRatio || 1;
+    const rect = (a: Vec3, b: Vec3) => {
+      const [ua, va] = worldToPlane(this.#axis, a);
+      const [ub, vb] = worldToPlane(this.#axis, b);
+      const [sa, ta] = planeToScreen(this.#orientation, ua, va);
+      const [sb, tb] = planeToScreen(this.#orientation, ub, vb);
+      const x = sx(Math.min(sa, sb));
+      const y = ty(Math.min(ta, tb));
+      return [x, y, (Math.abs(sb - sa) + 1) * px, (Math.abs(tb - ta) + 1) * px] as const;
+    };
+    const bounds = this.#engine.selection.get().bounds;
+    if (bounds) {
+      const lo: Vec3 = [bounds[0], bounds[1], bounds[2]];
+      const hi: Vec3 = [bounds[3], bounds[4], bounds[5]];
+      const inside = this.#depth >= (lo[this.#axis] ?? 0) && this.#depth <= (hi[this.#axis] ?? 0);
+      const [x, y, w, h] = rect(lo, hi);
+      if (inside) {
+        ctx.fillStyle = SELECTION_FILL;
+        ctx.fillRect(x, y, w, h);
+      }
+      ctx.strokeStyle = inside ? SELECTION_LINE : SELECTION_DIM;
+      ctx.lineWidth = (inside ? 2 : 1) * ratio;
+      ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    }
+    const anchor = this.#engine.anchor.get();
+    if (anchor && Math.floor(anchor[this.#axis] ?? 0) === this.#depth) {
+      const [x, y, w, h] = rect(anchor, anchor);
+      ctx.strokeStyle = SELECTION_LINE;
+      ctx.lineWidth = 2 * ratio;
+      ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+    }
+  }
+
+  /** The stroke being drawn: the hotbar's colour, or red outlines when erasing. */
+  #drawStroke(sx: (s: number) => number, ty: (t: number) => number, px: number): void {
+    const stroke = this.#stroke;
+    if (!stroke) return;
+    const ctx = this.#ctx;
+    const color = this.#engine.hotbar.current?.color ?? "#ffffff";
+    ctx.globalAlpha = stroke.erase ? 1 : 0.7;
+    ctx.fillStyle = color;
+    ctx.strokeStyle = ERASE_LINE;
+    ctx.lineWidth = Math.max(1, window.devicePixelRatio || 1);
+    for (const [u, v] of stroke.cells.values()) {
+      const [s, t] = planeToScreen(this.#orientation, u, v);
+      if (stroke.erase) ctx.strokeRect(sx(s) + 1.5, ty(t) + 1.5, px - 3, px - 3);
+      else ctx.fillRect(sx(s), ty(t), px, px);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /**
+   * Which way turnable blocks face, when cells are big enough: an arrow in the slice's
+   * plane, a diamond when they face out of it, hollow when upside down; cells of parts get
+   * a small corner mark.
+   */
+  #drawFacings(
+    s0: number,
+    t0: number,
+    s1: number,
+    t1: number,
+    sx: (s: number) => number,
+    ty: (t: number) => number,
+    px: number,
+  ): void {
+    const f = this.#fetched;
+    const facing = this.#engine.facing;
+    if (!f || f.axis !== this.#axis || f.depth !== this.#depth || facing.length === 0) return;
+    const ctx = this.#ctx;
+    const o = this.#orientation;
+    ctx.lineWidth = Math.max(1, (window.devicePixelRatio || 1) * 1.2);
+    for (let t = t0; t < t1; t++)
+      for (let s = s0; s < s1; s++) {
+        const [u, v] = screenToPlane(o, s, t);
+        const i = u - f.u0;
+        const j = v - f.v0;
+        if (i < 0 || j < 0 || i >= f.width || j >= f.height) continue;
+        const id = f.ids[i + j * f.width] ?? 0;
+        const bits = id === 0 ? 0 : (facing[id] ?? 0);
+        if (bits === 0) continue;
+        const x = sx(s);
+        const y = ty(t);
+        ctx.strokeStyle = "rgb(0 0 0 / 0.75)";
+        ctx.fillStyle = "rgb(255 255 255 / 0.9)";
+        if (bits & FACING_PARTS) {
+          ctx.beginPath();
+          ctx.moveTo(x + px * 0.62, y + px * 0.15);
+          ctx.lineTo(x + px * 0.85, y + px * 0.15);
+          ctx.lineTo(x + px * 0.85, y + px * 0.38);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          continue;
+        }
+        const side = SIDES[(bits & 7) - 1];
+        if (!side) continue;
+        const [du, dv] = worldToPlane(this.#axis, SIDE_VECTORS[side]);
+        const along = (a: { onU: boolean; sign: 1 | -1 }) => (a.onU ? du : dv) * a.sign;
+        const dx = along(o.right);
+        const dy = along(o.down);
+        const cx = x + px / 2;
+        const cy = y + px / 2;
+        const hollow = (bits & FACING_UPSIDE_DOWN) !== 0;
+        ctx.beginPath();
+        if (dx === 0 && dy === 0) {
+          const d = px * 0.16;
+          ctx.moveTo(cx, cy - d);
+          ctx.lineTo(cx + d, cy);
+          ctx.lineTo(cx, cy + d);
+          ctx.lineTo(cx - d, cy);
+        } else {
+          // An arrowhead pointing the way the front faces.
+          const r = px * 0.3;
+          const w = px * 0.18;
+          ctx.moveTo(cx + dx * r, cy + dy * r);
+          ctx.lineTo(cx - dx * r * 0.4 - dy * w, cy - dy * r * 0.4 + dx * w);
+          ctx.lineTo(cx - dx * r * 0.4 + dy * w, cy - dy * r * 0.4 - dx * w);
+        }
+        ctx.closePath();
+        if (!hollow) ctx.fill();
+        ctx.stroke();
+      }
   }
 
   async #askHover(at: [number, number, number]): Promise<void> {
@@ -654,4 +1025,30 @@ function cameraKeyOf(engine: Engine): string {
     key += `${q.x.toFixed(3)},${q.y.toFixed(3)},${q.z.toFixed(3)},${q.w.toFixed(3)};`;
   }
   return key;
+}
+
+/** The plane cells on a straight line between two cells, ends included. */
+export function lineCells(
+  a: readonly [number, number],
+  b: readonly [number, number],
+): [number, number][] {
+  const du = b[0] - a[0];
+  const dv = b[1] - a[1];
+  const steps = Math.max(Math.abs(du), Math.abs(dv));
+  if (steps === 0) return [[a[0], a[1]]];
+  const out: [number, number][] = [];
+  for (let i = 0; i <= steps; i++)
+    out.push([Math.round(a[0] + (du * i) / steps), Math.round(a[1] + (dv * i) / steps)]);
+  return out;
+}
+
+/** Every plane cell of the rectangle with corners a and b. */
+export function rectCells(
+  a: readonly [number, number],
+  b: readonly [number, number],
+): [number, number][] {
+  const out: [number, number][] = [];
+  for (let u = Math.min(a[0], b[0]); u <= Math.max(a[0], b[0]); u++)
+    for (let v = Math.min(a[1], b[1]); v <= Math.max(a[1], b[1]); v++) out.push([u, v]);
+  return out;
 }

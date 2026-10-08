@@ -77,3 +77,22 @@ export function planeToScreen(o: Orientation, u: number, v: number): [s: number,
   const back = (a: ScreenAxis, n: number) => (a.sign > 0 ? n : -n - 1);
   return o.right.onU ? [back(o.right, u), back(o.down, v)] : [back(o.right, v), back(o.down, u)];
 }
+
+/**
+ * A view turned and mirrored on top of its orientation: `turns` quarter turns clockwise (the
+ * picture turns, as when you rotate a map), then `mirror` flips it left to right. The 2D
+ * bar's View menu sets these; they change only how the slice is shown.
+ */
+export function turnedOrientation(o: Orientation, turns: number, mirror: boolean): Orientation {
+  let right = o.right;
+  let down = o.down;
+  const flip = (a: ScreenAxis): ScreenAxis => ({ onU: a.onU, sign: a.sign > 0 ? -1 : 1 });
+  for (let i = 0; i < ((turns % 4) + 4) % 4; i++) {
+    // Clockwise: what was up is now right, and what was right is now down.
+    const nextRight = flip(down);
+    down = right;
+    right = nextRight;
+  }
+  if (mirror) right = flip(right);
+  return { right, down };
+}

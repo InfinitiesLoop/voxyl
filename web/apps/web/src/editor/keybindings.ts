@@ -114,11 +114,20 @@ export const KEY_SECTIONS: readonly BindingSection[] = [
     title: "2D view",
     when: "Pointer over a 2D view",
     bindings: [
-      other("Pan", ["Drag"]),
+      other(
+        "Draw with the hotbar semantic",
+        ["Left drag"],
+        "Pencil, Line, Rectangle or Fill: the Draw menu",
+      ),
+      other("Erase", ["Right drag"]),
+      other("Pick the semantic in a cell", ["Middle click"]),
+      other("Pan", ["Middle drag"], "or Space + drag; left drag with Select"),
       other("Zoom", ["Wheel"]),
       key("Layer up", "layerUp", "also + in the bar"),
       key("Layer down", "layerDown", "also − in the bar"),
       other("Four layers at a time", ["Shift + those"]),
+      key("Turn the block under the pointer", "rotateBlock", "Shift turns it the other way"),
+      key("Mirror the picture", "flatMirror", "also the View menu"),
     ],
   },
 ];

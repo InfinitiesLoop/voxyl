@@ -6,6 +6,7 @@ import {
   planeToWorld,
   type SliceAxis,
   screenToPlane,
+  turnedOrientation,
   worldToPlane,
 } from "./plane.ts";
 
@@ -56,5 +57,26 @@ describe("2D view planes", () => {
       const [, v1] = screenToPlane(o, 0, -1);
       expect(v1 - v0).toBe(1);
     }
+  });
+
+  it("turns and mirrors a view, and still round-trips", () => {
+    const o = orientationFor(1, "north");
+    // A quarter turn clockwise: the real north, up before, points right.
+    const turned = turnedOrientation(o, 1, false);
+    const [u0, v0] = screenToPlane(turned, 0, 0);
+    const [u1, v1] = screenToPlane(turned, 1, 0);
+    expect([u1 - u0, v1 - v0]).toEqual([0, -1]);
+    // Mirrored: east is on the left.
+    const mirrored = turnedOrientation(o, 0, true);
+    const [a0] = screenToPlane(mirrored, 0, 0);
+    const [a1] = screenToPlane(mirrored, 1, 0);
+    expect(a1 - a0).toBe(-1);
+    for (const t of [0, 1, 2, 3])
+      for (const m of [false, true]) {
+        const x = turnedOrientation(o, t, m);
+        const [u, v] = screenToPlane(x, 4, -3);
+        expect(planeToScreen(x, u, v)).toEqual([4, -3]);
+      }
+    expect(turnedOrientation(o, 4, false)).toEqual(o);
   });
 });
