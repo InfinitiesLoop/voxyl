@@ -55,6 +55,9 @@ export const EMISSIVE_ALPHA = 0;
 /** The packed light the light volume stores in light-blocking cells (LightEngine OPAQUE_LIGHT). */
 const OPAQUE_LIGHT = 0xffff;
 
+/** How far a quad is grown past its edges, in sixteenths of a cell (0.003 of a cell). */
+const SEAM_OVERLAP = 0.05;
+
 const unit = (axis: number, sign = 1) =>
   new THREE.Vector3(axis === 0 ? sign : 0, axis === 1 ? sign : 0, axis === 2 ? sign : 0);
 
@@ -132,9 +135,13 @@ function surface(kind: SurfaceKind) {
     const corner = positionGeometry.xy;
     const u = uniformArray<"vec3">(FACE_U, "vec3").element(face);
     const v = uniformArray<"vec3">(FACE_V, "vec3").element(face);
+    // Each quad is grown by a hair on all sides. Greedy merging leaves T-junctions (a long
+    // edge against two short ones), and the rasteriser doesn't cover both the same way, so
+    // pixels fall in the sliver between and show what is behind the wall. A hair of overlap
+    // closes them; coplanar neighbours agree, so nothing else shows.
     const position = a.xyz
-      .add(u.mul(corner.x.mul(b.x)))
-      .add(v.mul(corner.y.mul(b.y)))
+      .add(u.mul(corner.x.mul(b.x.add(2 * SEAM_OVERLAP)).sub(SEAM_OVERLAP)))
+      .add(v.mul(corner.y.mul(b.y.add(2 * SEAM_OVERLAP)).sub(SEAM_OVERLAP)))
       .div(QUAD_UNITS);
     const normal = uniformArray<"vec3">(FACE_NORMAL, "vec3").element(face);
     return { position, normal, id: b.z, slot: b.w };

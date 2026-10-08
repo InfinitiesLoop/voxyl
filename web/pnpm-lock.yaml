@@ -205,6 +205,9 @@ importers:
       '@voxyl/mesher':
         specifier: workspace:*
         version: link:../../packages/mesher
+      '@voxyl/schematic':
+        specifier: workspace:*
+        version: link:../../packages/schematic
       '@voxyl/session':
         specifier: workspace:*
         version: link:../../packages/session
@@ -326,6 +329,19 @@ importers:
       '@voxyl/fixtures':
         specifier: workspace:*
         version: link:../fixtures
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+
+  packages/schematic:
+    dependencies:
+      '@voxyl/core':
+        specifier: workspace:*
+        version: link:../core
+      '@voxyl/shapes':
+        specifier: workspace:*
+        version: link:../shapes
+    devDependencies:
       typescript:
         specifier: ^7.0.2
         version: 7.0.2

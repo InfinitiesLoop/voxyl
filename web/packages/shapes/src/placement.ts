@@ -338,3 +338,50 @@ export function resolvePlacement(
   }
   return attempt(outside, flips && opposite ? farSlot : slot);
 }
+
+/**
+ * The lines of a shape's placement zones on a face, as u1 v1 u2 v2 per segment with u and v in
+ * -0.5..0.5 across the face (u along side (side + 2) % 6, v along (side + 4) % 6): the border
+ * and where a click on the face changes which slot a part takes. Architecture shapes orient
+ * from the click and have no zones, so they give none.
+ */
+export function placementGrid(shape: string): Float32Array {
+  const info = MICRO_SHAPES[shape];
+  if (!info) return new Float32Array(0);
+  const lines: number[] = [];
+  const seg = (a: number, b: number, c: number, d: number) => lines.push(a, b, c, d);
+  seg(-0.5, -0.5, 0.5, -0.5);
+  seg(0.5, -0.5, 0.5, 0.5);
+  seg(0.5, 0.5, -0.5, 0.5);
+  seg(-0.5, 0.5, -0.5, -0.5);
+  switch (info.family) {
+    case "face":
+    case "hollow": {
+      const s = info.family === "face" ? 0.25 : 0.375;
+      for (const [cx, cy] of [
+        [-1, -1],
+        [1, -1],
+        [1, 1],
+        [-1, 1],
+      ] as const) {
+        seg(cx * 0.5, cy * 0.5, cx * s, cy * s);
+      }
+      seg(-s, -s, s, -s);
+      seg(s, -s, s, s);
+      seg(s, s, -s, s);
+      seg(-s, s, -s, -s);
+      break;
+    }
+    case "corner":
+      seg(0, -0.5, 0, 0.5);
+      seg(-0.5, 0, 0.5, 0);
+      break;
+    case "edge":
+      for (const k of [-0.25, 0.25]) {
+        seg(k, -0.5, k, 0.5);
+        seg(-0.5, k, 0.5, k);
+      }
+      break;
+  }
+  return new Float32Array(lines);
+}

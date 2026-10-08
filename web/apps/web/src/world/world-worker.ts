@@ -6,6 +6,8 @@
 
 import {
   bakeBlockIcon,
+  bakeColorIcon,
+  blockLabel,
   compileBlock,
   compileShape,
   DEFAULT_LIBRARY_ID,
@@ -16,11 +18,12 @@ import {
   searchBlocks,
 } from "@voxyl/blocks";
 import {
-  type CellSet,
+  CellSet,
   type CellStateTable,
   cutPiece,
   type Command as EditCommand,
   IDENTITY,
+  MAX_REGION_CELLS,
   type Piece,
   type Project,
   raycast,
@@ -34,6 +37,15 @@ import {
 } from "@voxyl/fixtures";
 import { importJar } from "@voxyl/mc-import";
 import type { ModelShape, StateShape } from "@voxyl/mesher";
+import {
+  builtinIdentity,
+  exportSchematic,
+  type IdentityResolver,
+  materialRows,
+  materialText,
+  planExport,
+  semanticRows,
+} from "@voxyl/schematic";
 import {
   BlockMaterials,
   type CellBox,
@@ -91,6 +103,7 @@ import {
   newProject,
   paletteInfo,
   partGhost,
+  partGrid,
   placeCommand,
   removePaletteCommand,
   removeSemanticCommand,
@@ -129,6 +142,7 @@ import {
   type PasteGhost,
   type RayHit,
   type Replies,
+  type SchematicSource,
   type ToWorld,
   type Vec3,
 } from "./protocol.ts";
@@ -554,7 +568,10 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       if (command.refs.length > 8) throw new Error("Too many icons in one bake");
       const icons = new Uint8Array(command.refs.length * size * size * 4);
       command.refs.forEach((ref, i) => {
-        const icon = bakeBlockIcon(libraries, ref, size);
+        // "color:#rrggbb" is an undecided semantic's cube; anything else is a block.
+        const icon = ref.startsWith("color:")
+          ? bakeColorIcon(ref.slice(6), size)
+          : bakeBlockIcon(libraries, ref, size);
         if (icon) icons.set(icon, i * size * size * 4);
       });
       return { size, icons };
@@ -619,6 +636,7 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
           hitY: 0,
           preview: null,
           ghost: null,
+          grid: null,
           aimed: null,
           pasteGhost: pasteGhostAt(openProject(), at, command.paste),
         } satisfies AimView;
@@ -634,12 +652,14 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       const ghost = command.part
         ? partGhost(open, target, command.part.semantic, command.part.opposite)
         : null;
+      const grid = command.part ? partGrid(open, target, command.part.semantic) : null;
       const state = target.part ? world().states.get(target.id) : null;
       const met = target.part ? state?.parts[target.part.index] : undefined;
       return {
         ...target,
         preview,
         ghost,
+        grid,
         aimed: met ? { shape: met.shape, slot: met.slot } : null,
         pasteGhost: command.paste
           ? (() => {
@@ -720,6 +740,32 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       const colors = pieceColors(piece);
       const thumb = pieceThumbnail(piece, (n) => colors[n] ?? 0x808080);
       return prefabStore.save(piece, { name: command.name, tags: command.tags, thumb });
+    }
+    case "schematicPlan": {
+      const { piece, name } = await schematicPiece(command.source);
+      const exclude = new Set(command.exclude);
+      const identify = identifyBlock();
+      const options = { identify, exclude, trim: command.trim };
+      const materials = materialRows(piece, identify, exclude);
+      const labels: Record<string, string> = {};
+      for (const row of materials) if (row.block) labels[row.block] = blockLabel(row.block);
+      return {
+        name,
+        semantics: semanticRows(piece, identify),
+        materials,
+        materialText: materialText(materials, blockLabel),
+        labels,
+        report: planExport(piece, { ...options, dryRun: true }).report,
+      };
+    }
+    case "schematicFile": {
+      const { piece, name } = await schematicPiece(command.source);
+      const { bytes, report } = await exportSchematic(piece, {
+        identify: identifyBlock(),
+        exclude: new Set(command.exclude),
+        trim: command.trim,
+      });
+      return { name, bytes, report };
     }
     case "prefabs":
       return prefabStore.list();
@@ -874,6 +920,61 @@ function pieceOfSelection(open: Project, selection: CellSet): Piece | null {
     selection,
     [b.x0 + ax, b.y0 + ay, b.z0 + az],
   );
+}
+
+/** What a block is in Minecraft: its library's own word for it, else the vanilla names. */
+function identifyBlock(): IdentityResolver {
+  return (ref) => {
+    const parsed = parseBlockRef(ref);
+    return (
+      (parsed && libraries.get(parsed.library)?.blocks[parsed.block]?.mc) || builtinIdentity(ref)
+    );
+  };
+}
+
+/** The piece a schematic export is cut from, and a file name for it. */
+async function schematicPiece(source: SchematicSource): Promise<{ piece: Piece; name: string }> {
+  await librariesLoaded;
+  const open = openProject();
+  const name = open.settings.name;
+  if (source === "selection") {
+    const piece =
+      open.selection && open.selection.size > 0 ? pieceOfSelection(open, open.selection) : null;
+    if (!piece) throw new Error("Nothing is selected");
+    return { piece, name: name ? `${name} selection` : "selection" };
+  }
+  if (source === "build") {
+    const box = { x0: 0, y0: 0, z0: 0, x1: 0, y1: 0, z1: 0 };
+    let any = false;
+    open.world.forEachCell((x, y, z) => {
+      if (!any) {
+        box.x0 = box.x1 = x;
+        box.y0 = box.y1 = y;
+        box.z0 = box.z1 = z;
+        any = true;
+        return;
+      }
+      box.x0 = Math.min(box.x0, x);
+      box.y0 = Math.min(box.y0, y);
+      box.z0 = Math.min(box.z0, z);
+      box.x1 = Math.max(box.x1, x);
+      box.y1 = Math.max(box.y1, y);
+      box.z1 = Math.max(box.z1, z);
+    });
+    if (!any) throw new Error("The build is empty");
+    const cells = (box.x1 - box.x0 + 1) * (box.y1 - box.y0 + 1) * (box.z1 - box.z0 + 1);
+    if (cells > MAX_REGION_CELLS) throw new Error("The build is too big to export whole");
+    const piece = cutPiece(
+      { world: open.world, semantics: open.semantics, id: open.id, north: open.settings.north },
+      CellSet.ofBox(box),
+    );
+    if (!piece) throw new Error("The build is empty");
+    return { piece, name: name ?? "build" };
+  }
+  const piece = await prefabStore.load(source.prefab);
+  const entry = await prefabStore.entry(source.prefab);
+  if (!piece || !entry) throw new Error("That prefab is gone");
+  return { piece, name: entry.name };
 }
 
 /** Each piece semantic's colour as 0xrrggbb, by its 1-based number (index 0 is unused). */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bakeBlockIcon, buildDefaultLibrary } from "../src/index.ts";
+import { bakeBlockIcon, bakeColorIcon, buildDefaultLibrary } from "../src/index.ts";
 
 const libraries = new Map([["voxyl", buildDefaultLibrary()]]);
 
@@ -79,5 +79,20 @@ describe("block icons", () => {
   it("returns null for an unknown block", () => {
     expect(bakeBlockIcon(libraries, "voxyl:nope")).toBeNull();
     expect(bakeBlockIcon(libraries, "missing:stone")).toBeNull();
+  });
+});
+
+describe("bakeColorIcon", () => {
+  it("draws a shaded cube in the colour, and nothing for a bad colour", () => {
+    const icon = bakeColorIcon("#cc3322", 64);
+    expect(icon).not.toBeNull();
+    expect(opaque(icon as Uint8Array, 64).n).toBeGreaterThan(900);
+    const reds = new Set<number>();
+    for (let i = 0; i < 64 * 64; i++) {
+      if ((icon?.[i * 4 + 3] ?? 0) > 0) reds.add(icon?.[i * 4] ?? 0);
+    }
+    // Top, and the two visible sides, shade differently.
+    expect(reds.size).toBeGreaterThanOrEqual(3);
+    expect(bakeColorIcon("red", 64)).toBeNull();
   });
 });

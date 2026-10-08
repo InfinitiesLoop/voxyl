@@ -568,6 +568,34 @@ might blow the triangle or memory budget. Tested on the city fixture decorated w
 - Memory could halve later. Part quads could pack into 8 bytes for chunks up to 64Â³, and roof
   tiles inside hip roofs keep back faces nobody sees (the attic is hollow).
 
+### Schematic export and editor polish (2026-10-08)
+
+- **`packages/schematic`** (DOM- and Node-free, gzip through the platform's streams): NBT
+  writer and reader, the Schematica writer, FMP microblock and ArchitectureCraft tile export,
+  Minecraft identities (`Block.mc` in a library, else the built-in vanilla table), material
+  lists, and the include list per semantic. Semantics become blocks only inside the export;
+  what can't be written (undecided, no identity, shape with no mod equivalent) is reported and
+  left as air. North is north: the file is turned so the build's north ends on -Z. 20 tests.
+- **UI**: "Export schematic…" in the selection's Actions, and "Export as a schematic…" in the
+  Project dialog (whole build). The dialog ticks semantics in and out, shows the report and
+  the material list (copyable), and downloads `<project>.schematic`. Verified in the browser
+  on `world=blocks` (1,590 cells, 30 kinds of block, a valid gzipped file). Not yet loaded in
+  Minecraft: that check is the user's, at the gate. A prefab entry point isn't wired (the
+  worker already takes `{ prefab: id }`).
+- **Undecided semantics draw as a shaded colour cube** in the inventory, hotbar and preview
+  (`bakeColorIcon`, the same bake as blocks, ref `color:#rrggbb`). They were flat swatches
+  because the default city themes (Concrete, Brick) are colours with no blocks.
+- **Inventory footer is one height for every tool** (hint area and the options row are
+  reserved), so choosing a tool no longer moves the hotbar.
+- **Seams**: quads are grown by 0.003 cell (`SEAM_OVERLAP`, quad-material.ts). Greedy merging
+  leaves T-junctions, and the rasteriser leaves sub-pixel gaps there that show what is behind
+  the wall, worst in dark rooms. Sloped-part triangles aren't grown yet; if holes remain
+  beside roof parts, that is the next place to look.
+- **Placement grid**: with a microblock in hand, the shape's zones are drawn on the aimed
+  face (Forge Microblocks' overlay, ported from `ShapeCatalog.grid_lines`;
+  `placementGrid` in `packages/shapes`, `PlaceGrid` in the scene), beside the existing cyan
+  ghost of the part itself.
+
 ### ChatGPT widget research (2026-10-05)
 
 Web research, before the live probe (next section) answered most of it. The question: can a

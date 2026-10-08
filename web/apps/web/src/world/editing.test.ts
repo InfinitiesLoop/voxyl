@@ -17,6 +17,7 @@ import {
   newProject,
   paletteInfo,
   partGhost,
+  partGrid,
   placeCommand,
   renameCommand,
   renameSemanticCommand,
@@ -356,6 +357,18 @@ describe("shaped semantics place parts", () => {
     });
     // A semantic with no shape has no ghost.
     expect(partGhost(project, top, wall(project), false)).toBeNull();
+  });
+
+  it("gives the aimed face for the placement grid, even where no part would fit", () => {
+    const { project, trim } = shaped();
+    const top = aim(project.world, [0.5, 5, 0.5], [0, -1, 0], 100);
+    if (!top) throw new Error("no aim");
+    const grid = partGrid(project, top, trim);
+    expect(grid?.shape).toBe("face1");
+    expect(grid?.side).toBe(1);
+    expect(grid?.cell).toEqual([0, 0, 0]);
+    // A semantic with no shape has no zones to draw.
+    expect(partGrid(project, top, wall(project))).toBeNull();
   });
 
   it("adds to the parts already in the cell, and refuses a taken slot", () => {

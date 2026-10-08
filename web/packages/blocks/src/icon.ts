@@ -150,6 +150,84 @@ export function bakeBlockIcon(
   return pixels;
 }
 
+/**
+ * The icon of an undecided semantic: a plain cube in its colour, shaded like a block's, so a
+ * colour-only look reads as a block in the inventory and hotbar rather than a flat swatch.
+ */
+export function bakeColorIcon(color: string, size = ICON_RES): Uint8Array | null {
+  if (!/^#[0-9a-f]{6}$/i.test(color) || size < 8) return null;
+  const base = rgbOf(color);
+  // Each face as four corners, wound so the cross of the first two edges points outward.
+  const faces: Vec3[][] = [
+    [
+      [0.5, -0.5, -0.5],
+      [0.5, 0.5, -0.5],
+      [0.5, 0.5, 0.5],
+      [0.5, -0.5, 0.5],
+    ],
+    [
+      [-0.5, -0.5, -0.5],
+      [-0.5, -0.5, 0.5],
+      [-0.5, 0.5, 0.5],
+      [-0.5, 0.5, -0.5],
+    ],
+    [
+      [-0.5, 0.5, -0.5],
+      [-0.5, 0.5, 0.5],
+      [0.5, 0.5, 0.5],
+      [0.5, 0.5, -0.5],
+    ],
+    [
+      [-0.5, -0.5, -0.5],
+      [0.5, -0.5, -0.5],
+      [0.5, -0.5, 0.5],
+      [-0.5, -0.5, 0.5],
+    ],
+    [
+      [-0.5, -0.5, 0.5],
+      [0.5, -0.5, 0.5],
+      [0.5, 0.5, 0.5],
+      [-0.5, 0.5, 0.5],
+    ],
+    [
+      [-0.5, -0.5, -0.5],
+      [-0.5, 0.5, -0.5],
+      [0.5, 0.5, -0.5],
+      [0.5, -0.5, -0.5],
+    ],
+  ];
+  const pixels = new Uint8Array(size * size * 4);
+  const depth = new Float32Array(size * size);
+  depth.fill(-1e9);
+  for (const points of faces) {
+    const [o, a, , d] = points as [Vec3, Vec3, Vec3, Vec3];
+    let n = cross(sub(a, o), sub(d, o));
+    if (dot(n, CAM) < 0) n = scale(n, -1);
+    const shade = shadeOf(norm(n));
+    const corners = points.map((p) => toCam(p, [0, 0]));
+    drawFace(
+      {
+        corners,
+        texture: null,
+        tint: [255, 255, 255],
+        shade,
+        flat: [
+          Math.min(255, Math.round(base[0] * shade[0])),
+          Math.min(255, Math.round(base[1] * shade[1])),
+          Math.min(255, Math.round(base[2] * shade[2])),
+        ],
+        alpha: "opaque",
+        depth: corners.reduce((sum, c) => sum + c.z, 0) / corners.length,
+      },
+      pixels,
+      depth,
+      size,
+      false,
+    );
+  }
+  return pixels;
+}
+
 function prepare(
   face: ShapeFace,
   textures: Readonly<Record<string, Texture>> | undefined,

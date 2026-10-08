@@ -139,6 +139,18 @@ export function ProjectSettingsDialog({
           Where the heavier lines fall on the ground grid and in the 2D view, so they can match the
           build's own layout (a 16-wide hall starts on a line).
         </p>
+        <div className="project-grid">
+          <button
+            type="button"
+            title="Write the whole build as a Schematica file for Minecraft"
+            onClick={() => {
+              onClose();
+              engine.schematicDialog.set("build");
+            }}
+          >
+            Export as a schematic…
+          </button>
+        </div>
       </div>
     </div>,
     document.body,

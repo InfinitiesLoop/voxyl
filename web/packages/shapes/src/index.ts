@@ -27,6 +27,7 @@ export {
   orientOnPlacement,
   type PartPlacement,
   type PlacementWorld,
+  placementGrid,
   resolvePlacement,
   SIDE_VECTORS,
   sideFromNormal,

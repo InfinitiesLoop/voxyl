@@ -13,7 +13,7 @@ export {
 } from "./compile.ts";
 export { buildDefaultLibrary, DEFAULT_LIBRARY_ID, defaultLibrary } from "./defaults/library.ts";
 export { DEFAULT_TEXTURE_KEYS, paintTexture, textureOf } from "./defaults/textures.ts";
-export { bakeBlockIcon, ICON_RES } from "./icon.ts";
+export { bakeBlockIcon, bakeColorIcon, ICON_RES } from "./icon.ts";
 export {
   type Alpha,
   type Block,

@@ -15,6 +15,7 @@
     "@voxyl/light": "workspace:*",
     "@voxyl/mc-import": "workspace:*",
     "@voxyl/mesher": "workspace:*",
+    "@voxyl/schematic": "workspace:*",
     "@voxyl/session": "workspace:*",
     "@voxyl/shapes": "workspace:*",
     "react": "^19.3.0",

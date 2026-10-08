@@ -107,7 +107,8 @@ export function clearBlockIcons(engine: Engine): void {
 }
 
 /**
- * A block's baked picture, or its colour until the bake arrives (and when it has no block).
+ * A block's baked picture, or its colour until the bake arrives. A semantic with no block is
+ * baked as a cube in its colour.
  * `size` is the bake's pixels; CSS sets how big it is drawn. A picture is baked once it
  * scrolls into view, so a long library doesn't bake every block at once.
  */
@@ -125,16 +126,18 @@ export function BakedIcon({
   className?: string;
 }) {
   const icons = blockIcons(engine);
+  // An undecided semantic is baked as a cube in its colour, so it reads like a block too.
+  const ref = block || (/^#[0-9a-f]{6}$/i.test(color) ? `color:${color}` : undefined);
   const nodeRef = useRef<HTMLElement | null>(null);
   const setNode = useCallback((node: HTMLElement | null) => {
     nodeRef.current = node;
   }, []);
   const [seen, setSeen] = useState(false);
   const [url, setUrl] = useState<string | undefined>(() =>
-    block ? icons.url(block, size) : undefined,
+    ref ? icons.url(ref, size) : undefined,
   );
   useEffect(() => {
-    if (!block || seen) return;
+    if (!ref || seen) return;
     const node = nodeRef.current;
     if (!node || typeof IntersectionObserver === "undefined") {
       setSeen(true);
@@ -148,15 +151,15 @@ export function BakedIcon({
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [block, seen]);
+  }, [ref, seen]);
   useEffect(() => {
-    if (!block || !seen) {
-      if (!block) setUrl(undefined);
+    if (!ref || !seen) {
+      if (!ref) setUrl(undefined);
       return;
     }
-    setUrl(icons.url(block, size));
-    return icons.want(block, size, () => setUrl(icons.url(block, size)));
-  }, [icons, block, size, seen]);
+    setUrl(icons.url(ref, size));
+    return icons.want(ref, size, () => setUrl(icons.url(ref, size)));
+  }, [icons, ref, size, seen]);
   if (!url) {
     return <span ref={setNode} className={`swatch ${className}`} style={{ background: color }} />;
   }

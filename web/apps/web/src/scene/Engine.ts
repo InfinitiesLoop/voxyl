@@ -26,6 +26,7 @@ import {
   type PartArgs,
   type PartDraw,
   type Ray,
+  type SchematicSource,
   type SelectionView,
   type ToolArgs,
   type Vec3,
@@ -49,6 +50,7 @@ import { GroundGrid } from "./ground-grid.ts";
 import { LightVolume } from "./light-volume.ts";
 import { PartOutline } from "./part-outline.ts";
 import { PasteGhostView } from "./paste-ghost.ts";
+import { PlaceGrid } from "./place-grid.ts";
 import { SelectionOutline } from "./SelectionOutline.ts";
 import { Sky } from "./sky.ts";
 import { NOON, skyAt } from "./sky-model.ts";
@@ -201,6 +203,8 @@ export class Engine {
   readonly prefabsRev = new Store(0);
   /** Asks the screen to open the "Save as a prefab" dialog (Ctrl+P, or Actions). */
   readonly prefabDialog = new Store(false);
+  /** The schematic export dialog: what it is cut from, or null while closed. */
+  readonly schematicDialog = new Store<SchematicSource | null>(null);
   /** A short line over the hotbar for anything the editor refuses or reports; it fades. */
   readonly toast = new Store<{ readonly text: string; readonly id: number } | null>(null);
   #toastId = 0;
@@ -239,6 +243,8 @@ export class Engine {
   readonly #aimedPart = new PartOutline(0x111111, { overlay: false, opacity: 0.8 });
   /** The part a click would place, drawn over everything. */
   readonly #ghost = new PartOutline(0x8be9ff, { overlay: true });
+  /** The placement zones of the shaped part in hand, drawn across the aimed face. */
+  readonly #placeGrid = new PlaceGrid();
   /** The clipboard as it would land where the Paste tool aims. */
   readonly #pasteGhost = new PasteGhostView();
   /** The cutaway's box, outlined while its bounds panel is open. */
@@ -313,6 +319,7 @@ export class Engine {
     this.scene.add(this.#toolPreview.object);
     this.scene.add(this.#aimedPart.object);
     this.scene.add(this.#ghost.object);
+    this.scene.add(this.#placeGrid.object);
     this.scene.add(this.#pasteGhost.object);
     this.scene.add(this.#cutFrame.object);
     this.scene.add(this.#selectionOutline.object);
@@ -724,6 +731,7 @@ export class Engine {
     this.#toolPreview.dispose();
     this.#aimedPart.dispose();
     this.#ghost.dispose();
+    this.#placeGrid.dispose();
     this.#pasteGhost.dispose();
     this.#cutFrame.dispose();
     this.#selectionOutline.dispose();
@@ -1025,6 +1033,7 @@ export class Engine {
       this.#toolPreview.show(null);
       this.#aimedPart.show(null);
       this.#ghost.show(null);
+      this.#placeGrid.show(null);
       this.#aimedFor = "";
       this.#updateFrozenPaste();
       return;
@@ -1068,6 +1077,7 @@ export class Engine {
         if (paste && aim?.place) this.#lastPasteAt = aim.place;
         const ghost = this.tool.get() === "build" ? (aim?.ghost ?? null) : null;
         this.#ghost.show(ghost?.cell ?? null, ghost?.shape, ghost?.slot);
+        this.#placeGrid.show(this.tool.get() === "build" ? (aim?.grid ?? null) : null);
       }, done);
   }
 

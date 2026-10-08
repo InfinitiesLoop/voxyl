@@ -71,50 +71,53 @@ export function ToolStrip({ engine }: { engine: Engine }) {
         ))}
       </div>
       <p className="tool-strip-hint">{current?.hint}</p>
-      {usesBrush(tool) && (
-        <div className="tool-options">
-          <span className="tool-options-label">Brush</span>
-          {BRUSHES.map((size) => (
-            <button
-              key={size}
-              type="button"
-              aria-pressed={brush === size}
-              onClick={blurAfter(() => engine.setBrush(size))}
-            >
-              {size}×{size}
-            </button>
-          ))}
-        </div>
-      )}
-      {tool === "build" && (
-        <label
-          className="tool-options"
-          title="A shaped part (a cover, strip, roof tile ...) goes on the far side of the cell it would land in. Holding the key or a mouse thumb button does the same while it is down."
-        >
-          <input
-            type="checkbox"
-            checked={farSide}
-            onChange={(e) => {
-              engine.setFarSide(e.target.checked);
-              e.currentTarget.blur();
-            }}
-          />
-          Far side for shaped parts ({codesOf("placeOpposite").slice(0, 1).map(keyLabel)} held)
-        </label>
-      )}
-      {tool === "select" && (
-        <label className="tool-options">
-          <input
-            type="checkbox"
-            checked={connectAny}
-            onChange={(e) => {
-              engine.connectAny.set(e.target.checked);
-              e.currentTarget.blur();
-            }}
-          />
-          Shift+right click takes touching blocks of any kind
-        </label>
-      )}
+      {/* One row tall whatever the tool, so choosing tools never moves the hotbar. */}
+      <div className="tool-options-slot">
+        {usesBrush(tool) && (
+          <div className="tool-options">
+            <span className="tool-options-label">Brush</span>
+            {BRUSHES.map((size) => (
+              <button
+                key={size}
+                type="button"
+                aria-pressed={brush === size}
+                onClick={blurAfter(() => engine.setBrush(size))}
+              >
+                {size}×{size}
+              </button>
+            ))}
+          </div>
+        )}
+        {tool === "build" && (
+          <label
+            className="tool-options"
+            title="A shaped part (a cover, strip, roof tile ...) goes on the far side of the cell it would land in. Holding the key or a mouse thumb button does the same while it is down."
+          >
+            <input
+              type="checkbox"
+              checked={farSide}
+              onChange={(e) => {
+                engine.setFarSide(e.target.checked);
+                e.currentTarget.blur();
+              }}
+            />
+            Far side for shaped parts ({codesOf("placeOpposite").slice(0, 1).map(keyLabel)} held)
+          </label>
+        )}
+        {tool === "select" && (
+          <label className="tool-options">
+            <input
+              type="checkbox"
+              checked={connectAny}
+              onChange={(e) => {
+                engine.connectAny.set(e.target.checked);
+                e.currentTarget.blur();
+              }}
+            />
+            Shift+right click takes touching blocks of any kind
+          </label>
+        )}
+      </div>
     </div>
   );
 }

@@ -92,6 +92,19 @@ export interface Block {
   readonly color: string;
   /** Not offered by the block picker: the app draws with it itself (the undecided look). */
   readonly hidden?: boolean;
+  /**
+   * What this block is in the game a schematic is pasted into (registry name, metadata, how
+   * rotation sets it), for export only. A block without one still draws; the exporter falls
+   * back to its built-in table for vanilla names and otherwise reports it as unmapped. The
+   * Minecraft import fills this in (Phase 5); nothing in a cell or a palette ever holds it.
+   */
+  readonly mc?: {
+    readonly registry: string;
+    readonly meta?: number;
+    readonly orient?: "" | "half" | "stairs" | "log_axis";
+    readonly legacyId?: number;
+    readonly sawable?: boolean;
+  };
 }
 
 export interface Library {

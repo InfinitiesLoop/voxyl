@@ -1353,6 +1353,12 @@ button[aria-pressed="true"] {
   width: min(560px, 100%);
 }
 
+.tool-options-slot {
+  display: flex;
+  align-items: center;
+  height: 26px;
+}
+
 .tool-options {
   display: flex;
   gap: 4px;
@@ -1408,8 +1414,10 @@ button[aria-pressed="true"] {
   text-align: center;
 }
 
+/* The longest hint (Paste) fits, so the strip is one height for every tool. */
 .tool-strip-hint {
-  min-height: 2.6em;
+  height: 5.2em;
+  overflow-y: auto;
   margin: 0;
   color: var(--text-quiet);
   font-size: 11.5px;
@@ -2680,4 +2688,74 @@ button.brand {
   margin-left: 8px;
   padding: 0 6px;
   font-size: 11px;
+}
+
+/* The schematic export dialog. */
+.schematic {
+  width: min(720px, 100%);
+  overflow-y: auto;
+}
+
+.schematic-semantics {
+  display: flex;
+  flex-direction: column;
+  max-height: 40vh;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.schematic-semantics label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 2fr);
+  gap: 10px;
+  align-items: center;
+  padding: 5px 10px;
+  font-size: 12.5px;
+}
+
+.schematic-semantics label + label {
+  border-top: 1px solid var(--line);
+}
+
+.schematic-semantics em {
+  overflow: hidden;
+  color: var(--text-quiet);
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.schematic-problem em {
+  color: #f0b45a;
+}
+
+.schematic-trim {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12.5px;
+}
+
+.schematic-warnings {
+  margin: 0;
+  padding-left: 18px;
+  color: #f0b45a;
+  font-size: 12px;
+}
+
+.schematic-list {
+  display: flex;
+  gap: 6px;
+}
+
+.schematic-materials {
+  max-height: 30vh;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 11.5px;
+  white-space: pre;
 }

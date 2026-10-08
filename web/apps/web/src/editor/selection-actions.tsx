@@ -63,6 +63,14 @@ const ACTIONS: readonly SelectionAction[] = [
     run: (ctx) => ctx.engine.prefabDialog.set(true),
   },
   {
+    id: "schematic",
+    label: () => "Export schematic…",
+    title:
+      "Write the selection as a Schematica file for Minecraft. Semantics become the blocks their looks name, only in the file.",
+    enabled: (ctx) => ctx.selection.occupied > 0,
+    run: (ctx) => ctx.engine.schematicDialog.set("selection"),
+  },
+  {
     id: "fill",
     label: (ctx) => (ctx.slotName ? `Fill with ${ctx.slotName}` : "Fill"),
     title: "Write the hotbar semantic into every selected cell.",

@@ -18,6 +18,7 @@ import type {
   SharedPalette,
 } from "@voxyl/core";
 import type { ModelShape, StateShape } from "@voxyl/mesher";
+import type { ExportReport, MaterialRow, SemanticRow } from "@voxyl/schematic";
 import type {
   CellBox,
   LightingMode,
@@ -30,7 +31,7 @@ import type {
 import type { SliceAxis } from "../views/plane.ts";
 import type { WorldInfo, WorldSource } from "../worlds.ts";
 import type { PasteArgs } from "./clipboard.ts";
-import type { Aim, HistoryState, PaletteInfo, PartGhost } from "./editing.ts";
+import type { Aim, HistoryState, PaletteInfo, PartGhost, PartGrid } from "./editing.ts";
 import type { BuildTool } from "./tools.ts";
 
 /** The most cells one slice request may ask for. */
@@ -69,6 +70,8 @@ export interface PartArgs {
 export type AimView = Aim & {
   readonly preview: Int32Array | null;
   readonly ghost: PartGhost | null;
+  /** The placement zones to draw on the aimed face while a shaped semantic is in hand. */
+  readonly grid: PartGrid | null;
   readonly aimed: { readonly shape: string; readonly slot: number } | null;
   /** With the Paste tool: the cells the clipboard would fill at this aim (or at `paste.at`). */
   readonly pasteGhost: PasteGhost | null;
@@ -83,6 +86,30 @@ export interface PasteGhost {
   readonly min: Vec3;
   /** The far corner of the box, exclusive. */
   readonly max: Vec3;
+}
+
+/** What a schematic is cut from: the selection, the whole build, or a saved prefab. */
+export type SchematicSource = "selection" | "build" | { readonly prefab: string };
+
+export interface SchematicArgs {
+  readonly source: SchematicSource;
+  /** Piece semantic numbers (1-based, as `SemanticRow.semantic`) to leave out. */
+  readonly exclude: readonly number[];
+  /** Shrink the box to the cells that are kept. */
+  readonly trim: boolean;
+}
+
+/** What an export would hold, for the dialog that offers it. */
+export interface SchematicPlan {
+  /** A file name for it (no extension). */
+  readonly name: string;
+  readonly semantics: SemanticRow[];
+  readonly materials: MaterialRow[];
+  /** The material list as plain text, for the clipboard. */
+  readonly materialText: string;
+  /** Block names for the list, by reference. */
+  readonly labels: Readonly<Record<string, string>>;
+  readonly report: ExportReport;
 }
 
 /** What the clipboard holds, as the editor shows it. */
@@ -275,6 +302,10 @@ export type Command =
    * block is transparent. At most 8, so a bake stays a short pause on the world worker.
    */
   | { type: "bakeIcons"; refs: readonly string[]; size?: number }
+  /** What a schematic export of `source` would hold (counts, what is left out), without writing it. */
+  | ({ type: "schematicPlan" } & SchematicArgs)
+  /** The gzipped Schematica file for `source`. Rejects when nothing can be written. */
+  | ({ type: "schematicFile" } & SchematicArgs)
   /** Sets what a semantic is for. */
   | { type: "describeSemantic"; semantic: SemanticArg; description: string }
   /** Whether meshes come with feature edges, for the line-drawing render modes. */
@@ -358,6 +389,12 @@ export interface Replies {
   rotateAt: boolean;
   blockPreview: BlockPreview | null;
   bakeIcons: { readonly size: number; readonly icons: Uint8Array };
+  schematicPlan: SchematicPlan;
+  schematicFile: {
+    readonly name: string;
+    readonly bytes: Uint8Array;
+    readonly report: ExportReport;
+  };
   edges: null;
   visibility: null;
   /** True when anything changed. */

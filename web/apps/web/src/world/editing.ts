@@ -183,21 +183,9 @@ export function partPlacement(
   shape: string,
   opposite: boolean,
 ): PartPlacement | null {
-  const point = target.point;
-  if (!point) return null;
-  let cell: Vec3;
-  let side: number;
-  if (target.hit) {
-    cell = target.hit;
-    if (target.part) side = target.part.side;
-    else if (target.face[0] === 0 && target.face[1] === 0 && target.face[2] === 0) return null;
-    else side = sideFromNormal(target.face);
-  } else if (target.place) {
-    cell = [target.place[0], target.place[1] - 1, target.place[2]];
-    side = 1;
-  } else {
-    return null;
-  }
+  const face = partFace(target);
+  if (!face) return null;
+  const { cell, side, point } = face;
   const vhit: Vec3 = [point[0] - cell[0], point[1] - cell[1], point[2] - cell[2]];
   return resolvePlacement(
     { parts: (c) => partsAt(project.world, c) },
@@ -208,6 +196,42 @@ export function partPlacement(
     side,
     opposite,
   );
+}
+
+/** The face a part placement reads: its cell, its outward side, and where the ray met it. */
+export interface PartFace {
+  readonly cell: Vec3;
+  readonly side: number;
+  readonly point: Vec3;
+}
+
+/** The face the aim means for a part (aiming at the ground is the top of the block under it). */
+function partFace(target: Aim): PartFace | null {
+  const point = target.point;
+  if (!point) return null;
+  if (target.hit) {
+    if (target.part) return { cell: target.hit, side: target.part.side, point };
+    if (target.face[0] === 0 && target.face[1] === 0 && target.face[2] === 0) return null;
+    return { cell: target.hit, side: sideFromNormal(target.face), point };
+  }
+  if (target.place) {
+    return { cell: [target.place[0], target.place[1] - 1, target.place[2]], side: 1, point };
+  }
+  return null;
+}
+
+/** The placement zones drawn across the aimed face: where a click picks which slot. */
+export interface PartGrid extends PartFace {
+  readonly shape: string;
+}
+
+/** The face to draw the semantic's placement grid on, or null (no shape, or nothing aimed). */
+export function partGrid(project: Project, target: Aim, ref: SemanticArg): PartGrid | null {
+  const semantic = semanticIdOf(project, ref);
+  if (!project.semantics.has(semantic)) return null;
+  const shape = project.semantics.resolve(semantic).form.shape;
+  const face = shape === undefined ? null : partFace(target);
+  return shape !== undefined && face ? { ...face, shape } : null;
 }
 
 /** A cell of parts as the arguments of a set: the parts it keeps, or null when none are left. */

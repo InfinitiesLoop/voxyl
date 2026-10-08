@@ -2,6 +2,7 @@ import { CITY_THEMES } from "@voxyl/fixtures";
 import type { LightingMode, ProjectEntry } from "@voxyl/session";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type BenchResult, runBench } from "./bench/bench.ts";
+import { download } from "./download.ts";
 import { CutawayPanel } from "./editor/CutawayPanel.tsx";
 import { Home } from "./editor/Home.tsx";
 import { HotbarBar } from "./editor/HotbarBar.tsx";
@@ -20,6 +21,7 @@ import { PaletteDrawer } from "./editor/PaletteDrawer.tsx";
 import { Panes } from "./editor/Panes.tsx";
 import { PasteOverlay } from "./editor/PasteOverlay.tsx";
 import { PrefabSaveDialog } from "./editor/prefabs.tsx";
+import { SchematicDialog } from "./editor/SchematicDialog.tsx";
 import { SelectionPanel } from "./editor/SelectionPanel.tsx";
 import { SelectionActions } from "./editor/selection-actions.tsx";
 import { Toast } from "./editor/Toast.tsx";
@@ -433,6 +435,7 @@ export function App() {
       {engine && <Toast engine={engine} />}
       {engine && <CutawayPanel engine={engine} />}
       {engine && <PrefabSaveDialog engine={engine} />}
+      {engine && <SchematicDialog engine={engine} />}
       {engine && keysOpen && <KeysPanel tool={engine.tool.get()} onClose={closeKeys} />}
       {engine && palettesOpen && <PaletteDrawer engine={engine} />}
       <Hud
@@ -485,14 +488,4 @@ function EditorTools({ engine }: { engine: Engine }) {
       <SelectionActions engine={engine} />
     </>
   );
-}
-
-/** Saves a file through the browser's download. */
-function download(blob: Blob, name: string): void {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
