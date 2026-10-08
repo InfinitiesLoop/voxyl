@@ -473,3 +473,44 @@ alternate placement on left Ctrl and the thumb buttons (step 5); cutaway with H 
 "cut above camera", isolation (step 7); project settings, north, grid offset, app settings
 (step 8). In Phase 4: export to schematic (with the include/exclude preview), agent
 connections and their settings tab.
+
+## Feedback, fourth round (2026-10-07)
+
+- The amber slice in a 3D view is drawn only while that 2D pane is the focused one. Tab still
+  retargets the 2D pane focused last.
+- The ground grid's minor lines, major lines, and the horizon cutoff each fade over about
+  twice the old distance, starting where they did.
+- A plan's compass follows View → Turn and Mirror (east runs the other way when mirrored).
+  A turned cut names up and down when those are the left and right edges.
+- Inventory: right-click is Edit or Delete. "+" opens the entry editor with "New" filled in;
+  the block is chosen in that editor (the Godot dialog), and Create writes the semantic,
+  its description, its fallback colour and glow in one step. A preview of the selected
+  semantic sits on the right. The card is larger. Tool buttons and the hotbar badge are
+  icons. Each hotbar slot shows its name under the block.
+- Block pictures are baked from the real model (slab, stairs, fence post) on the world
+  worker, a few at a time, and cached for the hotbar, the inventory, and every block list.
+  A whole cube's detail preview can still turn; anything else shows the bake. There is no
+  disk cache yet — a big jar's first browse bakes what is on screen.
+- Home → Blocks is one library list (an import *is* a library, beside the built-in set), as
+  wide as the window, with import and remove on that list. The "showing x of y" line is gone.
+
+## Feedback, fifth round (2026-10-07)
+
+- **Inventory follows the hotbar.** Opening it selects the active slot's semantic and that
+  semantic's palette. Choosing another slot (click, 1–9, or the wheel) does the same, including
+  while the inventory is open. Clicking a semantic still loads the chosen slot and advances.
+- **Fly mode resumes.** Opening the inventory still releases the pointer. Closing it locks the
+  pointer again when it was flying before.
+- **One block preview.** The inventory's preview and Home → Blocks share `BlockStage`: the
+  turning cube, and 1×1 / 1×3 / 3×3, and the choice is remembered across both. Dragging the
+  cube turns it by hand (`editor/turntable.ts`, the same yaw and pitch a prefab thumbnail can
+  use). It spins on its own until that drag.
+- **Block lists page.** A search returns 60 hits unless asked for more, so a Minecraft jar
+  stopped in the B's. The chooser now asks for the next page as you scroll, and says how many
+  are still unloaded. Icons bake when they scroll into view.
+- **Block tiles stay square** (104px), aligned to the start of the grid, so a short list no
+  longer stretches each tile into a tall panel.
+- **Light** opens above the palette drawer.
+- The camera menu's slider is labelled **Fly speed**.
+- **Right-click a hotbar slot** (inventory open or not) is the same Edit or Delete.
+

@@ -68,8 +68,16 @@ export type Command =
   | { type: "createProject"; name: string }
   /** Renames the open project (a settings command, so it undoes). */
   | { type: "rename"; name: string }
-  /** Adds a semantic to a palette. */
-  | { type: "addSemantic"; palette: PaletteId; name: string }
+  /** Adds a semantic to a palette, optionally with a description and a look. */
+  | { type: "addSemantic"; palette: PaletteId; name: string; description?: string; look?: Look }
+  /** Renames a semantic and sets its description and look, in one step. */
+  | {
+      type: "editSemantic";
+      semantic: SemanticArg;
+      name: string;
+      description: string;
+      look: Look | null;
+    }
   /** Renames a semantic, deriving it first when the palette only offers it. */
   | { type: "renameSemantic"; semantic: SemanticArg; name: string }
   /**
@@ -81,7 +89,7 @@ export type Command =
   | { type: "addPalette"; name: string; extends?: PaletteId }
   | { type: "renamePalette"; palette: PaletteId; name: string }
   /** Blocks from the libraries, for the palette drawer's picker. */
-  | { type: "findBlocks"; query: string; library?: string; limit?: number }
+  | { type: "findBlocks"; query: string; library?: string; limit?: number; offset?: number }
   | { type: "deleteProject"; id: string }
   /** Stores a bundle file as a saved project. */
   | { type: "importProject"; bytes: Uint8Array }
@@ -182,6 +190,11 @@ export type Command =
   | { type: "removeSemantic"; semantic: SemanticArg }
   /** A block's six faces as 16×16 RGBA (mesher order +X, -X, +Y, -Y, +Z, -Z), for previews. */
   | { type: "blockPreview"; ref: string }
+  /**
+   * Orthographic icons of these blocks, `size`×`size` RGBA each, concatenated. A missing
+   * block is transparent. At most 8, so a bake stays a short pause on the world worker.
+   */
+  | { type: "bakeIcons"; refs: readonly string[]; size?: number }
   /** Sets what a semantic is for. */
   | { type: "describeSemantic"; semantic: SemanticArg; description: string }
   /** Whether meshes come with feature edges, for the line-drawing render modes. */
@@ -215,6 +228,7 @@ export interface Replies {
   rename: boolean;
   /** False when there was nothing to do (an empty or unchanged name or look). */
   addSemantic: boolean;
+  editSemantic: boolean;
   renameSemantic: boolean;
   setLook: boolean;
   addPalette: boolean;
@@ -242,6 +256,7 @@ export interface Replies {
   toolAt: boolean;
   rotateAt: boolean;
   blockPreview: BlockPreview | null;
+  bakeIcons: { readonly size: number; readonly icons: Uint8Array };
   edges: null;
   bounds: { min: Vec3; max: Vec3 } | null;
   rotate: boolean;
@@ -263,7 +278,7 @@ export interface Replies {
 /** A page of blocks for the palette drawer's picker. */
 export interface BlockSearch {
   readonly libraries: readonly { readonly id: string; readonly name: string }[];
-  /** How many blocks matched; hits is the first page of them. */
+  /** How many blocks matched; hits is one page of them (from `offset`). */
   readonly matched: number;
   readonly hits: readonly { readonly ref: string; readonly name: string; readonly color: string }[];
   /** 16×16 RGBA per hit, concatenated. A blank icon is all zeros. */

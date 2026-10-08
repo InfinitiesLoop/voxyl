@@ -20,9 +20,17 @@ import * as THREE from "three/webgpu";
 
 /**
  * Half the quad, in cells. The fade ends inside it, so the edge of the quad is never what
- * you see: from higher up the fade reaches farther and stops before the quad does.
+ * you see: from higher up the fade reaches farther and stops before the quad does. The fade
+ * runs about twice as far as it used to, so the quad grew with it.
  */
-const HALF = 4000;
+const HALF = 8000;
+/**
+ * Where the fade used to end, in cells (the old quad's 0.85). It still *starts* a tenth of
+ * the way out to here; only the run of the fade grew.
+ */
+const FADE_REACH = 3400;
+/** The fade covers this many times its old length, beginning at the same distance. */
+const FADE_SPAN = 2;
 /** A major line every this many cells, shifted by the project's grid offset. */
 const MAJOR = 16;
 /** The distance fade reaches at least this far, so standing on the grid shows a neighbourhood. */
@@ -41,9 +49,13 @@ const MINOR_PER_HEIGHT = 3;
  */
 const CROWD_START = 0.12;
 const CROWD_END = 0.4;
-/** Cells per pixel (in the most crowded direction) where the whole grid starts and ends fading. */
+/**
+ * Cells per pixel (in the most crowded direction) where the whole grid starts fading, and
+ * where it ends. The end is twice as far along as it was, so the horizon cutoff is softer.
+ * The start is unchanged.
+ */
 const FAN_START = 0.6;
-const FAN_END = 2.5;
+const FAN_END = 0.6 + (2.5 - 0.6) * 2;
 /**
  * Line colour and strength by night and by day (day lines are dark, so a pale sky shows them).
  * Blending happens in linear light, so a faint pale line on black comes out much brighter
@@ -84,9 +96,11 @@ export class GroundGrid {
       const xz = positionWorld.xz;
       const dist = length(xz.sub(cameraPosition.xz));
       const height = max(abs(cameraPosition.y), float(1));
-      const fadeDist = min(max(height.mul(FADE_PER_HEIGHT), float(MIN_FADE)), float(HALF * 0.85));
-      // A long gradient: the grid thins from a tenth of the way out to the end.
-      const fade = smoothstep(fadeDist, fadeDist.mul(0.1), dist);
+      const fadeDist = min(max(height.mul(FADE_PER_HEIGHT), float(MIN_FADE)), float(FADE_REACH));
+      // Both line weights thin over twice the old distance, starting where they always did.
+      const fadeStart = fadeDist.mul(0.1);
+      const fadeEnd = fadeStart.add(fadeDist.sub(fadeStart).mul(FADE_SPAN));
+      const fade = smoothstep(fadeEnd, fadeStart, dist);
 
       // Each family of lines (along x, along z) fades on its own by how crowded it is, so
       // lines running away from the camera outlast the ones packed toward the horizon.
@@ -101,7 +115,9 @@ export class GroundGrid {
         return max(onX.mul(keepX), onZ.mul(keepZ));
       };
       const minorEnd = height.mul(MINOR_PER_HEIGHT).add(MINOR_REACH);
-      const minor = lines(xz, 1).mul(smoothstep(minorEnd, minorEnd.mul(0.15), dist));
+      const minorStart = minorEnd.mul(0.15);
+      const minorFade = minorStart.add(minorEnd.sub(minorStart).mul(FADE_SPAN));
+      const minor = lines(xz, 1).mul(smoothstep(minorFade, minorStart, dist));
       const major = lines(xz.sub(vec2(offsetX, offsetZ)), MAJOR);
 
       const minorAlpha = mix(float(NIGHT_ALPHA.minor), float(DAY_ALPHA.minor), daylight);

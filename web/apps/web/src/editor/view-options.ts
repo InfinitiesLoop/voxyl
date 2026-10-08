@@ -27,7 +27,7 @@ export const SHOW_OPTIONS: readonly ShowOption[] = [
   {
     id: "slice",
     label: "2D slice",
-    title: "Where the active 2D view cuts through the world",
+    title: "Where the focused 2D view cuts the world. Hidden while a 3D view is the one you're in",
     kinds: ["3d"],
     default: true,
   },

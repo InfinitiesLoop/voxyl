@@ -307,15 +307,55 @@ export function addSemanticCommand(
   project: Project,
   palette: PaletteId,
   name: string,
+  extras?: { readonly description?: string; readonly look?: Look },
 ): Command | null {
   const trimmed = name.trim();
   if (trimmed === "" || trimmed.length > 80 || !project.semantics.hasPalette(palette)) return null;
+  const description = extras?.description?.trim().slice(0, 400);
+  const look = extras?.look;
   return {
     id: commandId(),
     kind: "semantic_add",
     source: EDITOR_SOURCE,
     label: `Add ${trimmed}`,
-    args: { name: trimmed, palette },
+    args: {
+      name: trimmed,
+      palette,
+      ...(description ? { description } : {}),
+      ...(look && (look.block || look.glow || look.tint) ? { look } : {}),
+    },
+  };
+}
+
+/**
+ * One step that renames a semantic and sets what it is for and what it looks like. Null when
+ * nothing would change. A semantic the palette only offers is derived first, by the ref.
+ */
+export function editSemanticCommand(
+  project: Project,
+  ref: SemanticArg,
+  fields: { readonly name: string; readonly description: string; readonly look: Look | null },
+): Command | null {
+  const name = fields.name.trim();
+  if (name === "" || name.length > 80) return null;
+  const description = fields.description.trim().slice(0, 400);
+  const id = typeof ref === "number" ? ref : ref.base;
+  if (!project.semantics.has(id)) return null;
+  const nameSame = name === project.semantics.nameOf(id);
+  const descSame = description === (project.semantics.resolve(id).description ?? "");
+  const lookSame = sameLook(storedLook(project, ref), fields.look);
+  if (nameSame && descSame && lookSame) return null;
+  return {
+    id: commandId(),
+    kind: "semantic_update",
+    source: EDITOR_SOURCE,
+    label: `Edit ${name}`,
+    args: {
+      semantic: ref,
+      ...(nameSame ? {} : { name }),
+      ...(descSame ? {} : { description: description === "" ? null : description }),
+      ...(lookSame ? {} : { look: fields.look }),
+    },
   };
 }
 

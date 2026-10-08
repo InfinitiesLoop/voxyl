@@ -28,6 +28,8 @@ export interface BlockQuery {
   readonly library?: string;
   /** How many hits to return. Default 60. */
   readonly limit?: number;
+  /** Skip this many hits first, so a viewer can ask for the next page. */
+  readonly offset?: number;
 }
 
 /** Blocks matching a query, best first, each with an icon. `matched` counts before the limit. */
@@ -40,6 +42,7 @@ export function searchBlocks(
     .split(/\s+/)
     .filter((t) => t !== "");
   const limit = Math.max(1, query.limit ?? 60);
+  const offset = Math.max(0, Math.floor(query.offset ?? 0));
   const ranked: { score: number; ref: string; name: string; block: Block; library: Library }[] = [];
   for (const library of libraries.values()) {
     if (query.library !== undefined && library.id !== query.library) continue;
@@ -62,7 +65,7 @@ export function searchBlocks(
   });
   return {
     matched: ranked.length,
-    hits: ranked.slice(0, limit).map((r) => ({
+    hits: ranked.slice(offset, offset + limit).map((r) => ({
       ref: r.ref,
       name: r.name,
       color: r.block.color,

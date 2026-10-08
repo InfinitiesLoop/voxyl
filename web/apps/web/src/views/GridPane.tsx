@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Compass } from "../editor/Compass.tsx";
-import { compassPoint } from "../editor/compass.ts";
+import { cutLabels, viewCompass } from "../editor/compass.ts";
 import type { EditorTool } from "../editor/tool.ts";
 import { useStore } from "../editor/useStore.ts";
 import { BarMenu, BarSpacer, blurAfter, ChoiceRow, ShowMenu, ViewBar } from "../editor/ViewBar.tsx";
@@ -8,7 +8,7 @@ import type { ShowId, ShowState } from "../editor/view-options.ts";
 import type { Engine } from "../scene/Engine.ts";
 import type { WorldInfo } from "../worlds.ts";
 import { type DrawMode, GridView, type GridViewState } from "./GridView.ts";
-import { orientationFor, type SliceAxis } from "./plane.ts";
+import { orientationFor, type SliceAxis, turnedOrientation } from "./plane.ts";
 
 const AXES: readonly { axis: SliceAxis; label: string; depth: string }[] = [
   { axis: 1, label: "Plan", depth: "Layer y" },
@@ -19,7 +19,7 @@ const AXES: readonly { axis: SliceAxis; label: string; depth: string }[] = [
 /**
  * A 2D pane: its bar (the kind switch, which slice, the layer, overlays, and what is under
  * the pointer) over a GridView canvas. React draws only the chrome; GridView draws the slice
- * from the world worker's cells. The active 2D pane shows its slice in the 3D views.
+ * from the world worker's cells. While this pane is the focused one, the 3D views draw its slice.
  */
 export function GridPane({
   engine,
@@ -29,6 +29,7 @@ export function GridPane({
   onShow,
   onFocus,
   active,
+  guide,
 }: {
   engine: Engine;
   info: WorldInfo | null;
@@ -37,8 +38,10 @@ export function GridPane({
   show: ShowState;
   onShow: (id: ShowId, on: boolean) => void;
   onFocus: () => void;
-  /** This pane's slice is the one the 3D views draw. */
+  /** Tab while flying retargets this slice. */
   active: boolean;
+  /** The 3D views draw this slice. Only while this pane is the focused one. */
+  guide: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<GridView | null>(null);
@@ -69,8 +72,8 @@ export function GridPane({
   }, [info]);
 
   useEffect(() => {
-    viewRef.current?.setActive(active);
-  }, [active]);
+    viewRef.current?.setShowGuide(guide);
+  }, [guide]);
 
   useEffect(() => {
     viewRef.current?.setCameras(show.cameras);
@@ -185,10 +188,19 @@ export function GridPane({
         {show.compass && info && (
           <div className="pane-corner">
             {(state?.axis ?? 1) === 1 ? (
-              // A plan always has the real north at the top.
-              <Compass heading={() => 0} />
+              <Compass
+                heading={() => {
+                  const o = turnedOrientation(
+                    orientationFor(1, info.north),
+                    state?.turns ?? 0,
+                    state?.mirror ?? false,
+                  );
+                  const pose = viewCompass(o, 1, info.north);
+                  return pose ? { angle: pose.heading, mirrored: pose.mirrored } : null;
+                }}
+              />
             ) : (
-              <CutCompass axis={state?.axis ?? 0} info={info} />
+              <CutCompass axis={state?.axis ?? 0} turns={turns} mirror={mirror} info={info} />
             )}
           </div>
         )}
@@ -229,14 +241,25 @@ function nextAxis(axis: SliceAxis): SliceAxis {
 }
 
 /** A cut stands up, so a disc means nothing: it names the directions to the left and right. */
-function CutCompass({ axis, info }: { axis: SliceAxis; info: WorldInfo }) {
-  const right = orientationFor(axis, info.north).right;
-  // Screen right in the project's axes: u is z across x (axis 0), x across z (axis 2).
-  const dx = axis === 2 ? right.sign : 0;
-  const dz = axis === 0 ? right.sign : 0;
+function CutCompass({
+  axis,
+  turns,
+  mirror,
+  info,
+}: {
+  axis: SliceAxis;
+  turns: number;
+  mirror: boolean;
+  info: WorldInfo;
+}) {
+  const labels = cutLabels(
+    turnedOrientation(orientationFor(axis, info.north), turns, mirror),
+    axis,
+    info.north,
+  );
   return (
     <span className="cut-compass" title="The real directions to the left and right">
-      {compassPoint(-dx, -dz, info.north)} ◂ ▸ {compassPoint(dx, dz, info.north)}
+      {labels.left} ◂ ▸ {labels.right}
     </span>
   );
 }

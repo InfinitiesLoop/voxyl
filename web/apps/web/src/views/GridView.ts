@@ -129,8 +129,8 @@ export class GridView {
   #cameraKey = "";
   /** Draw the 3D views' cameras. */
   #cameras = true;
-  /** This view's slice is the one the 3D views draw. */
-  #active = false;
+  /** The 3D views draw this slice, and only while this pane is focused. */
+  #showGuide = false;
   /** The window last given to the 3D views. */
   #guideKey = "";
 
@@ -256,12 +256,12 @@ export class GridView {
     this.#changed();
   }
 
-  /** Makes this view's slice the one the 3D views draw, or stops. */
-  setActive(active: boolean): void {
-    if (active === this.#active) return;
-    this.#active = active;
+  /** Draws or hides this slice in the 3D views. */
+  setShowGuide(on: boolean): void {
+    if (on === this.#showGuide) return;
+    this.#showGuide = on;
     this.#guideKey = "";
-    if (active) this.#dirty = true;
+    if (on) this.#dirty = true;
     else this.#engine.clearSliceGuide(this);
   }
 
@@ -606,11 +606,12 @@ export class GridView {
       u1: Math.max(ua, ub) + 1,
       v1: Math.max(va, vb) + 1,
     };
-    const key = `${this.#active}:${Object.values(window).join()}`;
+    const key = `${this.#showGuide}:${Object.values(window).join()}`;
     if (key === this.#guideKey) return;
     this.#guideKey = key;
     this.#engine.setFlatSlice(this, window);
-    if (this.#active) this.#engine.setSliceGuide(this, window);
+    if (this.#showGuide) this.#engine.setSliceGuide(this, window);
+    else this.#engine.clearSliceGuide(this);
   }
 
   /**

@@ -2,6 +2,7 @@
 // is the real north; the sky, the 2D plan and the compass all follow it.
 
 import type { Direction } from "@voxyl/core";
+import type { Orientation, ScreenAxis, SliceAxis } from "../views/plane.ts";
 
 /** The real north as a vector in the project's own axes (x, z): its north is -z. */
 export const REAL_NORTH: Record<Direction, readonly [number, number]> = {
@@ -51,6 +52,59 @@ export function bearingVector(degrees: number, north: Direction): [number, numbe
   const ez = nx;
   const b = (degrees * Math.PI) / 180;
   return [nx * Math.cos(b) + ex * Math.sin(b), nz * Math.cos(b) + ez * Math.sin(b)];
+}
+
+/**
+ * Where north sits on a 2D view: the clockwise angle from screen-up, and whether the view is
+ * mirrored (east then runs counter-clockwise from north). Null when screen-up isn't horizontal,
+ * which a plan never is.
+ */
+export function viewCompass(
+  o: Orientation,
+  axis: SliceAxis,
+  north: Direction,
+): { heading: number; mirrored: boolean } | null {
+  const [fx, , fz] = screenAxis(flip(o.down), axis);
+  if (fx === 0 && fz === 0) return null;
+  const [rx, , rz] = screenAxis(o.right, axis);
+  const [nx, nz] = REAL_NORTH[north];
+  return {
+    heading: Math.atan2(nx * rx + nz * rz, nx * fx + nz * fz),
+    mirrored: fx * rz - fz * rx < 0,
+  };
+}
+
+/**
+ * The real directions at the left and right of a cut. After a quarter turn those edges are
+ * up and down, and the words say so.
+ */
+export function cutLabels(
+  o: Orientation,
+  axis: SliceAxis,
+  north: Direction,
+): { left: string; right: string } {
+  const [x, y, z] = screenAxis(o.right, axis);
+  if (x === 0 && z === 0) {
+    const up = y > 0;
+    return { left: up ? "down" : "up", right: up ? "up" : "down" };
+  }
+  return {
+    left: compassPoint(-x, -z, north),
+    right: compassPoint(x, z, north),
+  };
+}
+
+/** A screen axis as a world vector. Screen-up is the flip of screen-down. */
+function screenAxis(a: ScreenAxis, axis: SliceAxis): [number, number, number] {
+  const u = a.onU ? a.sign : 0;
+  const v = a.onU ? 0 : a.sign;
+  if (axis === 1) return [u, 0, v];
+  if (axis === 0) return [0, v, u];
+  return [u, v, 0];
+}
+
+function flip(a: ScreenAxis): ScreenAxis {
+  return { onU: a.onU, sign: a.sign > 0 ? -1 : 1 };
 }
 
 /** The bearing (degrees clockwise from the real north) of a horizontal direction (x, z). */

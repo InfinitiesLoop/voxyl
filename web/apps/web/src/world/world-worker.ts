@@ -5,6 +5,7 @@
 // OPFS (a ProjectStore), read and written here.
 
 import {
+  bakeBlockIcon,
   compileBlock,
   compileShape,
   DEFAULT_LIBRARY_ID,
@@ -56,6 +57,7 @@ import {
   aim,
   clearSelectionCommand,
   describeSemanticCommand,
+  editSemanticCommand,
   eraseCommand,
   fillBoxCommand,
   fillSelectionCommand,
@@ -286,7 +288,24 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
     case "rename":
       return runEdit(renameCommand(openProject(), command.name)) >= 0;
     case "addSemantic":
-      return runEdit(addSemanticCommand(openProject(), command.palette, command.name)) >= 0;
+      return (
+        runEdit(
+          addSemanticCommand(openProject(), command.palette, command.name, {
+            ...(command.description !== undefined && { description: command.description }),
+            ...(command.look !== undefined && { look: command.look }),
+          }),
+        ) >= 0
+      );
+    case "editSemantic":
+      return (
+        runEdit(
+          editSemanticCommand(openProject(), command.semantic, {
+            name: command.name,
+            description: command.description,
+            look: command.look,
+          }),
+        ) >= 0
+      );
     case "renameSemantic":
       return runEdit(renameSemanticCommand(openProject(), command.semantic, command.name)) >= 0;
     case "setLook":
@@ -301,6 +320,7 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
         query: command.query,
         ...(command.library !== undefined && { library: command.library }),
         ...(command.limit !== undefined && { limit: command.limit }),
+        ...(command.offset !== undefined && { offset: command.offset }),
       });
       const icons = new Uint8Array(hits.length * 1024);
       hits.forEach((hit, i) => {
@@ -426,6 +446,19 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
     case "blockPreview": {
       await librariesLoaded;
       return blockPreview(command.ref);
+    }
+    case "bakeIcons": {
+      await librariesLoaded;
+      const size = command.size ?? 64;
+      if (!Number.isInteger(size) || size < 16 || size > 256)
+        throw new Error(`Icon size ${size} is out of range`);
+      if (command.refs.length > 8) throw new Error("Too many icons in one bake");
+      const icons = new Uint8Array(command.refs.length * size * size * 4);
+      command.refs.forEach((ref, i) => {
+        const icon = bakeBlockIcon(libraries, ref, size);
+        if (icon) icons.set(icon, i * size * size * 4);
+      });
+      return { size, icons };
     }
     case "describeSemantic":
       return (

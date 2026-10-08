@@ -21,7 +21,9 @@ pane a toolbar built from shared pieces, 3D camera cones and compasses, the 2D s
 the Godot app and a proposal for cross-project palettes. A third round, on the user's
 answers, built them: a keymap, Godot's wand plus Build to me and Exchange, camera presets and
 orbit, render modes with feature edges, slicing from 3D, Home with shared palettes and a
-textured starter palette, the block chooser, and 2D editing (editor step 6).
+textured starter palette, the block chooser, and 2D editing (editor step 6). A fourth
+round baked block icons, opened the palette entry editor from the inventory, and recorded
+the production deploy for voxyl.xyz (see "Production (voxyl.xyz)").
 Reviewed as a Claude Doc
 (https://claude.ai/code/artifact/98f31d14-989b-4c28-a24c-a3d7b8630a21); this file is now the
 working copy. **Keep it (and `web-lighting.md`) up to date as we go**, in the same commit as
@@ -707,6 +709,35 @@ tools, which doubles as the agent eval.
 **Type safety.** `strict` TypeScript with `noUncheckedIndexedAccess`. Tool argument schemas are
 written once with Zod, which generates both the MCP JSON schema and the runtime validation.
 
+## Production (voxyl.xyz)
+
+Decided 2026-10-07: the public site is **voxyl.xyz**. Until Phase 4 the app is a static
+client, so production is a static deploy of the web build. Accounts, sync and the relay stay
+off this host until that phase; they will be `api.voxyl.xyz`, not mixed into the page.
+
+**What gets published.** From `web/`, Node 24: `pnpm install --frozen-lockfile`, `pnpm check`,
+then `pnpm --filter @voxyl/web build`. The artifact is `web/apps/web/dist`. The default block
+set is in that bundle. Minecraft jars are not: a visitor imports their own copy in the
+browser and it stays in OPFS. No secrets belong in this build.
+
+**Where.** Cloudflare Pages (Workers static assets are the same idea). The plan already uses
+Cloudflare for the widget tunnel, TLS is included, each branch can have a preview URL, and
+the Phase 4 API can be a Worker on the same zone later.
+
+- DNS: the domain's nameservers at Cloudflare. Apex `voxyl.xyz` is the Pages project.
+  `www` redirects to the apex.
+- SPA fallback: every path serves `index.html`. The app is one page today; the fallback is
+  there for when routes exist.
+- Cache: hashed files under `assets/` are immutable. `index.html` is not cached, so a refresh
+  after a deploy picks up the new build.
+- Production deploys from `main` only, after `pnpm check` is green. Other branches get a
+  preview URL and do not touch voxyl.xyz.
+
+**Until a workflow exists.** There is no GitHub Actions file yet. A first deploy is local:
+`pnpm check && pnpm --filter @voxyl/web build` in `web/`, then
+`wrangler pages deploy apps/web/dist --project-name voxyl`. The follow-up is a workflow that
+does that on `main` and uploads previews for pull requests. `pnpm dev` is unchanged.
+
 ## Risks and open questions
 
 The two risks that could change the plan are texture licensing and whether a ChatGPT widget can
@@ -741,3 +772,5 @@ host tool execution. Both are checked in Phase 0, before any port work.
   saved, so the format needs no light channels.)
 - [x] Accounts: anonymous projects come first. Linking-only accounts (Google, Apple, then Sign in
   with ChatGPT) upgrade them in place.
+- [x] Production host: voxyl.xyz, a static Cloudflare Pages deploy of the web client until the
+  Phase 4 API (2026-10-07). See "Production (voxyl.xyz)".

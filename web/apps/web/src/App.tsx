@@ -5,6 +5,7 @@ import { type BenchResult, runBench } from "./bench/bench.ts";
 import { Home } from "./editor/Home.tsx";
 import { HotbarBar } from "./editor/HotbarBar.tsx";
 import { Inventory } from "./editor/Inventory.tsx";
+import { clearBlockIcons } from "./editor/icons.tsx";
 import { KeysPanel } from "./editor/KeysPanel.tsx";
 import {
   focusedPane,
@@ -322,6 +323,7 @@ export function App() {
             `(${imported.skipped} drawn by the game itself left out)`,
         );
         await refreshLibraries();
+        clearBlockIcons(engine);
         if (source === "mc-blocks") setReloads((n) => n + 1);
       })();
       track("Importing the Minecraft jar", work);
@@ -332,6 +334,7 @@ export function App() {
     delete: async (id: string, name: string) => {
       if (!engine || !confirm(`Remove ${name} from this browser?`)) return;
       await engine.world.request({ type: "deleteLibrary", id });
+      clearBlockIcons(engine);
       await refreshLibraries();
     },
   };
@@ -385,7 +388,9 @@ export function App() {
         {engine && (
           <Panes engine={engine} info={info} layout={layout} onLayout={setLayout} locked={locked} />
         )}
-        {engine && <HotbarBar hotbar={engine.hotbar} aside={<ToolBadge engine={engine} />} />}
+        {engine && (
+          <HotbarBar hotbar={engine.hotbar} engine={engine} aside={<ToolBadge engine={engine} />} />
+        )}
       </div>
       {engine && (
         <TopBar

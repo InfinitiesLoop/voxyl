@@ -283,7 +283,8 @@ dd {
 
 .topbar {
   position: absolute;
-  z-index: 4;
+  /* Above the palette drawer, so Light (and the other menus) open in front of it. */
+  z-index: 6;
   top: 0;
   left: 0;
   right: 0;
@@ -385,17 +386,10 @@ dd {
   user-select: none;
 }
 
-.hotbar-name {
-  padding: 2px 8px;
-  border-radius: 6px;
-  background: var(--panel);
-  color: var(--text);
-  font-size: 13px;
-}
-
 .hotbar-slots {
   display: flex;
   gap: 4px;
+  align-items: flex-start;
   padding: 4px;
   border-radius: 8px;
   background: var(--panel);
@@ -403,11 +397,27 @@ dd {
 
 .hotbar-slot {
   position: relative;
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 44px;
-  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 76px;
+  min-height: 64px;
+  padding: 4px 3px 14px;
+}
+
+.hotbar-icon {
+  width: 40px;
+  height: 40px;
+}
+
+.hotbar-slot-name {
+  max-width: 70px;
+  color: var(--text);
+  font-size: 10px;
+  line-height: 1.15;
+  text-align: center;
+  overflow-wrap: anywhere;
 }
 
 .swatch {
@@ -426,11 +436,18 @@ dd {
 
 .hotbar-key {
   position: absolute;
-  right: 4px;
-  bottom: 2px;
+  top: 2px;
+  right: 3px;
   color: var(--text-quiet);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
+}
+
+.hotbar-icon.glow,
+.inventory-icon.glow,
+.inventory-preview-icon.glow,
+.chooser-bake.glow {
+  filter: drop-shadow(0 0 6px rgb(255 211 107 / 0.85));
 }
 
 .grid-host {
@@ -640,19 +657,26 @@ button[aria-pressed="true"] {
 
 .block-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fill, 104px);
+  align-content: start;
+  align-items: start;
+  justify-content: start;
   gap: 6px;
   overflow: auto;
-  padding-bottom: 80px;
+  padding-bottom: 12px;
 }
 
 .block-choice {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 4px;
+  width: 104px;
+  aspect-ratio: 1;
   min-width: 0;
-  padding: 6px 2px;
+  padding: 6px 4px;
+  overflow: hidden;
   font-size: 11px;
 }
 
@@ -664,16 +688,15 @@ button[aria-pressed="true"] {
 }
 
 .block-icon {
-  width: 32px;
-  height: 32px;
-  image-rendering: pixelated;
+  width: 56px;
+  height: 56px;
   border-radius: 4px;
 }
 
 .selection-panel {
   position: absolute;
   z-index: 5;
-  bottom: 152px;
+  bottom: 200px;
   left: 12px;
   display: flex;
   flex-direction: column;
@@ -855,7 +878,7 @@ button[aria-pressed="true"] {
   inset: 0;
   display: grid;
   place-items: center;
-  padding: 48px;
+  padding: 28px;
 }
 
 .inventory-backdrop {
@@ -874,8 +897,8 @@ button[aria-pressed="true"] {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  width: min(880px, 100%);
-  height: min(640px, 100%);
+  width: min(1240px, 100%);
+  height: min(860px, 100%);
   padding: 16px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -937,9 +960,37 @@ button[aria-pressed="true"] {
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  width: 72px;
+  width: 88px;
   padding: 6px 4px;
   font-size: 11px;
+}
+
+.inventory-icon {
+  width: 48px;
+  height: 48px;
+}
+
+.inventory-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 240px;
+  padding: 4px;
+  overflow: auto;
+  text-align: center;
+}
+
+.inventory-preview p {
+  margin: 0;
+  color: var(--text-quiet);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.inventory-preview-icon {
+  width: 160px;
+  height: 160px;
 }
 
 .inventory-swatch span:last-child {
@@ -1155,26 +1206,22 @@ button[aria-pressed="true"] {
 }
 
 .tool-badge {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 52px;
   height: 52px;
-  padding: 0 12px;
+  padding: 0;
   border-color: transparent;
   border-radius: 8px;
   background: var(--panel);
   color: var(--text);
-  font-size: 13px;
-  font-weight: 600;
 }
 
-.tool-badge-label {
-  color: var(--text-quiet);
-  font-size: 10px;
-  font-weight: 400;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+.tool-icon {
+  display: block;
+  width: 22px;
+  height: 22px;
 }
 
 /* The inventory's footer: the tools beside its hotbar. */
@@ -1189,7 +1236,7 @@ button[aria-pressed="true"] {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  width: 430px;
+  width: min(420px, 46vw);
 }
 
 .tool-options {
@@ -1210,8 +1257,12 @@ button[aria-pressed="true"] {
 }
 
 .tool-badge-brush {
+  position: absolute;
+  right: 4px;
+  bottom: 2px;
   color: var(--text-quiet);
-  font-weight: 400;
+  font-size: 10px;
+  font-weight: 600;
 }
 
 .tool-strip-buttons {
@@ -1220,10 +1271,12 @@ button[aria-pressed="true"] {
 }
 
 .tool-strip-buttons button {
-  flex: 1;
-  height: 34px;
-  padding: 0 4px;
-  white-space: nowrap;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
 }
 
 .tool-strip-hint {
@@ -1425,6 +1478,20 @@ kbd {
 .home-section {
   max-width: 1200px;
   margin: 0 auto;
+}
+
+.home-body-blocks {
+  display: flex;
+  overflow: hidden;
+}
+
+.home-blocks {
+  display: flex;
+  flex: 1;
+  max-width: none;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
 }
 
 .home-split {
@@ -1698,6 +1765,10 @@ button.brand {
   height: 100%;
 }
 
+.home-blocks .chooser {
+  min-width: 0;
+}
+
 .chooser-rail {
   display: flex;
   flex-direction: column;
@@ -1709,15 +1780,105 @@ button.brand {
   text-align: left;
 }
 
+.chooser-lib {
+  display: flex;
+  gap: 4px;
+}
+
+.chooser-lib > button:first-child {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
+.chooser-main .block-grid {
+  flex: 1;
+  min-height: 0;
+}
+
+.chooser-bake {
+  width: 180px;
+  height: 180px;
+}
+
+.entry-card {
+  width: min(1240px, 100%);
+  height: min(880px, 100%);
+}
+
+.entry-card .chooser {
+  height: auto;
+}
+
+.entry-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  align-items: center;
+}
+
+.entry-fields label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.entry-card .entry-fields input:not([type="color"]):not([type="checkbox"]) {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #23272d;
+  color: var(--text);
+  font: inherit;
+}
+
+.entry-name input {
+  width: 180px;
+}
+
+.entry-for {
+  flex: 1;
+}
+
+.entry-for input {
+  flex: 1;
+  min-width: 140px;
+}
+
+.entry-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.entry-menu {
+  position: fixed;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 148px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #21242a;
+}
+
+.entry-menu button {
+  text-align: left;
+}
+
+.entry-menu p {
+  margin: 4px 6px;
+  color: var(--text-quiet);
+  font-size: 12px;
+}
+
 .chooser-main {
   display: flex;
   flex-direction: column;
   gap: 8px;
   min-height: 0;
-}
-
-.chooser-main .block-grid {
-  overflow: auto;
 }
 
 .chooser-search {
@@ -1727,6 +1888,17 @@ button.brand {
   background: #23272d;
   color: var(--text);
   font: inherit;
+}
+
+.chooser-count {
+  margin: 0;
+  color: var(--text-quiet);
+  font-size: 12px;
+}
+
+.block-sentinel {
+  grid-column: 1 / -1;
+  height: 1px;
 }
 
 .chooser-side {
@@ -1752,9 +1924,16 @@ button.brand {
 .cube-stage {
   display: grid;
   place-items: center;
-  width: 240px;
-  height: 220px;
+  width: min(220px, 100%);
+  height: 200px;
   perspective: 700px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.cube-stage:active {
+  cursor: grabbing;
 }
 
 .cube-spin {
@@ -1762,7 +1941,6 @@ button.brand {
   width: var(--cube);
   height: var(--cube);
   transform-style: preserve-3d;
-  animation: cube-spin 14s linear infinite;
 }
 
 .cube {
@@ -1776,20 +1954,4 @@ button.brand {
   inset: 0;
   image-rendering: pixelated;
   backface-visibility: hidden;
-}
-
-@keyframes cube-spin {
-  from {
-    transform: rotateX(-24deg) rotateY(0deg);
-  }
-  to {
-    transform: rotateX(-24deg) rotateY(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .cube-spin {
-    animation: none;
-    transform: rotateX(-24deg) rotateY(35deg);
-  }
 }

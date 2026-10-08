@@ -1,27 +1,37 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Engine } from "../scene/Engine.ts";
 import type { PaletteInfo, SemanticInfo } from "../world/editing.ts";
-import { blockTitle } from "./BlockPicker.tsx";
+import { BlockStage, blockTitle } from "./BlockPicker.tsx";
 import { HotbarBar } from "./HotbarBar.tsx";
 import { HOTBAR_SLOTS } from "./hotbar.ts";
+import { BakedIcon, PREVIEW_PX } from "./icons.tsx";
+import { PaletteEntryDialog } from "./PaletteEntry.tsx";
+import { menuAnchor, SemanticMenu, type SemanticMenuTarget } from "./SemanticMenu.tsx";
 import { ToolStrip } from "./Tools.tsx";
 import { useStore } from "./useStore.ts";
 
 /**
- * Loads the hotbar. Palettes on the left, the chosen palette's semantics as swatches,
- * and the same hotbar as the workspace. Clicking a semantic fills the chosen slot and
- * moves to the next. A search finds semantics by name, what they are for, or block, across
- * palettes, and narrows the palette list to those with a match. The "+" tile adds a
- * semantic to the palette; right-clicking one removes it (refused while cells use it).
- * Editing a look stays in the palette drawer. The tools sit beside its hotbar, so a tool is
- * chosen here too (E or Delete opens it).
+ * Loads the hotbar. Palettes on the left, the chosen palette's semantics as baked pictures,
+ * and the same turning preview the block library uses on the right. The preview follows the
+ * hotbar: opening selects that slot's semantic and its palette, and choosing another slot
+ * does too. Clicking a semantic fills the chosen slot and moves to the next. A search finds
+ * semantics by name, what they are for, or block. "+" opens the entry editor. Right-click
+ * offers Edit or Delete. The tools sit beside its hotbar.
  */
 export function Inventory({ engine }: { engine: Engine }) {
   const open = useStore(engine.inventoryOpen);
   const palettes = useStore(engine.palettes);
+  const bar = useStore(engine.hotbar.state);
+  const held = bar.slots[bar.selected] ?? null;
   const [paletteId, setPaletteId] = useState<number | null>(null);
   const [query, setQuery] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [menu, setMenu] = useState<SemanticMenuTarget | null>(null);
+  const [editing, setEditing] = useState<{
+    palette: PaletteInfo;
+    semantic: SemanticInfo | null;
+  } | null>(null);
+  const heldRef = useRef<HTMLButtonElement>(null);
+  const followed = useRef("");
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   const matches = (s: SemanticInfo) => terms.every((t) => searchText(s).includes(t));
   const shown = terms.length === 0 ? palettes : palettes.filter((p) => p.semantics.some(matches));
@@ -33,35 +43,31 @@ export function Inventory({ engine }: { engine: Engine }) {
 
   useEffect(() => {
     if (!open) {
+      followed.current = "";
       setQuery("");
-      setError(null);
+      setMenu(null);
+      setEditing(null);
+      return;
     }
-  }, [open]);
+    const mark = held
+      ? `${bar.selected}:${held.palette}:${semanticKey(held)}`
+      : `empty:${bar.selected}`;
+    if (followed.current === mark) return;
+    followed.current = mark;
+    if (held) setPaletteId(held.palette);
+  }, [open, bar.selected, held]);
+
+  const heldMark = held ? `${bar.selected}:${semanticKey(held)}` : "";
+  const shownPalette = palette?.id;
+  useEffect(() => {
+    if (!open || heldMark === "" || shownPalette === undefined) return;
+    heldRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [open, heldMark, shownPalette]);
 
   if (!open) return null;
 
-  const run = (work: Promise<unknown>) =>
-    void work.then(
-      () => setError(null),
-      (caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught)),
-    );
-  const add = (into: PaletteInfo) => {
-    const name = prompt(`A new semantic in ${into.name}`, "");
-    if (name?.trim()) run(engine.world.request({ type: "addSemantic", palette: into.id, name }));
-  };
-  const remove = (into: PaletteInfo, semantic: SemanticInfo) => {
-    if (into.linked || typeof semantic.ref !== "number") {
-      setError(
-        into.linked
-          ? `${into.name} is a shared palette: change it from Home.`
-          : `${semantic.name} comes from a parent palette: remove it there.`,
-      );
-      return;
-    }
-    if (!confirm(`Remove ${semantic.name} from ${into.name}?`)) return;
-    run(engine.world.request({ type: "removeSemantic", semantic: semantic.ref }));
-  };
   const semantics = palette?.semantics.filter((s) => terms.length === 0 || matches(s)) ?? [];
+  const heldKey = held ? semanticKey(held) : null;
 
   return (
     <div className="inventory">
@@ -81,12 +87,11 @@ export function Inventory({ engine }: { engine: Engine }) {
             aria-label="Search semantics"
             onChange={(e) => setQuery(e.target.value)}
           />
-          <span>Click to load the chosen slot · right-click removes · E, Delete or Esc closes</span>
+          <span>Click to load the chosen slot · right-click to edit or delete · Esc closes</span>
           <button type="button" onClick={() => engine.toggleInventory()}>
             Close
           </button>
         </header>
-        {error && <p className="palette-error">{error}</p>}
         <div className="inventory-body">
           <div className="inventory-palettes" role="listbox" aria-label="Palettes">
             {shown.map((item) => (
@@ -103,41 +108,51 @@ export function Inventory({ engine }: { engine: Engine }) {
             ))}
           </div>
           <div className="inventory-grid">
-            {semantics.map((semantic) => (
-              <button
-                key={`${semantic.palette}:${semantic.name}:${typeof semantic.ref === "number" ? semantic.ref : semantic.ref.base}`}
-                type="button"
-                className="inventory-swatch"
-                title={[
-                  semantic.name,
-                  semantic.description,
-                  semantic.block ? blockTitle(semantic.block) : "undecided",
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-                onClick={() => {
-                  const selected = engine.hotbar.state.get().selected;
-                  engine.hotbar.assign(selected, semantic);
-                  engine.hotbar.select((selected + 1) % HOTBAR_SLOTS);
-                }}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  if (palette) remove(palette, semantic);
-                }}
-              >
-                <span
-                  className={semantic.glow ? "swatch glow" : "swatch"}
-                  style={{ background: semantic.color }}
-                />
-                <span>{semantic.name}</span>
-              </button>
-            ))}
+            {semantics.map((semantic) => {
+              const key = semanticKey(semantic);
+              const active = key === heldKey;
+              return (
+                <button
+                  key={key}
+                  ref={active ? heldRef : undefined}
+                  type="button"
+                  className={active ? "inventory-swatch selected" : "inventory-swatch"}
+                  aria-pressed={active}
+                  title={[
+                    semantic.name,
+                    semantic.description,
+                    semantic.block ? blockTitle(semantic.block) : "undecided",
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                  onClick={() => {
+                    const chosen = engine.hotbar.state.get().selected;
+                    engine.hotbar.assign(chosen, semantic);
+                    engine.hotbar.select((chosen + 1) % HOTBAR_SLOTS);
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    if (!palette) return;
+                    const at = menuAnchor(e.clientX, e.clientY);
+                    setMenu({ ...at, palette, semantic });
+                  }}
+                >
+                  <BakedIcon
+                    engine={engine}
+                    block={semantic.block}
+                    color={semantic.color}
+                    className={semantic.glow ? "inventory-icon glow" : "inventory-icon"}
+                  />
+                  <span>{semantic.name}</span>
+                </button>
+              );
+            })}
             {palette && !palette.linked && terms.length === 0 && (
               <button
                 type="button"
                 className="inventory-swatch inventory-add"
                 title={`Add a semantic to ${palette.name}`}
-                onClick={() => add(palette)}
+                onClick={() => setEditing({ palette, semantic: null })}
               >
                 <span className="swatch">+</span>
                 <span>Add</span>
@@ -145,14 +160,51 @@ export function Inventory({ engine }: { engine: Engine }) {
             )}
             {palette && semantics.length === 0 && terms.length > 0 && <p>No match.</p>}
           </div>
+          <aside className="inventory-preview">
+            {held ? (
+              <>
+                {held.block ? (
+                  <BlockStage engine={engine} block={held.block} />
+                ) : (
+                  <BakedIcon
+                    engine={engine}
+                    block={held.block}
+                    color={held.color}
+                    size={PREVIEW_PX}
+                    className={held.glow ? "inventory-preview-icon glow" : "inventory-preview-icon"}
+                  />
+                )}
+                <strong>{held.name}</strong>
+                <span className="home-sub">
+                  {held.block ? blockTitle(held.block) : "Undecided"}
+                </span>
+                {held.description !== "" && <p>{held.description}</p>}
+              </>
+            ) : (
+              <p className="home-quiet">Choose a semantic to see it.</p>
+            )}
+          </aside>
         </div>
         <footer className="inventory-foot">
           <ToolStrip engine={engine} />
-          <HotbarBar hotbar={engine.hotbar} />
+          <HotbarBar hotbar={engine.hotbar} engine={engine} />
         </footer>
       </div>
+      <SemanticMenu engine={engine} target={menu} onClose={() => setMenu(null)} />
+      {editing && (
+        <PaletteEntryDialog
+          engine={engine}
+          palette={editing.palette}
+          semantic={editing.semantic}
+          onClose={() => setEditing(null)}
+        />
+      )}
     </div>
   );
+}
+
+function semanticKey(info: SemanticInfo): string {
+  return typeof info.ref === "number" ? `#${info.ref}` : `${info.ref.palette}:${info.ref.base}`;
 }
 
 /** What a search matches: the name, what it is for, and its block. */

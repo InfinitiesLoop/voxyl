@@ -1,8 +1,12 @@
 import { blockLabel } from "@voxyl/blocks";
-import { type CSSProperties, useEffect, useState } from "react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Engine } from "../scene/Engine.ts";
 import type { BlockSearch } from "../world/protocol.ts";
+import { BakedIcon, PREVIEW_PX } from "./icons.tsx";
+import { Store } from "./store.ts";
+import { useTurntable } from "./turntable.ts";
+import { useStore } from "./useStore.ts";
 
 /** "voxyl:oak_stairs" as "Oak stairs"; another library keeps its name. */
 export function blockTitle(ref: string): string {
@@ -13,7 +17,12 @@ export function blockTitle(ref: string): string {
 }
 
 const ICON = 16 * 16 * 4;
+const PAGE = 80;
 type Layout = "1x1" | "1x3" | "3x3";
+type BlockHit = BlockSearch["hits"][number];
+
+/** The 1×1 / 1×3 / 3×3 choice, shared by the inventory and the block library. */
+const previewLayout = new Store<Layout>("1x1");
 
 /**
  * The block chooser, after the Godot app's: the libraries down the left (all of them, or
@@ -25,50 +34,144 @@ export function BlockChooser({
   engine,
   current,
   onPick,
+  onExplore,
   browse = false,
+  embedded = false,
+  searchAutoFocus = true,
+  onImport,
+  onRemove,
+  removable,
 }: {
   engine: Engine;
   /** The block the look has now, explored first. */
   current?: string | null;
   onPick?: (ref: string | null) => void;
+  /** Fires as the explored block changes. The palette entry editor saves that one. */
+  onExplore?: (ref: string | null) => void;
   browse?: boolean;
+  /** Inside the palette entry editor: picking explores, and the editor's own button saves. */
+  embedded?: boolean;
+  searchAutoFocus?: boolean;
+  /** Home's Blocks tab: bring in a jar, and drop an imported library. */
+  onImport?: () => void;
+  onRemove?: (id: string, name: string) => void;
+  removable?: ReadonlySet<string>;
 }) {
   const [query, setQuery] = useState("");
   const [library, setLibrary] = useState("");
   const [pending, setPending] = useState("");
-  const [result, setResult] = useState<BlockSearch | null>(null);
+  const [libraries, setLibraries] = useState<BlockSearch["libraries"][number][]>([]);
+  const [hits, setHits] = useState<BlockHit[]>([]);
+  const [matched, setMatched] = useState(0);
   const [explored, setExplored] = useState<string | null>(current ?? null);
-  const [layout, setLayout] = useState<Layout>("1x1");
+  const [settled, setSettled] = useState(false);
+  const gridRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const generation = useRef(0);
+  const loading = useRef(false);
+  const more = useRef<() => void>(() => {});
   useEffect(() => {
     const handle = setTimeout(() => setPending(query), 120);
     return () => clearTimeout(handle);
   }, [query]);
   useEffect(() => {
+    const gen = ++generation.current;
+    loading.current = true;
+    setHits([]);
+    setMatched(0);
+    setSettled(false);
     let cancel = false;
     void engine.world
-      .request({ type: "findBlocks", query: pending, ...(library !== "" && { library }) })
+      .request({
+        type: "findBlocks",
+        query: pending,
+        limit: PAGE,
+        offset: 0,
+        ...(library !== "" && { library }),
+      })
       .then((found) => {
-        if (!cancel) setResult(found);
+        if (cancel || generation.current !== gen) return;
+        loading.current = false;
+        setLibraries([...found.libraries]);
+        setMatched(found.matched);
+        setHits([...found.hits]);
+        setSettled(true);
       })
       .catch((caught: unknown) => {
-        if (!cancel) console.error(caught);
+        if (cancel || generation.current !== gen) return;
+        loading.current = false;
+        console.error(caught);
       });
     return () => {
       cancel = true;
     };
   }, [engine, pending, library]);
+  more.current = () => {
+    if (loading.current || hits.length === 0 || hits.length >= matched) return;
+    const gen = generation.current;
+    const offset = hits.length;
+    loading.current = true;
+    void engine.world
+      .request({
+        type: "findBlocks",
+        query: pending,
+        limit: PAGE,
+        offset,
+        ...(library !== "" && { library }),
+      })
+      .then((found) => {
+        if (generation.current !== gen) return;
+        loading.current = false;
+        setMatched(found.matched);
+        setHits((prev) => [...prev, ...found.hits]);
+      })
+      .catch((caught: unknown) => {
+        if (generation.current !== gen) return;
+        loading.current = false;
+        console.error(caught);
+      });
+  };
+  useEffect(() => {
+    const root = gridRef.current;
+    const sentinel = sentinelRef.current;
+    if (!root || !sentinel || hits.length === 0 || hits.length >= matched) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) more.current();
+      },
+      { root, rootMargin: "240px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hits.length, matched]);
   return (
     <div className="chooser">
       <nav className="chooser-rail" aria-label="Libraries">
-        {[{ id: "", name: "All blocks" }, ...(result?.libraries ?? [])].map((l) => (
+        {onImport && (
           <button
-            key={l.id}
             type="button"
-            aria-pressed={library === l.id}
-            onClick={() => setLibrary(l.id)}
+            title="Textures from your own Minecraft stay in this browser"
+            onClick={onImport}
           >
-            {l.name}
+            Import a jar…
           </button>
+        )}
+        {[{ id: "", name: "All blocks" }, ...libraries].map((l) => (
+          <div key={l.id} className="chooser-lib">
+            <button type="button" aria-pressed={library === l.id} onClick={() => setLibrary(l.id)}>
+              {l.name}
+            </button>
+            {l.id !== "" && removable?.has(l.id) && onRemove && (
+              <button
+                type="button"
+                aria-label={`Remove ${l.name}`}
+                title={`Remove ${l.name} from this browser`}
+                onClick={() => onRemove(l.id, l.name)}
+              >
+                ×
+              </button>
+            )}
+          </div>
         ))}
       </nav>
       <div className="chooser-main">
@@ -78,47 +181,43 @@ export function BlockChooser({
           placeholder="Search blocks"
           aria-label="Search blocks"
           // biome-ignore lint/a11y/noAutofocus: the chooser opens to search
-          autoFocus
+          autoFocus={searchAutoFocus}
           onChange={(e) => setQuery(e.target.value)}
         />
-        {result && result.matched > result.hits.length && (
-          <p className="palette-note">
-            Showing {result.hits.length} of {result.matched}. Keep typing.
+        {matched > hits.length && (
+          <p className="chooser-count">
+            {hits.length} of {matched} blocks
           </p>
         )}
-        <div className="block-grid">
-          {result?.hits.map((hit, i) => (
+        <div className="block-grid" ref={gridRef}>
+          {hits.map((hit) => (
             <button
               key={hit.ref}
               type="button"
               className="block-choice"
               aria-pressed={hit.ref === explored}
               title={hit.ref}
-              onClick={() => setExplored(hit.ref)}
-              onDoubleClick={() => !browse && onPick?.(hit.ref)}
+              onClick={() => {
+                setExplored(hit.ref);
+                onExplore?.(hit.ref);
+              }}
+              onDoubleClick={() => {
+                if (embedded) onExplore?.(hit.ref);
+                else if (!browse) onPick?.(hit.ref);
+              }}
             >
-              <BlockIcon icons={result.icons} index={i} color={hit.color} />
+              <BakedIcon engine={engine} block={hit.ref} color={hit.color} className="block-icon" />
               <span>{hit.name}</span>
             </button>
           ))}
+          {hits.length < matched && <div ref={sentinelRef} className="block-sentinel" />}
         </div>
+        {settled && hits.length === 0 && <p className="home-quiet">No blocks.</p>}
       </div>
       <aside className="chooser-side">
         {explored ? (
           <>
-            <BlockPreview engine={engine} block={explored} layout={layout} />
-            <span className="chooser-layouts">
-              {(["1x1", "1x3", "3x3"] as const).map((l) => (
-                <button
-                  key={l}
-                  type="button"
-                  aria-pressed={layout === l}
-                  onClick={() => setLayout(l)}
-                >
-                  {l.replace("x", "×")}
-                </button>
-              ))}
-            </span>
+            <BlockStage engine={engine} block={explored} />
             <strong>{blockTitle(explored)}</strong>
             <small className="home-sub">{explored}</small>
           </>
@@ -127,15 +226,29 @@ export function BlockChooser({
         )}
         {!browse && (
           <span className="chooser-commit">
+            {!embedded && (
+              <button
+                type="button"
+                className="primary"
+                disabled={!explored}
+                onClick={() => explored && onPick?.(explored)}
+              >
+                Use this block
+              </button>
+            )}
+            {embedded && (
+              <p className="palette-note">
+                {explored ? blockTitle(explored) : "Undecided"} is what this entry places.
+              </p>
+            )}
             <button
               type="button"
-              className="primary"
-              disabled={!explored}
-              onClick={() => explored && onPick?.(explored)}
+              onClick={() => {
+                setExplored(null);
+                onExplore?.(null);
+                if (!embedded) onPick?.(null);
+              }}
             >
-              Use this block
-            </button>
-            <button type="button" onClick={() => onPick?.(null)}>
               No block (undecided)
             </button>
           </span>
@@ -192,6 +305,34 @@ export function BlockChooserDialog({
   );
 }
 
+/**
+ * The turning preview and its 1×1, 1×3 and 3×3 choices. The inventory and the block
+ * library both use it, and they share which layout is chosen.
+ */
+export function BlockStage({ engine, block }: { engine: Engine; block: string }) {
+  const layout = useStore(previewLayout);
+  const [whole, setWhole] = useState(true);
+  return (
+    <>
+      <BlockPreview engine={engine} block={block} layout={layout} onCube={setWhole} />
+      {whole && (
+        <span className="chooser-layouts">
+          {(["1x1", "1x3", "3x3"] as const).map((l) => (
+            <button
+              key={l}
+              type="button"
+              aria-pressed={layout === l}
+              onClick={() => previewLayout.set(l)}
+            >
+              {l.replace("x", "×")}
+            </button>
+          ))}
+        </span>
+      )}
+    </>
+  );
+}
+
 /** Where each cube of a layout sits, in cubes. */
 const LAYOUTS: Record<Layout, readonly (readonly [number, number])[]> = {
   "1x1": [[0, 0]],
@@ -214,35 +355,61 @@ const FACE_TRANSFORMS = [
 ];
 
 /**
- * A turning preview of a block from its six face textures, drawn with CSS 3D (no second
- * renderer). A block that isn't a whole cube shows its side textures on a cube.
+ * A turning preview of a whole cube from its six face textures, drawn with CSS 3D (no second
+ * renderer). Anything else is the baked picture of its real model.
  */
 function BlockPreview({
   engine,
   block,
   layout,
+  onCube,
 }: {
   engine: Engine;
   block: string;
   layout: Layout;
+  onCube: (cube: boolean) => void;
 }) {
+  const turn = useTurntable();
   const [faces, setFaces] = useState<(string | null)[] | null>(null);
   const [color, setColor] = useState("#808080");
+  const [cube, setCube] = useState<boolean | null>(null);
   useEffect(() => {
     let cancel = false;
+    setCube(null);
     void engine.world.request({ type: "blockPreview", ref: block }).then((preview) => {
       if (cancel || !preview) return;
       setColor(preview.color);
+      setCube(preview.cube);
+      onCube(preview.cube);
       setFaces(Array.from({ length: 6 }, (_, f) => faceUrl(preview.faces, f)));
     });
     return () => {
       cancel = true;
     };
-  }, [engine, block]);
+  }, [engine, block, onCube]);
   const size = layout === "3x3" ? 40 : layout === "1x3" ? 44 : 72;
+  if (cube === false) {
+    return (
+      <BakedIcon
+        engine={engine}
+        block={block}
+        color={color}
+        size={PREVIEW_PX}
+        className="chooser-bake"
+      />
+    );
+  }
   return (
-    <div className="cube-stage" style={{ "--cube": `${size}px` } as CSSProperties}>
-      <div className="cube-spin">
+    <div
+      className="cube-stage"
+      title="Drag to turn"
+      style={{ "--cube": `${size}px` } as CSSProperties}
+      onPointerDown={turn.onPointerDown}
+      onPointerMove={turn.onPointerMove}
+      onPointerUp={turn.onPointerUp}
+      onPointerCancel={turn.onPointerCancel}
+    >
+      <div className="cube-spin" ref={turn.ref}>
         {LAYOUTS[layout].map(([x, y]) => (
           <div
             key={`${x},${y}`}
@@ -277,36 +444,4 @@ function faceUrl(faces: Uint8Array, f: number): string | null {
   if (!ctx) return null;
   ctx.putImageData(new ImageData(new Uint8ClampedArray(slice), 16, 16), 0, 0);
   return canvas.toDataURL();
-}
-
-export function BlockIcon({
-  icons,
-  index,
-  color,
-}: {
-  icons: Uint8Array;
-  index: number;
-  color: string;
-}) {
-  const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
-  useEffect(() => {
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const slice = icons.subarray(index * ICON, index * ICON + ICON);
-    let textured = false;
-    for (let i = 3; i < slice.length; i += 4) {
-      if (slice[i] !== 0) {
-        textured = true;
-        break;
-      }
-    }
-    if (!textured || slice.length < ICON) {
-      ctx.fillStyle = color;
-      ctx.fillRect(0, 0, 16, 16);
-      return;
-    }
-    ctx.putImageData(new ImageData(new Uint8ClampedArray(slice), 16, 16), 0, 0);
-  }, [canvas, icons, index, color]);
-  return <canvas ref={setCanvas} width={16} height={16} className="block-icon" />;
 }

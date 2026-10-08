@@ -69,6 +69,14 @@ describe("block search", () => {
     expect(blockIcon(library, block("glass_pane"))).toEqual(library.textures.glass?.rgba);
   });
 
+  it("returns a later page without dropping the rest of the count", () => {
+    const all = searchBlocks(libraries, { query: "", limit: 1000 });
+    const page = searchBlocks(libraries, { query: "", limit: 2, offset: 1 });
+    expect(page.matched).toBe(all.matched);
+    expect(page.hits.map((h) => h.ref)).toEqual(all.hits.slice(1, 3).map((h) => h.ref));
+    expect(searchBlocks(libraries, { query: "", offset: all.matched }).hits).toEqual([]);
+  });
+
   it("tints an icon by its face", () => {
     const tinted = {
       ...library,

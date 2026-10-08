@@ -11,7 +11,12 @@ const LETTERS = 15;
  * N, and dim E, S and W. `heading` is read every frame (the clockwise angle from screen-up
  * to north, in radians), so the 3D views turn it without going through React.
  */
-export function Compass({ heading }: { heading: () => number | null }) {
+export function Compass({
+  heading,
+}: {
+  /** Clockwise from screen-up to north. `mirrored` sends E, S and W the other way round. */
+  heading: () => { angle: number; mirrored?: boolean } | null;
+}) {
   const rootRef = useRef<SVGSVGElement>(null);
   const needleRef = useRef<SVGGElement>(null);
   const letterRefs = useRef(new Map<CompassPoint, SVGTextElement>());
@@ -21,17 +26,22 @@ export function Compass({ heading }: { heading: () => number | null }) {
   useEffect(() => {
     let frame = 0;
     let shown = Number.NaN;
+    let flipped = false;
     const tick = () => {
       frame = requestAnimationFrame(tick);
-      const angle = read.current();
+      const pose = read.current();
       const root = rootRef.current;
       if (!root) return;
-      root.style.visibility = angle === null ? "hidden" : "visible";
-      if (angle === null || Math.abs(angle - shown) < 1e-4) return;
+      root.style.visibility = pose === null ? "hidden" : "visible";
+      const angle = pose?.angle ?? null;
+      const mirror = pose?.mirrored ?? false;
+      if (angle === null || (Math.abs(angle - shown) < 1e-4 && mirror === flipped)) return;
       shown = angle;
+      flipped = mirror;
       needleRef.current?.setAttribute("transform", `rotate(${(angle * 180) / Math.PI} ${C} ${C})`);
+      const step = (mirror ? -1 : 1) * (Math.PI / 2);
       COMPASS_POINTS.forEach((point, i) => {
-        const a = angle + (i * Math.PI) / 2;
+        const a = angle + i * step;
         const el = letterRefs.current.get(point);
         el?.setAttribute("x", (C + Math.sin(a) * LETTERS).toFixed(2));
         el?.setAttribute("y", (C - Math.cos(a) * LETTERS).toFixed(2));

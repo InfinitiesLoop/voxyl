@@ -164,6 +164,8 @@ export class Engine {
   readonly notice = new Store("");
   /** The inventory overlay. E toggles it; opening releases the pointer. */
   readonly inventoryOpen = new Store(false);
+  /** Closing the inventory locks the pointer again when it was open in fly mode. */
+  #resumeFly = false;
   /** Set while something (Home) covers every view: frames are skipped. */
   paused = false;
   /** Called when a click chooses a different 3D pane, so the chrome can follow. */
@@ -443,11 +445,35 @@ export class Engine {
     else if (this.fly.locked) this.fly.unlock();
   }
 
-  /** Opens or closes the inventory, releasing the pointer so its controls can be used. */
+  /**
+   * Opens or closes the inventory. Opening releases the pointer so its controls can be
+   * used. Closing locks it again when the inventory interrupted fly mode.
+   */
   toggleInventory(): void {
-    const open = !this.inventoryOpen.get();
-    this.inventoryOpen.set(open);
-    if (open) this.fly.unlock();
+    this.#setInventory(!this.inventoryOpen.get());
+  }
+
+  #setInventory(open: boolean, resumeOnKeyUp = false): void {
+    if (open === this.inventoryOpen.get()) return;
+    if (open) {
+      this.#resumeFly = this.fly.locked;
+      this.inventoryOpen.set(true);
+      this.fly.unlock();
+      return;
+    }
+    this.inventoryOpen.set(false);
+    if (!this.#resumeFly) return;
+    this.#resumeFly = false;
+    if (!resumeOnKeyUp) {
+      this.fly.lock();
+      return;
+    }
+    const lock = (event: KeyboardEvent) => {
+      if (event.code !== "Escape") return;
+      document.removeEventListener("keyup", lock, true);
+      this.fly.lock();
+    };
+    document.addEventListener("keyup", lock, true);
   }
 
   /**
@@ -1033,7 +1059,9 @@ export class Engine {
   #onKey(event: KeyboardEvent): void {
     if (event.code === "Escape" && this.inventoryOpen.get()) {
       event.preventDefault();
-      this.inventoryOpen.set(false);
+      // Escape is the gesture that leaves pointer lock, and a lock requested in that
+      // keydown is refused. Ask again when the key is released.
+      this.#setInventory(false, true);
       return;
     }
     if (isTyping(event.target)) return;

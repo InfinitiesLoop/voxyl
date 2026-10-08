@@ -73,7 +73,7 @@ export function Home(props: HomeProps) {
           </button>
         )}
       </header>
-      <div className="home-body">
+      <div className={tab === "blocks" ? "home-body home-body-blocks" : "home-body"}>
         {tab === "projects" && <Projects {...props} />}
         {tab === "palettes" && <Palettes engine={props.engine} />}
         {tab === "blocks" && (
@@ -415,7 +415,10 @@ function PaletteEditor({
   );
 }
 
-/** Block libraries in this browser: the defaults, and Minecraft jars you import. */
+/**
+ * Block libraries in this browser. An import is a library (the built-in set is the other
+ * one), so they are one list: the chooser's rail, with import and remove on it.
+ */
 function Blocks({
   engine,
   libraries,
@@ -427,48 +430,25 @@ function Blocks({
 }) {
   const file = useRef<HTMLInputElement>(null);
   return (
-    <section className="home-section home-split">
-      <div className="home-list">
-        <div className="home-actions">
-          <button type="button" className="primary" onClick={() => file.current?.click()}>
-            Import a Minecraft jar…
-          </button>
-          <input
-            ref={file}
-            type="file"
-            accept=".jar,.zip"
-            hidden
-            onChange={(e) => {
-              const chosen = e.target.files?.[0];
-              e.target.value = "";
-              if (chosen) void library.importJar(chosen);
-            }}
-          />
-        </div>
-        <ul>
-          <li className="home-library">
-            <strong>Voxyl defaults</strong>
-            <small className="home-sub">Built in</small>
-          </li>
-          {libraries.map((l) => (
-            <li key={l.id} className="home-library">
-              <strong>{l.name}</strong>
-              <small className="home-sub">
-                {l.blocks.toLocaleString()} blocks · stays in this browser
-              </small>
-              <button type="button" onClick={() => void library.delete(l.id, l.name)}>
-                Remove
-              </button>
-            </li>
-          ))}
-        </ul>
-        <p className="home-quiet">
-          Imported textures come from your own copy of the game and never leave this browser.
-        </p>
-      </div>
-      <div className="home-pane">
-        <BlockChooser engine={engine} browse />
-      </div>
+    <section className="home-section home-blocks">
+      <input
+        ref={file}
+        type="file"
+        accept=".jar,.zip"
+        hidden
+        onChange={(e) => {
+          const chosen = e.target.files?.[0];
+          e.target.value = "";
+          if (chosen) void library.importJar(chosen);
+        }}
+      />
+      <BlockChooser
+        engine={engine}
+        browse
+        onImport={() => file.current?.click()}
+        onRemove={(id, name) => void library.delete(id, name)}
+        removable={new Set(libraries.map((l) => l.id))}
+      />
     </section>
   );
 }

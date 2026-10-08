@@ -65,13 +65,14 @@ export function Panes({
   const panes = useMemo(() => visiblePanes(layout), [layout]);
   const focus = focusedIndex(layout);
 
-  // The 2D view the 3D panes show a slice guide for: the focused pane if it is 2D, else
-  // the 2D pane focused last, else the first one.
+  // Tab while flying retargets the focused 2D pane, or the one focused last, or the first.
+  // The amber slice in the 3D views is only that pane while it is the one you're in.
   const last2d = useRef<string | null>(null);
   const focused = panes[focus];
   if (focused?.kind === "2d") last2d.current = focused.id;
   const flat = panes.filter((pane) => pane.kind === "2d");
   const active2d = flat.find((pane) => pane.id === last2d.current)?.id ?? flat[0]?.id ?? null;
+  const guide2d = focused?.kind === "2d" ? focused.id : null;
 
   // A slice request with no 2D view on screen: the next pane over becomes one.
   const request = useStore(engine.sliceRequest);
@@ -157,6 +158,7 @@ export function Panes({
                 onShow={onShow}
                 onFocus={onFocus}
                 active={pane.id === active2d}
+                guide={pane.id === guide2d}
               />
             ) : (
               <>
@@ -192,7 +194,9 @@ export function Panes({
                       <Compass
                         heading={() => {
                           const yaw = engine.viewYaw(pane.id);
-                          return yaw === null ? null : northHeading(yaw, info?.north ?? "north");
+                          return yaw === null
+                            ? null
+                            : { angle: northHeading(yaw, info?.north ?? "north") };
                         }}
                       />
                     </div>
@@ -273,7 +277,7 @@ function CameraMenu({
   const speed = useStore(engine.speed);
   const selection = useStore(engine.selection);
   return (
-    <BarMenu label="Camera" title="Camera presets, orbit, projection and speed">
+    <BarMenu label="Camera" title="Camera presets, orbit, projection and fly speed">
       <span className="bar-choices">
         {PRESETS.map((p) => (
           <button
@@ -300,7 +304,7 @@ function CameraMenu({
         onChange={(projection) => onView({ projection })}
       />
       <label className="bar-range">
-        Speed {Math.round(speed)} cells a second (= and -)
+        Fly speed {Math.round(speed)} cells a second (= and -)
         <input
           type="range"
           min={Math.log(2)}

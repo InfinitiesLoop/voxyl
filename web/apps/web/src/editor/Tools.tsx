@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { Engine } from "../scene/Engine.ts";
 import { KEYMAP, keyLabel } from "./keymap.ts";
 import { type EditorTool, usesBrush } from "./tool.ts";
@@ -53,11 +54,12 @@ export function ToolStrip({ engine }: { engine: Engine }) {
           <button
             key={item.id}
             type="button"
+            aria-label={item.label}
             aria-pressed={tool === item.id}
-            title={`${item.hint} (${toolKeys()} steps through the tools)`}
+            title={`${item.label}. ${item.hint} (${toolKeys()} steps through the tools)`}
             onClick={blurAfter(() => engine.setTool(item.id))}
           >
-            {item.label}
+            <ToolIcon id={item.id} />
           </button>
         ))}
       </div>
@@ -106,17 +108,53 @@ export function ToolBadge({ engine }: { engine: Engine }) {
     <button
       type="button"
       className="tool-badge"
-      title={`${current?.hint ?? ""} Change tools in the inventory (E or Delete), or with ${toolKeys()}.`}
+      aria-label={current?.label ?? "Tool"}
+      title={`${current?.label ?? "Tool"}. ${current?.hint ?? ""} Change tools in the inventory (E or Delete), or with ${toolKeys()}.`}
       onClick={blurAfter(() => engine.toggleInventory())}
     >
-      <span className="tool-badge-label">Tool</span>
-      {current?.label}
-      {usesBrush(tool) && brush > 1 && (
-        <span className="tool-badge-brush">
-          {" "}
-          {brush}×{brush}
-        </span>
-      )}
+      <ToolIcon id={tool} />
+      {usesBrush(tool) && brush > 1 && <span className="tool-badge-brush">{brush}</span>}
     </button>
   );
 }
+
+/** A small picture for each tool, in the inventory and on the badge beside the hotbar. */
+export function ToolIcon({ id }: { id: EditorTool }) {
+  return (
+    <svg className="tool-icon" viewBox="0 0 24 24" aria-hidden>
+      {ICONS[id]}
+    </svg>
+  );
+}
+
+const stroke = {
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 1.6,
+  strokeLinejoin: "round" as const,
+  strokeLinecap: "round" as const,
+};
+
+const ICONS: Record<EditorTool, ReactNode> = {
+  build: (
+    <>
+      <path {...stroke} d="M12 3.2 20.2 8 12 12.8 3.8 8Z" />
+      <path {...stroke} d="M12 12.8 20.2 8v8.2L12 20.8" />
+      <path {...stroke} d="M12 12.8 3.8 8v8.2L12 20.8" />
+    </>
+  ),
+  column: (
+    <>
+      <path {...stroke} d="M5 19.5V9.5M5 19.5h6M5 14.5h6M5 9.5h6" />
+      <path {...stroke} d="M16.5 18V6.5M16.5 6.5 14 9M16.5 6.5 19 9" />
+    </>
+  ),
+  wand: (
+    <>
+      <path {...stroke} d="M4 20 13.5 10.5" />
+      <path {...stroke} d="M15 4.8 16.1 7.6 19 8.7 16.1 9.8 15 12.6 13.9 9.8 11 8.7 13.9 7.6Z" />
+    </>
+  ),
+  exchange: <path {...stroke} d="M4 8h13l-3.2-3.2M20 16H7l3.2 3.2" />,
+  select: <rect {...stroke} x="4" y="4" width="16" height="16" rx="1.5" strokeDasharray="3 2" />,
+};

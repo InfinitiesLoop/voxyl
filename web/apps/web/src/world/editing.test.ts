@@ -7,6 +7,7 @@ import {
   addSemanticCommand,
   aim,
   describeSemanticCommand,
+  editSemanticCommand,
   eraseCommand,
   fillBoxCommand,
   historyState,
@@ -197,6 +198,32 @@ describe("palette edits", () => {
     expect(palette?.extends).toBe(ROOT_PALETTE);
     expect(historyState(project).undo).toBe("Add palette Walkway");
     expect(addSemanticCommand(project, 99, "Nope")).toBeNull();
+
+    const made = addSemanticCommand(project, ROOT_PALETTE, "Hedge", {
+      description: "The edge of a garden",
+      look: { block: "voxyl:oak_leaves" },
+    });
+    if (!made) throw new Error("no command");
+    project.run(made);
+    const hedge = project.semantics.byName("Hedge");
+    if (hedge === undefined) throw new Error("no hedge");
+    expect(project.semantics.resolve(hedge).look.block).toBe("voxyl:oak_leaves");
+    const edited = editSemanticCommand(project, hedge, {
+      name: "Hedge",
+      description: "A garden edge",
+      look: { block: "voxyl:oak_leaves", glow: true },
+    });
+    if (!edited) throw new Error("no command");
+    project.run(edited);
+    expect(historyState(project).undo).toBe("Edit Hedge");
+    expect(project.semantics.resolve(hedge).look.glow).toBe(true);
+    expect(
+      editSemanticCommand(project, hedge, {
+        name: "Hedge",
+        description: "A garden edge",
+        look: { block: "voxyl:oak_leaves", glow: true },
+      }),
+    ).toBeNull();
   });
 });
 
