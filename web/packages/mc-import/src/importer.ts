@@ -144,7 +144,7 @@ const name = (ref: string) => (ref.startsWith("minecraft:") ? ref.slice(10) : re
 
 /** Imports a client jar's blocks. */
 export async function importJar(bytes: Uint8Array): Promise<ImportResult> {
-  const zip = new ZipReader(bytes);
+  const zip = await ZipReader.fromBytes(bytes);
   const json = async <T>(path: string): Promise<T | null> => {
     const data = await zip.read(path);
     return data ? (JSON.parse(utf8.decode(data)) as T) : null;
