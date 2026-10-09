@@ -4,6 +4,7 @@ import { CellFields, planCell } from "../cell.ts";
 import { resolveSemantic, SemRef } from "../names.ts";
 import { resolveRegion, ToolRegion } from "../region.ts";
 import { editResult, MutatingFields } from "../result.ts";
+import { EditExtras, expandRegionSpecs, expansionNotes, planImages } from "../symmetry.ts";
 import { type CommandSpec, defineTool, ToolError } from "../tool.ts";
 
 const STYLES = ["solid", "hollow", "walls", "frame", "floor"] as const;
@@ -26,6 +27,7 @@ export const fill = defineTool({
       .optional()
       .describe("hollow only: leave what is inside the shell instead of clearing it."),
     ...CellFields,
+    ...EditExtras,
     ...MutatingFields,
   }),
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
@@ -82,7 +84,12 @@ export const fill = defineTool({
         }
       }
     }
-    const summary = specs.length > 0 ? await call.run(specs) : null;
-    return editResult(summary, { style, problems });
+    const images = planImages(args);
+    const expanded = expandRegionSpecs(project, images, specs);
+    if (expanded.skipped > 0) {
+      problems.push(`${expanded.skipped} copy(ies) left out: a part has no mirror image.`);
+    }
+    const summary = expanded.specs.length > 0 ? await call.run(expanded.specs) : null;
+    return editResult(summary, { style, problems, ...expansionNotes(images, expanded.skipped) });
   },
 });

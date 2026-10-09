@@ -3,7 +3,7 @@
 // ToolHost, so it tests in Node with an in-memory host.
 
 import type { Libraries } from "@voxyl/blocks";
-import type { Box, Project, SemanticChange } from "@voxyl/core";
+import type { Box, Piece, Project, SemanticChange, SharedPalette } from "@voxyl/core";
 import type { z } from "zod";
 
 /** What a tool needs from whoever runs it: the core project plus the few things outside it. */
@@ -24,8 +24,26 @@ export interface ToolHost {
   ): void | Promise<void>;
   /** The block libraries available to this project (find_blocks, block checks). Async: they load. */
   libraries?(): Promise<Libraries> | Libraries;
-  // The clipboard and the prefab and palette stores join here, optional and
-  // async, as the tools that need them land (find_blocks, transform, prefab_*, palette_edit).
+  /** The clipboard: one piece, kept across projects. */
+  readonly clipboard?: ClipboardPort;
+  /** The user's shared palettes, kept outside any project. */
+  readonly sharedPalettes?: SharedPalettesPort;
+}
+
+type Maybe<T> = T | Promise<T>;
+
+/** The clipboard as tools use it: copy puts a piece there, paste reads it. */
+export interface ClipboardPort {
+  get(): Maybe<Piece | null>;
+  /** `from` says where it came from ("agent", a prefab name). */
+  set(piece: Piece, from: string): Maybe<void>;
+}
+
+/** A shared palette as stored: the palette itself and when it last changed. */
+export type StoredSharedPalette = SharedPalette & { readonly updated?: number };
+
+export interface SharedPalettesPort {
+  list(): Maybe<readonly StoredSharedPalette[]>;
 }
 
 /** MCP-style hints about what a tool does to the world. */
@@ -57,6 +75,8 @@ export interface RunSummary {
   readonly created: { readonly palettes: readonly string[]; readonly semantics: readonly string[] };
   /** Figures the commands added ("switched": 12), the last command's winning. */
   readonly notes: Readonly<Record<string, number | string>>;
+  /** The numeric figures summed over the commands (a call with several copies of an edit). */
+  readonly totals: Readonly<Record<string, number>>;
   /** The project as it is after (the fork, for a dry run): read it for selection and the like. */
   readonly after: Project;
 }

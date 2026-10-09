@@ -1,10 +1,27 @@
 import type { CellStateArg, SemanticArg } from "@voxyl/core";
 import { rejectPart } from "@voxyl/shapes";
 import { z } from "zod";
-import { CellFields, type CellFieldValues, type PartPlan, planCell, type Tags } from "../cell.ts";
+import {
+  CellFields,
+  type CellFieldValues,
+  type CellPlan,
+  type PartPlan,
+  planCell,
+  type Tags,
+} from "../cell.ts";
 import { resolveSemantic, type SemanticTarget, SemRef } from "../names.ts";
 import { PosSchema } from "../region.ts";
 import { editResult, MutatingFields, type Rejection } from "../result.ts";
+import {
+  checkExpansion,
+  EditExtras,
+  expansionNotes,
+  type Image,
+  isExpanded,
+  movePos,
+  moveState,
+  planImages,
+} from "../symmetry.ts";
 import { defineTool, ToolError } from "../tool.ts";
 
 const MAX_CELLS = 5000;
@@ -36,13 +53,16 @@ export const place = defineTool({
     at: z.array(PosSchema).min(1).max(MAX_POSITIONS).optional(),
     semantic: SemRef.optional().describe("With `at`: the semantic every position gets."),
     ...CellFields,
+    ...EditExtras,
     ...MutatingFields,
   }),
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
   async handler(_host, args, call) {
     const project = call.project;
     const world = project.world;
-    const { cells, at, semantic, op_id: _op, dry_run: _dry, ...shared } = args;
+    const { cells, at, semantic, op_id: _op, dry_run: _dry, symmetry, repeat, ...shared } = args;
+    const images = planImages({ symmetry, repeat });
+    let skippedImages = 0;
     if ((cells === undefined) === (at === undefined)) {
       throw new ToolError("bad_argument", "Give either `cells` or `at` with `semantic`, not both.");
     }
@@ -72,7 +92,26 @@ export const place = defineTool({
     const parts = new Map<string, Pending>();
     let placed = 0;
 
+    if (isExpanded(images)) checkExpansion(images, entries.length);
+    // Each entry is planned once, then placed at every image of its position.
+    const work: { at: readonly [number, number, number]; plan: CellPlan }[] = [];
     for (const { at: pos, ref, spec } of entries) {
+      const plan = planCell(targetOf(ref), spec, ignored);
+      for (const image of images) {
+        if (image === images[0]) {
+          work.push({ at: pos, plan });
+          continue;
+        }
+        const moved = planMoved(image, plan);
+        if (moved === null) {
+          skippedImages++;
+          rejected.push({ at: movePos(image, pos), reason: "no_mirror_image" });
+          continue;
+        }
+        work.push({ at: movePos(image, pos), plan: moved });
+      }
+    }
+    for (const { at: pos, plan } of work) {
       const [x, y, z] = pos;
       const reject = (reason: string, detail?: string) =>
         rejected.push({ at: pos, reason, ...(detail !== undefined && { detail }) });
@@ -80,7 +119,6 @@ export const place = defineTool({
         reject("out_of_world");
         continue;
       }
-      const plan = planCell(targetOf(ref), spec, ignored);
       const k = pos.join(",");
       if (plan.kind === "reject") {
         reject(plan.reason, plan.detail);
@@ -164,6 +202,23 @@ export const place = defineTool({
       flat.length > 0
         ? await call.run([{ kind: "set", args: { states: stateList, cells: flat } }])
         : null;
-    return editResult(summary, { placed, rejected, problems: [...ignored] });
+    return editResult(summary, {
+      placed,
+      rejected,
+      problems: [...ignored],
+      ...expansionNotes(images, skippedImages),
+    });
   },
 });
+
+/** A planned cell moved by an image, or null when a part has no image. */
+function planMoved(image: Image, plan: CellPlan): CellPlan | null {
+  if (plan.kind === "reject") return plan;
+  if (plan.kind === "block") {
+    const state = moveState(image, plan.state);
+    return state ? { kind: "block", state } : null;
+  }
+  const moved = moveState(image, { parts: [plan.part] });
+  const part = moved?.parts?.[0];
+  return part ? { kind: "part", part, tags: plan.tags } : null;
+}

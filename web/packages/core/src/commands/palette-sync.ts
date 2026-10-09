@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { SemanticRegistry, SharedPalette } from "../semantics.ts";
 import { CommandError, defineCommand, defined, FormArg, LookArg, NameArg } from "./command.ts";
 
 /**
@@ -43,3 +44,27 @@ export const paletteSync = defineCommand({
     }
   },
 });
+
+/**
+ * The arguments of the palette_sync that brings `shared` into a registry as a linked copy (or
+ * re-syncs the copy). A project palette with the same name keeps it: the copy is called
+ * "Name (shared)".
+ */
+export function paletteSyncArgs(registry: SemanticRegistry, shared: SharedPalette) {
+  const taken = new Set(
+    registry
+      .palettes()
+      .filter((p) => p.linked?.key !== shared.key)
+      .map((p) => p.name),
+  );
+  let name = shared.name;
+  for (let n = 1; taken.has(name); n++)
+    name = n === 1 ? `${shared.name} (shared)` : `${shared.name} (shared ${n})`;
+  return {
+    key: shared.key,
+    version: shared.version,
+    name,
+    ...(shared.description !== undefined && { description: shared.description }),
+    semantics: shared.semantics.map((s) => ({ ...s })),
+  };
+}

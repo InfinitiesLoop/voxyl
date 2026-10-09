@@ -5,11 +5,12 @@ import {
   type Look,
   PLACEMENTS,
   type Project,
+  paletteSyncArgs,
   type SemanticArg,
 } from "@voxyl/core";
 import { isKnownShape } from "@voxyl/shapes";
 import { z } from "zod";
-import { resolvePalette, resolveSemantic } from "../names.ts";
+import { nearMatches, resolvePalette, resolveSemantic } from "../names.ts";
 import { describePalette, usage } from "../palettes.ts";
 import { editResult, MutatingFields } from "../result.ts";
 import { type CommandSpec, defineTool, ToolError, type ToolHost } from "../tool.ts";
@@ -63,7 +64,16 @@ export const paletteEdit = defineTool({
     "a block here re-skins every cell without touching the build. A semantic with no block is " +
     "undecided. Use this to make semantics before placing them.",
   input: z.strictObject({
-    palette: Name.describe("The palette to edit, by name. The first palette is 'Main'."),
+    palette: Name.optional().describe(
+      "The palette to edit, by name (required unless `link`). The first palette is 'Main'.",
+    ),
+    link: Name.optional().describe(
+      "Bring in a shared palette (by name) as a linked, read-only copy named like it; if already linked, re-sync it. A palette of your own can extend the copy. Shared palettes live outside any project.",
+    ),
+    unlink: z
+      .boolean()
+      .optional()
+      .describe("Make a linked copy an ordinary editable palette again."),
     create: z
       .union([
         z.boolean(),
@@ -96,6 +106,7 @@ export const paletteEdit = defineTool({
     // commands read their ids from. The same specs then run for real (or as the dry run).
     const scratch = project.fork();
     const specs: CommandSpec[] = [];
+    let linked: number | undefined;
     const plan = (spec: CommandSpec, what: string) => {
       try {
         const result = scratch.run({ id: `plan-${specs.length}`, ...spec });
@@ -118,23 +129,53 @@ export const paletteEdit = defineTool({
       }
     };
 
+    if (args.link !== undefined) {
+      if (!host.sharedPalettes) {
+        throw new ToolError("unavailable", "This host has no shared palettes.");
+      }
+      const all = await host.sharedPalettes.list();
+      const wanted = args.link.trim().toLowerCase();
+      const shared =
+        all.find((p) => p.key === args.link) ?? all.find((p) => p.name.toLowerCase() === wanted);
+      if (!shared) {
+        const near = nearMatches(
+          args.link,
+          all.map((p) => p.name),
+        );
+        throw new ToolError(
+          "not_found",
+          `No shared palette named "${args.link}".${near.length > 0 ? ` Did you mean ${near.map((n) => `"${n}"`).join(", ")}?` : " There are none."}`,
+          { kind: "shared palette", query: args.link, suggestions: near },
+        );
+      }
+      plan(
+        { kind: "palette_sync", args: paletteSyncArgs(scratch.semantics, shared) },
+        `link ${shared.name}`,
+      );
+      linked = scratch.semantics.palettes().find((p) => p.linked?.key === shared.key)?.id;
+    }
+    const target =
+      args.palette ?? (linked !== undefined ? scratch.semantics.palette(linked).name : undefined);
+    if (target === undefined) {
+      throw new ToolError("bad_argument", "Give `palette` (or `link`).");
+    }
     let found = true;
     try {
-      resolvePalette(scratch, args.palette);
+      resolvePalette(scratch, target);
     } catch (error) {
       if (!(error instanceof ToolError) || error.code !== "not_found") throw error;
       found = false;
     }
     if (!found) {
       if (args.create === undefined || args.create === false) {
-        throw check("palette", () => resolvePalette(scratch, args.palette));
+        throw check("palette", () => resolvePalette(scratch, target));
       }
       const options = args.create === true ? {} : args.create;
       plan(
         {
           kind: "palette_add",
           args: {
-            name: args.palette,
+            name: target,
             ...(options.description !== undefined && { description: options.description }),
             ...(options.extends !== undefined && {
               extends: check("create.extends", () =>
@@ -143,10 +184,13 @@ export const paletteEdit = defineTool({
             }),
           },
         },
-        `create ${args.palette}`,
+        `create ${target}`,
       );
     }
-    const paletteId = resolvePalette(scratch, args.palette);
+    const paletteId = resolvePalette(scratch, target);
+    if (args.unlink === true) {
+      plan({ kind: "palette_unlink", args: { palette: paletteId } }, `unlink ${target}`);
+    }
 
     if (args.palette_set) {
       const { name, description, extends: parent } = args.palette_set;
@@ -238,7 +282,7 @@ export const paletteEdit = defineTool({
     });
 
     if (args.delete === true) {
-      plan({ kind: "palette_remove", args: { palette: paletteId } }, `delete ${args.palette}`);
+      plan({ kind: "palette_remove", args: { palette: paletteId } }, `delete ${target}`);
     }
 
     const problems = await unknownBlocks(host, ops);
@@ -247,7 +291,7 @@ export const paletteEdit = defineTool({
     const final = args.delete === true ? null : after.semantics.palette(paletteId);
     return editResult(summary, {
       ...(final && { palette: describePalette(after, paletteId, usage(after)) }),
-      ...(args.delete === true && { deleted: args.palette }),
+      ...(args.delete === true && { deleted: target }),
       ops_applied: specs.length,
       problems,
     });

@@ -28,6 +28,7 @@ export {
   SemanticArg,
 } from "./commands/command.ts";
 export { COMMANDS } from "./commands/index.ts";
+export { paletteSyncArgs } from "./commands/palette-sync.ts";
 export {
   ChunkLayout,
   chunkKey,
@@ -53,6 +54,7 @@ export {
 export { type StateJSON, stateInput, stateJSON } from "./format/state-json.ts";
 export {
   cutPiece,
+  defaultAnchor,
   filterPiece,
   forEachPieceCell,
   importSemantics,

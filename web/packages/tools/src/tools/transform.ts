@@ -1,3 +1,4 @@
+import { SideArg } from "@voxyl/core";
 import { z } from "zod";
 import { resolveRegion, ToolRegion } from "../region.ts";
 import { editResult, MutatingFields } from "../result.ts";
@@ -9,13 +10,13 @@ export const transform = defineTool({
   name: "transform",
   title: "Move, copy, turn or mirror",
   description:
-    "Relocate the cells of a region. With `by` ([dx,dy,dz]) or `to` ([x,y,z], where the result's " +
-    "lowest corner lands) the cells move there, or are copied with copy:true. Without them the " +
-    "region is turned or mirrored in place and keeps its lowest corner. `turn` is quarter turns " +
-    "clockwise seen from above (negative: anticlockwise); `mirror` x|y|z flips across that " +
-    "axis, after turning. Blocks and parts turn with their cells; parts with no mirror image " +
-    "are left out and counted in `rejected`. `air` lets the region's empty cells clear what " +
-    "they land on. A prefab or clipboard paste comes with the prefab tools.",
+    "Relocate a region's cells. With `by` ([dx,dy,dz]) or `to` (where the result's lowest " +
+    "corner lands) they move, or are copied with copy:true. Without them the region is turned " +
+    "or mirrored in place about its lowest corner: `turn` quarter turns clockwise from above " +
+    "(negative: anticlockwise), then `mirror` x|y|z. Parts with no mirror image are left out " +
+    "(`rejected_count`). `air`: empty cells clear what they land on. `rotate` {face?, turns?} " +
+    "instead turns each cell where it stands about the axis through `face` (default up). For " +
+    "a turned copy elsewhere use copy then paste.",
   input: z.strictObject({
     where: ToolRegion,
     by: Pos.optional(),
@@ -24,6 +25,13 @@ export const transform = defineTool({
     turn: z.number().int().min(-3).max(3).optional(),
     mirror: z.enum(["x", "y", "z"]).optional(),
     air: z.boolean().optional(),
+    rotate: z
+      .strictObject({
+        face: SideArg.optional(),
+        turns: z.number().int().min(-3).max(3).optional(),
+      })
+      .optional()
+      .describe("Turn each cell where it stands. Cannot combine with by, to, turn or mirror."),
     ...MutatingFields,
   }),
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
@@ -33,6 +41,33 @@ export const transform = defineTool({
       throw new ToolError("bad_argument", "Give `by` or `to`, not both.");
     }
     const where = resolveRegion(project, args.where);
+    if (args.rotate !== undefined) {
+      if (args.by || args.to || args.copy || args.turn !== undefined || args.mirror || args.air) {
+        throw new ToolError(
+          "bad_argument",
+          "rotate cannot combine with by, to, copy, turn, mirror or air.",
+        );
+      }
+      const turns = args.rotate.turns ?? 1;
+      if (turns === 0) throw new ToolError("bad_argument", "rotate.turns can't be 0.");
+      const summary = await call.run([
+        { kind: "rotate", args: { where, face: args.rotate.face ?? "up", turns } },
+      ]);
+      const rotated = Number(summary.notes.rotated ?? 0);
+      const unchanged = Number(summary.notes.unchanged ?? 0);
+      return editResult(summary, {
+        rotated,
+        unchanged,
+        problems:
+          rotated === 0
+            ? [
+                unchanged === 0
+                  ? "The region holds no cells."
+                  : "No cell changes under that turn (symmetric blocks, or parts with no such slot).",
+              ]
+            : [],
+      });
+    }
     const moving = args.by !== undefined || args.to !== undefined;
     if (!moving && args.copy === true) {
       throw new ToolError("bad_argument", "A copy needs `by` or `to` to say where it goes.");
@@ -61,7 +96,7 @@ export const transform = defineTool({
       };
     }
     const summary = await call.run([spec]);
-    const rejected = Number(summary.notes.rejected ?? 0);
+    const rejected = summary.totals.rejected ?? 0;
     return editResult(summary, {
       cells_written: Number(summary.notes.cells ?? 0),
       ...(rejected > 0 && { rejected_count: rejected }),

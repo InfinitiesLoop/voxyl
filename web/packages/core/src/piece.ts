@@ -149,6 +149,11 @@ export function cutPiece(
   };
 }
 
+/** The cell a paste puts at its target: the middle of the piece's footprint, on its floor. */
+export function defaultAnchor(size: readonly [number, number, number]): [number, number, number] {
+  return [Math.floor(size[0] / 2), 0, Math.floor(size[2] / 2)];
+}
+
 /**
  * Visits each cell in a piece (positions from its box's corner) with its state number, 1-based
  * (states[n - 1]; null there is air). Throws on a malformed piece.

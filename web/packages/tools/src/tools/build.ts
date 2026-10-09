@@ -3,6 +3,15 @@ import { z } from "zod";
 import { resolveSemantic } from "../names.ts";
 import { PosSchema } from "../region.ts";
 import { editResult, MutatingFields } from "../result.ts";
+import {
+  checkExpansion,
+  EditExtras,
+  expansionNotes,
+  isExpanded,
+  movePos,
+  moveState,
+  planImages,
+} from "../symmetry.ts";
 import { defineTool, ToolError } from "../tool.ts";
 
 type Legend = Record<string, z.output<typeof LegendValue>>;
@@ -42,6 +51,7 @@ export const build = defineTool({
     axis: z.enum(["x", "y", "z"]).optional(),
     legend: z.record(z.string().length(1), LegendValue),
     layers: z.array(z.union([z.string(), z.array(z.string())])).min(1),
+    ...EditExtras,
     ...MutatingFields,
   }),
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
@@ -60,7 +70,48 @@ export const build = defineTool({
     if (cells.length / 4 > MAX_TEXT_CELLS) {
       throw new ToolError("too_large", `More than ${MAX_TEXT_CELLS} cells in the text.`);
     }
-    const summary = await call.run([{ kind: "set", args: { states, cells } }]);
-    return editResult(summary, { cells_in_text: cells.length / 4 });
+    const images = planImages(args);
+    let skipped = 0;
+    let set = { states, cells };
+    if (isExpanded(images)) {
+      checkExpansion(images, cells.length / 4);
+      // The text copied through every image: its states move with the cells.
+      const allStates: (typeof states)[number][] = [];
+      const indexOf = new Map<string, number>();
+      const flat: number[] = [];
+      for (const image of images) {
+        const moved = states.map((s) => moveState(image, s));
+        const remap = moved.map((s) => {
+          if (s === undefined) return -1;
+          const k = JSON.stringify(s);
+          let i = indexOf.get(k);
+          if (i === undefined) {
+            i = allStates.push(s) - 1;
+            indexOf.set(k, i);
+          }
+          return i;
+        });
+        let lost = false;
+        for (let c = 0; c < cells.length; c += 4) {
+          const i = remap[cells[c + 3] ?? 0] ?? -1;
+          if (i < 0) {
+            lost = true;
+            continue;
+          }
+          const [x, y, z] = movePos(image, [cells[c] ?? 0, cells[c + 1] ?? 0, cells[c + 2] ?? 0]);
+          flat.push(x, y, z, i);
+        }
+        if (lost) skipped++;
+      }
+      set = { states: allStates, cells: flat };
+    }
+    const summary = await call.run([{ kind: "set", args: set }]);
+    return editResult(summary, {
+      cells_in_text: cells.length / 4,
+      ...expansionNotes(images, skipped),
+      ...(skipped > 0 && {
+        problems: [`${skipped} copy(ies) lost cells: a part has no mirror image.`],
+      }),
+    });
   },
 });

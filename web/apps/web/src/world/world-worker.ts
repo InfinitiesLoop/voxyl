@@ -487,9 +487,7 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       librariesChanged();
       return null;
     case "sharedPalettes": {
-      await librariesLoaded;
-      await paletteStore.seed(DEFAULT_PALETTES);
-      return (await paletteStore.list()).map((p) => ({
+      return (await storedPalettes()).map((p) => ({
         key: p.key,
         name: p.name,
         description: p.description ?? "",
@@ -1179,6 +1177,13 @@ function runEdit(command: EditCommand | null): number {
   return report ? report.cells : -1;
 }
 
+/** The user's shared palettes, with the starters put in the first time. */
+async function storedPalettes() {
+  await librariesLoaded;
+  await paletteStore.seed(DEFAULT_PALETTES);
+  return paletteStore.list();
+}
+
 /**
  * The agent tools' view of this worker (@voxyl/tools): the open project and the libraries, and
  * what to do after a tool changed the project. Tool calls arrive as ordinary commands, so they
@@ -1194,6 +1199,14 @@ const toolHost: ToolHost = {
     await librariesLoaded;
     return libraries;
   },
+  clipboard: {
+    get: () => clipboard?.piece ?? null,
+    async set(piece, from) {
+      await librariesLoaded;
+      setClipboard(piece, from);
+    },
+  },
+  sharedPalettes: { list: storedPalettes },
   changed() {
     // Like applyEdit after a command, without a report to read: a tool may have touched cells,
     // the palettes or the settings, so assume cells (a selection refresh is cheap) and save.

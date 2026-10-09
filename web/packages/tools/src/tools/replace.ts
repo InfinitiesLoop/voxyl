@@ -2,6 +2,7 @@ import { z } from "zod";
 import { resolveSemantic, SemRef } from "../names.ts";
 import { resolveRegion, ToolRegion } from "../region.ts";
 import { editResult, MutatingFields } from "../result.ts";
+import { EditExtras, expandRegionSpecs, expansionNotes, planImages } from "../symmetry.ts";
 import { defineTool } from "../tool.ts";
 
 export const replace = defineTool({
@@ -18,6 +19,7 @@ export const replace = defineTool({
     to: SemRef,
     where: ToolRegion.optional(),
     force: z.boolean().optional().describe("Relabel cells whose geometry doesn't fit `to`."),
+    ...EditExtras,
     ...MutatingFields,
   }),
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
@@ -35,19 +37,22 @@ export const replace = defineTool({
     const where = args.where
       ? resolveRegion(project, args.where)
       : { semantic: from.arg as number };
-    const summary = await call.run([
+    const images = planImages(args);
+    const expanded = expandRegionSpecs(project, images, [
       {
         kind: "resemantic",
         args: { where, from: from.arg, to: to.arg, ...(args.force && { force: true }) },
       },
     ]);
-    const skipped = Number(summary.notes.skipped ?? 0);
-    const switched = Number(summary.notes.switched ?? 0);
+    const summary = await call.run(expanded.specs);
+    const skipped = summary.totals.skipped ?? 0;
+    const switched = summary.totals.switched ?? 0;
     return editResult(summary, {
+      ...expansionNotes(images, expanded.skipped),
       switched,
       skipped,
-      ...(summary.notes.fixed !== undefined && {
-        orientation_adjusted: Number(summary.notes.fixed),
+      ...(summary.totals.fixed !== undefined && {
+        orientation_adjusted: summary.totals.fixed,
       }),
       problems:
         skipped > 0

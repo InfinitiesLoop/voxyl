@@ -6,6 +6,7 @@
 import {
   applyMatrix,
   type Direction,
+  defaultAnchor,
   forEachPieceCell,
   type MirrorAxis,
   type Piece,
@@ -63,10 +64,7 @@ export function pieceCells(piece: Piece): PieceCells {
   return { positions: Int32Array.from(positions), semantics: Uint16Array.from(semantics) };
 }
 
-/** The cell a paste puts at its target: the middle of the piece's footprint, on its floor. */
-export function defaultAnchor(size: readonly [number, number, number]): [number, number, number] {
-  return [Math.floor(size[0] / 2), 0, Math.floor(size[2] / 2)];
-}
+export { defaultAnchor };
 
 /** The matrix a paste turns the piece by: toward the project's north, then the user's turn. */
 export function pasteMatrix(piece: Piece, north: Direction, args: PasteArgs): number[] {

@@ -15,6 +15,7 @@ import {
 } from "./tool.ts";
 import { build } from "./tools/build.ts";
 import { clear } from "./tools/clear.ts";
+import { copy } from "./tools/copy.ts";
 import { describeShapes } from "./tools/describe-shapes.ts";
 import { fill } from "./tools/fill.ts";
 import { findBlocks } from "./tools/find-blocks.ts";
@@ -22,6 +23,7 @@ import { history } from "./tools/history.ts";
 import { inspect } from "./tools/inspect.ts";
 import { paletteEdit } from "./tools/palette-edit.ts";
 import { paletteGet } from "./tools/palette-get.ts";
+import { paste } from "./tools/paste.ts";
 import { place } from "./tools/place.ts";
 import { replace } from "./tools/replace.ts";
 import { select } from "./tools/select.ts";
@@ -42,6 +44,8 @@ export const TOOLS: readonly ToolDefinition[] = [
   paletteEdit,
   build,
   transform,
+  copy,
+  paste,
   describeShapes,
   findBlocks,
 ];

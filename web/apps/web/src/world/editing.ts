@@ -18,6 +18,7 @@ import {
   PLACEMENTS,
   type PlacementProfile,
   Project,
+  paletteSyncArgs,
   type Region,
   ROOT_PALETTE,
   raycast,
@@ -824,27 +825,12 @@ export function unlinkPaletteCommand(project: Project, palette: PaletteId): Comm
  * project palette with the same name keeps it: the copy is called "Name (shared)".
  */
 export function linkPaletteCommand(project: Project, shared: SharedPalette): Command {
-  const taken = new Set(
-    project.semantics
-      .palettes()
-      .filter((p) => p.linked?.key !== shared.key)
-      .map((p) => p.name),
-  );
-  let name = shared.name;
-  for (let n = 1; taken.has(name); n++)
-    name = n === 1 ? `${shared.name} (shared)` : `${shared.name} (shared ${n})`;
   return {
     id: commandId(),
     kind: "palette_sync",
     source: EDITOR_SOURCE,
     label: `Use ${shared.name} (v${shared.version})`,
-    args: {
-      key: shared.key,
-      version: shared.version,
-      name,
-      ...(shared.description !== undefined && { description: shared.description }),
-      semantics: shared.semantics.map((s) => ({ ...s })),
-    },
+    args: paletteSyncArgs(project.semantics, shared),
   };
 }
 

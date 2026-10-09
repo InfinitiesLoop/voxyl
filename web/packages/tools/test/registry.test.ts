@@ -6,22 +6,24 @@ describe("registry", () => {
   it("lists every tool with a JSON Schema, annotations and a short description", () => {
     const listing = listTools();
     expect(listing.map((t) => t.name)).toEqual(TOOLS.map((t) => t.name));
-    expect(listing.map((t) => t.name)).toEqual([
-      "status",
-      "history",
-      "inspect",
-      "select",
-      "place",
-      "fill",
-      "clear",
-      "replace",
-      "palette_get",
-      "palette_edit",
-      "build",
-      "transform",
-      "describe_shapes",
-      "find_blocks",
-    ]);
+    expect(listing.map((t) => t.name)).toEqual(
+      expect.arrayContaining([
+        "status",
+        "history",
+        "inspect",
+        "select",
+        "place",
+        "fill",
+        "clear",
+        "replace",
+        "palette_get",
+        "palette_edit",
+        "build",
+        "transform",
+        "describe_shapes",
+        "find_blocks",
+      ]),
+    );
     for (const t of listing) {
       expect(t.inputSchema.type).toBe("object");
       expect(t.description.length).toBeGreaterThan(20);

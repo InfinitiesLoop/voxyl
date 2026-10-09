@@ -82,6 +82,7 @@ function summarize(
   const palettes: string[] = [];
   const created: string[] = [];
   const notes: Record<string, number | string> = {};
+  const totals: Record<string, number> = {};
   for (const r of reports) {
     cells += r.cells;
     bounds = unionBox(bounds, r.bounds);
@@ -100,6 +101,9 @@ function summarize(
       if (target.semantics.has(id)) created.push(target.semantics.nameOf(id));
     }
     Object.assign(notes, r.notes);
+    for (const [k, v] of Object.entries(r.notes)) {
+      if (typeof v === "number") totals[k] = (totals[k] ?? 0) + v;
+    }
   }
   return {
     dryRun,
@@ -110,6 +114,7 @@ function summarize(
     semantics: [...semantics.values()],
     created: { palettes, semantics: created },
     notes,
+    totals,
     after: target,
   };
 }
