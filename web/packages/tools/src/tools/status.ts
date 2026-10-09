@@ -51,6 +51,7 @@ export const status = defineTool({
       project: {
         name: project.settings.name,
         north: project.settings.north,
+        ...(host.projects && { saved: host.projects.openId() !== null }),
         cells: stats.cells,
         bounds: boundsOf(stats.bounds),
       },

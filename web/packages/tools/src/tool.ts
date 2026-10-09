@@ -30,6 +30,44 @@ export interface ToolHost {
   readonly sharedPalettes?: SharedPalettesPort;
   /** The user's prefabs, kept outside any project. */
   readonly prefabs?: PrefabsPort;
+  /** The saved projects, and saving, creating and deleting them. */
+  readonly projects?: ProjectsPort;
+  /**
+   * Asks the tab to do something only it can (open a project, take a picture, move the camera)
+   * once this call has returned: the effects ride on the reply and the tab runs them in order,
+   * so a tool never waits on the tab. Hosts without a tab leave this out.
+   */
+  effect?(effect: TabEffect): void;
+}
+
+/** What a tool asks the tab to do after it returns (see ToolHost.effect). */
+export type TabEffect =
+  | { readonly kind: "open_project"; readonly id: string }
+  | { readonly kind: "project_saved"; readonly id: string }
+  | { readonly kind: "project_deleted"; readonly id: string };
+
+/** A saved project as a list shows it. */
+export interface ProjectInfo {
+  readonly id: string;
+  readonly name: string;
+  readonly cells: number;
+  readonly savedAt: number;
+}
+
+/**
+ * Saved projects. `open` replaces the open project (the tab shows it); the open project's
+ * unsaved changes are saved first when it is a saved one.
+ */
+export interface ProjectsPort {
+  list(): Maybe<readonly ProjectInfo[]>;
+  /** The id the open project is saved under, or null for one never saved. */
+  openId(): string | null;
+  open(id: string): Maybe<void>;
+  /** Makes a new saved project with the starter palette and opens it. */
+  create(name: string): Maybe<ProjectInfo>;
+  /** Saves the open project (as a new saved project if it never was). */
+  save(): Maybe<ProjectInfo>;
+  remove(id: string): Maybe<void>;
 }
 
 type Maybe<T> = T | Promise<T>;
@@ -166,6 +204,18 @@ export class ToolError extends Error {
     this.code = code;
     this.details = details;
   }
+}
+
+/**
+ * An image a tool result carries: the envelope field `images`. Adapters turn each into the
+ * transport's image content (MCP: {type: "image", data, mimeType}) and leave only a small
+ * description of it in the text, so base64 never sits in the JSON an agent reads.
+ */
+export interface ToolImage {
+  readonly mimeType: "image/png" | "image/jpeg";
+  /** Base64, no data: prefix. */
+  readonly data: string;
+  readonly label?: string;
 }
 
 export type ToolFailure = {

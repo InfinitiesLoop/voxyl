@@ -2,7 +2,7 @@
 // the envelope. It calls through the same ToolClient as WebMCP, so what you see is what an
 // agent gets (including "Claude: <tool>" in the undo history).
 
-import type { ToolListing } from "@voxyl/tools";
+import type { ToolImage, ToolListing } from "@voxyl/tools";
 import { useEffect, useState } from "react";
 import type { ToolClient } from "./webmcp.ts";
 
@@ -12,6 +12,7 @@ export function ToolsPanel({ client }: { client: ToolClient | null }) {
   const [args, setArgs] = useState("{}");
   const [result, setResult] = useState("");
   const [running, setRunning] = useState(false);
+  const [images, setImages] = useState<readonly ToolImage[]>([]);
 
   useEffect(() => {
     let live = true;
@@ -28,7 +29,10 @@ export function ToolsPanel({ client }: { client: ToolClient | null }) {
     if (!client) return;
     setRunning(true);
     try {
-      setResult(JSON.stringify(await client.call(name, JSON.parse(args || "{}")), null, 2));
+      const reply = await client.call(name, JSON.parse(args || "{}"));
+      const { images: pictures, ...rest } = reply as typeof reply & { images?: ToolImage[] };
+      setImages(pictures ?? []);
+      setResult(JSON.stringify(rest, null, 2));
     } catch (error) {
       setResult(`Could not run: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -64,6 +68,15 @@ export function ToolsPanel({ client }: { client: ToolClient | null }) {
         Run
       </button>
       {result && <pre>{result}</pre>}
+      {images.map((image, i) => (
+        <img
+          // biome-ignore lint/suspicious/noArrayIndexKey: a result's images have no other identity
+          key={i}
+          alt={image.label ?? "Tool image"}
+          src={`data:${image.mimeType};base64,${image.data}`}
+          style={{ maxWidth: "100%" }}
+        />
+      ))}
     </details>
   );
 }

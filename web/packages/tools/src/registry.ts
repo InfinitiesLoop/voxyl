@@ -29,6 +29,14 @@ import { prefabEdit } from "./tools/prefab-edit.ts";
 import { prefabPlace } from "./tools/prefab-place.ts";
 import { prefabGet, prefabList } from "./tools/prefab-read.ts";
 import { prefabSave } from "./tools/prefab-save.ts";
+import {
+  projectCreate,
+  projectDelete,
+  projectList,
+  projectOpen,
+  projectSave,
+  projectSettings,
+} from "./tools/project.ts";
 import { replace } from "./tools/replace.ts";
 import { select } from "./tools/select.ts";
 import { status } from "./tools/status.ts";
@@ -55,6 +63,12 @@ export const TOOLS: readonly ToolDefinition[] = [
   prefabSave,
   prefabPlace,
   prefabEdit,
+  projectList,
+  projectOpen,
+  projectCreate,
+  projectSettings,
+  projectSave,
+  projectDelete,
   describeShapes,
   findBlocks,
 ];
@@ -148,6 +162,17 @@ export async function callTool(
       return failure(
         "no_project",
         "No project is open. Open or create a project in the editor first.",
+      );
+    }
+    if (
+      typeof args.project === "string" &&
+      project &&
+      args.project.trim().toLowerCase() !== project.settings.name.trim().toLowerCase()
+    ) {
+      return failure(
+        "project_changed",
+        `The open project is "${project.settings.name}", not "${args.project}". Nothing was changed; check status.`,
+        { open: project.settings.name, expected: args.project },
       );
     }
     const opId = typeof args.op_id === "string" ? args.op_id : generateId(host);

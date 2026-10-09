@@ -5,8 +5,8 @@ import type { Box } from "@voxyl/core";
 import { z } from "zod";
 import type { RunSummary, ToolResult } from "./tool.ts";
 
-/** Fields every mutating tool takes. */
-export const MutatingFields = {
+/** The op_id and dry_run every mutating tool takes. */
+export const OpFields = {
   op_id: z
     .string()
     .min(1)
@@ -14,6 +14,16 @@ export const MutatingFields = {
     .optional()
     .describe("Optional id for this call. Repeating a call with the same op_id changes nothing."),
   dry_run: z.boolean().optional().describe("Report what would change without changing anything."),
+};
+
+/** Fields every mutating tool that works on the open project takes. */
+export const MutatingFields = {
+  ...OpFields,
+  project: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("The project you think is open; the call fails with project_changed if it isn't."),
 };
 
 /** Most entries a result lists (rejected cells, semantics); the rest is only counted. */

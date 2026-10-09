@@ -1,6 +1,6 @@
 import type { ProjectEntry } from "@voxyl/session";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { exposeVoxylTools, workerToolClient } from "./agent/tool-client.ts";
+import { exposeVoxylTools, type TabActions, workerToolClient } from "./agent/tool-client.ts";
 import { registerWebMcp } from "./agent/webmcp.ts";
 import { type BenchResult, runBench } from "./bench/bench.ts";
 import { download } from "./download.ts";
@@ -158,7 +158,24 @@ export function App() {
 
   // The agent tools (they run in the world worker) are offered to the browser's WebMCP, if it
   // has it, and to scripts as window.voxylTools. With no project open they answer no_project.
-  const toolClient = useMemo(() => (engine ? workerToolClient(engine.world) : null), [engine]);
+  // What a tool asks the tab to do after it returns (open a project, ...) goes through a ref,
+  // so the client made once per engine always runs the latest closures.
+  const tabActions = useRef<TabActions>({ run: async () => undefined });
+  const toolClient = useMemo(
+    () =>
+      engine ? workerToolClient(engine.world, { run: (e) => tabActions.current.run(e) }) : null,
+    [engine],
+  );
+  /** Callers waiting for the next project load to finish (a tool's project_open). */
+  const loadWaiters = useRef<{ resolve(): void; reject(error: unknown): void }[]>([]);
+  const settleLoads = useCallback((error?: unknown) => {
+    const waiting = loadWaiters.current;
+    loadWaiters.current = [];
+    for (const w of waiting) {
+      if (error === undefined) w.resolve();
+      else w.reject(error);
+    }
+  }, []);
   useEffect(() => {
     if (!toolClient) return;
     const unregister = registerWebMcp(toolClient);
@@ -271,6 +288,10 @@ export function App() {
       appliedTheme.current = shown;
       setSettings((s) => (s.theme === shown ? s : { ...s, theme: shown }));
     });
+    work.then(
+      () => settleLoads(),
+      (error: unknown) => settleLoads(error ?? new Error("The project did not open")),
+    );
     work.catch((error: unknown) => {
       console.error(`Couldn't open ${source}`, error);
       if (source === "mc-blocks") {
@@ -282,7 +303,7 @@ export function App() {
     track(label, work);
     // reloads only asks for the same source again.
     void reloads;
-  }, [engine, source, track, reloads]);
+  }, [engine, source, track, reloads, settleLoads]);
 
   const openSample = (kind: WorldKind) => {
     const missingJar =
@@ -368,6 +389,42 @@ export function App() {
         setInfo(null);
         setSettings((s) => ({ ...s, world: "" }));
         setHomeOpen(true);
+      }
+    },
+  };
+
+  tabActions.current = {
+    async run(effect) {
+      if (!engine) throw new Error("The editor is not ready");
+      switch (effect.kind) {
+        case "open_project": {
+          if (source === savedSource(effect.id)) return { note: "That project was already open." };
+          const loaded = new Promise<void>((resolve, reject) =>
+            loadWaiters.current.push({ resolve, reject }),
+          );
+          setSettings((s) => ({ ...s, world: savedSource(effect.id) }));
+          setHomeOpen(false);
+          void refreshProjects();
+          await loaded;
+          return undefined;
+        }
+        case "project_saved": {
+          justSaved.current = effect.id;
+          setInfo((i) => i && { ...i, saved: effect.id });
+          setSettings((s) => ({ ...s, world: savedSource(effect.id) }));
+          await refreshProjects();
+          return undefined;
+        }
+        case "project_deleted": {
+          await refreshProjects();
+          if (savedId(settings.world) === effect.id) {
+            engine.unload();
+            setInfo(null);
+            setSettings((s) => ({ ...s, world: "" }));
+            setHomeOpen(true);
+          }
+          return undefined;
+        }
       }
     },
   };

@@ -64,7 +64,7 @@ import {
   WorldSession,
 } from "@voxyl/session";
 import { shapeName } from "@voxyl/shapes";
-import { callTool, listTools, type ToolHost } from "@voxyl/tools";
+import { callTool, listTools, type TabEffect, type ToolHost } from "@voxyl/tools";
 import { outlineOf } from "../editor/outline.ts";
 import { planeToWorld } from "../views/plane.ts";
 import {
@@ -151,6 +151,7 @@ import {
   type Replies,
   type SchematicSource,
   type SelectionRow,
+  type ToolReply,
   type ToWorld,
   type Vec3,
 } from "./protocol.ts";
@@ -316,6 +317,20 @@ function autosaveNow(): void {
     });
 }
 
+/** Saves the open project now; it is saved under the returned id from then on. */
+async function saveOpen() {
+  if (!project) throw new Error("no project open");
+  const entry = await store.save(project, Date.now(), breathe);
+  saved = entry.id;
+  return entry;
+}
+
+/** Deletes a saved project; if it is the open one, it stays on screen, no longer saved. */
+async function deleteSaved(id: string): Promise<void> {
+  if (id === saved) saved = null;
+  await store.delete(id);
+}
+
 /** Saves now if an autosave is waiting (before another project replaces this one). */
 async function flushAutosave(): Promise<void> {
   const waiting = autosave !== null || autosaveAgain;
@@ -386,12 +401,8 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
   switch (command.type) {
     case "load":
       return open(command);
-    case "save": {
-      if (!project) throw new Error("no project open");
-      const entry = await store.save(project, Date.now(), breathe);
-      saved = entry.id;
-      return entry;
-    }
+    case "save":
+      return saveOpen();
     case "projects":
       return store.list();
     case "createProject":
@@ -451,8 +462,7 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       } satisfies BlockSearch;
     }
     case "deleteProject":
-      if (command.id === saved) saved = null; // it stays on screen, no longer saved
-      await store.delete(command.id);
+      await deleteSaved(command.id);
       return null;
     case "importProject":
       return store.importBundle(command.bytes);
@@ -1221,6 +1231,31 @@ const toolHost: ToolHost = {
     },
   },
   sharedPalettes: { list: storedPalettes },
+  effect(effect) {
+    toolEffects.push(effect);
+  },
+  projects: {
+    list: () => store.list(),
+    openId: () => saved,
+    open(id) {
+      toolEffects.push({ kind: "open_project", id });
+    },
+    async create(name) {
+      // Saved at once; the tab then opens it from storage (see "createProject").
+      const entry = await store.save(newProject(name, 5));
+      toolEffects.push({ kind: "open_project", id: entry.id });
+      return entry;
+    },
+    async save() {
+      const entry = await saveOpen();
+      toolEffects.push({ kind: "project_saved", id: entry.id });
+      return entry;
+    },
+    async remove(id) {
+      await deleteSaved(id);
+      toolEffects.push({ kind: "project_deleted", id });
+    },
+  },
   prefabs: {
     list: () => prefabStore.list(),
     load: (id) => prefabStore.load(id),
@@ -1236,10 +1271,21 @@ const toolHost: ToolHost = {
   },
 };
 
-/** Runs one tool call. The envelope goes through JSON so it is plain data for any transport. */
-async function runTool(name: string, args: unknown) {
+/** What the running tool asked the tab to do; tools run one at a time, so one list will do. */
+let toolEffects: TabEffect[] = [];
+
+/**
+ * Runs one tool call. The envelope goes through JSON so it is plain data for any transport,
+ * and carries the effects the tool asked of the tab (the client runs them after the reply).
+ */
+async function runTool(name: string, args: unknown): Promise<ToolReply> {
+  toolEffects = [];
   const envelope = await callTool(toolHost, name, args);
-  return JSON.parse(JSON.stringify(envelope)) as typeof envelope;
+  const effects = toolEffects;
+  toolEffects = [];
+  const reply = JSON.parse(JSON.stringify(envelope)) as ToolReply;
+  if (effects.length > 0) reply.effects = effects;
+  return reply;
 }
 
 /** Tells the main thread what the selection holds, when that changed. */

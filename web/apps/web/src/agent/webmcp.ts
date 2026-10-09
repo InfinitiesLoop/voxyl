@@ -15,7 +15,7 @@
 // The tools themselves run in the world worker; this file only forwards. Their answer is the
 // envelope callTool returns, sent back as one text block with isError set from `ok`.
 
-import type { ToolEnvelope, ToolListing } from "@voxyl/tools";
+import type { ToolEnvelope, ToolImage, ToolListing } from "@voxyl/tools";
 
 /** What the adapter needs from the app: the tool list and a way to call one. */
 export interface ToolClient {
@@ -26,7 +26,7 @@ export interface ToolClient {
 /** The result shape MCP tools return. */
 export interface McpResult {
   [key: string]: unknown;
-  content: { type: "text"; text: string }[];
+  content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[];
   isError: boolean;
 }
 
@@ -57,10 +57,25 @@ export function findModelContext(
   return null;
 }
 
-/** Wraps a tool envelope the way an MCP client expects a tool result. */
+/**
+ * Wraps a tool envelope the way an MCP client expects a tool result: the envelope as one text
+ * block, and each of its `images` as an image block (the text keeps only their labels).
+ */
 export function mcpResult(envelope: ToolEnvelope): McpResult {
+  const { images, ...rest } = envelope as ToolEnvelope & { images?: readonly ToolImage[] };
+  const text =
+    images && images.length > 0
+      ? { ...rest, images: images.map((i) => ({ label: i.label ?? "", mimeType: i.mimeType })) }
+      : rest;
   return {
-    content: [{ type: "text", text: JSON.stringify(envelope) }],
+    content: [
+      { type: "text", text: JSON.stringify(text) },
+      ...(images ?? []).map((i) => ({
+        type: "image" as const,
+        data: i.data,
+        mimeType: i.mimeType,
+      })),
+    ],
     isError: !envelope.ok,
   };
 }

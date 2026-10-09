@@ -28,7 +28,7 @@ import type {
   ProjectEntry,
   StoredPalette,
 } from "@voxyl/session";
-import type { ToolEnvelope, ToolListing } from "@voxyl/tools";
+import type { TabEffect, ToolEnvelope, ToolListing } from "@voxyl/tools";
 import type { SliceAxis } from "../views/plane.ts";
 import type { WorldInfo, WorldSource } from "../worlds.ts";
 import type { PasteArgs, PieceSurface } from "./clipboard.ts";
@@ -393,8 +393,11 @@ export type Command =
       id: number;
     };
 
+/** A tool's envelope, plus what it asked the tab to do once the call returned. */
+export type ToolReply = ToolEnvelope & { effects?: TabEffect[] };
+
 export interface Replies {
-  tool: ToolEnvelope;
+  tool: ToolReply;
   tools: ToolListing[];
   clipboardCopy: ClipboardInfo | null;
   clipboardInfo: ClipboardInfo | null;

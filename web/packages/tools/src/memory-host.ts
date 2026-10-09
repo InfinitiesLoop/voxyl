@@ -4,8 +4,11 @@ import type {
   ClipboardPort,
   PrefabInfo,
   PrefabsPort,
+  ProjectInfo,
+  ProjectsPort,
   SharedPalettesPort,
   StoredSharedPalette,
+  TabEffect,
   ToolHost,
 } from "./tool.ts";
 
@@ -85,6 +88,62 @@ export class MemoryHost implements ToolHost {
       this.prefabStore.delete(id);
     },
   };
+
+  /** Every effect a tool asked the tab for, in order. */
+  readonly effects: TabEffect[] = [];
+  effect(effect: TabEffect): void {
+    this.effects.push(effect);
+  }
+
+  /** Saved projects, in memory: a fork of each as it was saved. */
+  readonly savedProjects = new Map<string, { info: ProjectInfo; project: Project }>();
+  #openId: string | null = null;
+  readonly projects: ProjectsPort = {
+    list: () => [...this.savedProjects.values()].map((p) => p.info).reverse(),
+    openId: () => this.#openId,
+    open: (id) => {
+      const found = this.savedProjects.get(id);
+      if (!found) throw new Error("That project is gone");
+      this.project = found.project.fork();
+      this.#openId = id;
+      this.effect({ kind: "open_project", id });
+    },
+    create: (name) => {
+      const project = new Project({ chunkBits: 4 });
+      project.run({ id: "new", kind: "settings", args: { name } });
+      const info = this.#store(project, `pr${++this.#ids}`);
+      this.project = project.fork();
+      this.#openId = info.id;
+      this.effect({ kind: "open_project", id: info.id });
+      return info;
+    },
+    save: () => {
+      if (!this.project) throw new Error("No project is open");
+      const info = this.#store(this.project, this.#openId ?? `pr${++this.#ids}`);
+      this.#openId = info.id;
+      this.effect({ kind: "project_saved", id: info.id });
+      return info;
+    },
+    remove: (id) => {
+      this.savedProjects.delete(id);
+      if (this.#openId === id) {
+        this.project = null;
+        this.#openId = null;
+      }
+      this.effect({ kind: "project_deleted", id });
+    },
+  };
+
+  #store(project: Project, id: string): ProjectInfo {
+    const info: ProjectInfo = {
+      id,
+      name: project.settings.name,
+      cells: project.world.cellCount,
+      savedAt: ++this.#ids,
+    };
+    this.savedProjects.set(id, { info, project: project.fork() });
+    return info;
+  }
 
   /** The shared palettes this host offers. */
   shared: StoredSharedPalette[] = [];

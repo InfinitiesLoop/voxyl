@@ -9,6 +9,7 @@ import {
   type WebMcpTool,
 } from "./webmcp.ts";
 
+const textOf = (block: unknown) => (block as { text?: string } | undefined)?.text ?? "";
 const annotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true };
 const listing: ToolListing[] = [
   {
@@ -92,14 +93,28 @@ describe("registerWebMcp", () => {
     const result = await tools.get("place")?.execute({ at: [1, 2, 3] });
     expect(call).toHaveBeenCalledWith("place", { at: [1, 2, 3] });
     expect(result?.isError).toBe(false);
-    expect(JSON.parse(result?.content[0]?.text ?? "")).toEqual({ ok: true, cells: 3 });
+    expect(JSON.parse(textOf(result?.content[0]))).toEqual({ ok: true, cells: 3 });
   });
 
   it("marks a failed envelope as an error", () => {
     const failed: ToolEnvelope = { ok: false, error: { code: "no_project", message: "none" } };
     const result = mcpResult(failed);
     expect(result.isError).toBe(true);
-    expect(JSON.parse(result.content[0]?.text ?? "").error.code).toBe("no_project");
+    expect(JSON.parse(textOf(result.content[0])).error.code).toBe("no_project");
+  });
+
+  it("turns an envelope's images into MCP image blocks and keeps base64 out of the text", () => {
+    const envelope = {
+      ok: true,
+      framed: [0, 0, 0, 1, 1, 1],
+      images: [{ mimeType: "image/png", data: "QUJD", label: "front" }],
+    } as ToolEnvelope;
+    const result = mcpResult(envelope);
+    expect(result.isError).toBe(false);
+    expect(result.content[1]).toEqual({ type: "image", data: "QUJD", mimeType: "image/png" });
+    const text = JSON.parse(textOf(result.content[0]));
+    expect(text.images).toEqual([{ label: "front", mimeType: "image/png" }]);
+    expect(JSON.stringify(text)).not.toContain("QUJD");
   });
 
   it("tolerates a duplicate name and still registers the rest", async () => {
