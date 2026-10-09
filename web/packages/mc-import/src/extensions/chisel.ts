@@ -50,9 +50,9 @@ export async function healChisel(ctx: HealContext): Promise<void> {
     // Ascending by meta (object order for integer keys), as the Godot table lists them.
     for (const [metaKey, base] of Object.entries(metas)) {
       const meta = Number(metaKey);
-      const display = displayName(lang, group, groupName, meta);
+      const names = nameCandidates(lang, group, groupName, meta);
       if (pane) {
-        await healPane(ctx, registry, group, meta, base, display);
+        await healPane(ctx, registry, group, meta, base, names);
         continue;
       }
       const fakeController = FAKE_CONTROLLER_CROP[group]?.[meta];
@@ -65,7 +65,7 @@ export async function healChisel(ctx: HealContext): Promise<void> {
         );
         continue;
       }
-      const name = ctx.existingFor(registry, meta) ?? ctx.uniqueName(display);
+      const name = claimName(ctx, registry, meta, names);
       ctx.addCube(name, faces, { color: ctx.averageColor(faces.north ?? "") });
       ctx.confirmRegistry(name, { registry, meta });
     }
@@ -86,7 +86,7 @@ async function healPane(
   group: string,
   meta: number,
   base: string,
-  display: string,
+  names: readonly string[],
 ): Promise<void> {
   const pair = await topSide(ctx, group, base);
   const side = pair ? pair.side : await single(ctx, group, base);
@@ -95,24 +95,90 @@ async function healPane(
     ctx.warnings.push(`chisel: no texture match for ${registry} meta ${meta} (${base}), skipped`);
     return;
   }
-  const name = ctx.existingFor(registry, meta) ?? ctx.uniqueName(display);
+  const name = claimName(ctx, registry, meta, names);
   ctx.addPane(name, side, edge, { color: ctx.averageColor(side) });
   ctx.confirmRegistry(name, { registry, meta });
 }
 
-/** The display name of one meta, shared by the cube and pane paths. */
-function displayName(
+/**
+ * Chisel names a block in two places: the group ("Glass", `tile.chisel.<group>.name`) and, per
+ * variation, a description that is the variation's real in-game name ("Bubble Glass", "Asymmetrical
+ * Leaded Glass", `tile.<group>.<meta>.desc`). NEI and the roster import show only the group name,
+ * so every variation of a group would be "Glass", "Glass (2)"... and tell nothing apart. The name
+ * of a variation is its own description, whichever meta it is, so the list is searchable by what
+ * the block looks like.
+ *
+ * Returns the names to try, best first; `claimName` takes the first one no other block holds.
+ * Where two groups share a description ("Marble Pillar" in two registries, "White Bubble Glass"
+ * for a glass and its pane) the later one is qualified with its group, so the names stay both
+ * unique and the same on every run.
+ */
+function nameCandidates(
   lang: ReadonlyMap<string, string>,
   group: string,
   groupName: string,
   meta: number,
-): string {
-  // The dyed glass families: a real name even at meta 0 (see chisel-lang.ts).
+): string[] {
+  const named = variantName(lang, group, meta);
+  const plain = named ?? (meta === 0 ? groupName : `${groupName} ${meta}`);
+  const qualified = (qualifier: string) =>
+    plain.toLowerCase().includes(qualifier.toLowerCase()) ? null : `${plain} (${qualifier})`;
+  const byGroup = qualified(groupName);
+  const byFolder = qualified(prettifyGroup(group));
+  // A short description ("Screen", "White", "Ceramic") says nothing about what it is a variation
+  // of ('Bubble Pane' does say it, in a group of Glass Panes), so it leads with its group; a longer one ("Asymmetrical Leaded Glass") already does.
+  const lastWord = groupName.split(/\s+/).at(-1)?.toLowerCase() ?? "";
+  const terse =
+    plain.split(/\s+/).length <= SHORT_NAME_WORDS && !plain.toLowerCase().includes(lastWord);
+  const out = terse && byGroup ? [byGroup] : [plain];
+  for (const name of [plain, byGroup, byFolder]) if (name && !out.includes(name)) out.push(name);
+  return out;
+}
+
+/** A name of this many words or fewer is qualified with its group (see `nameCandidates`). */
+const SHORT_NAME_WORDS = 2;
+
+/** Chisel's own name for one variation, or undefined when the lang gives none that is a name. */
+function variantName(
+  lang: ReadonlyMap<string, string>,
+  group: string,
+  meta: number,
+): string | undefined {
+  // The dyed glass families: their own key shape (see chisel-lang.ts).
   const dyed = lang.get(`SGP_DISPLAY:${group}:${meta}`);
   if (dyed !== undefined) return dyed;
-  // Meta 0's .desc is often a tooltip, not a name ("tile.andesite.0.desc=Generates in your world").
-  if (meta === 0) return groupName;
-  return lang.get(`${group}.${meta}`) ?? `${groupName} ${meta}`;
+  const desc = lang.get(`${group}.${meta}`)?.trim();
+  // A few descriptions are a tooltip, not a name: "tile.andesite.0.desc=Generates in your world".
+  if (!desc || TOOLTIP.test(desc)) return undefined;
+  return desc;
+}
+
+const TOOLTIP = /^generates in /i;
+
+/**
+ * The name a block of this identity goes by.
+ *
+ * A block this healer made on an earlier run keeps its name (a heal is keyed by identity, so
+ * running again changes nothing and ids stay put). A block the roster import made from NEI's
+ * display text ("Concrete", "Concrete (2)"...: its model is `<ns>:nei/<name>`) has no worth as a
+ * name, so it gives way: the first candidate no other block holds is taken, else the last with a
+ * number, and the roster's block and model are dropped. The result does not depend on what the
+ * roster called it, so every run of the same install names the same blocks the same.
+ */
+function claimName(
+  ctx: HealContext,
+  registry: string,
+  meta: number,
+  candidates: readonly string[],
+): string {
+  const existing = ctx.existingFor(registry, meta);
+  const model =
+    existing === undefined ? undefined : ctx.draft.block(existing)?.variants?.[""]?.model;
+  if (existing !== undefined && !model?.includes(":nei/")) return existing;
+  const free = candidates.find((name) => name === existing || !ctx.draft.hasBlock(name));
+  if (model) delete ctx.draft.models[model];
+  if (existing !== undefined && free !== existing) ctx.removeBlock(existing);
+  return free ?? ctx.uniqueName(candidates.at(-1) ?? registry);
 }
 
 /** All six faces on one texture, or top/bottom on a "top" file and the sides on a "side" file. */

@@ -641,6 +641,27 @@ because there was no default block set to draw with.
   removed). The selection is UI state (`chosenLibraries`, shared by every chooser) and
   narrows block search through `findBlocks({libraries})`; none ticked means all.
 
+### Import feedback: solid-colour preview, Chisel names (2026-10-08)
+
+- **Solid-colour 3D preview.** Cause: the chooser's preview (`blockPreview` in `world-worker.ts`)
+  skipped any face whose texture was not exactly 16 px, so a block from a 32 px mod (JABBA's
+  Better Barrel, the Catwalks blocks; 94 of the GTNH textures are 32 px, 9 are 64 px) fell back to
+  its flat colour while the icon, baked through the mesher, drew any size. The preview now brings
+  all six faces to one size (the largest texture among them, up to 64) with `resampleSquare`
+  (`packages/blocks`), and `BlockPreview` carries that `size`. The list icon (`blockIcon`) had the
+  same 16 px test and scales to 16 now. Reproduced against the real GTNH 2.9 Beta 2 import; not
+  looked at in a browser window (needs the library in OPFS), so the user's eye is the check.
+- **Chisel names.** Chisel's lang gives each variation its real name (`tile.<group>.<meta>.desc`,
+  "Asymmetrical Leaded Glass"); the healer used the group name ("Glass") for meta 0, and a block the
+  NEI roster had made ("Concrete (2)" ... for `chisel:concrete` metas) kept its roster name because
+  a heal keeps the name of an existing identity. Now a variation is named by its description, meta 0
+  too (a tooltip like "Generates in your world" falls back to the group); a name of two words or
+  fewer that does not mention its group gets it ("Screen (Glass)"); a clash between groups is
+  qualified with the group. A roster-made block (model `<ns>:nei/...`) gives way to the new name and
+  its model is dropped; a block an earlier heal made keeps its name, so ids stay stable. All 1,170
+  Chisel names are distinct, 75 still end in a number (no lang entry: "Anti Block 3"). Godot's
+  healer uses the same old rule (group name at meta 0), so its manifest now differs in these names.
+
 ### Next steps (2026-10-08)
 
 In the order I'd take them. The first two are the user's.

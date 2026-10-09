@@ -211,6 +211,114 @@ describe("healChisel", () => {
   });
 });
 
+describe("healChisel names", () => {
+  const NAMES_LANG = `
+tile.chisel.glass2.name=Glass
+tile.glass2.0.desc=Asymmetrical Leaded Glass
+tile.chisel.concrete.name=Concrete
+tile.concrete.0.desc=Concrete
+tile.concrete.1.desc=Concrete Block
+tile.concrete.2.desc=Concrete Double Slab
+tile.chisel.andesite.name=Andesite
+tile.andesite.0.desc=Generates in your world
+tile.andesite.1.desc=Screen
+tile.chisel.glass.name=Glass
+tile.glass.1.desc=Screen
+`;
+  const textures = {
+    "glass/chrono": [1, 2, 3],
+    "concrete/default": [4, 5, 6],
+    "concrete/block": [7, 8, 9],
+    "concrete/doubleslab": [10, 11, 12],
+    "andesite/andesite": [13, 14, 15],
+    "andesite/andesitePolished": [16, 17, 18],
+    "glass/terrain-glassbubble": [19, 20, 21],
+  } satisfies Record<string, [number, number, number]>;
+
+  /** What the roster import leaves behind: a block per NEI row, all called by the group's name. */
+  function rosterDraft() {
+    const draft = new LibraryDraft("chisel");
+    const nei = (name: string, registry: string, meta: number) => {
+      draft.addTexture("chisel:blocks/stub", {
+        size: 16,
+        alpha: "opaque",
+        color: "#000000",
+        rgba: new Uint8Array(1024),
+      });
+      draft.addCube(name, { up: "chisel:blocks/stub" }, { modelKey: `chisel:nei/${name}` });
+      draft.addBlock(name, {
+        ...(draft.block(name) as NonNullable<ReturnType<typeof draft.block>>),
+        mc: { registry, meta, legacyId: 2075 },
+      });
+    };
+    nei("Glass", "chisel:glass2", 0);
+    nei("Concrete", "chisel:concrete", 0);
+    nei("Concrete (2)", "chisel:concrete", 1);
+    nei("Concrete (3)", "chisel:concrete", 2);
+    return draft;
+  }
+
+  it("names a variation by its own description, meta 0 included, not by its group", async () => {
+    const source = await chiselJar(textures, { "assets/chisel/lang/en_US.lang": NAMES_LANG });
+    const { draft } = await heal(source);
+    expect(draft.block("Asymmetrical Leaded Glass")?.mc).toEqual({
+      registry: "chisel:glass2",
+      meta: 0,
+    });
+    expect(draft.hasBlock("Glass")).toBe(false);
+    expect(draft.block("Concrete Block")?.mc?.meta).toBe(1);
+    expect(draft.block("Concrete Double Slab")?.mc?.meta).toBe(2);
+  });
+
+  it("keeps a tooltip out of the name, and leads a terse name with its group", async () => {
+    const source = await chiselJar(textures, { "assets/chisel/lang/en_US.lang": NAMES_LANG });
+    const { draft } = await heal(source);
+    // "Generates in your world" is a tooltip: meta 0 falls back to the group name.
+    expect(draft.block("Andesite")?.mc?.meta).toBe(0);
+    // "Screen" alone says nothing about what it is; two groups share it and both are told apart.
+    expect(draft.block("Screen (Andesite)")?.mc).toEqual({ registry: "chisel:andesite", meta: 1 });
+    expect(draft.block("Screen (Glass)")?.mc).toEqual({ registry: "chisel:glass", meta: 1 });
+  });
+
+  it("gives every block of the jar a different name", async () => {
+    const source = await chiselJar(textures, { "assets/chisel/lang/en_US.lang": NAMES_LANG });
+    const { draft } = await heal(source);
+    const metas = Object.values(draft.blocks).map((b) => `${b.mc?.registry}@${b.mc?.meta}`);
+    expect(new Set(Object.keys(draft.blocks)).size).toBe(metas.length);
+    expect(new Set(metas).size).toBe(metas.length);
+  });
+
+  it("renames what the roster made from NEI's display text, and drops its model", async () => {
+    const source = await chiselJar(textures, { "assets/chisel/lang/en_US.lang": NAMES_LANG });
+    const draft = rosterDraft();
+    await heal(source, draft, () => 2075);
+    expect(draft.hasBlock("Glass")).toBe(false);
+    expect(draft.hasBlock("Concrete (2)")).toBe(false);
+    expect(draft.block("Asymmetrical Leaded Glass")?.mc?.legacyId).toBe(2075);
+    expect(draft.block("Concrete Block")?.mc).toMatchObject({
+      registry: "chisel:concrete",
+      meta: 1,
+    });
+    expect(Object.keys(draft.models).filter((key) => key.includes(":nei/"))).toEqual([]);
+  });
+
+  it("names the same on a second run and from a roster or a bare draft alike", async () => {
+    const source = await chiselJar(textures, { "assets/chisel/lang/en_US.lang": NAMES_LANG });
+    const fromRoster = rosterDraft();
+    await heal(source, fromRoster);
+    const bare = (await heal(source)).draft;
+    const sansRoster = (name: string) => name;
+    // Same blocks under the same names, whatever the roster called them before.
+    expect(Object.keys(fromRoster.blocks).map(sansRoster).sort()).toEqual(
+      Object.keys(bare.blocks).sort(),
+    );
+    // Running over its own output renames and adds nothing, so ids stay put.
+    const names = Object.keys(fromRoster.blocks).sort();
+    await heal(source, fromRoster);
+    expect(Object.keys(fromRoster.blocks).sort()).toEqual(names);
+  });
+});
+
 describe("parseChiselLang", () => {
   const lang = parseChiselLang(LANG);
 

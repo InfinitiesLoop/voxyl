@@ -34,6 +34,7 @@ export {
   type Variant,
 } from "./library.ts";
 export { profileOfBlock } from "./placement.ts";
+export { resampleSquare } from "./resample.ts";
 export {
   type CompiledShape,
   compileShape,

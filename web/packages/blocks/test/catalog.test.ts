@@ -5,6 +5,7 @@ import {
   blockLabel,
   buildDefaultLibrary,
   profileOfBlock,
+  resampleSquare,
   searchBlocks,
 } from "../src/index.ts";
 import type { Block } from "../src/library.ts";
@@ -113,5 +114,47 @@ describe("block search", () => {
     expect(icon[0]).toBe(0);
     expect(icon[1]).toBe(raw[1]);
     expect(icon[2]).toBe(0);
+  });
+});
+
+describe("textures that are not 16 pixels", () => {
+  // A 32 px texture: left half red, right half blue (what a high-resolution mod ships).
+  const hd = new Uint8Array(32 * 32 * 4);
+  for (let y = 0; y < 32; y++)
+    for (let x = 0; x < 32; x++)
+      hd.set(x < 16 ? [255, 0, 0, 255] : [0, 0, 255, 255], (y * 32 + x) * 4);
+
+  it("scales down to the 16 px size by averaging, and up by repeating", () => {
+    const down = resampleSquare(hd, 32, 16);
+    expect(down.length).toBe(16 * 16 * 4);
+    expect([...down.subarray(0, 4)]).toEqual([255, 0, 0, 255]);
+    expect([...down.subarray(15 * 4, 15 * 4 + 4)]).toEqual([0, 0, 255, 255]);
+    const up = resampleSquare(down, 16, 32);
+    expect(up).toEqual(hd);
+    // Averaged colour is weighted by alpha: a clear pixel next to a solid one adds no black.
+    const edge = new Uint8Array([200, 100, 50, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    expect([...resampleSquare(edge, 2, 1)]).toEqual([200, 100, 50, 64]);
+  });
+
+  it("still gives the list an icon for a high-resolution block", () => {
+    const hdLibrary = {
+      ...library,
+      textures: { hd: { size: 32, alpha: "opaque" as const, color: "#808080", rgba: hd } },
+      models: {
+        hd: {
+          elements: [
+            {
+              from: [0, 0, 0] as [number, number, number],
+              to: [16, 16, 16] as [number, number, number],
+              faces: { up: { texture: "hd" } },
+            },
+          ],
+        },
+      },
+      blocks: { hd: { variants: { "": { model: "hd" } }, color: "#808080" } },
+    };
+    const icon = blockIcon(hdLibrary, hdLibrary.blocks.hd as Block);
+    expect(icon?.length).toBe(1024);
+    expect([...(icon?.subarray(0, 4) ?? [])]).toEqual([255, 0, 0, 255]);
   });
 });

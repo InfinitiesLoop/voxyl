@@ -589,8 +589,10 @@ export const EMPTY_SELECTION: SelectionView = {
 /** Cell states' looks for the renderer (see StateLooks and BlockMaterials). */
 /** A block's faces for the chooser's turning preview. */
 export interface BlockPreview {
-  /** 6 × 16 × 16 RGBA; a face's alpha is all 0 where the block has no texture there. */
+  /** 6 × size × size RGBA; a face's alpha is all 0 where the block has no texture there. */
   readonly faces: Uint8Array;
+  /** Pixels along one face's edge (16 for vanilla art, more for high-resolution textures). */
+  readonly size: number;
   /** False for a shape that isn't a whole cube (stairs, slabs): its faces are approximate. */
   readonly cube: boolean;
   readonly color: string;

@@ -23,7 +23,6 @@ export function blockTitle(ref: string): string {
   return library === "" || library === "voxyl" ? name : `${name} · ${library}`;
 }
 
-const ICON = 16 * 16 * 4;
 const PAGE = 80;
 type Layout = "1x1" | "1x3" | "3x3";
 type BlockHit = BlockSearch["hits"][number];
@@ -445,7 +444,7 @@ function BlockPreview({
       setColor(preview.color);
       setCube(preview.cube);
       onCube(preview.cube);
-      setFaces(Array.from({ length: 6 }, (_, f) => faceUrl(preview.faces, f)));
+      setFaces(Array.from({ length: 6 }, (_, f) => faceUrl(preview.faces, preview.size, f)));
     });
     return () => {
       cancel = true;
@@ -498,14 +497,15 @@ function BlockPreview({
 }
 
 /** One face's 16×16 pixels as a PNG data URL, or null where the face has none. */
-function faceUrl(faces: Uint8Array, f: number): string | null {
-  const slice = faces.subarray(f * ICON, f * ICON + ICON);
+function faceUrl(faces: Uint8Array, size: number, f: number): string | null {
+  const stride = size * size * 4;
+  const slice = faces.subarray(f * stride, f * stride + stride);
   if (!slice.some((v, i) => i % 4 === 3 && v !== 0)) return null;
   const canvas = document.createElement("canvas");
-  canvas.width = 16;
-  canvas.height = 16;
+  canvas.width = size;
+  canvas.height = size;
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
-  ctx.putImageData(new ImageData(new Uint8ClampedArray(slice), 16, 16), 0, 0);
+  ctx.putImageData(new ImageData(new Uint8ClampedArray(slice), size, size), 0, 0);
   return canvas.toDataURL();
 }

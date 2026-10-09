@@ -15,6 +15,7 @@ import {
   type Library,
   parseBlockRef,
   profileOfBlock,
+  resampleSquare,
   searchBlocks,
 } from "@voxyl/blocks";
 import {
@@ -1101,29 +1102,44 @@ function pasteGhostAt(open: Project, at: Vec3, args: PasteArgs): PasteGhost | nu
   return { positions, colors: rgb, ...box };
 }
 
-/** A block's faces as textures, tinted, for the block chooser's preview. */
+/** The largest a face of the chooser's preview is drawn, in pixels per edge. */
+const PREVIEW_FACE_MAX = 64;
+
+/**
+ * A block's faces as textures, tinted, for the block chooser's preview. Every face is brought
+ * to one size, the largest texture among them (up to PREVIEW_FACE_MAX), because mods ship 16,
+ * 32 or 64 pixel art and a face whose size didn't match used to be left out: the preview then
+ * showed one solid colour although the icon, which draws any size, was right.
+ */
 function blockPreview(ref: string): BlockPreview | null {
   const block = compileBlock(libraries, ref, IDENTITY);
   const shape = block?.cube ? null : compileShape(libraries, ref, IDENTITY);
   const faces = block?.cube ?? shape?.sides ?? null;
   if (!block && !shape) return null;
-  const out = new Uint8Array(6 * 1024);
-  faces?.forEach((face, f) => {
-    if (!face) return;
+  const textures = (faces ?? []).map((face) => {
+    if (!face) return undefined;
     const parsed = parseBlockRef(face.texture);
-    const texture = parsed ? libraries.get(parsed.library)?.textures[parsed.block] : undefined;
-    if (texture?.size !== 16) return;
+    return parsed ? libraries.get(parsed.library)?.textures[parsed.block] : undefined;
+  });
+  const size = Math.min(
+    PREVIEW_FACE_MAX,
+    Math.max(16, ...textures.map((texture) => texture?.size ?? 0)),
+  );
+  const stride = size * size * 4;
+  const out = new Uint8Array(6 * stride);
+  faces?.forEach((face, f) => {
+    const texture = textures[f];
+    if (!face || !texture || texture.size < 1) return;
+    const rgba = resampleSquare(texture.rgba, texture.size, size);
     const tint = face.tint ? Number.parseInt(face.tint.slice(1), 16) : 0xffffff;
     const t = [(tint >> 16) & 0xff, (tint >> 8) & 0xff, tint & 0xff];
-    for (let i = 0; i < 256; i++) {
+    for (let i = 0; i < size * size; i++) {
       for (let c = 0; c < 3; c++)
-        out[f * 1024 + i * 4 + c] = Math.round(
-          ((texture.rgba[i * 4 + c] ?? 0) * (t[c] ?? 255)) / 255,
-        );
-      out[f * 1024 + i * 4 + 3] = texture.rgba[i * 4 + 3] ?? 0;
+        out[f * stride + i * 4 + c] = Math.round(((rgba[i * 4 + c] ?? 0) * (t[c] ?? 255)) / 255);
+      out[f * stride + i * 4 + 3] = rgba[i * 4 + 3] ?? 0;
     }
   });
-  return { faces: out, cube: block?.cube != null, color: block?.color ?? "#808080" };
+  return { faces: out, size, cube: block?.cube != null, color: block?.color ?? "#808080" };
 }
 
 function openProject(): Project {

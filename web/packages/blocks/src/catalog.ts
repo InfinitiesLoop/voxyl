@@ -3,6 +3,7 @@
 
 import type { Libraries } from "./compile.ts";
 import { type Block, type Library, MC_SIDES, type McSide, type Texture } from "./library.ts";
+import { resampleSquare } from "./resample.ts";
 
 const ICON_SIZE = 16;
 
@@ -104,7 +105,7 @@ export function blockIcon(library: Library, block: Block): Uint8Array | null {
       for (const side of MC_SIDES) {
         const face = element.faces[side];
         const texture = face ? library.textures[face.texture] : undefined;
-        if (!face || !texture || texture.size !== ICON_SIZE) continue;
+        if (!face || !texture || texture.size < 1) continue;
         const size = area(side);
         // A real top (at least a quarter of the cell) shows what a map would: grass, log ends.
         const score = size + (side === "up" && size >= 64 ? 400 : 0);
@@ -113,7 +114,10 @@ export function blockIcon(library: Library, block: Block): Uint8Array | null {
       }
     }
   }
-  return best ? tintedCopy(best.texture.rgba, best.tint) : null;
+  if (!best) return null;
+  // Any size becomes the 16 px icon: high-resolution mod textures are 32 or 64.
+  const rgba = resampleSquare(best.texture.rgba, best.texture.size, ICON_SIZE);
+  return tintedCopy(rgba, best.tint);
 }
 
 /** Higher is better. -1 when a term is missing. */
