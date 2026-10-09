@@ -52,7 +52,7 @@ export function BlockChooser({
   /** Inside the palette entry editor: picking explores, and the editor's own button saves. */
   embedded?: boolean;
   searchAutoFocus?: boolean;
-  /** Home's Blocks tab: bring in a jar, and drop an imported library. */
+  /** Home's Blocks tab: bring in Minecraft (a game folder or a jar), and drop a library. */
   onImport?: () => void;
   onRemove?: (id: string, name: string) => void;
   removable?: ReadonlySet<string>;
@@ -153,7 +153,7 @@ export function BlockChooser({
             title="Textures from your own Minecraft stay in this browser"
             onClick={onImport}
           >
-            Import a jar…
+            Import Minecraft…
           </button>
         )}
         {[{ id: "", name: "All blocks" }, ...libraries].map((l) => (

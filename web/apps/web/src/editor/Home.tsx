@@ -8,6 +8,7 @@ import { placementName } from "../world/editing.ts";
 import type { LibraryInfo, SharedPaletteInfo } from "../world/protocol.ts";
 import { WORLD_KINDS, type WorldKind } from "../worlds.ts";
 import { BlockChooser, blockTitle } from "./BlockPicker.tsx";
+import { ImportMinecraftDialog } from "./ImportMinecraft.tsx";
 import { BakedIcon } from "./icons.tsx";
 import { EntryDialog, freshName } from "./PaletteEntry.tsx";
 import { PrefabGrid } from "./prefabs.tsx";
@@ -476,24 +477,16 @@ function Blocks({
   libraries: readonly LibraryInfo[];
   library: LibraryActions;
 }) {
-  const file = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
   return (
     <section className="home-section home-blocks">
-      <input
-        ref={file}
-        type="file"
-        accept=".jar,.zip"
-        hidden
-        onChange={(e) => {
-          const chosen = e.target.files?.[0];
-          e.target.value = "";
-          if (chosen) void library.importJar(chosen);
-        }}
-      />
+      {importing && <ImportMinecraftDialog library={library} onClose={() => setImporting(false)} />}
       <BlockChooser
+        // The list of libraries is read once on mount: a new library is a new chooser.
+        key={libraries.map((l) => `${l.id}:${l.blocks}`).join()}
         engine={engine}
         browse
-        onImport={() => file.current?.click()}
+        onImport={() => setImporting(true)}
         onRemove={(id, name) => void library.delete(id, name)}
         removable={new Set(libraries.map((l) => l.id))}
       />

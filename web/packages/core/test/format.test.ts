@@ -92,7 +92,8 @@ describe("storage chunk codec", () => {
       }),
       { numRuns: 20 },
     );
-  });
+    // 20 runs of 32k-cell arrays: slow enough to pass 5 s when the whole suite runs at once.
+  }, 30_000);
 });
 
 describe("saving and loading", () => {

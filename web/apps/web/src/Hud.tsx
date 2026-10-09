@@ -229,6 +229,8 @@ function ProjectRow({
 
 export interface LibraryActions {
   importJar(file: File): Promise<void>;
+  /** Reads in libraries another worker stored (the folder import). */
+  reload(): Promise<void>;
   delete(id: string, name: string): Promise<void>;
 }
 

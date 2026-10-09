@@ -20,7 +20,7 @@ describe.skipIf(!existsSync(GAME) || !existsSync(VANILLA))("importing a real ins
     expect(result.libraries.length).toBeGreaterThan(50);
     expect(result.imported).toBeGreaterThan(1000);
     expect(phases.has("Healing mods")).toBe(true);
-    const ztones = result.libraries.find((l) => l.id === "pack-Ztones");
+    const ztones = result.libraries.find((l) => l.id === "pack-ztones");
     expect(Object.keys(ztones?.blocks ?? {}).length).toBe(551);
     // Every block that names a Minecraft block carries what a schematic export needs.
     const chisel = Object.values(

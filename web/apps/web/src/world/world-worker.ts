@@ -468,6 +468,12 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       librariesChanged();
       return { ...infoOf(library), skipped: skipped.length, ms: performance.now() - start };
     }
+    case "reloadLibraries": {
+      await librariesLoaded;
+      for (const library of await libraryStore.loadAll()) libraries.set(library.id, library);
+      librariesChanged();
+      return [...libraries.values()].filter((l) => l.id !== DEFAULT_LIBRARY_ID).map(infoOf);
+    }
     case "deleteLibrary":
       if (command.id === DEFAULT_LIBRARY_ID) return null;
       await libraryStore.delete(command.id);

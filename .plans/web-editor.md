@@ -983,7 +983,44 @@ must follow `turnsBetween`.
 3. **Healers stay code.** Fold the table-shaped ones into data only if a second pack wants
    them.
 
-### Added to the import UI (not built)
+### Import UI built (2026-10-08)
+
+Home, Blocks, **Import Minecraft...** opens one dialog (`editor/ImportMinecraft.tsx`) with two
+routes: a game folder or modpack instance (new), and a Minecraft jar or resource pack (the old
+`importJar`, unchanged, then the dialog closes).
+
+- **Folder step**: `Choose folder...` uses `showDirectoryPicker` (`id` and `startIn` the
+  remembered handle, mode read) and falls back to `<input webkitdirectory>`. Common launcher
+  locations per platform with copy buttons (`import/locations.ts`); a remembered folder is
+  offered as "Use <name> again" and goes through `requestPermission`. Handles live in IndexedDB
+  (`voxyl-folders`, key `mc-instance`). The fallback can't remember a folder.
+- **Plan** (from `planInstance`): mods, NEI dumps, vanilla jar, saw list. Problems (missing
+  dumps) disable Import and show `NEI_HOWTO`; "Check again" rescans a handle-picked folder. A
+  missing vanilla jar is not a problem: the dialog offers "Add the Minecraft 1.7.10 jar..." with
+  where Prism and the vanilla launcher keep it. Library name prefix (default `pack-`, lower-case,
+  required).
+- **Run** in `import/import-worker.ts`, one module worker per plan or run; the page never reads
+  the folder. It runs `importInstance` and saves every library to the same OPFS store the world
+  worker reads (`LibraryStore(new OpfsFolder("voxyl"))`), with progress (phase, done, total),
+  then the page sends the world worker `reloadLibraries` and refreshes its list. Cancel
+  terminates the worker (not offered once libraries are being saved). Adapters
+  (`import/fs-browser.ts`): handle -> `FsDir` (listings cached), `File[]` -> `FsDir` (grouped by
+  `webkitRelativePath`), ranged reads by `File.slice`.
+- **Report**: libraries, blocks, roster entries left out for lack of a texture match with the
+  biggest mods, healed namespaces, warnings count, time.
+- **Library ids are lower-cased** (`libraryIdFor`): the library store only accepts
+  `[a-z0-9_.-]{1,64}`, and the first real run failed on `pack-Automagy`. Two namespaces that
+  differ only in case would share an id.
+- **Proven in Edge (Playwright, `webkitdirectory` path)** on the real GTNH 2.9 Beta 2
+  `.minecraft` (16,508 files, 244 mods) with the vanilla 1.7.10 jar added: plan appears, import
+  takes about 9 s (opening mods 1 s, matching textures 4 s, healing 4 s, saving 0.3 s), 64
+  libraries, libraries persist across a reload, cancel mid-run returns to the plan, no console
+  errors; the main thread's worst timer delay was 36 ms (frame gap 52 ms). Counts at that time,
+  with healers still being completed: 3,772 blocks imported, 17,191 left out. Not proven: the
+  real `showDirectoryPicker` (needs a user gesture; the handle adapter, IndexedDB round trip and
+  a plan through the worker were checked on an OPFS folder).
+
+### Added to the import UI (now built, see above)
 
 - **Common locations.** The folder step offers places people keep Minecraft: the vanilla
   `.minecraft` (and its `versions/`), CurseForge instances, Prism Launcher instances (and

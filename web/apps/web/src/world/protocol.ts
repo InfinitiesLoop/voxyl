@@ -221,6 +221,8 @@ export type Command =
   /** Imports a Minecraft client jar as the "minecraft" library, replacing any before. */
   | { type: "importJar"; bytes: Uint8Array }
   | { type: "deleteLibrary"; id: string }
+  /** Reads the stored libraries again: another worker (the importer) wrote some. */
+  | { type: "reloadLibraries" }
   /** Re-skins a city with another city theme (a palette_sync): looks only. */
   | { type: "theme"; theme: number }
   /** The id of the whole-block state of a semantic, by name (added if new). */
@@ -394,6 +396,7 @@ export interface Replies {
   libraries: LibraryInfo[];
   importJar: LibraryInfo & { readonly skipped: number; readonly ms: number };
   deleteLibrary: null;
+  reloadLibraries: LibraryInfo[];
   /** applied is false for a project without the city theme. */
   theme: { applied: boolean; relit: boolean };
   save: ProjectEntry;

@@ -363,6 +363,13 @@ export function App() {
         alert(`Couldn't import ${file.name}: ${error instanceof Error ? error.message : error}`),
       );
     },
+    /** Libraries were stored by the import worker: read them in and show them. */
+    reload: async () => {
+      if (!engine) return;
+      await engine.world.request({ type: "reloadLibraries" });
+      await refreshLibraries();
+      clearBlockIcons(engine);
+    },
     delete: async (id: string, name: string) => {
       if (!engine || !confirm(`Remove ${name} from this browser?`)) return;
       await engine.world.request({ type: "deleteLibrary", id });

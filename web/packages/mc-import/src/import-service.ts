@@ -95,9 +95,15 @@ export interface InstanceImportResult {
   readonly ms: number;
 }
 
-/** A library id from a namespace: letters, digits, `.`, `_` and `-` only. */
+/**
+ * A library id from a namespace, as the library store accepts it: lower-case letters, digits,
+ * `.`, `_` and `-`, at most 64 characters (`Automagy` becomes `pack-automagy`).
+ */
 export function libraryIdFor(prefix: string, ns: string): string {
-  return `${prefix}${ns}`.replace(/[^A-Za-z0-9._-]/g, "_");
+  return `${prefix}${ns}`
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, "_")
+    .slice(0, 64);
 }
 
 export async function importInstance(opts: InstanceImportOptions): Promise<InstanceImportResult> {
