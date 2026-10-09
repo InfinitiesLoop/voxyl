@@ -28,6 +28,7 @@ import type {
   ProjectEntry,
   StoredPalette,
 } from "@voxyl/session";
+import type { ToolEnvelope, ToolListing } from "@voxyl/tools";
 import type { SliceAxis } from "../views/plane.ts";
 import type { WorldInfo, WorldSource } from "../worlds.ts";
 import type { PasteArgs, PieceSurface } from "./clipboard.ts";
@@ -375,6 +376,13 @@ export type Command =
   | { type: "bounds" }
   /** What a cell holds, in words, or null if it is empty. */
   | { type: "cell"; at: Vec3 }
+  /**
+   * Runs an agent tool (@voxyl/tools) on the open project. The reply is always the tool's
+   * envelope, `{ok: true, ...}` or `{ok: false, error}`, as plain JSON (never a rejection).
+   */
+  | { type: "tool"; name: string; args: unknown }
+  /** The agent tools: name, description, JSON Schema and annotations. */
+  | { type: "tools" }
   /** Raycast and edit what it hits: erase it, or place state `id` against it (the bench). */
   | {
       type: "rayEdit";
@@ -386,6 +394,8 @@ export type Command =
     };
 
 export interface Replies {
+  tool: ToolEnvelope;
+  tools: ToolListing[];
   clipboardCopy: ClipboardInfo | null;
   clipboardInfo: ClipboardInfo | null;
   clipboardClear: null;

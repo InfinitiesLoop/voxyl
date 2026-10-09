@@ -214,6 +214,9 @@ importers:
       '@voxyl/shapes':
         specifier: workspace:*
         version: link:../../packages/shapes
+      '@voxyl/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
       react:
         specifier: ^19.3.0
         version: 19.3.0

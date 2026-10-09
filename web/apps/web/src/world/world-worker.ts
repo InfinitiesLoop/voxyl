@@ -64,6 +64,7 @@ import {
   WorldSession,
 } from "@voxyl/session";
 import { shapeName } from "@voxyl/shapes";
+import { callTool, listTools, type ToolHost } from "@voxyl/tools";
 import { outlineOf } from "../editor/outline.ts";
 import { planeToWorld } from "../views/plane.ts";
 import {
@@ -458,6 +459,10 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
     case "exportProject":
       await flushAutosave();
       return store.exportBundle(command.id);
+    case "tool":
+      return runTool(command.name, command.args);
+    case "tools":
+      return listTools();
     case "libraries":
       await librariesLoaded;
       return [...libraries.values()].filter((l) => l.id !== DEFAULT_LIBRARY_ID).map(infoOf);
@@ -1172,6 +1177,35 @@ function applyEdit(command: EditCommand | null) {
 function runEdit(command: EditCommand | null): number {
   const report = applyEdit(command);
   return report ? report.cells : -1;
+}
+
+/**
+ * The agent tools' view of this worker (@voxyl/tools): the open project and the libraries, and
+ * what to do after a tool changed the project. Tool calls arrive as ordinary commands, so they
+ * run through the same queue as the editor's and never overlap it; after one, `run` does the
+ * usual history, selection and pump bookkeeping, which is how a tool edit shows up live.
+ */
+const toolHost: ToolHost = {
+  get project() {
+    return project;
+  },
+  editorAttached: true,
+  async libraries() {
+    await librariesLoaded;
+    return libraries;
+  },
+  changed() {
+    // Like applyEdit after a command, without a report to read: a tool may have touched cells,
+    // the palettes or the settings, so assume cells (a selection refresh is cheap) and save.
+    contentRev++;
+    changed();
+  },
+};
+
+/** Runs one tool call. The envelope goes through JSON so it is plain data for any transport. */
+async function runTool(name: string, args: unknown) {
+  const envelope = await callTool(toolHost, name, args);
+  return JSON.parse(JSON.stringify(envelope)) as typeof envelope;
 }
 
 /** Tells the main thread what the selection holds, when that changed. */
