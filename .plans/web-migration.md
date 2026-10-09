@@ -847,6 +847,16 @@ saved under My projects keeps the note it was saved with). The Minecraft note sa
 to be imported and links to the Blocks tab; the same note shows when this browser has no jar
 yet. The small mark and the favicon are the earlier Godot snapshot of the same pillar.
 
+**Shared palette editor (2026-10-08).** Home → Palettes edited a shared palette in a bare table
+(a "Look" button over a plain block list, no placing, no preview). It now matches a build's
+inventory: the palette's semantics are the same picture grid, with an Add tile, and a click
+opens the entry editor a build uses (`EntryDialog` in `PaletteEntry.tsx`: name, what it is for,
+shape, placing, colour, glow, and the block chooser with its turning preview). The dialog is
+one component; a build's `PaletteEntryDialog` and Home's editor each give it their own
+save (world requests there, a saved shared palette here), plus Delete for shared entries.
+Dialogs opened from Home were also hidden behind it (`.keys` z-index 9 under Home's 10); `.keys`
+is 11 now.
+
 **Readiness check (2026-10-08).** The workflow is on `origin/main` (it must be, for Run workflow
 to appear). `pnpm check` is green and `pnpm --filter @voxyl/web build` makes a 2.3 MB `dist/`
 with `_headers` and `_redirects` in it; the three.js chunk for the region dialog's preview is

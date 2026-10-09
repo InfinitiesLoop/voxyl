@@ -1628,7 +1628,8 @@ button[aria-pressed="true"] {
 /* The key bindings panel. */
 .keys {
   position: fixed;
-  z-index: 9;
+  /* Above Home (10), so a dialog opened from Home is seen. */
+  z-index: 11;
   inset: 0;
   display: grid;
   /* One track as big as the window, so a card's percentage height means the window's and a
@@ -2090,7 +2091,7 @@ button.note-link {
   font-size: 12px;
 }
 
-.palette-editor input:not([type="color"]):not([type="checkbox"]),
+.palette-editor > label input,
 .palette-editor textarea {
   padding: 5px 8px;
   border: 1px solid var(--line);
@@ -2099,45 +2100,6 @@ button.note-link {
   color: var(--text);
   font: inherit;
   resize: vertical;
-}
-
-.palette-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
-.palette-table th {
-  padding: 4px 6px;
-  color: var(--text-quiet);
-  font-size: 11px;
-  font-weight: 400;
-  text-align: left;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.palette-table td {
-  padding: 3px 6px;
-  border-top: 1px solid var(--line);
-}
-
-.palette-table td input:not([type="color"]):not([type="checkbox"]) {
-  width: 100%;
-}
-
-.palette-look {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  width: 190px;
-  text-align: left;
-}
-
-.palette-look .swatch {
-  flex: none;
-  width: 18px;
-  height: 18px;
 }
 
 button.brand {

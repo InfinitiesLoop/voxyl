@@ -5,42 +5,63 @@ import type { Engine } from "../scene/Engine.ts";
 import {
   type PaletteInfo,
   PLACEMENT_CHOICES,
+  placementName,
   placementOf,
   type SemanticInfo,
 } from "../world/editing.ts";
 import { BlockChooser } from "./BlockPicker.tsx";
 import { ShapePicker } from "./ShapePicker.tsx";
 
+/** What the entry editor produces: the same whichever palette (a build's or a shared one) it is for. */
+export interface EntryValue {
+  readonly name: string;
+  readonly description: string;
+  readonly look: Look;
+  readonly form: Form;
+}
+
 /**
  * New or edit a palette entry, the way the Godot app does: a name (already filled in) and
  * the block chooser, so the block is picked here rather than asked for first. Nothing is
- * written until Create or Save.
+ * written until Create or Save. Which palette it is for is the caller's: `onSave` takes the
+ * result and rejects with a reason to show.
  */
-export function PaletteEntryDialog({
+export function EntryDialog({
   engine,
-  palette,
-  semantic,
+  creating,
+  initial,
+  inheritsShape = false,
+  note,
+  onSave,
+  onDelete,
   onClose,
 }: {
   engine: Engine;
-  palette: PaletteInfo;
-  /** Null creates an entry. Otherwise the one being edited. */
-  semantic: SemanticInfo | null;
+  creating: boolean;
+  initial: {
+    name: string;
+    description: string;
+    block: string | null;
+    glow: boolean;
+    tint: string;
+    shape: string | null;
+    placement: string;
+  };
+  /** The shape is inherited from another palette's semantic, which forms only merge with. */
+  inheritsShape?: boolean;
+  note?: string;
+  onSave: (value: EntryValue) => Promise<unknown>;
+  /** Offered when editing: removes the entry. */
+  onDelete?: () => void;
   onClose: () => void;
 }) {
-  const creating = semantic === null;
-  const [name, setName] = useState(semantic?.name ?? freshName(palette));
-  const [description, setDescription] = useState(semantic?.description ?? "");
-  const [block, setBlock] = useState<string | null>(semantic?.block ?? null);
-  const [glow, setGlow] = useState(semantic?.glow ?? false);
-  const [tint, setTint] = useState(semantic?.ownLook.tint ?? semantic?.color ?? "#9aa0a8");
-  const [shape, setShape] = useState<string | null>(semantic?.shape ?? null);
-  const [placement, setPlacement] = useState(semantic?.placement ?? "auto");
-  // A semantic that derives from another keeps the shape it inherits: forms only merge.
-  const inheritsShape =
-    semantic?.base !== undefined &&
-    semantic.shape !== undefined &&
-    semantic.ownForm.shape === undefined;
+  const [name, setName] = useState(initial.name);
+  const [description, setDescription] = useState(initial.description);
+  const [block, setBlock] = useState<string | null>(initial.block);
+  const [glow, setGlow] = useState(initial.glow);
+  const [tint, setTint] = useState(initial.tint);
+  const [shape, setShape] = useState<string | null>(initial.shape);
+  const [placement, setPlacement] = useState(initial.placement);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -68,28 +89,8 @@ export function PaletteEntryDialog({
     // The form this semantic sets itself: the shape, or how whole blocks turn.
     const profile = shape === null && placement !== "auto" ? placementOf(placement) : undefined;
     const form: Form = { ...(shape ? { shape } : {}), ...(profile ? { placement: profile } : {}) };
-    const formChanged = creating
-      ? Object.keys(form).length > 0
-      : (semantic.shape ?? null) !== shape || semantic.placement !== placement;
     setBusy(true);
-    const work = creating
-      ? engine.world.request({
-          type: "addSemantic",
-          palette: palette.id,
-          name: trimmed,
-          ...(description.trim() !== "" && { description: description.trim() }),
-          look,
-          ...(Object.keys(form).length > 0 && { form }),
-        })
-      : engine.world.request({
-          type: "editSemantic",
-          semantic: semantic.ref,
-          name: trimmed,
-          description,
-          look,
-          ...(formChanged && { form: Object.keys(form).length > 0 ? form : null }),
-        });
-    void work.then(
+    void onSave({ name: trimmed, description: description.trim(), look, form }).then(
       () => onClose(),
       (caught: unknown) => {
         setBusy(false);
@@ -176,12 +177,7 @@ export function PaletteEntryDialog({
             Glows
           </label>
         </div>
-        {semantic?.base !== undefined && (
-          <p className="palette-note">
-            This semantic comes from another palette. A new name here is this palette's own; to
-            rename it everywhere, use Semantics.
-          </p>
-        )}
+        {note && <p className="palette-note">{note}</p>}
         {error && <p className="palette-error">{error}</p>}
         <BlockChooser
           engine={engine}
@@ -191,6 +187,12 @@ export function PaletteEntryDialog({
           onExplore={setBlock}
         />
         <footer className="entry-actions">
+          {onDelete && !creating && (
+            <button type="button" onClick={onDelete}>
+              Delete
+            </button>
+          )}
+          <span className="topbar-gap" />
           <button type="button" onClick={onClose}>
             Cancel
           </button>
@@ -209,9 +211,72 @@ export function PaletteEntryDialog({
   );
 }
 
-/** "New", then "New 2", "New 3", … — the first name this palette doesn't already use. */
-function freshName(palette: PaletteInfo): string {
-  const names = new Set(palette.semantics.map((s) => s.name));
+/** New or edit an entry of a build's palette. */
+export function PaletteEntryDialog({
+  engine,
+  palette,
+  semantic,
+  onClose,
+}: {
+  engine: Engine;
+  palette: PaletteInfo;
+  /** Null creates an entry. Otherwise the one being edited. */
+  semantic: SemanticInfo | null;
+  onClose: () => void;
+}) {
+  // A semantic that derives from another keeps the shape it inherits: forms only merge.
+  const inheritsShape =
+    semantic?.base !== undefined &&
+    semantic.shape !== undefined &&
+    semantic.ownForm.shape === undefined;
+  return (
+    <EntryDialog
+      engine={engine}
+      creating={semantic === null}
+      initial={{
+        name: semantic?.name ?? freshName(palette.semantics.map((s) => s.name)),
+        description: semantic?.description ?? "",
+        block: semantic?.block ?? null,
+        glow: semantic?.glow ?? false,
+        tint: semantic?.ownLook.tint ?? semantic?.color ?? "#9aa0a8",
+        shape: semantic?.shape ?? null,
+        placement: semantic?.placement ?? "auto",
+      }}
+      inheritsShape={inheritsShape}
+      {...(semantic?.base !== undefined && {
+        note: "This semantic comes from another palette. A new name here is this palette's own; to rename it everywhere, use Semantics.",
+      })}
+      onSave={({ name, description, look, form }) => {
+        if (!semantic) {
+          return engine.world.request({
+            type: "addSemantic",
+            palette: palette.id,
+            name,
+            ...(description !== "" && { description }),
+            look,
+            ...(Object.keys(form).length > 0 && { form }),
+          });
+        }
+        const formChanged =
+          (semantic.shape ?? null) !== (form.shape ?? null) ||
+          (form.shape === undefined && semantic.placement !== placementName(form.placement));
+        return engine.world.request({
+          type: "editSemantic",
+          semantic: semantic.ref,
+          name,
+          description,
+          look,
+          ...(formChanged && { form: Object.keys(form).length > 0 ? form : null }),
+        });
+      }}
+      onClose={onClose}
+    />
+  );
+}
+
+/** "New", then "New 2", "New 3", … — the first name that isn't taken. */
+export function freshName(taken: readonly string[]): string {
+  const names = new Set(taken);
   if (!names.has("New")) return "New";
   let i = 2;
   while (names.has(`New ${i}`)) i++;

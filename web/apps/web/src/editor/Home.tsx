@@ -1,13 +1,17 @@
 import type { SharedPalette } from "@voxyl/core";
 import type { ProjectEntry, StoredPalette } from "@voxyl/session";
+import { shapeName } from "@voxyl/shapes";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { LibraryActions, ProjectActions } from "../Hud.tsx";
 import type { Engine } from "../scene/Engine.ts";
+import { placementName } from "../world/editing.ts";
 import type { LibraryInfo, SharedPaletteInfo } from "../world/protocol.ts";
 import { WORLD_KINDS, type WorldKind } from "../worlds.ts";
-import { BlockChooser, BlockChooserDialog, blockTitle } from "./BlockPicker.tsx";
-import { FormCell } from "./FormCell.tsx";
+import { BlockChooser, blockTitle } from "./BlockPicker.tsx";
+import { BakedIcon } from "./icons.tsx";
+import { EntryDialog, freshName } from "./PaletteEntry.tsx";
 import { PrefabGrid } from "./prefabs.tsx";
+import { ShapeIcon } from "./ShapeIcon.tsx";
 
 /** The samples offered when there are no builds yet. The 20M cities stay in Samples. */
 const DEMOS: readonly { kind: WorldKind; label: string }[] = [
@@ -298,9 +302,10 @@ function Palettes({ engine }: { engine: Engine }) {
 type SemanticDraft = SharedPalette["semantics"][number];
 
 /**
- * A shared palette's editor: its name and description, and each semantic's name, what it is
- * for, its block and its fallback colour. Saved as you go; projects that use it update when
- * their owner picks "Update" in the drawer.
+ * A shared palette's editor: its name and description, and its semantics as the same picture
+ * grid a build's inventory shows. A click opens the entry editor a build uses (name, block
+ * chooser, shape, placing, colour). Saved as you go; projects that use it update when their
+ * owner picks "Update" in the drawer.
  */
 function PaletteEditor({
   engine,
@@ -314,7 +319,8 @@ function PaletteEditor({
   onDeleted: () => void;
 }) {
   const [palette, setPalette] = useState<StoredPalette | null>(null);
-  const [picking, setPicking] = useState<number | null>(null);
+  /** The semantic being edited by its place in the palette, or "new" for one being added. */
+  const [editing, setEditing] = useState<number | "new" | null>(null);
   useEffect(() => {
     void engine.world.request({ type: "sharedPalette", key: info.key }).then(setPalette);
   }, [engine, info.key]);
@@ -328,24 +334,45 @@ function PaletteEditor({
     }, 400);
   };
   if (!palette) return <p className="home-quiet home-pane">Loading…</p>;
-  const setSemantic = (i: number, patch: Partial<SemanticDraft>) =>
-    update({
-      ...palette,
-      semantics: palette.semantics.map((s, k) => (k === i ? { ...s, ...patch } : s)),
-    });
-  const pickingSemantic = picking === null ? undefined : palette.semantics[picking];
+  const editingSemantic = typeof editing === "number" ? palette.semantics[editing] : undefined;
   return (
     <div className="home-pane palette-editor">
-      {picking !== null && pickingSemantic && (
-        <BlockChooserDialog
+      {editing !== null && (
+        <EntryDialog
+          key={editing === "new" ? "new" : (editingSemantic?.key ?? editing)}
           engine={engine}
-          title={`Block for ${pickingSemantic.name}`}
-          current={pickingSemantic.look?.block ?? null}
-          onClose={() => setPicking(null)}
-          onPick={(ref) => {
-            const { block: _b, ...rest } = pickingSemantic.look ?? {};
-            setSemantic(picking, { look: ref ? { ...rest, block: ref } : rest });
+          creating={editing === "new"}
+          initial={{
+            name: editingSemantic?.name ?? freshName(palette.semantics.map((x) => x.name)),
+            description: editingSemantic?.description ?? "",
+            block: editingSemantic?.look?.block ?? null,
+            glow: editingSemantic?.look?.glow ?? false,
+            tint: editingSemantic?.look?.tint ?? "#9aa0a8",
+            shape: editingSemantic?.form?.shape ?? null,
+            placement: placementName(editingSemantic?.form?.placement),
           }}
+          onSave={async ({ name, description, look, form }) => {
+            const entry: SemanticDraft = {
+              key: editingSemantic?.key ?? freshKey(),
+              name,
+              ...(description !== "" && { description }),
+              ...(Object.keys(form).length > 0 && { form }),
+              look,
+            };
+            update({
+              ...palette,
+              semantics:
+                editing === "new"
+                  ? [...palette.semantics, entry]
+                  : palette.semantics.map((x, k) => (k === editing ? entry : x)),
+            });
+          }}
+          onDelete={() => {
+            if (typeof editing !== "number") return;
+            update({ ...palette, semantics: palette.semantics.filter((_, k) => k !== editing) });
+            setEditing(null);
+          }}
+          onClose={() => setEditing(null)}
         />
       )}
       <label>
@@ -364,99 +391,43 @@ function PaletteEditor({
           onChange={(e) => update({ ...palette, description: e.target.value })}
         />
       </label>
-      <table className="palette-table">
-        <thead>
-          <tr>
-            <th>Look</th>
-            <th>Name</th>
-            <th>What it is for</th>
-            <th>Shape</th>
-            <th>Fallback</th>
-            <th>Glows</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {palette.semantics.map((s, i) => (
-            <tr key={s.key}>
-              <td>
-                <button type="button" className="palette-look" onClick={() => setPicking(i)}>
-                  <span className="swatch" style={{ background: info.colors[i] ?? s.look?.tint }} />
-                  {s.look?.block ? blockTitle(s.look.block) : "Undecided"}
-                </button>
-              </td>
-              <td>
-                <input
-                  value={s.name}
-                  onChange={(e) => setSemantic(i, { name: e.target.value || s.name })}
-                />
-              </td>
-              <td>
-                <input
-                  value={s.description ?? ""}
-                  placeholder="What it is for"
-                  onChange={(e) => setSemantic(i, { description: e.target.value })}
-                />
-              </td>
-              <td>
-                <FormCell
-                  form={s.form}
-                  onChange={(form) => {
-                    // Setting a form replaces it whole, so drop the key when it is empty.
-                    const { form: _f, ...rest } = s;
-                    update({
-                      ...palette,
-                      semantics: palette.semantics.map((x, k) =>
-                        k === i ? (form ? { ...rest, form } : rest) : x,
-                      ),
-                    });
-                  }}
-                />
-              </td>
-              <td>
-                <input
-                  type="color"
-                  value={s.look?.tint ?? "#8a8f98"}
-                  onChange={(e) => setSemantic(i, { look: { ...s.look, tint: e.target.value } })}
-                />
-              </td>
-              <td>
-                <input
-                  type="checkbox"
-                  checked={s.look?.glow === true}
-                  onChange={(e) => setSemantic(i, { look: { ...s.look, glow: e.target.checked } })}
-                />
-              </td>
-              <td>
-                <button
-                  type="button"
-                  title="Remove from this palette (projects keep theirs until they update)"
-                  onClick={() =>
-                    update({ ...palette, semantics: palette.semantics.filter((_, k) => k !== i) })
-                  }
-                >
-                  ×
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <div className="home-actions">
+      <div className="inventory-grid palette-grid">
+        {palette.semantics.map((s, i) => (
+          <button
+            key={s.key}
+            type="button"
+            className="inventory-swatch"
+            title={[
+              s.name,
+              s.description,
+              s.look?.block ? blockTitle(s.look.block) : "undecided",
+              s.form?.shape ? shapeName(s.form.shape) : "",
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+            onClick={() => setEditing(i)}
+          >
+            <BakedIcon
+              engine={engine}
+              block={s.look?.block}
+              color={s.look?.tint ?? info.colors[i] ?? "#9aa0a8"}
+              className={s.look?.glow ? "inventory-icon glow" : "inventory-icon"}
+            />
+            {s.form?.shape && <ShapeIcon shape={s.form.shape} className="inventory-shape" />}
+            <span>{s.name}</span>
+          </button>
+        ))}
         <button
           type="button"
-          onClick={() =>
-            update({
-              ...palette,
-              semantics: [
-                ...palette.semantics,
-                { key: freshKey(), name: `Semantic ${palette.semantics.length + 1}` },
-              ],
-            })
-          }
+          className="inventory-swatch inventory-add"
+          title={`Add a semantic to ${palette.name}`}
+          onClick={() => setEditing("new")}
         >
-          Add a semantic
+          <span className="swatch">+</span>
+          <span>Add</span>
         </button>
+      </div>
+      <div className="home-actions">
         <span className="topbar-gap" />
         <button
           type="button"
