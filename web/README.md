@@ -31,6 +31,7 @@ packages/mesher/    chunk mesher: greedy cube faces, shaped parts as merged quad
                     also lists the light bricks its faces read (runs in workers)
 packages/light/     Minecraft-style sky and colored block light, incremental on edits
 packages/session/   WorldSession: a World, its light, mesh scheduling and the GPU light layout
+packages/tools/     agent tools: a Zod registry over a ToolHost (status, place, fill, ...); see .plans/web-tools.md
 packages/fixtures/  seeded test worlds (the benchmark city, plain or decorated with shaped parts)
 apps/web/           the React + Three.js app (Vite), with the in-app benchmark
 tools/              dev tools (shot, golden)
@@ -98,7 +99,7 @@ widget outside ChatGPT for local checks. Results are in the plan ("ChatGPT widge
 
 ## Rules of the road
 
-- `core`, `shapes`, `mesher`, `light` and `session` compile with no DOM or Node types, so anything that
+- `core`, `shapes`, `mesher`, `light`, `session` and `tools` compile with no DOM or Node types, so anything that
   touches `document`, `window` or `process` fails their typecheck. Keep it that way: the same
   code runs in the tab, in workers and on the server.
 - Cells store semantics, never materials. Palettes (colours, transparency, emission) live

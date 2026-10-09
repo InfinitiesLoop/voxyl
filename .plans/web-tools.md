@@ -114,4 +114,75 @@ Godot tool names in brackets show what each replaces.
 
 ## Status
 
-Nothing built yet.
+**Step 1 built (2026-10-09).** `packages/tools` (`@voxyl/tools`: pure TS, depends on core and
+shapes only, no session) with the registry, envelope, `ToolHost`, an in-memory host
+(`MemoryHost`, exported for the headless host and scripts) and eight tools: `status`,
+`history`, `inspect`, `select`, `place`, `fill`, `clear`, `replace`. 44 Vitest tests (Node,
+`packages/tools/test`); `pnpm check` is green. Core needed no change.
+
+What exists:
+- **Registry.** `defineTool`, `TOOLS`, `listTools()` (name, title, description, JSON Schema from
+  `z.toJSONSchema`, annotations; the recursive region schema converts fine) and
+  `callTool(host, name, rawArgs)`, which never throws. Envelope `{ok: true, ...}` or
+  `{ok: false, error: {code, message, ...}}`. Codes so far: `unknown_tool` (with
+  `suggestions`), `bad_argument` (with `issues: [{path, message}]`, the likeliest union branch
+  shown), `no_project`, `not_found` (with `kind`, `query`, `suggestions`), `ambiguous`
+  (a name in several palettes; give `{name, palette}`), `too_large` (inspect layers),
+  `bad_region`, `command_failed` (a core CommandError), `internal`.
+- **ToolHost** = `{project, editorAttached?, newId?(), changed?(project, info)}`. `changed` is
+  awaited after every real (not dry) change, the hook for persisting or telling views. Libraries,
+  clipboard and the prefab and palette stores join as optional async members when the tools
+  that need them land.
+- **Call context.** A handler is `handler(host, args, call)`; `call.run(specs)` stamps command
+  ids (`op_id`, or `op_id:1`, `op_id:2` for several), source `Claude`, label `Claude: <tool>`
+  and one group (`claude:<op_id>`), so a multi-command call is one undo step. Dry runs apply the
+  commands to `project.fork()` (what `preview` does, but for a sequence); several commands are
+  proven on a fork first, so a call applies completely or not at all. A repeated `op_id` comes
+  back `duplicate: true` with nothing changed.
+- **Names.** `SemRef` is `"Name"` or `{name, palette}`; matching is exact, then
+  case-insensitive when unambiguous. `ToolRegion` mirrors core's `Region` with names for
+  semantics and palettes. Reading never creates anything: a name a palette could derive but
+  has not yet matches no cells.
+- **Results** are small: `changed` (cells), `bounds` as `[x0,y0,z0,x1,y1,z1]`, per-semantic
+  `before/after`, `rejected` (first 20) with `rejected_count`, one `problems` list.
+- **Tools.** `place` builds one `set` and merges parts into the cell's existing parts, checking
+  `rejectPart` from shapes (reasons: `slot_taken`, `exclusive`, `micro_conflict`, ..., plus the
+  tool's `block_in_cell`, `slot_required`, `bad_slot`, `out_of_world`). `fill` styles solid,
+  hollow (clears the inside first unless `keep_inside`: two commands, one undo), walls, frame
+  and floor, all from the region's bounding box intersected with the region. `clear` with
+  `semantic` is one `set` that removes only that semantic's parts from a cell of parts.
+  `replace` is `resemantic` (keeps orientation; `skipped` counts cells whose geometry does not
+  fit, `force` relabels). `history` lists steps (a group is one step) and undoes or redoes
+  `count` of them. `inspect` has summary, materials, layers (capped at 32,768 cells in bounds)
+  and cells (paged).
+
+Deviations from the design above:
+- **Handlers take a third argument**, the call context (`handler(host, args, call)`), which
+  carries `run`; the design had `run` on the host. Per call it can hold the op id, group and
+  dry-run flag, and hosts stay simple.
+- **`select` has no `isolate`**: isolating is view state (hiding everything else), so it
+  belongs with the later `ui` tools, not the data registry.
+- **`select` and `history` take `op_id`/`dry_run`** like the others. `select` is not an undo
+  step (core's `select` is non-undoable). Repeating a `history` undo with the same `op_id` is a
+  no-op only while there is something left to undo (otherwise it reports "nothing more").
+- Shaped parts: micro shapes and architecture (roof) shapes work through a semantic's shape
+  and a `slot` name; that was cheap and needed nothing from core.
+
+Known gaps:
+- **No semantic creation yet.** `place`, `fill` and `replace` need the semantic to exist
+  (`not_found` lists near matches); creating one waits for `palette_edit` (step 2). A fresh
+  project has none, so `palette_edit` should come first in step 2.
+- Architecture shapes take `slot` only (`"up=north turn=1"`); `up`/`facing` do not map onto
+  their (side, turn) slots yet, and `attached_to` for torches is not ported.
+- `symmetry` and `repeat` on edit tools are not in.
+- `fill` styles other than solid use the region's bounding box; hollow's shell is "cells with a
+  missing face neighbour". A part fill replaces the cell, it does not merge like `place`.
+- A `{semantic}` region matching both a palette's own and a derived same-named semantic is
+  `ambiguous`, never "all of them".
+- `status` lists at most 200 semantics, and `regionStats` is a full scan (fine until builds are
+  huge).
+
+Next: build order step 2 (`build`, `transform`, `palette_get`, `palette_edit`, `find_blocks`,
+`describe_shapes`), starting with `palette_edit` so semantics can be created. Then step 3, the
+worker adapter (`{type: "tool", name, args}` calling `callTool`) over a host on the worker's
+project, with `changed` wired to persistence and the views.

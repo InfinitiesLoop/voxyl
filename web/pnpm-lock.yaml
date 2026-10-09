@@ -377,6 +377,22 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
+  packages/tools:
+    dependencies:
+      '@voxyl/core':
+        specifier: workspace:*
+        version: link:../core
+      '@voxyl/shapes':
+        specifier: workspace:*
+        version: link:../shapes
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+    devDependencies:
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+
 packages:
 
   '@biomejs/biome@2.5.15':
