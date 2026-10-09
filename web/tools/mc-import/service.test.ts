@@ -22,6 +22,20 @@ describe.skipIf(!existsSync(GAME) || !existsSync(VANILLA))("importing a real ins
     expect(phases.has("Healing mods")).toBe(true);
     const ztones = result.libraries.find((l) => l.id === "pack-Ztones");
     expect(Object.keys(ztones?.blocks ?? {}).length).toBe(551);
+    // Every block that names a Minecraft block carries what a schematic export needs.
+    const chisel = Object.values(
+      result.libraries.find((l) => l.id === "pack-chisel")?.blocks ?? {},
+    );
+    expect(chisel.length).toBeGreaterThan(1000);
+    expect(chisel.every((b) => b.mc?.registry.startsWith("chisel:"))).toBe(true);
+    // Chisel's own group names are not all registered block names, as in the Godot import (421 have no id there either).
+    expect(chisel.filter((b) => (b.mc?.legacyId ?? 0) > 0).length).toBeGreaterThan(700);
+    expect(chisel.some((b) => b.multipart)).toBe(true);
+    const torch = result.libraries.find((l) => l.id === "pack-minecraft")?.blocks.Torch;
+    expect(torch?.attachment).toBe("torch");
+    expect(Object.values(ztones?.blocks ?? {}).every((b) => b.mc?.sawable !== undefined)).toBe(
+      true,
+    );
     console.log(
       `${result.libraries.length} libraries, ${result.imported} blocks, ${result.dropped} left out, ` +
         `${result.healed.length} healed, ${Math.round(result.ms)} ms`,

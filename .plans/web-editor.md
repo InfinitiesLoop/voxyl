@@ -814,11 +814,60 @@ Before the gate. Everything here is built and `pnpm check` is green (59 files, 4
   workflow no longer goes through `cloudflare/wrangler-action`; it runs `wrangler@4` itself.
   `gh` is installed (winget, 2.102.0) but not signed in: `gh auth login` is the user's.
 
-## Gate item: pre-1.8 and GTNH import (plan, nothing built)
+## Gate item: pre-1.8 and GTNH import (engine built and proven; UI in progress)
 
 The user (2026-10-08): add pre-1.8 import and every GTNH healer the Godot app has to the editor
 gate, so people can import from GTNH. Full parity with Godot's features; the implementation is
 greenfield. This is the plan, to be built as Phase 5 work and checked at this gate.
+
+### Status (2026-10-08, later the same day)
+
+Built and proven against the Godot importer, in `packages/mc-import` (order below = the plan's):
+
+1. **Sources** (`src/sources/`): ranged zip reading over a `ByteSource` (end record and directory
+   only, entries on demand), `AssetSource`/`PathIndex`/`MultiSource`, `DirAssetSource`, and
+   `scanInstance` over an `FsDir` abstraction (the app backs it with the File System Access API or a
+   `webkitdirectory` list, tests with Node fs in `tools/mc-import/node-fs.ts`). 245 jars open in ~0.9 s.
+2. **NEI roster** (`src/legacy/`): CSV and dump parsing, the narrow texture match, `LibraryDraft`
+   (a mutable library with `addCube`), `importRoster`. GTNH 2.9 Beta 2: 18,754 roster rows, 1,563
+   imported and 17,191 left out, in ~2 s and 280 MB (Godot: ~10 min, 5 GB). **Parity with
+   Godot's `nei-manifest`**: 1,327 identities identical on all six faces; the only differences are
+   24 blocks whose texture is a non-square sprite sheet (IC2, Railcraft, Avaritia...), which Godot
+   stretches over the faces and the web leaves out on purpose, and 27 names that only differ by
+   an unstable sort of ties ("Torch (n)").
+3. **Healer framework** (`HealContext`, `Extension`, `runHealers`, `extensions/gtnh.ts`), the shared
+   junk strip and the torch attachment flag (`Block.attachment`, recorded; nothing reads it yet).
+4. **Healers**, one file each in `src/extensions/`: GregTech, Et Futurum, Catwalks, Chisel (with
+   `chisel-variations.ts` ported as data, and the dyed glass names), ProjectRed Illumination, Extra
+   Utilities, Ztones. Pane geometry is `legacy/pane-geometry.ts` (a multipart blockstate).
+   **`final-diff` against Godot's healed manifest is clean for every healed namespace** (gregtech 1,224,
+   chisel 1,170 incl. 113 panes, etfuturum 146, catwalks 10, ProjRed 32, ExtraUtilities 39, Ztones 551,
+   minecraft 68), apart from the same 24 skipped sheets. The whole heal pass takes ~0.7 s.
+5. **`import-service.ts`**: `planInstance` (what the folder offers; refuses without the NEI dumps and says
+   how to make them) and `importInstance` (roster, healers, the `microblocks.cfg` saw whitelist applied
+   to `Block.mc.sawable` automatically, one `Library` per mod). Real run: 133 libraries, 3,772 blocks.
+
+Parity tooling (all in `web/tools/mc-import/`, the Godot side in `tools/parity-manifest.{gd,sh}`, which runs
+sandboxed so it never touches the user's libraries): `roster-manifest.ts` + `manifest-diff.ts` (pre-heal),
+`final-manifest.ts` + `final-diff.ts` (after healing). The gated tests (`instance`, `roster`, `service`)
+run when the Beta 2 instance and the 1.7.10 jar exist and skip otherwise.
+
+Things to know:
+
+- **GTNH 2.9 RC2 has no NEI `dumps/` folder**; only Beta 2 does. RC2 needs the dumps made in game
+  (Items, Item Panel in CSV mode, Blocks) before it can import; the plan step says so.
+- The vanilla 1.7.10 jar is not in a Prism instance (it lives in `PrismLauncher/libraries/com/mojang/minecraft/1.7.10/`),
+  so the dialog offers an optional jar pick for the `minecraft` textures.
+- Resource packs in `resourcepacks/` are not read as sources (Godot picked them up as a side effect of its scan).
+- Blocks do not carry Godot's search tags (the web `Block` has none). GregTech machines carry no Minecraft
+  identity, as in Godot; 421 Chisel blocks have no numeric id either (their group name is not a registry
+  name in `block.csv`), as in Godot. Both are candidates for later improvements.
+- Libraries are named `<prefix><namespace>` (default prefix `pack-`) so a legacy `minecraft` library does not
+  collide with the 1.13+ vanilla one.
+
+Still to do for this item: the import worker and dialog (in progress), checking a schematic export of a GTNH
+build against Godot's (ids, metas, legacy ids, a GregTech machine over 15 and an `orient` block), the user's
+twelve-block look check and loading an export in the game, and the common-locations/remember-folder polish.
 
 ### What Godot does (the features to match)
 

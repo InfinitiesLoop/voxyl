@@ -644,7 +644,7 @@ In the order I'd take them. The first two are the user's.
    Phase 0); capture tiers 2 and 3; connect Claude Code and Codex; the private ChatGPT app.
    The MCP tool shape wants the intent-level verbs the user asked for (see the Godot memory
    note), not cell lists; settle that design before porting tools.
-6. **Phase 5, Minecraft import**: pre-1.8 and GTNH import is planned in `web-editor.md` ("Gate item: pre-1.8 and GTNH import") and is part of the editor gate. Also modpacks, Chisel variations, schematic import that follows
+6. **Phase 5, Minecraft import**: pre-1.8 and GTNH import is part of the editor gate; the engine (sources, NEI roster, all GTNH healers, the import service) is built and matches Godot's output, only the UI and the gate checks remain: see the status in `web-editor.md` ("Gate item: pre-1.8 and GTNH import"). Also modpacks, Chisel variations, schematic import that follows
    "north is north"), and the open question of the hosted default texture set (the default set
    is original and procedural today, so this may be answered; confirm).
 7. **Housekeeping:** the cp1252 bytes in `selection-actions.tsx`, `ProjectSettings.tsx` and this
