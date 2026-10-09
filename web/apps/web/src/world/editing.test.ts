@@ -486,6 +486,14 @@ describe("project settings", () => {
     expect(project.settings.north).toBe("east");
     project.run(stepCommand(project, "undo") as never);
     expect(project.settings.north).toBe("north");
+    const note = settingsCommand(project, { note: "Hello [Blocks](blocks)" });
+    if (!note) throw new Error("no command");
+    project.run(note);
+    expect(project.settings.note).toBe("Hello [Blocks](blocks)");
+    expect(historyState(project).undo).toBe("Change the opening note");
+    project.run(stepCommand(project, "undo") as never);
+    expect(project.settings.note).toBe("");
+    expect(settingsCommand(project, { note: "   " })).toBeNull();
   });
 
   it("touches no cell when north changes", () => {

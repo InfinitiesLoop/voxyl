@@ -21,6 +21,7 @@ interface TopBarProps {
   onNew: () => void;
   /** The name the user typed. Empty and over-long names are refused here. */
   onRename: (name: string) => void;
+  onNote: (note: string) => void;
   devOpen: boolean;
   onDev: () => void;
   palettesOpen: boolean;
@@ -53,6 +54,7 @@ export function TopBar({
   onSave,
   onNew,
   onRename,
+  onNote,
   devOpen,
   onDev,
   palettesOpen,
@@ -115,6 +117,7 @@ export function TopBar({
           engine={engine}
           info={info}
           onRename={onRename}
+          onNote={onNote}
           onClose={() => setSettingsOpen(false)}
         />
       )}
@@ -197,7 +200,7 @@ export function timeLabel(hours: number): string {
 /** Minecraft's names for the ends and middle of its Brightness slider. */
 function brightnessLabel(brightness: number): string {
   if (brightness === 0) return "Moody";
-  if (brightness === 50) return "default";
+  if (brightness === 50) return "50%";
   if (brightness === 100) return "Bright";
   return `${brightness}%`;
 }

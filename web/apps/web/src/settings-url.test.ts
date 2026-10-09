@@ -6,9 +6,9 @@ function settings(patch: Partial<Settings> = {}): Settings {
   return {
     world: "",
     theme: 0,
-    lighting: "off",
+    lighting: "volume",
     time: 12,
-    brightness: 50,
+    brightness: 0,
     layout: "single",
     ...patch,
   };
@@ -22,7 +22,7 @@ describe("settings query", () => {
 
   it("keeps only the world when every other setting is a default", () => {
     const params = new URLSearchParams(
-      "world=city-1m&chunk=64&theme=concrete&lighting=off&time=12&brightness=50&layout=single",
+      "world=city-1m&chunk=64&theme=concrete&lighting=volume&time=12&brightness=0&layout=single",
     );
     expect(settingsQuery(readSettings(params), false)).toBe("world=city-1m");
   });
@@ -33,15 +33,15 @@ describe("settings query", () => {
       settings({
         world: "saved:abc",
         theme: brick,
-        lighting: "volume",
+        lighting: "off",
         time: 18.5,
-        brightness: 0,
+        brightness: 100,
         layout: "rows",
       }),
       false,
     );
     expect(query).toBe(
-      "world=saved%3Aabc&theme=brick&lighting=volume&time=18.5&brightness=0&layout=rows",
+      "world=saved%3Aabc&theme=brick&lighting=off&time=18.5&brightness=100&layout=rows",
     );
   });
 
@@ -55,5 +55,8 @@ describe("settings query", () => {
     expect(legacy.time).toBe(0);
     expect(legacy.layout).toBe("columns");
     expect(readSettings(new URLSearchParams("world=nope")).world).toBe("");
+    expect(readSettings(new URLSearchParams("world=pillar")).lighting).toBe("volume");
+    expect(readSettings(new URLSearchParams("lighting=off")).lighting).toBe("off");
+    expect(readSettings(new URLSearchParams("world=pillar")).brightness).toBe(0);
   });
 });

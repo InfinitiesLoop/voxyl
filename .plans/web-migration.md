@@ -833,9 +833,19 @@ secrets `CLOUDFLARE_PAGES_API_TOKEN` (Pages Edit only) and `CLOUDFLARE_ACCOUNT_I
 **Follow-up the same day, before showing the site.** The address bar only keeps settings that
 aren't the defaults: `world`, plus `theme`, `lighting`, `time`, `brightness` and `layout` when
 they differ. Home is a clean URL. Mesh chunks are fixed at 64³ (the size measured as the best
-single setting); the dev panel no longer offers another. The home page uses a Godot snapshot of
-the conduit pillar as the mark, standing on a receding voxel grid, and the same picture is the
-favicon.
+single setting); the dev panel no longer offers another. The home page background is a crop of the Godot viewport with the Conduit Pillar prefab
+open, from the camera the user framed (`public/home-pillar.png`). It covers the browser
+(the pillar stays on the right) and does not set the page width. A dark veil sits over it,
+heavier toward the type. With no builds yet, Home says welcome (the pillar mark sits to the
+right of the words) and offers the block showcase, the Minecraft showcase and the two 5M
+cities; the 20M cities stay in Samples. Lighting defaults to on (a link records `lighting=off`
+only when it is off). Brightness defaults to Moody (0). Samples open at sunset unless the link
+names an hour, standing 5 blocks up just outside the build; the camera is placed on open and is
+not stored on the project. The block showcase puts a walled court in front of the catalogue.
+Every sample carries an opening note, rebuilt with the sample on each open (a build already
+saved under My projects keeps the note it was saved with). The Minecraft note says a jar has
+to be imported and links to the Blocks tab; the same note shows when this browser has no jar
+yet. The small mark and the favicon are the earlier Godot snapshot of the same pillar.
 
 **Readiness check (2026-10-08).** The workflow is on `origin/main` (it must be, for Run workflow
 to appear). `pnpm check` is green and `pnpm --filter @voxyl/web build` makes a 2.3 MB `dist/`

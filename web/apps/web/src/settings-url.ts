@@ -15,13 +15,13 @@ export interface Settings {
   lighting: LightingMode;
   /** Time of day in hours, 0 (midnight) to 24; 12 is noon. */
   time: number;
-  /** Minecraft's Brightness, 0 (Moody) to 100 (Bright); 50 is its default. */
+  /** Brightness, 0 (Moody) to 100 (Bright). Moody is the default. */
   brightness: number;
   /** Which arrangement of panes is showing. Each pane's kind and time live with the layout. */
   layout: LayoutPreset;
 }
 
-const DEFAULT_BRIGHTNESS = 50;
+const DEFAULT_BRIGHTNESS = 0;
 
 function percent(value: string | null, fallback: number): number {
   const n = Number(value ?? fallback);
@@ -46,8 +46,8 @@ export function readSettings(params: URLSearchParams): Settings {
   return {
     world,
     theme: Math.max(0, theme),
-    // "on" and "vertex" are from earlier versions; any lighting now means the light volume.
-    lighting: lighting === null || lighting === "off" ? "off" : "volume",
+    // On, unless the link turns it off. "on" and "vertex" are earlier names for the light volume.
+    lighting: lighting === "off" ? "off" : "volume",
     time: readTime(params),
     brightness: percent(params.get("brightness"), DEFAULT_BRIGHTNESS),
     layout: presetFromParams(params) ?? "single",
@@ -69,7 +69,7 @@ export function settingsQuery(settings: Settings, home: boolean): string {
   params.set("world", settings.world);
   const theme = CITY_THEMES[settings.theme];
   if (settings.theme !== 0 && theme) params.set("theme", theme.name.toLowerCase());
-  if (settings.lighting !== "off") params.set("lighting", settings.lighting);
+  if (settings.lighting === "off") params.set("lighting", "off");
   const time = formatHours(settings.time);
   if (time !== String(NOON)) params.set("time", time);
   const brightness = Math.round(settings.brightness);

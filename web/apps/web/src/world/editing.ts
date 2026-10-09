@@ -849,12 +849,17 @@ export function linkPaletteCommand(project: Project, shared: SharedPalette): Com
 }
 
 /**
- * The command that changes which direction is the real north and where the major grid falls,
- * or null when nothing would change. Cells never move; north turns what crosses in or out.
+ * The command that changes which direction is the real north, where the major grid falls, and
+ * the note shown on open, or null when nothing would change. Cells never move; north turns
+ * what crosses in or out.
  */
 export function settingsCommand(
   project: Project,
-  patch: { readonly north?: Direction; readonly grid?: readonly [number, number] },
+  patch: {
+    readonly north?: Direction;
+    readonly grid?: readonly [number, number];
+    readonly note?: string;
+  },
 ): Command | null {
   const now = project.settings;
   const north = patch.north !== undefined && patch.north !== now.north ? patch.north : undefined;
@@ -862,18 +867,23 @@ export function settingsCommand(
     patch.grid !== undefined && (patch.grid[0] !== now.grid[0] || patch.grid[1] !== now.grid[1])
       ? patch.grid
       : undefined;
-  if (north === undefined && grid === undefined) return null;
+  const note = patch.note !== undefined && patch.note.trim() !== now.note ? patch.note : undefined;
+  if (north === undefined && grid === undefined && note === undefined) return null;
+  const parts = [
+    north !== undefined ? `North is now ${north === "north" ? "-Z (the default)" : north}` : "",
+    grid !== undefined ? `Grid offset ${grid[0]}, ${grid[1]}` : "",
+    note !== undefined ? "Change the opening note" : "",
+  ].filter((part) => part !== "");
   return {
     id: commandId(),
     kind: "settings",
     source: EDITOR_SOURCE,
-    label:
-      north !== undefined && grid !== undefined
-        ? "Change north and the grid"
-        : north !== undefined
-          ? `North is now ${north === "north" ? "-Z (the default)" : north}`
-          : `Grid offset ${grid?.[0]}, ${grid?.[1]}`,
-    args: { ...(north !== undefined && { north }), ...(grid !== undefined && { grid }) },
+    label: parts.join(". "),
+    args: {
+      ...(north !== undefined && { north }),
+      ...(grid !== undefined && { grid }),
+      ...(note !== undefined && { note }),
+    },
   };
 }
 

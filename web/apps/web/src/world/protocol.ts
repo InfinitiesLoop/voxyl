@@ -361,7 +361,7 @@ export type Command =
    */
   | { type: "visibility"; hide: CellBox | null; isolate: boolean }
   /** Which of the project's directions is the real north, and the major grid's offset. */
-  | { type: "settings"; north?: Direction; grid?: [number, number] }
+  | { type: "settings"; north?: Direction; grid?: [number, number]; note?: string }
   /** The project's bounds as cell corners, or null when it is empty. */
   | { type: "bounds" }
   /** What a cell holds, in words, or null if it is empty. */

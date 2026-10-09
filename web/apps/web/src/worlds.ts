@@ -20,6 +20,37 @@ export type WorldKind =
   | "parts-5m"
   | "parts-20m";
 
+/**
+ * The Minecraft showcase's opening note. `blocks` is the Home tab where a jar is imported.
+ * Shown on the project, and also when the showcase is opened with no jar in this browser.
+ */
+/** Told in every sample note: the clock is the view's time of day, and the sample starts at sunset. */
+const SUNSET_LINE = "It opens at sunset. Change the time of day with the clock on the view.";
+
+export const MC_BLOCKS_NOTE = [
+  "This showcase is built from your own Minecraft jar. Voxyl doesn't include those files, so a jar has to be added to this browser.",
+  "[Import a Minecraft jar](blocks), then open this showcase. The jar stays on this computer.",
+  SUNSET_LINE,
+].join("\n\n");
+
+/** The note a sample opens with. Samples are rebuilt on each open, so this is always current. */
+export function sampleNote(kind: WorldKind): string {
+  if (kind === "pillar") {
+    return `A small hollow pillar, for trying the camera and the tools. The bands and the glowing corners are separate semantics, so a palette change recolours them without moving a cell. ${SUNSET_LINE}`;
+  }
+  if (kind === "blocks") {
+    return `Every block in Voxyl's own set, with a walled court in front so stairs, glass, fences and lamps read as a place. Nothing here comes from Minecraft. ${SUNSET_LINE}`;
+  }
+  if (kind === "mc-blocks") return MC_BLOCKS_NOTE;
+  const cells = CITY_TARGETS[kind];
+  const size = `${cells / 1_000_000} million`;
+  const shaped = kind.startsWith("parts-");
+  const what = shaped
+    ? `A generated city of about ${size} cells, built with shaped parts (stairs, slabs and fences) instead of plain cubes.`
+    : `A generated city of about ${size} cells, made of plain blocks.`;
+  return `${what} It comes from one fixed seed, so it is the same city every time. ${SUNSET_LINE}`;
+}
+
 export const WORLD_KINDS: readonly { kind: WorldKind; label: string }[] = [
   { kind: "pillar", label: "Demo pillar" },
   { kind: "blocks", label: "Block showcase" },
@@ -67,6 +98,8 @@ export interface WorldInfo {
   /** Which of its directions is real north, and its major grid offset (project settings). */
   readonly north: Direction;
   readonly grid: readonly [number, number];
+  /** Shown in a panel on open. Empty means the project has no note. */
+  readonly note: string;
   /** Which city theme it shows (CITY_THEMES), or null for a project without one. */
   readonly theme: number | null;
   /** Time to generate or open it. */
@@ -105,7 +138,11 @@ export function buildSample(
 ): { project: Project; framing: Framing } {
   const project = new Project({ chunkBits: Math.log2(chunkSize) });
   const label = WORLD_KINDS.find((w) => w.kind === kind)?.label ?? kind;
-  project.run({ id: "name", kind: "settings", args: { ...project.settings, name: label } });
+  project.run({
+    id: "name",
+    kind: "settings",
+    args: { ...project.settings, name: label, note: sampleNote(kind) },
+  });
   if (kind === "blocks" || kind === "mc-blocks") {
     // Looks of its own, one per block: no city theme.
     const id = kind === "blocks" ? DEFAULT_LIBRARY_ID : MINECRAFT_LIBRARY_ID;

@@ -216,7 +216,7 @@ export class ChunkRenderer {
     this.#uniforms.daylight.value = daylight;
   }
 
-  /** Minecraft's Brightness: 0 Moody, 0.5 default, 1 Bright. One shader value. */
+  /** Brightness: 0 Moody (the default), 1 Bright. One shader value. */
   setBrightness(brightness: number): void {
     this.#uniforms.brightness.value = brightness;
   }

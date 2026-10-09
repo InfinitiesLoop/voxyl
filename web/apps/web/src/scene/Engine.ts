@@ -313,7 +313,7 @@ export class Engine {
   #lighting: LightingMode = "off";
   #hours = NOON;
   readonly #sky = new Sky();
-  #brightness = 0.5;
+  #brightness = 0;
   readonly #sentCamera = new THREE.Vector3(Number.POSITIVE_INFINITY, 0, 0);
 
   readonly #frameMs = new Float64Array(FRAME_WINDOW);
@@ -499,12 +499,18 @@ export class Engine {
     if (!info) return;
     const [cx, , cz] = info.center;
     const e = info.extent;
-    if (e <= 32) {
-      this.fly.place({ x: cx + 22, y: 18, z: cz + 26 }, { x: cx, y: 7, z: cz });
+    const eye = 5;
+    if (info.top <= 0) {
+      // A new build is empty: stand a few blocks off the ground, looking at where it starts.
+      this.fly.place({ x: cx + 12, y: eye, z: cz + 16 }, { x: cx, y: 1, z: cz });
     } else {
+      // Just outside the near edge, a few blocks off the ground, looking a short way in.
+      // Demos are generated on open, so this pose is their camera; it is not saved on the project.
+      const edge = cz - e / 2;
+      const lookIn = Math.min(e * 0.35, 40);
       this.fly.place(
-        { x: cx - e * 0.42, y: Math.max(60, e * 0.18), z: cz - e * 0.42 },
-        { x: cx, y: 10, z: cz },
+        { x: cx - Math.min(8, e * 0.05), y: eye, z: edge - 12 },
+        { x: cx, y: Math.min(4, Math.max(1, info.top * 0.35)), z: edge + lookIn },
       );
     }
     // Every 3D pane starts on the same overview. Each one flies on its own after that.
@@ -676,7 +682,7 @@ export class Engine {
     this.fly.restore(next.pose);
   }
 
-  /** Minecraft's Brightness setting, 0 (Moody) to 1 (Bright); 0.5 is its default. */
+  /** Brightness, 0 (Moody) to 1 (Bright). Moody is the default. */
   setBrightness(brightness: number): void {
     this.#brightness = brightness;
     this.#chunks?.setBrightness(brightness);
@@ -1582,7 +1588,11 @@ export class Engine {
   }
 
   /** Changes the project's north and major grid offset (one undo step). */
-  async setProjectSettings(change: { north?: Direction; grid?: [number, number] }): Promise<void> {
+  async setProjectSettings(change: {
+    north?: Direction;
+    grid?: [number, number];
+    note?: string;
+  }): Promise<void> {
     await this.world.request({ type: "settings", ...change });
   }
 

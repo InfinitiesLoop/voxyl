@@ -9,8 +9,27 @@ import { BlockChooser, BlockChooserDialog, blockTitle } from "./BlockPicker.tsx"
 import { FormCell } from "./FormCell.tsx";
 import { PrefabGrid } from "./prefabs.tsx";
 
+/** The samples offered when there are no builds yet. The 20M cities stay in Samples. */
+const DEMOS: readonly { kind: WorldKind; label: string }[] = [
+  { kind: "blocks", label: "Block showcase" },
+  { kind: "mc-blocks", label: "Minecraft blocks" },
+  { kind: "city-5m", label: "City, 5M cells" },
+  { kind: "parts-5m", label: "Shaped city, 5M cells" },
+];
+
 type Tab = "projects" | "palettes" | "prefabs" | "blocks";
 const TAB_KEY = "voxyl.homeTab";
+const TAB_EVENT = "voxyl-home-tab";
+
+/** Opens Home on a tab. A note's `[label](blocks)` uses this. */
+export function openHomeTab(tab: Tab): void {
+  try {
+    localStorage.setItem(TAB_KEY, tab);
+  } catch {
+    // The tab still changes for this visit.
+  }
+  window.dispatchEvent(new Event(TAB_EVENT));
+}
 
 function readTab(): Tab {
   try {
@@ -44,6 +63,11 @@ export interface HomeProps {
  */
 export function Home(props: HomeProps) {
   const [tab, setTab] = useState<Tab>(readTab);
+  useEffect(() => {
+    const onTab = () => setTab(readTab());
+    window.addEventListener(TAB_EVENT, onTab);
+    return () => window.removeEventListener(TAB_EVENT, onTab);
+  }, []);
   const choose = (next: Tab) => {
     setTab(next);
     try {
@@ -96,91 +120,81 @@ function Projects({ projects, onOpen, onNew, onSample, project }: HomeProps) {
   const file = useRef<HTMLInputElement>(null);
   const [samples, setSamples] = useState(false);
   return (
-    <>
-      <Horizon />
-      <section className="home-section">
-        <div className="home-actions">
-          <button type="button" className="primary" onClick={onNew}>
-            New build
-          </button>
-          <button type="button" onClick={() => file.current?.click()}>
-            Import a .voxyl file…
-          </button>
-          <button type="button" aria-expanded={samples} onClick={() => setSamples(!samples)}>
-            Samples
-          </button>
-          <input
-            ref={file}
-            type="file"
-            accept=".voxyl"
-            hidden
-            onChange={(e) => {
-              const chosen = e.target.files?.[0];
-              e.target.value = "";
-              if (chosen) void project.import(chosen);
-            }}
-          />
+    <section className="home-section">
+      <div className="home-actions">
+        <button type="button" className="primary" onClick={onNew}>
+          New build
+        </button>
+        <button type="button" onClick={() => file.current?.click()}>
+          Import a .voxyl file…
+        </button>
+        <button type="button" aria-expanded={samples} onClick={() => setSamples(!samples)}>
+          Samples
+        </button>
+        <input
+          ref={file}
+          type="file"
+          accept=".voxyl"
+          hidden
+          onChange={(e) => {
+            const chosen = e.target.files?.[0];
+            e.target.value = "";
+            if (chosen) void project.import(chosen);
+          }}
+        />
+      </div>
+      {samples && (
+        <div className="home-samples">
+          {WORLD_KINDS.map((w) => (
+            <button key={w.kind} type="button" onClick={() => onSample(w.kind)}>
+              {w.label}
+            </button>
+          ))}
         </div>
-        {samples && (
-          <div className="home-samples">
-            {WORLD_KINDS.map((w) => (
-              <button key={w.kind} type="button" onClick={() => onSample(w.kind)}>
-                {w.label}
+      )}
+      {projects.length === 0 ? (
+        <div className="home-welcome">
+          <h1>
+            Welcome to Voxyl
+            <img src="/conduit-pillar.png" alt="" />
+          </h1>
+          <button type="button" className="primary welcome-start" onClick={onNew}>
+            Start building
+          </button>
+          <p className="home-quiet">Or check out these demos</p>
+          <div className="home-demos">
+            {DEMOS.map((demo) => (
+              <button key={demo.kind} type="button" onClick={() => onSample(demo.kind)}>
+                {demo.label}
               </button>
             ))}
           </div>
-        )}
-        {projects.length === 0 ? (
-          <div className="home-empty">
-            <p>No builds in this browser yet.</p>
-            <button type="button" className="primary big" onClick={onNew}>
-              Start building
-            </button>
-            <p className="home-quiet">
-              A new build starts with a few semantics (Wall, Floor, Roof, …) already on blocks.
-              Change any of them later without touching what you built.
-            </p>
-          </div>
-        ) : (
-          <ul className="home-cards">
-            {[...projects]
-              .sort((a, b) => b.savedAt - a.savedAt)
-              .map((p) => (
-                <li key={p.id} className="home-card">
-                  <button type="button" className="home-card-open" onClick={() => onOpen(p.id)}>
-                    <strong className="home-card-name">{p.name}</strong>
-                    <span className="home-card-meta">
-                      {p.cells.toLocaleString()} cells · {sizeLabel(p.bytes)} · {ago(p.savedAt)}
-                    </span>
-                  </button>
-                  <span className="home-card-tools">
-                    <button type="button" onClick={() => void project.export(p.id, p.name)}>
-                      Export
-                    </button>
-                    <button type="button" onClick={() => void project.delete(p.id, p.name)}>
-                      Delete
-                    </button>
+        </div>
+      ) : (
+        <ul className="home-cards">
+          {[...projects]
+            .sort((a, b) => b.savedAt - a.savedAt)
+            .map((p) => (
+              <li key={p.id} className="home-card">
+                <button type="button" className="home-card-open" onClick={() => onOpen(p.id)}>
+                  <strong className="home-card-name">{p.name}</strong>
+                  <span className="home-card-meta">
+                    {p.cells.toLocaleString()} cells · {sizeLabel(p.bytes)} · {ago(p.savedAt)}
                   </span>
-                </li>
-              ))}
-          </ul>
-        )}
-      </section>
-    </>
-  );
-}
-
-/** The conduit pillar, standing on a grid that runs out to the horizon. */
-function Horizon() {
-  return (
-    <div className="horizon">
-      <div className="horizon-sky" />
-      <div className="horizon-ground">
-        <div className="horizon-floor" />
-      </div>
-      <img className="horizon-pillar" src="/conduit-pillar.png" alt="" />
-      <p className="horizon-caption">Build first. Decide later.</p>
-    </div>
+                </button>
+                <span className="home-card-tools">
+                  <button type="button" onClick={() => void project.export(p.id, p.name)}>
+                    Export
+                  </button>
+                  <button type="button" onClick={() => void project.delete(p.id, p.name)}>
+                    Delete
+                  </button>
+                </span>
+              </li>
+            ))}
+        </ul>
+      )}
+    </section>
   );
 }
 

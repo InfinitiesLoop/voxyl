@@ -81,12 +81,12 @@ type FloatUniform = ReturnType<typeof makeFloat>;
 export interface LightUniforms {
   /** Time of day, 0 (midnight) to 1 (noon), as Minecraft darkens the sky. */
   readonly daylight: FloatUniform;
-  /** Minecraft's Brightness setting: 0 Moody, 0.5 the default, 1 Bright. */
+  /** Brightness: 0 Moody (the default), 1 Bright. */
   readonly brightness: FloatUniform;
 }
 
 export function createLightUniforms(): LightUniforms {
-  return { daylight: makeFloat(1), brightness: makeFloat(0.5) };
+  return { daylight: makeFloat(1), brightness: makeFloat(0) };
 }
 
 /**

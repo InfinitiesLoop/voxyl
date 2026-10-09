@@ -106,7 +106,12 @@ describe("saving and loading", () => {
       expect(describeCells(loaded)).toEqual(describeCells(p));
       expect(loaded.world.cellCount).toBe(p.world.cellCount);
       expect(loaded.semantics.toJSON()).toEqual(p.semantics.toJSON());
-      expect(loaded.settings).toEqual({ name: "Test build", north: "east", grid: [3, 5] });
+      expect(loaded.settings).toEqual({
+        name: "Test build",
+        north: "east",
+        grid: [3, 5],
+        note: "",
+      });
       expect(loaded.id).toBe(p.id);
     },
   );

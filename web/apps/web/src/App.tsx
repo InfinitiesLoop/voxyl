@@ -3,12 +3,20 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { type BenchResult, runBench } from "./bench/bench.ts";
 import { download } from "./download.ts";
 import { CutawayPanel } from "./editor/CutawayPanel.tsx";
-import { Home } from "./editor/Home.tsx";
+import { Home, openHomeTab } from "./editor/Home.tsx";
 import { HotbarBar } from "./editor/HotbarBar.tsx";
 import { Inventory } from "./editor/Inventory.tsx";
 import { clearBlockIcons } from "./editor/icons.tsx";
 import { KeysPanel } from "./editor/KeysPanel.tsx";
-import { focusedPane, type LayoutState, readLayout, saveLayout } from "./editor/layout.ts";
+import {
+  focusedPane,
+  type LayoutState,
+  readLayout,
+  saveLayout,
+  withTime,
+} from "./editor/layout.ts";
+import { NotePanel } from "./editor/NotePanel.tsx";
+import type { NoteTarget } from "./editor/note.ts";
 import { PaletteDrawer } from "./editor/PaletteDrawer.tsx";
 import { Panes } from "./editor/Panes.tsx";
 import { PasteOverlay } from "./editor/PasteOverlay.tsx";
@@ -20,14 +28,29 @@ import { TopBar } from "./editor/TopBar.tsx";
 import { useStore } from "./editor/useStore.ts";
 import { BenchPanel, Hud } from "./Hud.tsx";
 import { type Backend, Engine, type EngineStats } from "./scene/Engine.ts";
+import { SUNSET } from "./scene/sky-model.ts";
 import { readSettings, type Settings, settingsQuery } from "./settings-url.ts";
 import type { LibraryInfo } from "./world/protocol.ts";
-import { CHUNK_SIZE, savedId, savedSource, WORLD_KINDS, type WorldInfo } from "./worlds.ts";
+import {
+  CHUNK_SIZE,
+  MC_BLOCKS_NOTE,
+  sampleKind,
+  savedId,
+  savedSource,
+  WORLD_KINDS,
+  type WorldInfo,
+  type WorldKind,
+} from "./worlds.ts";
 
 export type { Settings };
 
 const DEV_KEY = "voxyl.dev";
 const PALETTES_KEY = "voxyl.palettes";
+
+/** A sample opened with no time of its own starts at sunset. An explicit `time` stays. */
+function sampleOnArrival(world: string, params: URLSearchParams): boolean {
+  return sampleKind(world) !== null && !params.has("time") && !params.has("daylight");
+}
 
 /** Puts the current link in the address bar. Home, and a build at every default, stay clean. */
 function syncAddress(settings: Settings, home: boolean): void {
@@ -45,9 +68,12 @@ export function App() {
   const [settings, setSettings] = useState(() =>
     readSettings(new URLSearchParams(location.search)),
   );
-  const [layout, setLayout] = useState<LayoutState>(() =>
-    readLayout(settings.time, new URLSearchParams(location.search)),
-  );
+  const [layout, setLayout] = useState<LayoutState>(() => {
+    const params = new URLSearchParams(location.search);
+    const stored = readLayout(settings.time, params);
+    // A sample linked with no time of its own opens at sunset; an explicit time stays.
+    return sampleOnArrival(settings.world, params) ? withTime(stored, SUNSET) : stored;
+  });
   /** Work in progress, shown in the banner (latest last); the controls wait for it. */
   const [tasks, setTasks] = useState<string[]>(["Starting renderer"]);
   const [stats, setStats] = useState<EngineStats | null>(null);
@@ -58,6 +84,10 @@ export function App() {
   const [info, setInfo] = useState<WorldInfo | null>(null);
   const [projects, setProjects] = useState<ProjectEntry[]>([]);
   const [libraries, setLibraries] = useState<LibraryInfo[]>([]);
+  /** Set after the first library list, so a missing jar isn't guessed before that. */
+  const [librariesReady, setLibrariesReady] = useState(false);
+  /** The opening note on screen, from a project or from a demo that can't start yet. */
+  const [openingNote, setOpeningNote] = useState<string | null>(null);
   /** Bumped to open the same source again (a sample whose library just arrived). */
   const [reloads, setReloads] = useState(0);
   /** The dev panel (samples, stats, benchmark), remembered across visits. */
@@ -150,6 +180,11 @@ export function App() {
   const themeRef = useRef(settings.theme);
   themeRef.current = settings.theme;
   const { world: source, theme, lighting, brightness } = settings;
+  // A link that names an hour keeps it for the build it opened. The next sample sets sunset.
+  const pinnedTime = useRef(
+    new URLSearchParams(location.search).has("time") ||
+      new URLSearchParams(location.search).has("daylight"),
+  );
 
   const refreshProjects = useCallback(async () => {
     if (engine) setProjects(await engine.world.request({ type: "projects" }));
@@ -163,12 +198,23 @@ export function App() {
     if (!engine) return;
     const list = await engine.world.request({ type: "libraries" });
     setLibraries(list);
+    setLibrariesReady(true);
     engine.libraries.set(list);
   }, [engine]);
 
   useEffect(() => {
     void refreshLibraries();
   }, [refreshLibraries]);
+
+  // Lighting is applied before a load in this commit, so a world opened with lighting on is lit
+  // while it is built rather than rebuilt dark and then lit. The banner is for turning it on
+  // under a world already on screen; the first open lights as part of generating.
+  useEffect(() => {
+    if (!engine) return;
+    const turningOn = lighting !== "off" && engine.lighting === "off" && info !== null;
+    const work = engine.setLighting(lighting);
+    if (turningOn) track("Lighting the world", work);
+  }, [engine, lighting, track, info]);
 
   // Generate a sample or open a saved project when the source changes. Both happen (and, with
   // lighting on, light) in the world worker, so the page stays responsive.
@@ -184,21 +230,56 @@ export function App() {
     justSaved.current = null;
     setBench(null);
     const sample = WORLD_KINDS.find((w) => w.kind === source);
+    if (sample && !pinnedTime.current) setLayout((current) => withTime(current, SUNSET));
+    pinnedTime.current = false;
     const label = sample ? `Generating ${sample.label}` : "Opening the project";
     const work = engine.load(source, CHUNK_SIZE, themeRef.current).then((loaded) => {
       if (!loaded) return;
       setInfo(loaded);
+      setOpeningNote(loaded.note || null);
       // The theme picker shows what the project looks like; picking another re-skins it.
       const shown = loaded.theme;
       if (shown === null) return;
       appliedTheme.current = shown;
       setSettings((s) => (s.theme === shown ? s : { ...s, theme: shown }));
     });
-    work.catch((error: unknown) => console.error(`Couldn't open ${source}`, error));
+    work.catch((error: unknown) => {
+      console.error(`Couldn't open ${source}`, error);
+      if (source === "mc-blocks") {
+        setSettings((s) => (s.world === "mc-blocks" ? { ...s, world: "" } : s));
+        setHomeOpen(true);
+        setOpeningNote(MC_BLOCKS_NOTE);
+      }
+    });
     track(label, work);
     // reloads only asks for the same source again.
     void reloads;
   }, [engine, source, track, reloads]);
+
+  const openSample = (kind: WorldKind) => {
+    const missingJar =
+      kind === "mc-blocks" &&
+      librariesReady &&
+      !libraries.some((library) => library.id === "minecraft");
+    if (missingJar) {
+      setOpeningNote(MC_BLOCKS_NOTE);
+      return;
+    }
+    pinnedTime.current = false;
+    setOpeningNote(null);
+    setSettings((s) => ({ ...s, world: kind }));
+    setHomeOpen(false);
+  };
+
+  const followNote = (target: NoteTarget) => {
+    setOpeningNote(null);
+    if ("tab" in target) {
+      openHomeTab(target.tab);
+      setHomeOpen(true);
+      return;
+    }
+    openSample(target.sample);
+  };
 
   useEffect(() => {
     if (!engine || theme === appliedTheme.current) return;
@@ -298,15 +379,6 @@ export function App() {
     engine?.setBrightness(brightness / 100);
   }, [engine, brightness]);
 
-  // Turning lighting on lights the whole world in the worker: the world stays on screen,
-  // unlit, until each chunk's light arrives.
-  useEffect(() => {
-    if (!engine) return;
-    const turningOn = lighting !== "off" && engine.lighting === "off";
-    const work = engine.setLighting(lighting);
-    if (turningOn) track("Lighting the world", work);
-  }, [engine, lighting, track]);
-
   useEffect(() => {
     if (!engine) return;
     const timer = setInterval(() => setStats(engine.stats()), 250);
@@ -357,6 +429,7 @@ export function App() {
           onSave={() => void project.save()}
           onNew={() => void project.create()}
           onRename={(name) => void project.rename(name)}
+          onNote={(note) => setInfo((current) => (current ? { ...current, note } : current))}
           devOpen={devOpen}
           onDev={toggleDev}
           palettesOpen={palettesOpen}
@@ -399,14 +472,14 @@ export function App() {
             setHomeOpen(false);
           }}
           onNew={() => void project.create()}
-          onSample={(kind) => {
-            setSettings((s) => ({ ...s, world: kind }));
-            setHomeOpen(false);
-          }}
+          onSample={openSample}
           project={project}
           libraries={libraries}
           library={library}
         />
+      )}
+      {openingNote !== null && (
+        <NotePanel note={openingNote} onClose={() => setOpeningNote(null)} onGo={followNote} />
       )}
       {(loading || benchStep) && <div className="banner">{benchStep ?? loading}…</div>}
       {bench && <BenchPanel result={bench} onClose={() => setBench(null)} />}

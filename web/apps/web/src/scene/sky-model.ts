@@ -16,6 +16,8 @@ const BIOME_FOG: Rgb = [0xc0 / 255, 0xd8 / 255, 0xff / 255];
 const FOG_TO_SKY = 1 - (0.25 + (0.75 * 12) / 32) ** 0.25;
 
 export const NOON = 12;
+/** The hour the sample builds open at: the sun on the horizon, west. */
+export const SUNSET = 18;
 export const HOURS = 24;
 
 export interface SkyState {

@@ -9,6 +9,7 @@ import {
   withPane,
   withPreset,
   withShow,
+  withTime,
 } from "./layout.ts";
 import { defaultShow, readShow } from "./view-options.ts";
 
@@ -50,6 +51,15 @@ describe("layout", () => {
       grid: false,
     });
     expect(readShow(null)).toEqual(defaultShow());
+  });
+
+  it("sets the time on the 3D panes and leaves a flat one", () => {
+    const layout = withPane(defaultLayout(12), 1, { kind: "2d" });
+    const next = withTime(layout, 18);
+    expect(next.panes[0]?.time).toBe(18);
+    expect(next.panes[1]).toMatchObject({ kind: "2d", time: 12 });
+    expect(next.panes[2]?.time).toBe(18);
+    expect(withTime(next, 18)).toBe(next);
   });
 
   it("changes one pane's kind without touching the others", () => {

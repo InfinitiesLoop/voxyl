@@ -26,17 +26,21 @@ export function ProjectSettingsDialog({
   engine,
   info,
   onRename,
+  onNote,
   onClose,
 }: {
   engine: Engine;
   info: WorldInfo;
   onRename: (name: string) => void;
+  /** The note now stored, so the next open of this dialog shows it. */
+  onNote: (note: string) => void;
   onClose: () => void;
 }) {
   const north = useStore(engine.north);
   const currentName = useStore(engine.projectName) || info.name;
   const [name, setName] = useState(currentName);
   const [grid, setGrid] = useState<[number, number]>([info.grid[0], info.grid[1]]);
+  const [note, setNote] = useState(info.note);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -60,6 +64,18 @@ export function ProjectSettingsDialog({
     next[axis] = clamped;
     setGrid(next);
     run(engine.setProjectSettings({ grid: next }));
+  };
+  const commitNote = () => {
+    const trimmed = note.trim();
+    if (trimmed === info.note) return;
+    setNote(trimmed);
+    void engine.setProjectSettings({ note: trimmed }).then(
+      () => {
+        setError(null);
+        onNote(trimmed);
+      },
+      (caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught)),
+    );
   };
   const commitName = () => {
     const trimmed = name.trim();
@@ -138,6 +154,21 @@ export function ProjectSettingsDialog({
         <p className="home-sub">
           Where the heavier lines fall on the ground grid and in the 2D view, so they can match the
           build's own layout (a 16-wide hall starts on a line).
+        </p>
+        <label>
+          Note shown when this build is opened
+          <textarea
+            rows={5}
+            value={note}
+            maxLength={4000}
+            placeholder={"Shown on open. A link: [Import a jar](blocks)"}
+            onChange={(e) => setNote(e.target.value)}
+            onBlur={commitNote}
+          />
+        </label>
+        <p className="home-sub">
+          Leave it empty for no note. A link is [words](target). The target is a home tab (builds,
+          palettes, prefabs, blocks) or a sample (sample:city-1m).
         </p>
         <div className="project-grid">
           <button

@@ -1786,10 +1786,29 @@ kbd {
   inset: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
+  /* The shot is wider than the window. Cover fills the browser with the sky and keeps
+     the pillar, which sits on the right, in frame. The picture does not set the layout width.
+     The veil sits over it: heavier on the left, where the type is, lighter on the pillar. */
+  background: #07010f url("/home-pillar.png") right center / cover no-repeat;
+}
+
+.home::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    105deg,
+    rgb(7 1 15 / 0.9) 0%,
+    rgb(7 1 15 / 0.78) 42%,
+    rgb(7 1 15 / 0.62) 100%
+  );
 }
 
 .home-head {
+  position: relative;
+  z-index: 1;
   display: flex;
   gap: 12px;
   align-items: center;
@@ -1797,104 +1816,6 @@ kbd {
   padding: 0 16px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
-}
-
-/* The pillar on a voxel grid. The floor is a plane tipped away from the camera, so the
-   lines meet at the horizon and keep coming toward it. */
-.horizon {
-  position: relative;
-  height: 420px;
-  margin: -20px -24px 20px;
-  overflow: hidden;
-  background: #0c0e14;
-}
-
-.horizon-sky {
-  position: absolute;
-  inset: 0 0 38% 0;
-  background:
-    radial-gradient(1.2px 1.2px at 8% 22%, rgb(255 255 255 / 0.9), transparent),
-    radial-gradient(1px 1px at 18% 48%, rgb(255 255 255 / 0.45), transparent),
-    radial-gradient(1.4px 1.4px at 27% 16%, rgb(255 255 255 / 0.75), transparent),
-    radial-gradient(1px 1px at 39% 38%, rgb(255 255 255 / 0.4), transparent),
-    radial-gradient(1px 1px at 52% 12%, rgb(255 255 255 / 0.7), transparent),
-    radial-gradient(1.2px 1.2px at 63% 44%, rgb(255 255 255 / 0.5), transparent),
-    radial-gradient(1px 1px at 74% 20%, rgb(255 255 255 / 0.8), transparent),
-    radial-gradient(1.3px 1.3px at 86% 36%, rgb(255 255 255 / 0.45), transparent),
-    radial-gradient(1px 1px at 93% 14%, rgb(255 255 255 / 0.65), transparent),
-    radial-gradient(ellipse 70% 55% at 50% 100%, rgb(34 211 238 / 0.14), transparent 70%),
-    radial-gradient(ellipse 50% 40% at 28% 30%, rgb(96 48 150 / 0.45), transparent 70%),
-    radial-gradient(ellipse 40% 36% at 78% 18%, rgb(48 24 96 / 0.5), transparent 70%),
-    linear-gradient(#100c1c, #1a1430 70%, #12151c);
-}
-
-.horizon-ground {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  height: 52%;
-  overflow: hidden;
-  perspective: 640px;
-  perspective-origin: center top;
-  background: linear-gradient(to bottom, rgb(34 211 238 / 0.08), transparent 28%);
-}
-
-.horizon-floor {
-  position: absolute;
-  top: 0;
-  right: -30%;
-  left: -30%;
-  height: 240%;
-  background-image:
-    linear-gradient(rgb(34 211 238 / 0.5) 1px, transparent 1px),
-    linear-gradient(90deg, rgb(34 211 238 / 0.5) 1px, transparent 1px);
-  background-size: 72px 72px;
-  transform: rotateX(62deg);
-  transform-origin: center top;
-  animation: horizon-drift 10s linear infinite;
-  mask-image: linear-gradient(to bottom, black 0%, black 30%, transparent 92%);
-}
-
-.horizon-pillar {
-  position: absolute;
-  bottom: 22%;
-  left: 50%;
-  height: 64%;
-  width: auto;
-  transform: translateX(-50%);
-  filter: drop-shadow(0 22px 14px rgb(0 0 0 / 0.55)) drop-shadow(0 0 18px rgb(34 211 238 / 0.22));
-}
-
-.horizon-caption {
-  position: absolute;
-  right: 16px;
-  bottom: 22px;
-  left: 16px;
-  margin: 0;
-  color: rgb(230 232 235 / 0.82);
-  font-size: 13px;
-  letter-spacing: 0.08em;
-  text-align: center;
-  text-shadow: 0 1px 10px rgb(0 0 0 / 0.85);
-}
-
-@keyframes horizon-drift {
-  to {
-    background-position: 0 72px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .horizon-floor {
-    animation: none;
-  }
-}
-
-@media (max-width: 640px) {
-  .horizon {
-    height: 300px;
-  }
 }
 
 .home-tabs {
@@ -1913,6 +1834,8 @@ kbd {
 }
 
 .home-body {
+  position: relative;
+  z-index: 1;
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -1987,11 +1910,76 @@ button.big {
 .home-empty {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   max-width: 460px;
-  margin: 60px auto;
+  margin: 48px 0;
+  text-align: left;
+}
+
+.home-welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  max-width: 640px;
+  margin: 56px auto;
   text-align: center;
+}
+
+.home-welcome h1 {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 0;
+  font-size: 34px;
+  font-weight: 650;
+}
+
+.home-welcome h1 img {
+  height: 52px;
+  width: auto;
+}
+
+button.welcome-start {
+  padding: 14px 36px;
+  font-size: 20px;
+}
+
+.home-demos {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.note-layer {
+  z-index: 30;
+}
+
+.note-card {
+  width: min(520px, 100%);
+  gap: 18px;
+}
+
+.note-body p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.note-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+button.note-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .home-samples {
@@ -3020,7 +3008,8 @@ button.brand {
 }
 
 .project-settings input:not([type="checkbox"]),
-.project-settings select {
+.project-settings select,
+.project-settings textarea {
   padding: 4px 8px;
   border: 1px solid var(--line);
   border-radius: 6px;

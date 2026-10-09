@@ -18,12 +18,19 @@ export interface ProjectSettings {
   readonly north: Direction;
   /** Major grid lines run along the west and north edges of cells at x, z = offset + 16k. */
   readonly grid: readonly [x: number, z: number];
+  /**
+   * Shown in a panel when the project is opened. Empty means no note. Links are written
+   * `[label](target)`, where target is a home tab (`builds`, `palettes`, `prefabs`, `blocks`)
+   * or a sample (`sample:city-1m`).
+   */
+  readonly note: string;
 }
 
 export const DEFAULT_SETTINGS: ProjectSettings = Object.freeze({
   name: "Untitled",
   north: "north",
   grid: Object.freeze([0, 0] as const),
+  note: "",
 });
 
 const Offset = z
@@ -36,6 +43,7 @@ export const SettingsArg = z.strictObject({
   name: z.string().trim().min(1).max(120),
   north: DirectionArg,
   grid: z.tuple([Offset, Offset]),
+  note: z.string().max(4000),
 });
 
 /** Settings as loaded: anything missing or invalid falls back to the default. */
@@ -46,5 +54,6 @@ export function settingsFrom(json: unknown): ProjectSettings {
     name: s.name ?? DEFAULT_SETTINGS.name,
     north: s.north ?? DEFAULT_SETTINGS.north,
     grid: Object.freeze([...(s.grid ?? DEFAULT_SETTINGS.grid)] as [number, number]),
+    note: s.note?.trim() ?? DEFAULT_SETTINGS.note,
   });
 }

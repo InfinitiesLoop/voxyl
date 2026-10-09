@@ -373,6 +373,7 @@ async function open(command: Extract<Command, { type: "load" }>): Promise<WorldI
     theme: cityThemeOf(next.semantics),
     north: next.settings.north,
     grid: next.settings.grid,
+    note: next.settings.note,
     chunkSize: command.chunkSize,
     ...framing,
     loadMs: performance.now() - start,

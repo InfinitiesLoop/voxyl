@@ -354,7 +354,7 @@ describe("settings", () => {
     const { p } = build();
     const cells = describeCells(p, false);
     p.run(cmd("settings", { name: "Hall", north: "west", grid: [4, 8] }));
-    expect(p.settings).toEqual({ name: "Hall", north: "west", grid: [4, 8] });
+    expect(p.settings).toEqual({ name: "Hall", north: "west", grid: [4, 8], note: "" });
     expect(describeCells(p, false)).toEqual(cells);
     p.run(cmd("undo", { target: p.undoTarget() }));
     expect(p.settings.north).toBe("north");

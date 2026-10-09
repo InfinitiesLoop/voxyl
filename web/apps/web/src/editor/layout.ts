@@ -106,6 +106,16 @@ export function withShow(layout: LayoutState, index: number, id: ShowId, on: boo
   return withPane(layout, index, { show: { ...pane.show, [id]: on } });
 }
 
+/** Sets the time of day on every 3D pane. A 2D pane has no sky. */
+export function withTime(layout: LayoutState, hours: number): LayoutState {
+  const time = wrapHours(hours);
+  if (layout.panes.every((pane) => pane.kind !== "3d" || pane.time === time)) return layout;
+  const panes = layout.panes.map((pane) =>
+    pane.kind === "3d" ? { ...pane, time } : pane,
+  ) as unknown as LayoutState["panes"];
+  return { ...layout, panes };
+}
+
 /** Changes some of a pane's view settings. */
 export function withView(
   layout: LayoutState,
