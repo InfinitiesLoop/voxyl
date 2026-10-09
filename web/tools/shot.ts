@@ -7,10 +7,15 @@
 //   pnpm shot "world=city-5m&lighting=volume" --bench
 //   pnpm shot --url http://localhost:4173 --out shots/preview.png
 //   pnpm shot "world=city-1m" --timeout 30   # seconds to wait for meshing (default 180)
+//   pnpm shot "world=city-1m" --eval try.js  # run a script in the page (see below)
+//
+// --eval runs a file as the body of an async function in the page once the world has meshed,
+// and prints what it returns as JSON, before the screenshot. For example, to drive the agent
+// tools: `return await window.voxylTools.call("status", {})`.
 //
 // Uses the installed Edge or Chrome (playwright-core downloads no browsers).
 
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { chromium } from "playwright-core";
 
@@ -20,7 +25,7 @@ const option = (name: string, fallback: string) => {
   const i = args.indexOf(`--${name}`);
   return i >= 0 ? (args[i + 1] ?? fallback) : fallback;
 };
-const valued = new Set(["--url", "--out", "--channel", "--timeout"]);
+const valued = new Set(["--url", "--out", "--channel", "--timeout", "--eval"]);
 const query = args.find((a, i) => !a.startsWith("--") && !valued.has(args[i - 1] ?? "")) ?? "";
 const base = option("url", "http://localhost:5173");
 const out = resolve(option("out", "shots/latest.png"));
@@ -60,6 +65,18 @@ try {
     );
   if (!ready) problems.push("[shot] the world never finished meshing; showing it as it is");
   await page.waitForTimeout(1000);
+  const script = option("eval", "");
+  if (script) {
+    const body = readFileSync(resolve(script), "utf8");
+    const value = await page.evaluate(
+      (code) =>
+        new Function(`return (async () => {${code}
+})()`)() as Promise<unknown>,
+      body,
+    );
+    console.log(`eval: ${JSON.stringify(value, null, 1)}`);
+    await page.waitForTimeout(1500); // let the meshes of its edits arrive before the screenshot
+  }
   const canvases = await page.evaluate(() => document.querySelectorAll(".viewport canvas").length);
   const hud = (await page.textContent(".hud"))?.replace(/\s+/g, " ") ?? "";
   console.log(`url: ${url}`);

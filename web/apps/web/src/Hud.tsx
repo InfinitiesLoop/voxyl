@@ -1,6 +1,8 @@
 import { CITY_THEMES } from "@voxyl/fixtures";
 import type { ProjectEntry } from "@voxyl/session";
 import { useRef } from "react";
+import { ToolsPanel } from "./agent/ToolsPanel.tsx";
+import type { ToolClient } from "./agent/webmcp.ts";
 import type { BenchResult, Distribution } from "./bench/bench.ts";
 import type { Backend, EngineStats } from "./scene/Engine.ts";
 import type { Settings } from "./settings-url.ts";
@@ -29,6 +31,8 @@ interface HudProps {
   /** Imported block libraries. */
   libraries: readonly LibraryInfo[];
   library: LibraryActions;
+  /** The agent tools, for the Tools section. */
+  tools: ToolClient | null;
 }
 
 export function Hud({
@@ -45,6 +49,7 @@ export function Hud({
   project,
   libraries,
   library,
+  tools,
 }: HudProps) {
   const f = stats?.frame;
   const c = stats?.chunks;
@@ -153,6 +158,7 @@ export function Hud({
       </dl>
       <ProjectRow info={info} project={project} busy={busy} />
       <LibraryRow libraries={libraries} library={library} busy={busy} />
+      <ToolsPanel client={tools} />
       <div className="actions">
         <button type="button" onClick={onHome} disabled={busy}>
           Overview

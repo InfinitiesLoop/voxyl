@@ -33,7 +33,8 @@ packages/light/     Minecraft-style sky and colored block light, incremental on 
 packages/session/   WorldSession: a World, its light, mesh scheduling and the GPU light layout
 packages/tools/     agent tools: a Zod registry over a ToolHost (status, place, fill, ...); see .plans/web-tools.md
 packages/fixtures/  seeded test worlds (the benchmark city, plain or decorated with shaped parts)
-apps/web/           the React + Three.js app (Vite), with the in-app benchmark
+apps/web/           the React + Three.js app (Vite), with the in-app benchmark; src/agent/ offers
+                    the agent tools to the browser (WebMCP) and the Dev panel
 tools/              dev tools (shot, golden)
 golden/             golden images for `pnpm golden`
 ```
@@ -59,6 +60,11 @@ pnpm shot "world=city-5m&lighting=volume" --bench
 
 This is how changes get checked against exactly what `pnpm dev` serves, React's development
 double mount included.
+
+`--eval file.js` runs a script in the page once the world has meshed (the file is the body of an
+async function; what it returns is printed). That is how the agent tools are driven:
+`return await window.voxylTools.call("status", {})`. The Dev panel's **Tools** section does the
+same by hand, and `apps/web/src/agent/webmcp.ts` offers the tools to browsers that have WebMCP.
 
 `pnpm golden` renders a fixed set of scenes (`tools/golden.ts`) on SwiftShader, Chrome's CPU
 WebGPU, and compares each with its image in `golden/`, so rendering changes show up whatever

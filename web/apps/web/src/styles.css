@@ -3066,3 +3066,39 @@ button.brand {
   color: #f0b45a;
   font-size: 12px;
 }
+
+/* The dev panel's Tools section (agent/ToolsPanel.tsx). */
+.hud .tools {
+  margin-top: 10px;
+}
+
+.hud .tools > select,
+.hud .tools > textarea,
+.hud .tools > button {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  box-sizing: border-box;
+}
+
+.hud .tools textarea {
+  font:
+    12px ui-monospace,
+    Consolas,
+    monospace;
+  color: var(--text);
+  background: #23272d;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 6px;
+  resize: vertical;
+}
+
+.hud .tools pre {
+  max-height: 220px;
+  margin: 6px 0 0;
+  overflow: auto;
+  font-size: 11.5px;
+  color: var(--text);
+  user-select: text;
+}

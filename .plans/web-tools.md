@@ -114,7 +114,7 @@ Godot tool names in brackets show what each replaces.
 
 ## Status
 
-**Steps 1 and 2 built (2026-10-09); 73 tests; the step 2 notes are at the end.** Step 1:
+**Steps 1 to 3 built (2026-10-09); 73 tool tests; the step 2 and step 3 notes are at the end.** Step 1:
 `packages/tools` (`@voxyl/tools`: pure TS, depends on core, shapes and blocks, no session) with
 the registry, envelope, `ToolHost`, an in-memory host (`MemoryHost`, exported for the headless
 host and scripts) and eight tools: `status`, `history`, `inspect`, `select`, `place`, `fill`,
@@ -181,8 +181,8 @@ Known gaps:
 - `status` lists at most 200 semantics, and `regionStats` is a full scan (fine until builds are
   huge).
 
-Next: step 3, the worker adapter (`{type: "tool", name, args}` calling `callTool`) over a host on the worker's
-project, with `changed` wired to persistence and the views.
+Next: step 4, the relay (Phase 4 server) so agents outside the tab (Claude Code, ChatGPT) reach the
+same tools; see "Step 3 built" for what it can reuse.
 
 ### Step 2a built: `palette_edit`, `palette_get`
 
@@ -239,3 +239,48 @@ project, with `changed` wired to persistence and the views.
 - `paste` of a prefab or the clipboard, and in-place `rotate` of cells (core has both).
 - Reading the block library's `attachment` flag (host block profiles) for `attached_to`.
 - `symmetry` and `repeat` on edit tools; the `prefab`, `project` and `capture` tools.
+
+### Step 3 built: tools callable inside the running editor
+
+- **Worker adapter** (`apps/web/src/world/world-worker.ts`, `protocol.ts`). Two commands:
+  `{type: "tool", name, args}` replies the `callTool` envelope (round-tripped through JSON, so it is
+  plain data) and `{type: "tools"}` replies `listTools()`. They are ordinary commands, so they run
+  through the worker's one queue, serial with the editor's own, and `run` then does the usual
+  history, selection and pump bookkeeping. `toolHost` is a `ToolHost` over the module state:
+  `project` is the open one (null gives `no_project`; `status` still answers), `editorAttached:
+  true`, `libraries()` waits for the stored libraries, and `changed()` bumps `contentRev` and
+  schedules the autosave (as `applyEdit` does; it has no report to tell cells from palette-only
+  changes, so it always bumps, which only costs a selection refresh). Dry runs never call it.
+- **WebMCP** (`apps/web/src/agent/webmcp.ts`, one file, unit-tested against a fake model
+  context). `registerWebMcp(client)` finds `document.modelContext`, then `navigator.modelContext`;
+  does nothing when neither exists (today that is every browser without Chrome's flag or origin
+  trial); registers each tool (name, description, JSON Schema, annotations) with an
+  `execute` that forwards to the worker and answers `{content: [{type: "text", text: <envelope
+  JSON>}], isError: !ok}`; ignores a throwing duplicate registration; disposing aborts the
+  `{signal}` it passed and calls any returned handle's `unregister()` and `unregisterTool(name)`.
+  `App.tsx` calls it once per engine (so once at startup; React's dev double mount unregisters
+  the first), with no project required: tools answer `no_project`.
+- **Dev panel.** The Dev panel (Hud) has a Tools section: tool select, JSON arguments, Run, result.
+  `window.voxylTools = {list(), call(name, args)}` is the same client, for the console, Playwright
+  and `pnpm shot`.
+- **Trying it.** With `pnpm dev` running: `pnpm shot "world=city-1m" --eval script.js` runs the file
+  as an async function body in the page once the world has meshed and prints its return value
+  (e.g. `return await window.voxylTools.call("status", {})`); the screenshot follows.
+- **Verified** against the dev server: `palette_edit` (new semantic), `fill`, `place`, `inspect`
+  (49 cells counted), `history` (steps labelled `Claude: palette_edit/fill/place`), the mesh count
+  rising 73 to 74 for the new chunk, the editor's own `undo`/`redo` command reverting and
+  restoring a tool step (the first undo took the last `Claude: place`), a dry run changing
+  nothing, `unknown_tool` suggestions, `status` with no project (`project: null`), and a saved
+  project's autosave picking up tool edits (125 cells written 1.5 s later). No console errors.
+- **Not verified**: a real WebMCP host (no browser here has the API; only the fake context test),
+  the Undo button in the top bar clicked by hand (the same `undo` command was sent instead), and
+  tools other than the five above through the live worker (they share the same path and have
+  Node tests).
+- **Gaps**: tool edits do not set the editor's toast or "last edit" timing; `changed()` always bumps
+  `contentRev`; no per-call cancel (a long tool holds the worker queue); the UI-state tools
+  (`view_set`, `cutaway`, ...) are still missing; `libraries()` returns the live map, so a tool must
+  not mutate it.
+- **Next: the relay.** The Worker server (Phase 4) holds the tab's connection and speaks MCP over
+  HTTP, forwarding `tools/list` and `tools/call` to the tab. The tab side is already the
+  `ToolClient` in `apps/web/src/agent/webmcp.ts` (`tools()`, `call()`): a relay adapter implements
+  the same interface over its socket, and the `mcpResult` wrapper is reusable as is.

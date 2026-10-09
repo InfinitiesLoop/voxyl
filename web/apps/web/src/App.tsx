@@ -504,6 +504,7 @@ export function App() {
         project={project}
         libraries={libraries}
         library={library}
+        tools={toolClient}
       />
       {engine && homeOpen && (
         <Home
