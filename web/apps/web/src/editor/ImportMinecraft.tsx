@@ -260,6 +260,8 @@ export function ImportMinecraftDialog({
               report={report}
               busy={busy}
               onChoose={chooseFolder}
+              onChooseUploadStyle={() => folderInput.current?.click()}
+              canPick={canPickDirectory()}
               onUseRemembered={useRemembered}
               onRecheck={() => source && check(source)}
               onVanilla={() => vanillaInput.current?.click()}
@@ -342,6 +344,9 @@ function FolderRoute(props: {
   report: ImportReport | null;
   busy: boolean;
   onChoose: () => void;
+  /** The `<input webkitdirectory>` route, which has no list of folders it refuses. */
+  onChooseUploadStyle: () => void;
+  canPick: boolean;
   onUseRemembered: () => void;
   onRecheck: () => void;
   onVanilla: () => void;
@@ -368,10 +373,28 @@ function FolderRoute(props: {
         <code>.minecraft</code> inside both work. Voxyl only reads it, here in your browser; nothing
         is uploaded.
       </p>
+      {props.canPick && (
+        <p className="home-quiet">
+          If the browser says it can't open the folder because it contains system files, that is its
+          folder picker refusing protected places such as <code>AppData</code>, where Prism keeps
+          its instances. Use <b>Choose another way…</b>: the browser then asks to upload the folder,
+          but nothing leaves your device.
+        </p>
+      )}
       <div className="import-row">
         <button type="button" className="primary" disabled={busy} onClick={props.onChoose}>
           Choose folder…
         </button>
+        {props.canPick && (
+          <button
+            type="button"
+            disabled={busy}
+            title="The browser's plain folder upload, for folders its folder picker refuses"
+            onClick={props.onChooseUploadStyle}
+          >
+            Choose another way…
+          </button>
+        )}
         {offered && props.remembered && (
           <button
             type="button"
