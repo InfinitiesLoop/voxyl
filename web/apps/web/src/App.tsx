@@ -1,5 +1,7 @@
 import type { ProjectEntry } from "@voxyl/session";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { exposeVoxylTools, workerToolClient } from "./agent/tool-client.ts";
+import { registerWebMcp } from "./agent/webmcp.ts";
 import { type BenchResult, runBench } from "./bench/bench.ts";
 import { download } from "./download.ts";
 import { CutawayPanel } from "./editor/CutawayPanel.tsx";
@@ -153,6 +155,19 @@ export function App() {
       created.dispose();
     };
   }, []);
+
+  // The agent tools (they run in the world worker) are offered to the browser's WebMCP, if it
+  // has it, and to scripts as window.voxylTools. With no project open they answer no_project.
+  const toolClient = useMemo(() => (engine ? workerToolClient(engine.world) : null), [engine]);
+  useEffect(() => {
+    if (!toolClient) return;
+    const unregister = registerWebMcp(toolClient);
+    const unexpose = exposeVoxylTools(toolClient);
+    return () => {
+      unregister();
+      unexpose();
+    };
+  }, [toolClient]);
 
   // Ctrl+W while flying closes the tab: ask first (see editor/tab-guard.ts for what holds).
   const infoRef = useRef(info);
