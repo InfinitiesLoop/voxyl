@@ -39,7 +39,7 @@ export interface InstancePlan {
 }
 
 export const NEI_HOWTO =
-  "In the game, open NEI, then Options → Tools → Data Dumps: click Items, switch Item Panel to " +
+  "If your modpack has NEI: in the game, open NEI, then Options → Tools → Data Dumps: click Items, switch Item Panel to " +
   "CSV mode and click it, then click Blocks. The dumps are written to the game folder's " +
   "dumps folder.";
 
@@ -86,6 +86,8 @@ export interface InstanceImportOptions {
 
 export interface InstanceImportResult {
   readonly libraries: Library[];
+  /** Whether a vanilla Minecraft jar was read (the folder's own, or the one passed in). */
+  readonly vanilla: boolean;
   readonly imported: number;
   readonly dropped: number;
   /** Roster entries left out for lack of a confident texture match, by mod. */
@@ -104,6 +106,15 @@ export function libraryIdFor(prefix: string, ns: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9._-]/g, "_")
     .slice(0, 64);
+}
+
+/**
+ * The name a library shows in the block picker: the user's prefix, then the mod's own name
+ * (`gtnh-` and `GregTech` make `gtnh-GregTech`), so a pack's libraries sit together and apart
+ * from the built-in and vanilla ones. The id (`libraryIdFor`) carries the same prefix.
+ */
+export function libraryNameFor(prefix: string, label: string): string {
+  return `${prefix}${label}`;
 }
 
 export async function importInstance(opts: InstanceImportOptions): Promise<InstanceImportResult> {
@@ -138,6 +149,7 @@ export async function importInstance(opts: InstanceImportOptions): Promise<Insta
 
   const prefix = opts.prefix ?? "pack-";
   const drafts = new Map<string, LibraryDraft>();
+  const byId = new Map<string, LibraryDraft>();
   const labelByNs = new Map<string, string>();
   for (const [mod, rows] of roster.rowsByMod) {
     for (const row of rows) if (!labelByNs.has(row.ns)) labelByNs.set(row.ns, mod);
@@ -150,7 +162,13 @@ export async function importInstance(opts: InstanceImportOptions): Promise<Insta
     libraries: (ns) => {
       let draft = drafts.get(ns);
       if (!draft) {
-        draft = new LibraryDraft(libraryIdFor(prefix, ns), labelByNs.get(ns) ?? ns);
+        // Two namespaces that clean up to one id share a draft, never two libraries of one id.
+        const id = libraryIdFor(prefix, ns);
+        draft = byId.get(id);
+        if (!draft) {
+          draft = new LibraryDraft(id, libraryNameFor(prefix, labelByNs.get(ns) ?? ns));
+          byId.set(id, draft);
+        }
         drafts.set(ns, draft);
       }
       return draft;
@@ -173,11 +191,12 @@ export async function importInstance(opts: InstanceImportOptions): Promise<Insta
 
   await applySawWhitelist(scan, drafts);
 
-  const libraries = [...drafts.values()]
+  const libraries = [...byId.values()]
     .filter((d) => Object.keys(d.blocks).length > 0)
     .map((d) => d.toLibrary());
   return {
     libraries,
+    vanilla: vanilla.length > 0,
     imported: result.imported.length,
     dropped: result.dropped.length,
     droppedByMod: result.droppedByMod,

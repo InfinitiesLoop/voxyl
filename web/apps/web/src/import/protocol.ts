@@ -4,10 +4,10 @@
 import type { InstancePlan } from "@voxyl/mc-import";
 import type { PickedFile } from "./fs-browser.ts";
 
-/** The folder the user picked: a handle, or the files of a `webkitdirectory` pick. */
-export type FolderSource =
-  | { readonly kind: "handle"; readonly handle: FileSystemDirectoryHandle }
-  | { readonly kind: "files"; readonly entries: readonly PickedFile[] };
+/** The folder the user chose: the files of a `webkitdirectory` pick, read in place. */
+export interface FolderSource {
+  readonly entries: readonly PickedFile[];
+}
 
 export type ToImport =
   | { type: "plan"; source: FolderSource }

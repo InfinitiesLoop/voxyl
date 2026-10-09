@@ -1,0 +1,328 @@
+/* The Import Minecraft dialog: numbered steps (source, folder, options, import). */
+.keys-card.import-card {
+  width: min(1040px, 100%);
+  height: min(880px, 100%);
+}
+
+.import-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 14px;
+  min-height: 0;
+  padding-right: 4px;
+  overflow: auto;
+}
+
+.import-step {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 4px 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.import-step.waiting {
+  opacity: 0.55;
+}
+
+.import-step.finished {
+  border-color: var(--accent);
+}
+
+.import-step-number {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--text-quiet);
+  font-weight: 600;
+}
+
+.import-step.finished .import-step-number,
+.import-step:not(.waiting) .import-step-number {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.import-step > h3 {
+  align-self: center;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.import-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  grid-column: 2;
+  min-width: 0;
+}
+
+.import-step p,
+.import-report p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.import-step code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #23272d;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.import-routes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.import-routes button {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+  height: auto;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.import-routes button span {
+  color: var(--text-quiet);
+  font-size: 12px;
+  font-weight: 400;
+  white-space: normal;
+}
+
+.import-routes button[aria-pressed="true"] {
+  border-color: var(--accent);
+}
+
+.import-order {
+  padding: 8px 12px;
+  border-left: 3px solid var(--accent);
+  background: #23272d;
+  border-radius: 0 6px 6px 0;
+}
+
+.import-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.import-folder {
+  min-width: 0;
+  max-width: 420px;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-locations ul {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.import-locations li {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.import-where {
+  color: var(--text-quiet);
+}
+
+.import-locations code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Click-to-expand help. */
+.import-help {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.import-help > summary {
+  padding: 8px 12px;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.import-help[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.import-help-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px 12px;
+}
+
+.import-help-body ol {
+  margin: 0;
+  padding-left: 20px;
+  line-height: 1.5;
+}
+
+.import-help-body img {
+  align-self: flex-start;
+  width: min(100%, 420px);
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  image-rendering: auto;
+}
+
+.import-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.import-plan dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 16px;
+  margin: 0;
+}
+
+.import-plan dt {
+  color: var(--text-quiet);
+}
+
+.import-plan dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.import-problems {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: #f0a8a8;
+}
+
+.import-problems p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.import-error {
+  margin: 0;
+}
+
+.import-prefix {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.import-prefix input {
+  width: 200px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #23272d;
+  color: var(--text);
+  font: inherit;
+}
+
+.import-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.import-progress-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-quiet);
+}
+
+.import-bar {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #23272d;
+}
+
+.import-bar > div {
+  height: 100%;
+  background: var(--accent);
+}
+
+.import-bar.indeterminate > div {
+  width: 30%;
+  animation: import-slide 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes import-slide {
+  from {
+    margin-left: 0;
+  }
+  to {
+    margin-left: 70%;
+  }
+}
+
+.import-report {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.import-report ul {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.import-report li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  max-width: 360px;
+}
+
+@media (max-width: 720px) {
+  .import-routes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .import-bar.indeterminate > div {
+    animation: none;
+  }
+}

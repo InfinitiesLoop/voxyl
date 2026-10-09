@@ -5,6 +5,7 @@ export {
   type InstancePlan,
   importInstance,
   libraryIdFor,
+  libraryNameFor,
   NEI_HOWTO,
   planInstance,
 } from "./import-service.ts";

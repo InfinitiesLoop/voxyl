@@ -1020,6 +1020,26 @@ routes: a game folder or modpack instance (new), and a Minecraft jar or resource
   real `showDirectoryPicker` (needs a user gesture; the handle adapter, IndexedDB round trip and
   a plan through the worker were checked on an OPFS folder).
 
+### Import dialog revised after the user's first real GTNH import (2026-10-08)
+
+- **Prefix on names.** The prefix was only on the library id; the name (what the block picker shows) was
+  the bare mod label. `libraryNameFor` now makes the name `<prefix><mod>` too (`gtnh-GregTech`).
+  Test: `import/import-run.test.ts`.
+- **Re-import is idempotent.** Same prefix and folder replaces each library by id (`LibraryStore.save`),
+  no duplicates; tested through `importAndStore` (extracted from the worker into `import/import-run.ts`).
+  Two namespaces that clean up to one id now share one draft. Not done: a mod that stops producing a
+  library leaves its earlier one behind.
+- **One way to choose the folder: `<input webkitdirectory>`** (the "alternate method" that works for
+  `AppData`). `showDirectoryPicker`, the remembered handle and `handleDir` are gone. The text says
+  nothing is uploaded to any Voxyl server, whatever Chrome's own dialog says.
+- **No Minecraft-jar nagging in modpack mode.** The plan row and warning are gone; the jar is an
+  optional collapsed extra. With no vanilla jar, `reportOf` hides the `minecraft` mod's left-out
+  entries and warnings. Wording: import vanilla Minecraft first, then the modpack.
+- **NEI help** is a click-to-open section ("Does your modpack have NEI?") with the quickstart's
+  screenshot (`public/nei-data-dumps.png`, copied from `quickstart/assets/`).
+- **Layout**: larger card, four numbered steps (source, folder, name, import); CSS now in
+  `editor/import-minecraft.css`.
+
 ### Added to the import UI (now built, see above)
 
 - **Common locations.** The folder step offers places people keep Minecraft: the vanilla

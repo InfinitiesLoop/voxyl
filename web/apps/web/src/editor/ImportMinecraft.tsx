@@ -1,14 +1,8 @@
 import type { InstancePlan } from "@voxyl/mc-import";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { LibraryActions } from "../Hud.tsx";
-import {
-  canPickDirectory,
-  ensureReadable,
-  pickDirectory,
-  pickedFiles,
-  recallHandle,
-} from "../import/fs-browser.ts";
+import { pickedFiles } from "../import/fs-browser.ts";
 import { Cancelled, type ImportJob, planFolder, runImport } from "../import/import-client.ts";
 import {
   detectPlatform,
@@ -17,9 +11,8 @@ import {
   vanillaJarHint,
 } from "../import/locations.ts";
 import type { FolderSource, ImportReport } from "../import/protocol.ts";
+import "./import-minecraft.css";
 
-/** The picker remembers the folder under this name, so it opens there next time. */
-const PURPOSE = "mc-instance";
 const DEFAULT_PREFIX = "pack-";
 /** How many mods the report lists as having entries left out. */
 const LEFT_OUT_LISTED = 8;
@@ -35,9 +28,10 @@ const plural = (n: number, one: string, many = `${one}s`) =>
   `${n.toLocaleString()} ${n === 1 ? one : many}`;
 
 /**
- * Home, Blocks, Import Minecraft: one dialog, two routes. A game folder or modpack instance is
- * read by the import worker (it never leaves this device); a Minecraft jar or resource pack is
- * the single-file import the library already had.
+ * Home, Blocks, Import Minecraft: one dialog in numbered steps (what to import, which folder,
+ * the options, the import itself). A game folder or modpack instance is read by the import
+ * worker and never leaves this device; a Minecraft jar or resource pack is the single-file
+ * import the library already had.
  */
 export function ImportMinecraftDialog({
   library,
@@ -50,7 +44,6 @@ export function ImportMinecraftDialog({
   const [route, setRoute] = useState<Route>("folder");
   const [source, setSource] = useState<FolderSource | null>(null);
   const [folderName, setFolderName] = useState("");
-  const [remembered, setRemembered] = useState<FileSystemDirectoryHandle | null>(null);
   const [plan, setPlan] = useState<InstancePlan | null>(null);
   const [planning, setPlanning] = useState(false);
   const [vanilla, setVanilla] = useState<File | null>(null);
@@ -69,16 +62,6 @@ export function ImportMinecraftDialog({
 
   // Leaving with work in flight (the page closing a dialog) ends the worker.
   useEffect(() => () => job.current?.cancel(), []);
-
-  useEffect(() => {
-    let current = true;
-    void recallHandle(PURPOSE).then((handle) => {
-      if (current) setRemembered(handle);
-    });
-    return () => {
-      current = false;
-    };
-  }, []);
 
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
@@ -118,41 +101,7 @@ export function ImportMinecraftDialog({
     );
   }, []);
 
-  const use = useCallback(
-    (from: FolderSource, name: string) => {
-      setSource(from);
-      setFolderName(name);
-      setReport(null);
-      check(from);
-    },
-    [check],
-  );
-
-  const chooseFolder = () => {
-    if (!canPickDirectory()) {
-      folderInput.current?.click();
-      return;
-    }
-    pickDirectory(PURPOSE, remembered).then(
-      (handle) => {
-        if (!handle) return;
-        setRemembered(handle);
-        use({ kind: "handle", handle }, handle.name);
-      },
-      (caught: unknown) => setError(message(caught)),
-    );
-  };
-
-  const useRemembered = () => {
-    if (!remembered) return;
-    ensureReadable(remembered).then(
-      (allowed) => {
-        if (allowed) use({ kind: "handle", handle: remembered }, remembered.name);
-        else setError("Voxyl wasn't allowed to read that folder. Choose it again.");
-      },
-      (caught: unknown) => setError(message(caught)),
-    );
-  };
+  const chooseFolder = () => folderInput.current?.click();
 
   const start = () => {
     if (!source || !plan || plan.problems.length > 0 || busy) return;
@@ -180,8 +129,8 @@ export function ImportMinecraftDialog({
 
   const cancel = () => job.current?.cancel();
 
-  const importable =
-    source !== null && plan !== null && plan.problems.length === 0 && prefix.trim() !== "";
+  const folderReady = source !== null && plan !== null && plan.problems.length === 0;
+  const importable = folderReady && prefix.trim() !== "";
 
   return createPortal(
     <div className="keys">
@@ -200,32 +149,42 @@ export function ImportMinecraftDialog({
           </button>
         </header>
         <div className="import-body">
-          <fieldset className="import-routes" aria-label="What to import">
-            <button
-              type="button"
-              aria-pressed={route === "folder"}
-              disabled={busy}
-              onClick={() => setRoute("folder")}
-            >
-              A game folder or modpack instance
-            </button>
-            <button
-              type="button"
-              aria-pressed={route === "jar"}
-              disabled={busy}
-              onClick={() => setRoute("jar")}
-            >
-              A Minecraft jar or resource pack
-            </button>
-          </fieldset>
+          <Step number={1} title="What do you want to import?">
+            <fieldset className="import-routes" aria-label="What to import">
+              <button
+                type="button"
+                aria-pressed={route === "folder"}
+                disabled={busy}
+                onClick={() => setRoute("folder")}
+              >
+                A modpack or game folder
+                <span>The mods of a launcher instance such as GTNH, one library per mod.</span>
+              </button>
+              <button
+                type="button"
+                aria-pressed={route === "jar"}
+                disabled={busy}
+                onClick={() => setRoute("jar")}
+              >
+                Minecraft itself
+                <span>A Minecraft client jar (1.13 or newer) or a resource pack zip.</span>
+              </button>
+            </fieldset>
+            <p className="import-order">
+              Doing both? Import vanilla Minecraft first, to get the Minecraft blocks, then the
+              modpack for its mods.
+            </p>
+          </Step>
           {route === "jar" ? (
-            <section className="import-step">
+            <Step number={2} title="Choose the file">
               <p>
                 Pick a Minecraft 1.13 or newer client jar (for example{" "}
                 <code>.minecraft/versions/1.21/1.21.jar</code>), or a resource pack zip. Its blocks
                 become the Minecraft library.
               </p>
-              <p className="home-quiet">The file is read in this browser and never uploaded.</p>
+              <p className="home-quiet">
+                The file is read in this browser. It is not uploaded to any Voxyl server.
+              </p>
               <div className="import-row">
                 <button type="button" className="primary" onClick={() => jarInput.current?.click()}>
                   Choose jar or zip…
@@ -244,14 +203,12 @@ export function ImportMinecraftDialog({
                   onClose();
                 }}
               />
-            </section>
+            </Step>
           ) : (
             <FolderRoute
               platform={platform}
               folderName={folderName}
               hasSource={source !== null}
-              handleSource={source?.kind === "handle"}
-              remembered={remembered}
               plan={plan}
               planning={planning}
               vanilla={vanilla}
@@ -259,26 +216,24 @@ export function ImportMinecraftDialog({
               running={running}
               report={report}
               busy={busy}
+              folderReady={folderReady}
+              importable={importable}
+              cancellable={cancellable}
+              error={error}
               onChoose={chooseFolder}
-              onChooseUploadStyle={() => folderInput.current?.click()}
-              canPick={canPickDirectory()}
-              onUseRemembered={useRemembered}
-              onRecheck={() => source && check(source)}
               onVanilla={() => vanillaInput.current?.click()}
               onClearVanilla={() => setVanilla(null)}
               onPrefix={(value) => setPrefix(value.toLowerCase().replace(/[^a-z0-9._-]/g, ""))}
+              onImport={start}
+              onCancel={cancel}
             />
-          )}
-          {route === "folder" && error && (
-            <p className="palette-error import-error" role="alert">
-              {error}
-            </p>
           )}
         </div>
         <input
           ref={folderInput}
           type="file"
-          // The browsers without a directory picker still give a whole folder this way.
+          // A whole folder, read in place: the browser's own folder picker refuses places such
+          // as AppData, and this one doesn't.
           {...({ webkitdirectory: "" } as object)}
           multiple
           hidden
@@ -288,8 +243,11 @@ export function ImportMinecraftDialog({
             e.target.value = "";
             if (files.length === 0) return;
             const entries = pickedFiles(files);
-            const root = entries[0]?.path.split("/")[0] ?? "";
-            use({ kind: "files", entries }, root);
+            const next: FolderSource = { entries };
+            setSource(next);
+            setFolderName(entries[0]?.path.split("/")[0] ?? "");
+            setReport(null);
+            check(next);
           }}
         />
         <input
@@ -304,29 +262,32 @@ export function ImportMinecraftDialog({
             if (chosen) setVanilla(chosen);
           }}
         />
-        {route === "folder" && (
-          <footer className="entry-actions">
-            <span className="topbar-gap" />
-            {cancellable && (
-              <button type="button" onClick={cancel}>
-                Cancel
-              </button>
-            )}
-            {!report && (
-              <button
-                type="button"
-                className="primary"
-                disabled={!importable || busy}
-                onClick={start}
-              >
-                Import
-              </button>
-            )}
-          </footer>
-        )}
       </div>
     </div>,
     document.body,
+  );
+}
+
+/** One numbered step of the dialog; `state` dims a step that isn't reachable yet. */
+function Step({
+  number,
+  title,
+  state,
+  children,
+}: {
+  number: number;
+  title: string;
+  state?: "waiting" | "finished" | undefined;
+  children: ReactNode;
+}) {
+  return (
+    <section className={state ? `import-step ${state}` : "import-step"}>
+      <span className="import-step-number" aria-hidden="true">
+        {number}
+      </span>
+      <h3>{title}</h3>
+      <div className="import-step-body">{children}</div>
+    </section>
   );
 }
 
@@ -334,8 +295,6 @@ function FolderRoute(props: {
   platform: Platform;
   folderName: string;
   hasSource: boolean;
-  handleSource: boolean;
-  remembered: FileSystemDirectoryHandle | null;
   plan: InstancePlan | null;
   planning: boolean;
   vanilla: File | null;
@@ -343,15 +302,16 @@ function FolderRoute(props: {
   running: Phase | null;
   report: ImportReport | null;
   busy: boolean;
+  folderReady: boolean;
+  importable: boolean;
+  cancellable: boolean;
+  error: string | null;
   onChoose: () => void;
-  /** The `<input webkitdirectory>` route, which has no list of folders it refuses. */
-  onChooseUploadStyle: () => void;
-  canPick: boolean;
-  onUseRemembered: () => void;
-  onRecheck: () => void;
   onVanilla: () => void;
   onClearVanilla: () => void;
   onPrefix: (value: string) => void;
+  onImport: () => void;
+  onCancel: () => void;
 }) {
   const { plan, running, report, busy } = props;
   const [copied, setCopied] = useState("");
@@ -364,141 +324,186 @@ function FolderRoute(props: {
       () => {},
     );
   };
-  const offered = props.remembered && props.remembered.name !== props.folderName;
   return (
-    <section className="import-step">
-      <p>
-        Choose the game folder of your modpack: the one with <code>mods</code> and{" "}
-        <code>config</code> in it. For a launcher instance, the instance folder or its{" "}
-        <code>.minecraft</code> inside both work. Voxyl only reads it, here in your browser; nothing
-        is uploaded.
-      </p>
-      {props.canPick && (
-        <p className="home-quiet">
-          If the browser says it can't open the folder because it contains system files, that is its
-          folder picker refusing protected places such as <code>AppData</code>, where Prism keeps
-          its instances. Use <b>Choose another way…</b>: the browser then asks to upload the folder,
-          but nothing leaves your device.
+    <>
+      <Step number={2} title="Choose the folder" state={props.folderReady ? "finished" : undefined}>
+        <p>
+          Choose the game folder of your modpack: the one with <code>mods</code> and{" "}
+          <code>config</code> in it. For a launcher instance, the instance folder or its{" "}
+          <code>.minecraft</code> inside both work.
         </p>
-      )}
-      <div className="import-row">
-        <button type="button" className="primary" disabled={busy} onClick={props.onChoose}>
-          Choose folder…
-        </button>
-        {props.canPick && (
-          <button
-            type="button"
-            disabled={busy}
-            title="The browser's plain folder upload, for folders its folder picker refuses"
-            onClick={props.onChooseUploadStyle}
-          >
-            Choose another way…
+        <p className="home-quiet">
+          <b>Nothing is uploaded to any Voxyl server.</b> Your browser's own dialog will say the
+          folder's files "will be uploaded to" this site. That is its standard wording for any
+          folder choice: Voxyl only reads the files here, in your browser, and keeps what it builds
+          on this device.
+        </p>
+        <div className="import-row">
+          <button type="button" className="primary" disabled={busy} onClick={props.onChoose}>
+            {props.hasSource ? "Choose another folder…" : "Choose folder…"}
           </button>
-        )}
-        {offered && props.remembered && (
-          <button
-            type="button"
-            disabled={busy}
-            title="Use the folder you picked last time"
-            onClick={props.onUseRemembered}
-          >
-            Use {props.remembered.name} again
-          </button>
-        )}
-        {props.hasSource && (
-          <span className="import-folder" title={props.folderName}>
-            {props.folderName || "Folder chosen"}
-          </span>
-        )}
-      </div>
-      {!props.hasSource && (
-        <div className="import-locations">
-          <p className="home-quiet">Where to look:</p>
-          <ul>
-            {launcherLocations(props.platform).map((where) => (
-              <li key={where.label}>
-                <span className="import-where">{where.label}</span>
-                <code>{where.path}</code>
-                <button
-                  type="button"
-                  title={`Copy ${where.copy}, to paste into the folder picker`}
-                  onClick={() => copy(where.copy)}
-                >
-                  {copied === where.copy ? "Copied" : "Copy"}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      {props.planning && <p className="home-quiet">Looking through the folder…</p>}
-      {plan && !report && (
-        <>
-          <PlanSummary
-            plan={plan}
-            vanilla={props.vanilla}
-            onRecheck={props.handleSource ? props.onRecheck : null}
-            busy={busy}
-          />
-          {!plan.hasVanilla && (
-            <div className="import-vanilla">
-              {!props.vanilla && (
-                <p>
-                  No Minecraft jar was found in this folder. Without it the vanilla blocks and the
-                  textures many mods borrow from it are missing, so more blocks get left out.
-                </p>
-              )}
-              <div className="import-row">
-                <button type="button" disabled={busy} onClick={props.onVanilla}>
-                  Add the Minecraft 1.7.10 jar…
-                </button>
-                {props.vanilla && (
-                  <>
-                    <span className="import-folder" title={props.vanilla.name}>
-                      {props.vanilla.name}
-                    </span>
-                    <button type="button" disabled={busy} onClick={props.onClearVanilla}>
-                      Remove
-                    </button>
-                  </>
-                )}
-              </div>
-              <p className="home-quiet">{vanillaJarHint(props.platform)}</p>
-            </div>
+          {props.hasSource && (
+            <span className="import-folder" title={props.folderName}>
+              {props.folderName || "Folder chosen"}
+            </span>
           )}
-          <label className="import-prefix">
-            Library name prefix
-            <input
-              value={props.prefix}
-              disabled={busy}
-              aria-label="Library name prefix"
-              spellCheck={false}
-              onChange={(e) => props.onPrefix(e.target.value)}
-            />
-          </label>
-          <p className="home-quiet">
-            Each mod becomes its own library, named with this first, such as{" "}
-            <code>{props.prefix}gregtech</code>. It keeps them apart from the built-in and vanilla
-            Minecraft libraries, and an import with the same prefix replaces its earlier one.
+        </div>
+        {!props.hasSource && (
+          <div className="import-locations">
+            <p className="home-quiet">Where to look:</p>
+            <ul>
+              {launcherLocations(props.platform).map((where) => (
+                <li key={where.label}>
+                  <span className="import-where">{where.label}</span>
+                  <code>{where.path}</code>
+                  <button
+                    type="button"
+                    title={`Copy ${where.copy}, to paste into the folder dialog`}
+                    onClick={() => copy(where.copy)}
+                  >
+                    {copied === where.copy ? "Copied" : "Copy"}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <NeiHelp />
+        {props.planning && <p className="home-quiet">Looking through the folder…</p>}
+        {plan && !report && (
+          <PlanSummary plan={plan} vanilla={props.vanilla} busy={busy} onChoose={props.onChoose} />
+        )}
+        {props.error && (
+          <p className="palette-error import-error" role="alert">
+            {props.error}
           </p>
-        </>
-      )}
-      {running && <Progress phase={running} />}
-      {report && <Report report={report} />}
-    </section>
+        )}
+      </Step>
+      <Step
+        number={3}
+        title="Name the libraries"
+        state={props.folderReady ? (report ? "finished" : undefined) : "waiting"}
+      >
+        <label className="import-prefix">
+          Library name prefix
+          <input
+            value={props.prefix}
+            disabled={busy || !props.folderReady}
+            aria-label="Library name prefix"
+            spellCheck={false}
+            onChange={(e) => props.onPrefix(e.target.value)}
+          />
+        </label>
+        <p className="home-quiet">
+          Each mod becomes its own library, named with this first, such as{" "}
+          <code>{props.prefix}GregTech</code>. It keeps them apart from the built-in and vanilla
+          Minecraft libraries. Importing again with the same prefix updates those libraries in
+          place; it never adds a second copy.
+        </p>
+        <details className="import-help">
+          <summary>Optional: add a Minecraft jar for this import</summary>
+          <div className="import-help-body">
+            <p>
+              Not needed: the Minecraft blocks come from importing vanilla Minecraft itself (step
+              1). If this pack's mods borrow textures from the Minecraft 1.7.10 jar, adding it here
+              lets them find those textures too.
+            </p>
+            <div className="import-row">
+              <button type="button" disabled={busy || !props.folderReady} onClick={props.onVanilla}>
+                Add the Minecraft 1.7.10 jar…
+              </button>
+              {props.vanilla && (
+                <>
+                  <span className="import-folder" title={props.vanilla.name}>
+                    {props.vanilla.name}
+                  </span>
+                  <button type="button" disabled={busy} onClick={props.onClearVanilla}>
+                    Remove
+                  </button>
+                </>
+              )}
+            </div>
+            <p className="home-quiet">{vanillaJarHint(props.platform)}</p>
+          </div>
+        </details>
+      </Step>
+      <Step
+        number={4}
+        title="Import"
+        state={report ? "finished" : props.importable ? undefined : "waiting"}
+      >
+        {!report && (
+          <div className="import-row">
+            <button
+              type="button"
+              className="primary"
+              disabled={!props.importable || busy}
+              onClick={props.onImport}
+            >
+              Import
+            </button>
+            {props.cancellable && (
+              <button type="button" onClick={props.onCancel}>
+                Cancel
+              </button>
+            )}
+          </div>
+        )}
+        {running && <Progress phase={running} />}
+        {report && <Report report={report} />}
+      </Step>
+    </>
+  );
+}
+
+/** How to make NEI's Data Dumps, for the modpacks that have NEI (click to open). */
+function NeiHelp() {
+  return (
+    <details className="import-help">
+      <summary>Does your modpack have NEI? Make its Data Dumps first</summary>
+      <div className="import-help-body">
+        <p>
+          Older modpacks (Minecraft 1.7.10 and before, such as GTNH) don't describe their blocks in
+          a form Voxyl can read. If your modpack has NEI (Not Enough Items), its Data Dumps list
+          them, and Voxyl needs three of them:
+        </p>
+        <ol>
+          <li>
+            In the game, open your inventory and click NEI's <b>Options</b>, then <b>Tools</b>, then{" "}
+            <b>Data Dumps</b>.
+          </li>
+          <li>
+            Click <b>Dump</b> beside <b>Items</b>, and beside <b>Blocks</b>.
+          </li>
+          <li>
+            Set <b>Item Panel</b> to <b>CSV</b> (click the button until it says CSV), then click{" "}
+            <b>Dump</b> beside it.
+          </li>
+        </ol>
+        <img
+          src="/nei-data-dumps.png"
+          alt="NEI's Data Dumps screen: Dump buttons for Items, Blocks and Item Panel"
+        />
+        <p className="home-quiet">
+          The files (<code>item.csv</code>, <code>block.csv</code>, <code>itempanel.csv</code>) are
+          written to the <code>dumps</code> folder in the game folder. Then choose the folder here.
+          A modpack without NEI can't be imported yet.
+        </p>
+      </div>
+    </details>
   );
 }
 
 function PlanSummary({
   plan,
   vanilla,
-  onRecheck,
   busy,
+  onChoose,
 }: {
   plan: InstancePlan;
   vanilla: File | null;
-  onRecheck: (() => void) | null;
   busy: boolean;
+  onChoose: () => void;
 }) {
   const missing = (["item", "itempanel", "block"] as const).filter((k) => !plan.dumps[k]);
   return (
@@ -514,14 +519,12 @@ function PlanSummary({
             ? "item, itempanel and block are all there"
             : `missing: ${missing.map((k) => `${k}.csv`).join(", ")}`}
         </dd>
-        <dt>Minecraft jar</dt>
-        <dd>
-          {plan.hasVanilla
-            ? `found in versions (${plan.versionJars})`
-            : vanilla
-              ? vanilla.name
-              : "not found"}
-        </dd>
+        {(plan.hasVanilla || vanilla) && (
+          <>
+            <dt>Minecraft jar</dt>
+            <dd>{plan.hasVanilla ? `found in versions (${plan.versionJars})` : vanilla?.name}</dd>
+          </>
+        )}
         <dt>Saw list</dt>
         <dd>{plan.hasMicroblocksCfg ? "microblocks.cfg found" : "none (optional)"}</dd>
       </dl>
@@ -530,11 +533,9 @@ function PlanSummary({
           {plan.problems.map((problem) => (
             <p key={problem}>{problem}</p>
           ))}
-          {onRecheck && (
-            <button type="button" disabled={busy} onClick={onRecheck}>
-              Check again
-            </button>
-          )}
+          <button type="button" disabled={busy} onClick={onChoose}>
+            Choose the folder again…
+          </button>
         </div>
       )}
     </div>
