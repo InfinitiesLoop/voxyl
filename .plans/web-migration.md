@@ -810,6 +810,76 @@ With that, an idle widget answered a relay after 150 s (21 ms over WebSocket).
 **Still untested:** the phone apps (display modes, backgrounding, WebGPU). Rerun with
 `pnpm probe` and a tunnel; the steps are in the web README.
 
+### Phase 4 design notes: WebMCP, Cloudflare free tier, accounts (2026-10-09, proposed)
+
+Editor phase called complete by the user (remaining issues go to Polish). Research before
+building the MCP server; nothing below is built or decided yet.
+
+**WebMCP (the browser standard, and Cloudflare's toggle for it).** WebMCP lets a *page* register
+tools (name, description, JSON-schema input, `execute` callback) that an agent *inside the
+browser* can call. It is a W3C Web Machine Learning CG draft (not on the standards track), in an
+early preview in Chrome 146 and an origin trial reported for Chrome 149-156; the entry point is
+moving from `navigator.modelContext` to `document.modelContext`, and `provideContext` was
+removed. Cloudflare's post ([blog](https://blog.cloudflare.com/webmcp/)) is a dashboard switch
+that injects a bridge script with HTMLRewriter; its two packs (C2PA content credentials, and a
+proxy to a site's own `/mcp`) don't help us.
+
+- **It does not replace the remote MCP server.** Claude Code, Codex and ChatGPT are not in the
+  page. They still reach us over HTTP, through the relay.
+- **It complements it, and it is free.** The tab already is the tool host (goal 1). Registering
+  the same tool registry with WebMCP costs no server, no account and no relay: an agent built
+  into the browser drives the open editor directly. Treat it as a third adapter over `tools`.
+- **Keep it thin.** One adapter that feature-detects both entry points, so the next spec move
+  is a one-file change. Do not toggle Cloudflare's injection (it adds a second registrant and
+  nothing we use).
+- **Plan impact:** `packages/tools` (Zod registry over a `ToolHost` interface) gets three
+  adapters: WebMCP in the tab, MCP over HTTP via the relay, and the headless host. Build the
+  registry and the WebMCP adapter first: no server needed, and it proves the tool design.
+
+**Cloudflare free tier (limits from the docs, 2026-10-09; re-check before relying on them).**
+Workers Free: 100k requests/day, 10 ms CPU per request, 128 MB. Durable Objects Free:
+SQLite-backed only, 100k requests/day, 13k GB-s/day, 5M rows read and 100k rows written per
+day, 5 GB; incoming WebSocket messages bill 20:1; an idle hibernating object bills no duration.
+D1 and R2 also have free tiers (not re-checked: D1 about 5 GB; R2 10 GB with free egress).
+Pages static hosting is the app today and is free.
+
+- **Tab-first is the free-tier strategy.** The Worker only parses a call and forwards it to the
+  project's relay object, well inside 10 ms. Everything heavy (decode, tool logic, meshing,
+  captures) runs in the user's tab.
+- **The headless host does not fit 10 ms CPU.** Loading and decompressing chunks, running a
+  tool and rasterizing a capture all exceed it. Headless needs Workers Paid (about $5/month,
+  30 s CPU) or the Node fallback. Proposal: v1 is tab-required; a call with no tab attached
+  returns a clear "open voxyl.xyz to attach" error. Add headless when the paid plan is worth
+  it. This costs the "one-shot in ChatGPT with nothing open" case.
+- **Write counts are the real budget**, not bytes: 100k DO rows/day, and R2's monthly write
+  operations. Sync batches ops into one row or object per flush (debounced, with compaction to
+  a snapshot), never one write per op. 10 MB per account against 10 GB of R2 is room for about
+  1,000 full accounts.
+- **Batch-friendly tool design saves requests.** Each agent call is a Worker request plus a
+  relay request. Intent-level verbs and multi-step tools (the user's earlier ask) mean fewer
+  calls, so they are a cost lever as well as a quality one.
+- Use `createMcpHandler` from the Agents SDK for the stateless MCP endpoint (its docs now mark
+  `McpAgent` as the deprecated pattern); the relay stays a plain hibernating Durable Object
+  keyed by project.
+
+**Accounts vs MCP.** The order barely matters, with one rule: every project and every MCP
+connection is keyed by a `userId` from day one (the anonymous device record the plan already
+has), so login later only attaches an identity to it. Two facts tie them together:
+
+- Claude Code and Codex can send a bearer token. v1 can issue a per-user token from the web app
+  ("Connect an agent" in Settings), as the Godot app did.
+- ChatGPT (and Claude.ai connectors) need OAuth 2.1 with PKCE and dynamic client registration.
+  `@cloudflare/workers-oauth-provider` implements that server and delegates login to an
+  identity provider such as Google. The `/authorize` page it needs is the login page, so
+  Phase 6's account linking and the ChatGPT connection are one piece of work. It keeps its
+  state in KV (free tier writes are limited, but enough to launch).
+
+**Proposed order.** 1) Settle the intent-level tool design and build `packages/tools` with the
+registry and a handful of tools (edit, selection, palette) over the existing commands.
+2) WebMCP adapter in the tab. 3) Worker with `createMcpHandler`, the relay object and bearer
+tokens, so Claude Code and Codex connect. 4) Persistence and sync. 5) Capture tiers. 6) OAuth
+and login, then the ChatGPT app. 7) Headless, if the paid plan is justified.
+
 ## Testing and verification
 
 The web version is designed fresh (Phase 1), so there is no oracle app to match. Correctness
@@ -936,7 +1006,8 @@ host tool execution. Both are checked in Phase 0, before any port work.
 - [x] Does the ChatGPT Apps sandbox allow a persistent WebSocket from the widget to our domain?
   Yes, with keepalive pings (see "ChatGPT widget live probe").
 - [ ] Which openly licensed texture set, or an original one, becomes the hosted default?
-- [ ] Should Codex and Claude Code connect to the hosted relay, a local relay, or both?
+- [ ] Should Codex and Claude Code connect to the hosted relay, a local relay, or both? (Leaning
+  hosted only; see "Phase 4 design notes".)
 - [ ] How do block imports work with server-stored projects and the 10 MB limit? (A
   possible answer is under "Storage, limits and funding".)
 - [ ] The free limit's warning threshold and what happens over it; the expiry period for
