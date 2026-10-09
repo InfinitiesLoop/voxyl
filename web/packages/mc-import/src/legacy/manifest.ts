@@ -85,3 +85,53 @@ export function neiManifest(result: RosterResult, drafts: Iterable<LibraryDraft>
   }
   return { mods: sorted };
 }
+
+/** One block of a finished import, in the shape the Godot parity script writes. */
+export interface FinalBlock {
+  readonly name: string;
+  readonly registry: string;
+  readonly meta: number;
+  readonly legacy_id: number;
+  /** Side -> texture key (a pane reports only its post's sides). */
+  readonly faces: Readonly<Partial<Record<McSide, string>>> | null;
+  readonly pane: boolean;
+  readonly attachment: boolean;
+}
+
+export interface FinalManifest {
+  readonly libraries: Readonly<Record<string, readonly FinalBlock[]>>;
+}
+
+/** What the libraries hold after the healers ran, per namespace, for the parity diff. */
+export function finalManifest(drafts: ReadonlyMap<string, LibraryDraft>): FinalManifest {
+  const libraries: Record<string, FinalBlock[]> = {};
+  for (const [ns, draft] of drafts) {
+    const list: FinalBlock[] = [];
+    for (const [name, block] of Object.entries(draft.blocks)) {
+      const pane = !!block.multipart;
+      const modelKey = pane
+        ? block.multipart?.[0]?.apply.model
+        : Object.values(block.variants ?? {})[0]?.model;
+      const model = modelKey === undefined ? undefined : draft.models[modelKey];
+      const faces: Partial<Record<McSide, string>> = {};
+      for (const side of MC_SIDES) {
+        const texture = model?.elements[0]?.faces[side]?.texture;
+        if (texture !== undefined) faces[side] = texture;
+      }
+      list.push({
+        name,
+        registry: block.mc?.registry ?? "",
+        meta: block.mc?.meta ?? 0,
+        legacy_id: block.mc?.legacyId ?? -1,
+        faces: model ? faces : null,
+        pane,
+        attachment: !!block.attachment,
+      });
+    }
+    list.sort((a, b) =>
+      a.registry === b.registry ? a.meta - b.meta : a.registry < b.registry ? -1 : 1,
+    );
+    libraries[ns] = list;
+  }
+  return { libraries };
+}

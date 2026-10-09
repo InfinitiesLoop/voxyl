@@ -184,6 +184,7 @@ export class LibraryDraft {
       ...(transparent && { transparent: true }),
       ...(emits !== undefined && { emits }),
       ...(hidden && { hidden: true }),
+      ...(old?.attachment && { attachment: old.attachment }),
       ...(mc && { mc }),
     };
     this.addBlock(name, block);

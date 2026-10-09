@@ -90,6 +90,11 @@ export interface Block {
   readonly emits?: number;
   /** Average colour, "#rrggbb": how it draws where textures don't. */
   readonly color: string;
+  /**
+   * Holds on to a neighbour the way a torch does (stands on the block below or leans out of a
+   * wall). The import records it; nothing reads it until the editor has attachment kinds.
+   */
+  readonly attachment?: "torch";
   /** Not offered by the block picker: the app draws with it itself (the undecided look). */
   readonly hidden?: boolean;
   /**

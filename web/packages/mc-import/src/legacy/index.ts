@@ -10,7 +10,15 @@ export {
 } from "./chisel-variations.ts";
 export { parseCsv } from "./csv.ts";
 export { type CubeOptions, identityKey, LibraryDraft } from "./draft.ts";
-export { type NeiManifest, neiManifest } from "./manifest.ts";
+export { type Extension, extensionFor } from "./extension.ts";
+export { type Color, HealContext, type HealOptions, type Identity, type Rect } from "./heal.ts";
+export {
+  type FinalBlock,
+  type FinalManifest,
+  finalManifest,
+  type NeiManifest,
+  neiManifest,
+} from "./manifest.ts";
 export { isSawable, type MicroblockWhitelist, parseMicroblocksCfg } from "./microblocks-cfg.ts";
 export {
   NeiDumpError,
@@ -34,4 +42,5 @@ export {
   importRoster,
   type RosterResult,
 } from "./roster.ts";
+export { type HealRunOptions, type HealRunResult, runHealers } from "./run-heal.ts";
 export { TextureIngest } from "./texture.ts";

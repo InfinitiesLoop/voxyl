@@ -4,13 +4,17 @@
 import {
   type AssetSource,
   fileIn,
+  findSiblingText,
+  gtnhExtension,
   importRoster,
   LibraryDraft,
   type NeiRoster,
   openArchive,
   parseNeiDumps,
   type RosterResult,
+  runHealers,
   scanInstance,
+  TextureIngest,
   ZipAssetSource,
 } from "../../packages/mc-import/src/index.ts";
 import { nodeDir, nodeFileAt } from "./node-fs.ts";
@@ -24,6 +28,9 @@ export interface GtnhRun {
   readonly skipped: string[];
   readonly openMs: number;
   readonly importMs: number;
+  /** Set when `heal` was asked for. */
+  readonly healMs?: number;
+  readonly healed?: string[] | undefined;
   readonly rssMb: number;
 }
 
@@ -39,7 +46,7 @@ const text = async (dir: Awaited<ReturnType<typeof scanInstance>>, name: string)
 export async function importGtnh(
   gameDir: string,
   vanillaJar: string,
-  opts: { mods?: string[] } = {},
+  opts: { mods?: string[]; heal?: boolean } = {},
 ): Promise<GtnhRun> {
   const scan = await scanInstance(nodeDir(gameDir));
   if (!scan) throw new Error(`${gameDir} is not a game folder`);
@@ -65,8 +72,10 @@ export async function importGtnh(
 
   const drafts = new Map<string, LibraryDraft>();
   const t1 = performance.now();
+  const ingest = new TextureIngest();
   const result = await importRoster({
     roster,
+    ingest,
     sources,
     ...(opts.mods && { mods: opts.mods }),
     libraries: (ns) => {
@@ -79,6 +88,21 @@ export async function importGtnh(
     },
   });
   const importMs = performance.now() - t1;
+  let healMs: number | undefined;
+  let healed: string[] | undefined;
+  if (opts.heal) {
+    const t2 = performance.now();
+    const ran = await runHealers({
+      extensions: [gtnhExtension],
+      drafts,
+      resolver: result.resolver,
+      ingest,
+      legacyIdFor: (registry) => roster.legacyIdFor(registry),
+      siblingText: (name) => findSiblingText(scan, name),
+    });
+    healMs = performance.now() - t2;
+    healed = ran.healed;
+  }
   return {
     roster,
     result,
@@ -87,6 +111,7 @@ export async function importGtnh(
     skipped,
     openMs,
     importMs,
+    ...(healMs !== undefined && { healMs, healed }),
     rssMb: Math.round(process.memoryUsage().rss / 1e6),
   };
 }
