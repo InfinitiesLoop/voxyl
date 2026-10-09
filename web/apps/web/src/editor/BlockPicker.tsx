@@ -4,6 +4,13 @@ import { createPortal } from "react-dom";
 import type { Engine } from "../scene/Engine.ts";
 import type { BlockSearch } from "../world/protocol.ts";
 import { BakedIcon, PREVIEW_PX } from "./icons.tsx";
+import {
+  chooseOnly,
+  filterLibraries,
+  liveSelection,
+  sortLibraries,
+  toggleLibrary,
+} from "./library-list.ts";
 import { Store } from "./store.ts";
 import { useTurntable } from "./turntable.ts";
 import { useStore } from "./useStore.ts";
@@ -25,6 +32,12 @@ type BlockHit = BlockSearch["hits"][number];
 const previewLayout = new Store<Layout>("1x1");
 
 /**
+ * The libraries block search draws from; empty means all of them. View state shared by every
+ * chooser, so what you pick on Home's Blocks tab also narrows the palette entry's picker.
+ */
+const chosenLibraries = new Store<ReadonlySet<string>>(new Set());
+
+/**
  * The block chooser, after the Godot app's: the libraries down the left (all of them, or
  * one), a search and a grid of icons, and on the right a turning preview of the block you
  * explore, alone, three in a row or a 3×3 wall to see how it tiles. A click explores;
@@ -39,7 +52,7 @@ export function BlockChooser({
   embedded = false,
   searchAutoFocus = true,
   onImport,
-  onRemove,
+  onRemoveMany,
   removable,
 }: {
   engine: Engine;
@@ -54,11 +67,12 @@ export function BlockChooser({
   searchAutoFocus?: boolean;
   /** Home's Blocks tab: bring in Minecraft (a game folder or a jar), and drop a library. */
   onImport?: () => void;
-  onRemove?: (id: string, name: string) => void;
+  onRemoveMany?: (items: { id: string; name: string }[]) => void;
   removable?: ReadonlySet<string>;
 }) {
   const [query, setQuery] = useState("");
-  const [library, setLibrary] = useState("");
+  const chosen = useStore(chosenLibraries);
+  const [libraryQuery, setLibraryQuery] = useState("");
   const [pending, setPending] = useState("");
   const [libraries, setLibraries] = useState<BlockSearch["libraries"][number][]>([]);
   const [hits, setHits] = useState<BlockHit[]>([]);
@@ -67,6 +81,8 @@ export function BlockChooser({
   const [settled, setSettled] = useState(false);
   const gridRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  /** The chosen libraries as a stable key and list for requests. */
+  const chosenKey = [...chosen].sort().join(",");
   const generation = useRef(0);
   const loading = useRef(false);
   const more = useRef<() => void>(() => {});
@@ -87,12 +103,15 @@ export function BlockChooser({
         query: pending,
         limit: PAGE,
         offset: 0,
-        ...(library !== "" && { library }),
+        ...(chosenKey !== "" && { libraries: chosenKey.split(",") }),
       })
       .then((found) => {
         if (cancel || generation.current !== gen) return;
         loading.current = false;
         setLibraries([...found.libraries]);
+        // A library that was removed no longer narrows the search.
+        const live = liveSelection(chosenLibraries.get(), found.libraries);
+        if (live.size !== chosenLibraries.get().size) chosenLibraries.set(live);
         setMatched(found.matched);
         setHits([...found.hits]);
         setSettled(true);
@@ -105,7 +124,7 @@ export function BlockChooser({
     return () => {
       cancel = true;
     };
-  }, [engine, pending, library]);
+  }, [engine, pending, chosenKey]);
   more.current = () => {
     if (loading.current || hits.length === 0 || hits.length >= matched) return;
     const gen = generation.current;
@@ -117,7 +136,7 @@ export function BlockChooser({
         query: pending,
         limit: PAGE,
         offset,
-        ...(library !== "" && { library }),
+        ...(chosenKey !== "" && { libraries: chosenKey.split(",") }),
       })
       .then((found) => {
         if (generation.current !== gen) return;
@@ -144,6 +163,8 @@ export function BlockChooser({
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [hits.length, matched]);
+  const shownLibraries = filterLibraries(sortLibraries(libraries), libraryQuery);
+  const doomed = libraries.filter((l) => chosen.has(l.id) && removable?.has(l.id));
   return (
     <div className="chooser">
       <nav className="chooser-rail" aria-label="Libraries">
@@ -156,23 +177,66 @@ export function BlockChooser({
             Import Minecraft…
           </button>
         )}
-        {[{ id: "", name: "All blocks" }, ...libraries].map((l) => (
-          <div key={l.id} className="chooser-lib">
-            <button type="button" aria-pressed={library === l.id} onClick={() => setLibrary(l.id)}>
-              {l.name}
+        <input
+          className="chooser-search"
+          value={libraryQuery}
+          placeholder="Search libraries"
+          aria-label="Search libraries"
+          onChange={(e) => setLibraryQuery(e.target.value)}
+        />
+        <div className="chooser-libs">
+          <div className="chooser-lib">
+            <button
+              type="button"
+              aria-pressed={chosen.size === 0}
+              title="Search every library"
+              onClick={() => chosenLibraries.set(new Set())}
+            >
+              All blocks
             </button>
-            {l.id !== "" && removable?.has(l.id) && onRemove && (
+          </div>
+          {shownLibraries.map((l) => (
+            <div key={l.id} className="chooser-lib">
+              <input
+                type="checkbox"
+                checked={chosen.has(l.id)}
+                aria-label={`Search ${l.name}`}
+                title="Search this library (tick several to search them together)"
+                onChange={() => chosenLibraries.set(toggleLibrary(chosen, l.id))}
+              />
               <button
                 type="button"
-                aria-label={`Remove ${l.name}`}
-                title={`Remove ${l.name} from this browser`}
-                onClick={() => onRemove(l.id, l.name)}
+                aria-pressed={chosen.has(l.id)}
+                title={l.name}
+                onClick={(e) =>
+                  chosenLibraries.set(
+                    e.ctrlKey || e.metaKey || e.shiftKey
+                      ? toggleLibrary(chosen, l.id)
+                      : chooseOnly(chosen, l.id),
+                  )
+                }
               >
-                ×
+                {l.name}
               </button>
-            )}
-          </div>
-        ))}
+            </div>
+          ))}
+          {shownLibraries.length === 0 && <p className="home-quiet">No library matches.</p>}
+        </div>
+        {onRemoveMany && (
+          <button
+            type="button"
+            className="chooser-delete"
+            disabled={doomed.length === 0}
+            title={
+              doomed.length === 0
+                ? "Tick libraries you imported to remove them"
+                : `Remove ${doomed.map((l) => l.name).join(", ")} from this browser`
+            }
+            onClick={() => onRemoveMany(doomed)}
+          >
+            Delete selected{doomed.length > 0 ? ` (${doomed.length})` : ""}
+          </button>
+        )}
       </nav>
       <div className="chooser-main">
         <input

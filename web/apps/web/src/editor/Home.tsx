@@ -487,7 +487,7 @@ function Blocks({
         engine={engine}
         browse
         onImport={() => setImporting(true)}
-        onRemove={(id, name) => void library.delete(id, name)}
+        onRemoveMany={(items) => void library.deleteMany(items)}
         removable={new Set(libraries.map((l) => l.id))}
       />
     </section>

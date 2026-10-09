@@ -10,6 +10,8 @@ export const PREVIEW_PITCH = -24;
 export const PREVIEW_PITCH_LIMIT = 80;
 /** One full turn of the idle spin. */
 const SPIN_MS = 14000;
+/** How long a preview rests after a drag before it spins again. */
+export const RESUME_MS = 1500;
 
 export interface TurnPose {
   readonly yaw: number;
@@ -20,7 +22,18 @@ interface LivePose {
   yaw: number;
   pitch: number;
   held: boolean;
-  taken: boolean;
+  /** When the last drag let go (performance.now), or null if it never was dragged. */
+  releasedAt: number | null;
+}
+
+/** Whether the idle spin runs: not while held, and not until `RESUME_MS` after a release. */
+export function spinning(
+  state: { held: boolean; releasedAt: number | null },
+  now: number,
+  delay = RESUME_MS,
+): boolean {
+  if (state.held) return false;
+  return state.releasedAt === null || now - state.releasedAt >= delay;
 }
 
 /** Yaw and pitch after a drag of `dx`/`dy` pixels. Pitch stays short of flipping over. */
@@ -45,7 +58,8 @@ export function previewTransform(pose: TurnPose): string {
 }
 
 /**
- * Spins `ref`'s element until the pointer drags it, then holds the angle the drag left.
+ * Spins `ref`'s element. A drag turns it by hand; once the pointer has been let go for
+ * `RESUME_MS` it spins on again from the angle the drag left.
  * Handlers go on the hit target (a parent); `ref` goes on the element that turns.
  */
 export function useTurntable() {
@@ -54,7 +68,7 @@ export function useTurntable() {
     yaw: 0,
     pitch: PREVIEW_PITCH,
     held: false,
-    taken: false,
+    releasedAt: null,
   });
 
   useEffect(() => {
@@ -71,7 +85,7 @@ export function useTurntable() {
       const dt = now - last;
       last = now;
       const current = pose.current;
-      if (!reduced && !current.held && !current.taken) {
+      if (!reduced && spinning(current, now)) {
         current.yaw += (dt / SPIN_MS) * 360;
         apply();
       }
@@ -84,7 +98,6 @@ export function useTurntable() {
   const onPointerDown = (event: ReactPointerEvent<HTMLElement>) => {
     event.preventDefault();
     pose.current.held = true;
-    pose.current.taken = true;
     event.currentTarget.setPointerCapture(event.pointerId);
   };
   const onPointerMove = (event: ReactPointerEvent<HTMLElement>) => {
@@ -97,6 +110,7 @@ export function useTurntable() {
   };
   const onPointerUp = () => {
     pose.current.held = false;
+    pose.current.releasedAt = performance.now();
   };
 
   return { ref, onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp };

@@ -232,6 +232,8 @@ export interface LibraryActions {
   /** Reads in libraries another worker stored (the folder import). */
   reload(): Promise<void>;
   delete(id: string, name: string): Promise<void>;
+  /** Removes several libraries after one confirmation. */
+  deleteMany(items: readonly { id: string; name: string }[]): Promise<void>;
 }
 
 /**

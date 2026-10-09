@@ -2136,7 +2136,7 @@ button.brand {
 .chooser {
   display: grid;
   flex: 1;
-  grid-template-columns: 170px 1fr 260px;
+  grid-template-columns: 255px 1fr 260px;
   gap: 14px;
   min-height: 0;
   height: 100%;
@@ -2150,7 +2150,22 @@ button.brand {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* The libraries scroll on their own, so the search above and Delete below stay put. */
+.chooser-libs {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
   overflow: auto;
+}
+
+.chooser-delete {
+  margin-top: auto;
 }
 
 .chooser-rail button {
@@ -2160,12 +2175,22 @@ button.brand {
 .chooser-lib {
   display: flex;
   gap: 4px;
+  align-items: center;
 }
 
-.chooser-lib > button:first-child {
+.chooser-lib > input[type="checkbox"] {
+  flex: none;
+  margin: 0;
+}
+
+/* A long name is cut with an ellipsis; the full name is the button's tooltip. */
+.chooser-lib > button {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
   text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chooser-main .block-grid {
@@ -3040,224 +3065,4 @@ button.brand {
   padding-left: 18px;
   color: #f0b45a;
   font-size: 12px;
-}
-
-/* The Import Minecraft dialog: a route, a folder, its plan, progress and a report. */
-.import-card {
-  width: min(760px, 100%);
-}
-
-.import-body {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  min-height: 0;
-  overflow: auto;
-}
-
-.import-routes {
-  margin: 0;
-  padding: 0;
-  border: none;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.import-step {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.import-step p,
-.import-report p {
-  margin: 0;
-  line-height: 1.45;
-}
-
-.import-step code {
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: #23272d;
-  color: var(--text);
-  font-size: 12px;
-}
-
-.import-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}
-
-.import-folder {
-  min-width: 0;
-  max-width: 320px;
-  overflow: hidden;
-  color: var(--text-quiet);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.import-locations ul {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin: 6px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.import-locations li {
-  display: grid;
-  grid-template-columns: 140px minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-}
-
-.import-where {
-  color: var(--text-quiet);
-}
-
-.import-locations code {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.import-plan {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-}
-
-.import-plan dl {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 4px 16px;
-  margin: 0;
-}
-
-.import-plan dt {
-  color: var(--text-quiet);
-}
-
-.import-plan dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.import-problems {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  align-items: flex-start;
-  padding-top: 10px;
-  border-top: 1px solid var(--line);
-  color: #f0a8a8;
-}
-
-.import-problems p {
-  margin: 0;
-  line-height: 1.45;
-}
-
-.import-error {
-  margin: 0;
-}
-
-.import-vanilla {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.import-prefix {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.import-prefix input {
-  width: 180px;
-  padding: 4px 8px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #23272d;
-  color: var(--text);
-  font: inherit;
-}
-
-.import-progress {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.import-progress-label {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--text-quiet);
-}
-
-.import-bar {
-  height: 8px;
-  overflow: hidden;
-  border-radius: 4px;
-  background: #23272d;
-}
-
-.import-bar > div {
-  height: 100%;
-  background: var(--accent);
-}
-
-.import-bar.indeterminate > div {
-  width: 30%;
-  animation: import-slide 1.2s ease-in-out infinite alternate;
-}
-
-@keyframes import-slide {
-  from {
-    margin-left: 0;
-  }
-  to {
-    margin-left: 70%;
-  }
-}
-
-.import-report {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--accent);
-  border-radius: 8px;
-}
-
-.import-report ul {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.import-report li {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  max-width: 360px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .import-bar.indeterminate > div {
-    animation: none;
-  }
 }

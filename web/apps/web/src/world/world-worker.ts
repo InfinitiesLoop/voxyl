@@ -433,7 +433,7 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
       await librariesLoaded;
       const { matched, hits } = searchBlocks(libraries, {
         query: command.query,
-        ...(command.library !== undefined && { library: command.library }),
+        ...(command.libraries !== undefined && { libraries: command.libraries }),
         ...(command.limit !== undefined && { limit: command.limit }),
         ...(command.offset !== undefined && { offset: command.offset }),
       });

@@ -57,6 +57,20 @@ describe("block search", () => {
     );
   });
 
+  it("searches only the chosen libraries, and all of them when none are chosen", () => {
+    const other = { ...library, id: "other", blocks: { zzz_block: library.blocks.stone as Block } };
+    const both = new Map([
+      [library.id, library],
+      [other.id, other],
+    ]);
+    const all = searchBlocks(both, { query: "", limit: 1000 }).matched;
+    expect(searchBlocks(both, { query: "", libraries: [] }).matched).toBe(Math.min(all, 60));
+    const only = searchBlocks(both, { query: "", libraries: ["other"] });
+    expect(only.hits.map((h) => h.ref)).toEqual(["other:zzz_block"]);
+    const mixed = searchBlocks(both, { query: "zzz", libraries: ["other", library.id] });
+    expect(mixed.hits.some((h) => h.ref === "other:zzz_block")).toBe(true);
+  });
+
   it("lists the default set, and icons show a cube's top or a pane's glass", () => {
     const { hits, matched } = searchBlocks(libraries, { query: "" });
     // Every block but the hidden undecided placeholder.

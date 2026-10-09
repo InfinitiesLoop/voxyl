@@ -5,6 +5,7 @@ import type { Settings } from "../settings-url.ts";
 import type { WorldInfo } from "../worlds.ts";
 import { type LayoutPreset, type LayoutState, withPreset } from "./layout.ts";
 import { ProjectSettingsDialog } from "./ProjectSettings.tsx";
+import { canLockKeys, toggleFullscreen } from "./tab-guard.ts";
 import { useStore } from "./useStore.ts";
 
 interface TopBarProps {
@@ -183,10 +184,41 @@ export function TopBar({
       >
         Keys
       </button>
+      <FullscreenButton />
       <button type="button" aria-pressed={devOpen} onClick={click(onDev)}>
         Dev
       </button>
     </header>
+  );
+}
+
+/**
+ * Fullscreen the page's own way. That is the only state where the browser lets the editor
+ * keep Ctrl+W (and Ctrl+T, Ctrl+N, Ctrl+1-9) from closing or switching tabs while you fly.
+ */
+function FullscreenButton() {
+  const [full, setFull] = useState(() => document.fullscreenElement !== null);
+  useEffect(() => {
+    const change = () => setFull(document.fullscreenElement !== null);
+    document.addEventListener("fullscreenchange", change);
+    return () => document.removeEventListener("fullscreenchange", change);
+  }, []);
+  return (
+    <button
+      type="button"
+      aria-pressed={full}
+      title={
+        canLockKeys()
+          ? "Fullscreen. Ctrl+W, Ctrl+T and Ctrl+N then stay in the editor instead of closing the tab"
+          : "Fullscreen (this browser can't keep Ctrl+W from closing the tab)"
+      }
+      onClick={(e) => {
+        toggleFullscreen().catch(() => {});
+        e.currentTarget.blur();
+      }}
+    >
+      Fullscreen
+    </button>
   );
 }
 

@@ -624,6 +624,23 @@ because there was no default block set to draw with.
   reviewed, so `pnpm golden` fails until someone looks at the diffs in `shots/golden/` and
   updates them.
 
+### Editor feedback: tab guard, preview spin, block libraries (2026-10-08)
+
+- **Ctrl+W closes the tab while flying.** What holds: Chrome handles Ctrl+W/T/N before the
+  page sees them and ignores `preventDefault` in a normal tab (pointer lock changes nothing).
+  The Keyboard Lock API (`navigator.keyboard.lock`) does give them to the page, but only while
+  fullscreen through `requestFullscreen()` (F11 does not count), so the top bar has a
+  **Fullscreen** button that, once fullscreen, locks W/T/N and Ctrl+1-9. Everywhere else a
+  `beforeunload` guard asks "Leave site?" while flying or with an unsaved project
+  (`editor/tab-guard.ts`). The fullscreen lock is unverified in a real window: headless
+  cannot test it.
+- **Block preview** spins again 1.5 s after a drag lets go (`spinning()` in `turntable.ts`).
+- **Block libraries list** (the chooser's rail): sorted case-insensitively, 255 px wide, long
+  names ellipsised with the name as tooltip, a search box, tick boxes (or Ctrl-click) to
+  select several, and **Delete selected** (one confirmation; the built-in set can't be
+  removed). The selection is UI state (`chosenLibraries`, shared by every chooser) and
+  narrows block search through `findBlocks({libraries})`; none ticked means all.
+
 ### Next steps (2026-10-08)
 
 In the order I'd take them. The first two are the user's.

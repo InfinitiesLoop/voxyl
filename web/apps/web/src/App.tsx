@@ -25,6 +25,7 @@ import { SelectionPanel } from "./editor/SelectionPanel.tsx";
 import { Toast } from "./editor/Toast.tsx";
 import { ToolBadge } from "./editor/Tools.tsx";
 import { TopBar } from "./editor/TopBar.tsx";
+import { installTabGuard } from "./editor/tab-guard.ts";
 import { useStore } from "./editor/useStore.ts";
 import { BenchPanel, Hud } from "./Hud.tsx";
 import { type Backend, Engine, type EngineStats } from "./scene/Engine.ts";
@@ -152,6 +153,18 @@ export function App() {
       created.dispose();
     };
   }, []);
+
+  // Ctrl+W while flying closes the tab: ask first (see editor/tab-guard.ts for what holds).
+  const infoRef = useRef(info);
+  infoRef.current = info;
+  useEffect(() => {
+    if (!engine) return;
+    return installTabGuard(() => ({
+      hasProject: infoRef.current !== null,
+      saved: Boolean(infoRef.current?.saved),
+      flying: engine.flying.get(),
+    }));
+  }, [engine]);
 
   // The project's north is a setting that can change (and undo) while it is open.
   useEffect(() => {
@@ -373,6 +386,15 @@ export function App() {
     delete: async (id: string, name: string) => {
       if (!engine || !confirm(`Remove ${name} from this browser?`)) return;
       await engine.world.request({ type: "deleteLibrary", id });
+      clearBlockIcons(engine);
+      await refreshLibraries();
+    },
+    deleteMany: async (items: readonly { id: string; name: string }[]) => {
+      if (!engine || items.length === 0) return;
+      const list =
+        items.length <= 5 ? items.map((i) => i.name).join(", ") : `${items.length} libraries`;
+      if (!confirm(`Remove ${list} from this browser?`)) return;
+      for (const item of items) await engine.world.request({ type: "deleteLibrary", id: item.id });
       clearBlockIcons(engine);
       await refreshLibraries();
     },

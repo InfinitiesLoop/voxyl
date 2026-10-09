@@ -26,6 +26,8 @@ export interface BlockQuery {
   readonly query: string;
   /** Only this library, when set. */
   readonly library?: string;
+  /** Only these libraries, when set and not empty (empty means all of them). */
+  readonly libraries?: readonly string[];
   /** How many hits to return. Default 60. */
   readonly limit?: number;
   /** Skip this many hits first, so a viewer can ask for the next page. */
@@ -43,9 +45,11 @@ export function searchBlocks(
     .filter((t) => t !== "");
   const limit = Math.max(1, query.limit ?? 60);
   const offset = Math.max(0, Math.floor(query.offset ?? 0));
+  const only = query.libraries && query.libraries.length > 0 ? new Set(query.libraries) : null;
   const ranked: { score: number; ref: string; name: string; block: Block; library: Library }[] = [];
   for (const library of libraries.values()) {
     if (query.library !== undefined && library.id !== query.library) continue;
+    if (only && !only.has(library.id)) continue;
     for (const id of Object.keys(library.blocks)) {
       const block = library.blocks[id];
       if (!block || block.hidden) continue;

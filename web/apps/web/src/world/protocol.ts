@@ -209,7 +209,14 @@ export type Command =
   /** Takes a palette out of the project (refused while cells use it, or others extend it). */
   | { type: "removePalette"; palette: PaletteId }
   /** Blocks from the libraries, for the palette drawer's picker. */
-  | { type: "findBlocks"; query: string; library?: string; limit?: number; offset?: number }
+  | {
+      type: "findBlocks";
+      query: string;
+      /** Only these libraries; empty or missing means all of them. */
+      libraries?: readonly string[];
+      limit?: number;
+      offset?: number;
+    }
   | { type: "deleteProject"; id: string }
   /** Stores a bundle file as a saved project. */
   | { type: "importProject"; bytes: Uint8Array }
