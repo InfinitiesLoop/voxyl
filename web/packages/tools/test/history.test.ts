@@ -116,7 +116,6 @@ describe("history tool", () => {
     expect(project.world.cellCount).toBe(3);
     const again = await ok(host, "history", { action: "undo", op_id: "u1" });
     expect(again.duplicate).toBe(true);
-    expect(again.undone).toEqual([]);
     expect(project.world.cellCount).toBe(3);
   });
 

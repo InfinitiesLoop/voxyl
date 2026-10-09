@@ -1,7 +1,7 @@
 // The registry and the one entry point adapters call. callTool never throws: every outcome is
 // an envelope, { ok: true, ... } or { ok: false, error: { code, message, ... } }.
 
-import { CommandError, RegionError, RegionTextError } from "@voxyl/core";
+import { CommandError, type HistoryEntry, RegionError, RegionTextError } from "@voxyl/core";
 import { z } from "zod";
 import { nearMatches } from "./names.ts";
 import { generateId, makeCall } from "./run.ts";
@@ -17,6 +17,8 @@ import { clear } from "./tools/clear.ts";
 import { fill } from "./tools/fill.ts";
 import { history } from "./tools/history.ts";
 import { inspect } from "./tools/inspect.ts";
+import { paletteEdit } from "./tools/palette-edit.ts";
+import { paletteGet } from "./tools/palette-get.ts";
 import { place } from "./tools/place.ts";
 import { replace } from "./tools/replace.ts";
 import { select } from "./tools/select.ts";
@@ -32,6 +34,8 @@ export const TOOLS: readonly ToolDefinition[] = [
   fill,
   clear,
   replace,
+  paletteGet,
+  paletteEdit,
 ];
 
 const BY_NAME: ReadonlyMap<string, ToolDefinition> = new Map(TOOLS.map((t) => [t.name, t]));
@@ -127,6 +131,15 @@ export async function callTool(
     }
     const opId = typeof args.op_id === "string" ? args.op_id : generateId(host);
     const dryRun = args.dry_run === true;
+    // A repeat of a call already applied: answer without planning against the changed project.
+    if (project && !dryRun && typeof args.op_id === "string" && wasApplied(project.history, opId)) {
+      return {
+        ok: true,
+        duplicate: true,
+        note: "This op_id was already applied; nothing changed this time.",
+        problems: [],
+      };
+    }
     // A tool that runs without a project never uses its call's project.
     const call = makeCall(host, project as NonNullable<typeof project>, name, opId, dryRun);
     const result = await tool.handler(host, parsed.data, call);
@@ -134,6 +147,11 @@ export async function callTool(
   } catch (error) {
     return errorEnvelope(error);
   }
+}
+
+/** Whether a call with this op_id already ran: its command ids are the id or id:suffix. */
+function wasApplied(history: readonly HistoryEntry[], opId: string): boolean {
+  return history.some((e) => e.command.id === opId || e.command.id.startsWith(`${opId}:`));
 }
 
 function errorEnvelope(error: unknown): ToolFailure {

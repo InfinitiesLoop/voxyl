@@ -186,3 +186,18 @@ Next: build order step 2 (`build`, `transform`, `palette_get`, `palette_edit`, `
 `describe_shapes`), starting with `palette_edit` so semantics can be created. Then step 3, the
 worker adapter (`{type: "tool", name, args}` calling `callTool`) over a host on the worker's
 project, with `changed` wired to persistence and the views.
+
+### Step 2a built: `palette_edit`, `palette_get`
+
+- `palette_edit {palette, create?, palette_set?, ops[], delete?}`: ops are `add | set | rename |
+  remove` on a semantic by name, with `block`, `shape`, `glow`, `tint`, `description` (null
+  clears a field; `set` merges into the semantic's own look, so setting an inherited semantic
+  overrides it in that palette only, deriving it on first use). A rename keeps the id, so
+  cells follow. The call plans on a scratch fork (new palette ids come from the commands),
+  then runs the same commands as one group: one undo step, all or nothing, errors say
+  `ops[i] <op> <name>`. `delete: true` removes the palette (core refuses while cells use it).
+- `palette_get {palette?}`: palette list, or one palette's entries with the resolved block,
+  shape, glow, tint, cell count, `inherited_from` and `derived_from`.
+- `callTool` now answers a repeated `op_id` before running the handler (`duplicate: true`), by
+  looking for the id in the project history; planning tools can't be re-run on a changed project.
+- Gap: `link` (shared palettes) needs the shared-palette store on the host; it lands with it.
