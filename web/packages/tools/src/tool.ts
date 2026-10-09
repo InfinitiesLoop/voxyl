@@ -2,6 +2,7 @@
 // an input schema and a handler; it never sees the worker, the relay or WebMCP, only a
 // ToolHost, so it tests in Node with an in-memory host.
 
+import type { Libraries } from "@voxyl/blocks";
 import type { Box, Project, SemanticChange } from "@voxyl/core";
 import type { z } from "zod";
 
@@ -21,7 +22,9 @@ export interface ToolHost {
     project: Project,
     info: { tool: string; commandIds: readonly string[] },
   ): void | Promise<void>;
-  // Block libraries, the clipboard and the prefab and palette stores join here, optional and
+  /** The block libraries available to this project (find_blocks, block checks). Async: they load. */
+  libraries?(): Promise<Libraries> | Libraries;
+  // The clipboard and the prefab and palette stores join here, optional and
   // async, as the tools that need them land (find_blocks, transform, prefab_*, palette_edit).
 }
 

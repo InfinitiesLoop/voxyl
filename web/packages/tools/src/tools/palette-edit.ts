@@ -1,3 +1,4 @@
+import { parseBlockRef } from "@voxyl/blocks";
 import {
   CommandError,
   type Form,
@@ -11,7 +12,7 @@ import { z } from "zod";
 import { resolvePalette, resolveSemantic } from "../names.ts";
 import { describePalette, usage } from "../palettes.ts";
 import { editResult, MutatingFields } from "../result.ts";
-import { type CommandSpec, defineTool, ToolError } from "../tool.ts";
+import { type CommandSpec, defineTool, ToolError, type ToolHost } from "../tool.ts";
 
 const MAX_OPS = 200;
 const Name = z.string().trim().min(1).max(80);
@@ -89,7 +90,7 @@ export const paletteEdit = defineTool({
     ...MutatingFields,
   }),
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
-  async handler(_host, args, call) {
+  async handler(host, args, call) {
     const project = call.project;
     // Ids of new palettes come from the commands, so the plan runs on a scratch fork that later
     // commands read their ids from. The same specs then run for real (or as the dry run).
@@ -240,6 +241,7 @@ export const paletteEdit = defineTool({
       plan({ kind: "palette_remove", args: { palette: paletteId } }, `delete ${args.palette}`);
     }
 
+    const problems = await unknownBlocks(host, ops);
     const summary = specs.length > 0 ? await call.run(specs) : null;
     const after = summary?.after ?? project;
     const final = args.delete === true ? null : after.semantics.palette(paletteId);
@@ -247,6 +249,7 @@ export const paletteEdit = defineTool({
       ...(final && { palette: describePalette(after, paletteId, usage(after)) }),
       ...(args.delete === true && { deleted: args.palette }),
       ops_applied: specs.length,
+      problems,
     });
   },
 });
@@ -291,4 +294,23 @@ function formOf(own: Form | undefined, op: Edit): Form | null | undefined {
   if (op.placement === null) delete merged.placement;
   else if (op.placement !== undefined) merged.placement = PLACEMENTS[op.placement];
   return Object.keys(merged).length > 0 ? (merged as Form) : null;
+}
+
+/** Warnings for blocks the host's libraries don't have (the semantic is set anyway). */
+async function unknownBlocks(host: ToolHost, ops: readonly Edit[]): Promise<string[]> {
+  if (!host.libraries) return [];
+  const libraries = await host.libraries();
+  if (libraries.size === 0) return [];
+  const out: string[] = [];
+  for (const op of ops) {
+    if (op.block == null) continue;
+    const ref = parseBlockRef(op.block);
+    const found = ref && libraries.get(ref.library)?.blocks[ref.block];
+    if (!found) {
+      out.push(
+        `${op.semantic}: block "${op.block}" isn't in the loaded libraries; use find_blocks.`,
+      );
+    }
+  }
+  return out;
 }

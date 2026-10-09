@@ -20,6 +20,7 @@ describe("registry", () => {
       "build",
       "transform",
       "describe_shapes",
+      "find_blocks",
     ]);
     for (const t of listing) {
       expect(t.inputSchema.type).toBe("object");

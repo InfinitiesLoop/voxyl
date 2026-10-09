@@ -17,6 +17,7 @@ import { build } from "./tools/build.ts";
 import { clear } from "./tools/clear.ts";
 import { describeShapes } from "./tools/describe-shapes.ts";
 import { fill } from "./tools/fill.ts";
+import { findBlocks } from "./tools/find-blocks.ts";
 import { history } from "./tools/history.ts";
 import { inspect } from "./tools/inspect.ts";
 import { paletteEdit } from "./tools/palette-edit.ts";
@@ -42,6 +43,7 @@ export const TOOLS: readonly ToolDefinition[] = [
   build,
   transform,
   describeShapes,
+  findBlocks,
 ];
 
 const BY_NAME: ReadonlyMap<string, ToolDefinition> = new Map(TOOLS.map((t) => [t.name, t]));

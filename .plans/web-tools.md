@@ -114,11 +114,13 @@ Godot tool names in brackets show what each replaces.
 
 ## Status
 
-**Step 1 built (2026-10-09).** `packages/tools` (`@voxyl/tools`: pure TS, depends on core and
-shapes only, no session) with the registry, envelope, `ToolHost`, an in-memory host
-(`MemoryHost`, exported for the headless host and scripts) and eight tools: `status`,
-`history`, `inspect`, `select`, `place`, `fill`, `clear`, `replace`. 44 Vitest tests (Node,
-`packages/tools/test`); `pnpm check` is green. Core needed no change.
+**Steps 1 and 2 built (2026-10-09); 73 tests; the step 2 notes are at the end.** Step 1:
+`packages/tools` (`@voxyl/tools`: pure TS, depends on core, shapes and blocks, no session) with
+the registry, envelope, `ToolHost`, an in-memory host (`MemoryHost`, exported for the headless
+host and scripts) and eight tools: `status`, `history`, `inspect`, `select`, `place`, `fill`,
+`clear`, `replace` (step 2 adds `palette_get`, `palette_edit`, `build`, `transform`,
+`describe_shapes`, `find_blocks`). Tests run in Node (`packages/tools/test`); `pnpm check` is
+green. Core needed no change.
 
 What exists:
 - **Registry.** `defineTool`, `TOOLS`, `listTools()` (name, title, description, JSON Schema from
@@ -169,11 +171,8 @@ Deviations from the design above:
   and a `slot` name; that was cheap and needed nothing from core.
 
 Known gaps:
-- **No semantic creation yet.** `place`, `fill` and `replace` need the semantic to exist
-  (`not_found` lists near matches); creating one waits for `palette_edit` (step 2). A fresh
-  project has none, so `palette_edit` should come first in step 2.
-- Architecture shapes take `slot` only (`"up=north turn=1"`); `up`/`facing` do not map onto
-  their (side, turn) slots yet, and `attached_to` for torches is not ported.
+- (Closed in step 2: semantics are made with `palette_edit`; `up`/`facing` and `attached_to`
+  work.)
 - `symmetry` and `repeat` on edit tools are not in.
 - `fill` styles other than solid use the region's bounding box; hollow's shell is "cells with a
   missing face neighbour". A part fill replaces the cell, it does not merge like `place`.
@@ -182,9 +181,7 @@ Known gaps:
 - `status` lists at most 200 semantics, and `regionStats` is a full scan (fine until builds are
   huge).
 
-Next: build order step 2 (`build`, `transform`, `palette_get`, `palette_edit`, `find_blocks`,
-`describe_shapes`), starting with `palette_edit` so semantics can be created. Then step 3, the
-worker adapter (`{type: "tool", name, args}` calling `callTool`) over a host on the worker's
+Next: step 3, the worker adapter (`{type: "tool", name, args}` calling `callTool`) over a host on the worker's
 project, with `changed` wired to persistence and the views.
 
 ### Step 2a built: `palette_edit`, `palette_get`
@@ -224,3 +221,21 @@ project, with `changed` wired to persistence and the views.
   clipboard (`paste`) are not exposed: paste waits for the prefab and clipboard host members.
 - **`describe_shapes {shape?, up?, facing?}`** lists shapes, or gives one's slot names, and the
   slot a given `up`/`facing` means. It needs no project.
+
+### Step 2d built: `find_blocks`
+
+- `ToolHost.libraries?()` (sync or async) returns the block libraries (`@voxyl/blocks`
+  `Libraries`); `MemoryHost` takes them in its constructor or `MemoryHost.create({libraries})`.
+  `@voxyl/tools` now depends on `@voxyl/blocks`.
+- `find_blocks {query?, library?, near_color?, tolerance?, limit, offset, libraries?}` wraps
+  `searchBlocks` (no icons in results); `near_color` ranks the first 5,000 matches of the query
+  by RGB distance. `libraries: true` lists libraries. A host without `libraries` answers
+  `unavailable`; an empty one answers with a problem. `palette_edit` warns (in `problems`)
+  about a `block` the libraries lack, and sets it anyway.
+
+### Still open after step 2
+
+- `palette_edit` `link` (shared palettes) and anything touching the shared-palette store.
+- `paste` of a prefab or the clipboard, and in-place `rotate` of cells (core has both).
+- Reading the block library's `attachment` flag (host block profiles) for `attached_to`.
+- `symmetry` and `repeat` on edit tools; the `prefab`, `project` and `capture` tools.
