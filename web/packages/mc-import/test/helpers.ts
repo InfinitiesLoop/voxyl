@@ -90,3 +90,80 @@ export function solid(r: number, g: number, b: number, a = 255, frames = 1): Uin
   for (let i = 0; i < out.length; i += 4) out.set([r, g, b, a], i);
   return out;
 }
+
+const ADAM7 = [
+  [0, 0, 8, 8],
+  [4, 0, 8, 8],
+  [0, 4, 4, 8],
+  [2, 0, 4, 4],
+  [0, 2, 2, 4],
+  [1, 0, 2, 2],
+  [0, 1, 1, 2],
+] as const;
+
+/**
+ * A greyscale PNG (`depth` 1, 2, 4 or 8 bits) of grey levels 0..2^depth-1, optionally Adam7
+ * interlaced, filter 0 on every row, for testing the decoder's bit handling.
+ */
+export async function pngGrey(
+  width: number,
+  height: number,
+  levels: readonly number[],
+  depth: 1 | 2 | 4 | 8,
+  interlaced: boolean,
+): Promise<Uint8Array> {
+  const pack = (pixels: number[]) => {
+    const row = new Uint8Array(1 + Math.ceil((pixels.length * depth) / 8));
+    pixels.forEach((v, i) => {
+      const bit = i * depth;
+      row[1 + (bit >> 3)] = (row[1 + (bit >> 3)] ?? 0) | (v << (8 - depth - (bit & 7)));
+    });
+    return row;
+  };
+  const rows: Uint8Array[] = [];
+  if (interlaced) {
+    for (const [x0, y0, dx, dy] of ADAM7) {
+      for (let y = y0; y < height; y += dy) {
+        const pixels: number[] = [];
+        for (let x = x0; x < width; x += dx) pixels.push(levels[y * width + x] ?? 0);
+        if (pixels.length) rows.push(pack(pixels));
+      }
+    }
+  } else {
+    for (let y = 0; y < height; y++) rows.push(pack(levels.slice(y * width, (y + 1) * width)));
+  }
+  const raw = new Uint8Array(rows.reduce((n, r) => n + r.length, 0));
+  let at = 0;
+  for (const r of rows) {
+    raw.set(r, at);
+    at += r.length;
+  }
+  const idat = await deflate(raw, "deflate");
+  const chunk = (kind: string, body: Uint8Array) => {
+    const c = new Uint8Array(12 + body.length);
+    new DataView(c.buffer).setUint32(0, body.length);
+    c.set(utf8.encode(kind), 4);
+    c.set(body, 8);
+    return c;
+  };
+  const ihdr = new Uint8Array(13);
+  const hv = new DataView(ihdr.buffer);
+  hv.setUint32(0, width);
+  hv.setUint32(4, height);
+  ihdr[8] = depth;
+  ihdr[9] = 0;
+  ihdr[12] = interlaced ? 1 : 0;
+  const parts = [
+    Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", idat),
+    chunk("IEND", new Uint8Array(0)),
+  ];
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let o = 0;
+  for (const p of parts) {
+    out.set(p, o);
+    o += p.length;
+  }
+  return out;
+}

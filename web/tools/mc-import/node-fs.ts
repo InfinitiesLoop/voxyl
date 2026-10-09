@@ -20,6 +20,11 @@ export function nodeDir(path: string, name = path.split(/[/]/).pop() ?? path): F
   };
 }
 
+/** A file on disk, opened lazily for ranged reads. */
+export function nodeFileAt(path: string, name = path.split(/[/]/).pop() ?? path): FsFile {
+  return nodeFile(path, name);
+}
+
 function nodeFile(path: string, name: string): FsFile {
   return {
     name,

@@ -1,5 +1,5 @@
-// A small PNG decoder: every colour type and bit depth, to 8-bit RGBA. Not interlaced images
-// (Minecraft's textures never are).
+// A small PNG decoder: every colour type and bit depth, to 8-bit RGBA, interlaced (Adam7) or
+// not. Vanilla's textures never are interlaced, but a few mods' are (four of Ztones').
 
 import { inflate } from "./streams.ts";
 
@@ -21,6 +21,7 @@ export async function decodePng(bytes: Uint8Array): Promise<Image> {
   let height = 0;
   let depth = 8;
   let type = 6;
+  let interlaced = false;
   let palette: Uint8Array | null = null;
   let transparency: Uint8Array | null = null;
   const data: Uint8Array[] = [];
@@ -33,7 +34,7 @@ export async function decodePng(bytes: Uint8Array): Promise<Image> {
       height = view.getUint32(at + 12);
       depth = body[8] ?? 8;
       type = body[9] ?? 6;
-      if ((body[12] ?? 0) !== 0) throw new Error("Interlaced PNGs aren't supported");
+      interlaced = (body[12] ?? 0) === 1;
     } else if (kind === "PLTE") palette = body;
     else if (kind === "tRNS") transparency = body;
     else if (kind === "IDAT") data.push(body);
@@ -46,7 +47,9 @@ export async function decodePng(bytes: Uint8Array): Promise<Image> {
   const bitsPerPixel = channels * depth;
   const stride = Math.ceil((width * bitsPerPixel) / 8);
   const bpp = Math.max(1, bitsPerPixel >> 3);
-  const pixels = unfilter(raw, height, stride, bpp);
+  const pixels = interlaced
+    ? deinterlace(raw, width, height, bitsPerPixel)
+    : unfilter(raw, height, stride, bpp);
 
   const rgba = new Uint8Array(width * height * 4);
   const max = (1 << depth) - 1;
@@ -95,6 +98,66 @@ export async function decodePng(bytes: Uint8Array): Promise<Image> {
     }
   }
   return { width, height, rgba };
+}
+
+/** Adam7's seven passes: where each starts and how far apart its pixels are, in x and y. */
+const ADAM7 = [
+  [0, 0, 8, 8],
+  [4, 0, 8, 8],
+  [0, 4, 4, 8],
+  [2, 0, 4, 4],
+  [0, 2, 2, 4],
+  [1, 0, 2, 2],
+  [0, 1, 1, 2],
+] as const;
+
+/**
+ * An interlaced image's rows, as a non-interlaced image would have them: each of the seven
+ * passes is a small image of its own (filtered like any), whose pixels are copied to their
+ * places bit for bit, so the colour decoding after it doesn't care.
+ */
+function deinterlace(
+  raw: Uint8Array,
+  width: number,
+  height: number,
+  bitsPerPixel: number,
+): Uint8Array {
+  const stride = Math.ceil((width * bitsPerPixel) / 8);
+  const out = new Uint8Array(height * stride);
+  const bpp = Math.max(1, bitsPerPixel >> 3);
+  let at = 0;
+  for (const [x0, y0, dx, dy] of ADAM7) {
+    const pw = Math.ceil((width - x0) / dx);
+    const ph = Math.ceil((height - y0) / dy);
+    if (pw <= 0 || ph <= 0) continue; // a pass of a small image can be empty (and has no bytes)
+    const passStride = Math.ceil((pw * bitsPerPixel) / 8);
+    const pass = unfilter(raw.subarray(at), ph, passStride, bpp);
+    at += ph * (passStride + 1);
+    for (let y = 0; y < ph; y++) {
+      for (let x = 0; x < pw; x++) {
+        const to = (y0 + y * dy) * stride;
+        const column = x0 + x * dx;
+        if (bitsPerPixel >= 8) {
+          const n = bitsPerPixel >> 3;
+          out.set(
+            pass.subarray(y * passStride + x * n, y * passStride + (x + 1) * n),
+            to + column * n,
+          );
+        } else {
+          // Sub-byte pixels share bytes: move the pixel's bits one pixel at a time.
+          const from = x * bitsPerPixel;
+          const src =
+            ((pass[y * passStride + (from >> 3)] ?? 0) >> (8 - bitsPerPixel - (from & 7))) &
+            ((1 << bitsPerPixel) - 1);
+          const dest = column * bitsPerPixel;
+          const shift = 8 - bitsPerPixel - (dest & 7);
+          const byte = to + (dest >> 3);
+          out[byte] = ((out[byte] ?? 0) & ~(((1 << bitsPerPixel) - 1) << shift)) | (src << shift);
+        }
+      }
+    }
+  }
+  return out;
 }
 
 /** Undoes PNG's per-row filters in place of a copy: one filter byte, then `stride` bytes. */
