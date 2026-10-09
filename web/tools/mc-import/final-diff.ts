@@ -27,6 +27,8 @@ const key = (b: FinalBlock) => (b.registry ? `${b.registry}@${b.meta}` : `name:$
 const faces = (b: FinalBlock) =>
   b.faces
     ? Object.entries(b.faces)
+        // Godot lists a pane's unbound sides as null; the web leaves them out.
+        .filter(([, t]) => t !== null)
         .sort(([a], [c]) => (a < c ? -1 : 1))
         .map(([s, t]) => `${s}=${t}`)
         .join(" ")
