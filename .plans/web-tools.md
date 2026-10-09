@@ -201,3 +201,26 @@ project, with `changed` wired to persistence and the views.
 - `callTool` now answers a repeated `op_id` before running the handler (`duplicate: true`), by
   looking for the id in the project history; planning tools can't be re-run on a changed project.
 - Gap: `link` (shared palettes) needs the shared-palette store on the host; it lands with it.
+
+### Step 2b/2c built: orientation, `build`, `transform`, `describe_shapes`
+
+- **Orientation (closes two step-1 gaps).** `up` and `facing` now pick the slot of a roof or
+  slope shape: `up` = where the shape's top points, `facing` = where its low (downhill) end
+  looks (its model -Z; verified on the roof tile, which falls toward -Z). `archSlotFor` in
+  `cell.ts` searches the 24 `(side, turn)` slots with `archRotation`; an explicit `slot` still
+  wins. `attached_to` (torch-like blocks) sets `up` to the opposite side, so `down` = standing
+  on the block below and `north` = leaning out of the north wall; the semantic's placement
+  profile fixes the rotation (core's `attachedTo` reads it back). It is rejected together with
+  `facing`/`up`, and ignored (noted) on parts. `palette_edit` gained `placement` (a standard
+  profile name: torch, stairs, slab, log, horizontal, facing, hopper, cube) so a semantic can
+  be made attachable; `palette_get` reports it. The block library's `attachment: "torch"` flag
+  is not read yet (that needs the host's block profiles, wired with the editor).
+- **`build {origin, axis?, legend, layers}`** is core's `parseRegionText` into one `set`; legend
+  names are checked first so a typo gets near matches, and text problems come back as a
+  `problems` list under `bad_argument`.
+- **`transform {where, by|to, copy?, turn?, mirror?, air?}`**: with `by` (offset) or `to`
+  (lowest corner) it is core's `move` or `copy`; without them `turn`/`mirror` run core's
+  `transform` in place. Rotating each cell in place (`rotate`) and pasting a prefab or the
+  clipboard (`paste`) are not exposed: paste waits for the prefab and clipboard host members.
+- **`describe_shapes {shape?, up?, facing?}`** lists shapes, or gives one's slot names, and the
+  slot a given `up`/`facing` means. It needs no project.

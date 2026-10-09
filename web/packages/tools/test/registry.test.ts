@@ -17,6 +17,9 @@ describe("registry", () => {
       "replace",
       "palette_get",
       "palette_edit",
+      "build",
+      "transform",
+      "describe_shapes",
     ]);
     for (const t of listing) {
       expect(t.inputSchema.type).toBe("object");

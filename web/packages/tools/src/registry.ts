@@ -13,7 +13,9 @@ import {
   type ToolHost,
   type ToolListing,
 } from "./tool.ts";
+import { build } from "./tools/build.ts";
 import { clear } from "./tools/clear.ts";
+import { describeShapes } from "./tools/describe-shapes.ts";
 import { fill } from "./tools/fill.ts";
 import { history } from "./tools/history.ts";
 import { inspect } from "./tools/inspect.ts";
@@ -23,6 +25,7 @@ import { place } from "./tools/place.ts";
 import { replace } from "./tools/replace.ts";
 import { select } from "./tools/select.ts";
 import { status } from "./tools/status.ts";
+import { transform } from "./tools/transform.ts";
 
 /** Every tool. To add one, write its file and add one line here. */
 export const TOOLS: readonly ToolDefinition[] = [
@@ -36,6 +39,9 @@ export const TOOLS: readonly ToolDefinition[] = [
   replace,
   paletteGet,
   paletteEdit,
+  build,
+  transform,
+  describeShapes,
 ];
 
 const BY_NAME: ReadonlyMap<string, ToolDefinition> = new Map(TOOLS.map((t) => [t.name, t]));

@@ -1,6 +1,12 @@
 // A palette as an agent reads it: each semantic with the block it resolves to.
 
-import { type PaletteId, type Project, regionStats, type SemanticId } from "@voxyl/core";
+import {
+  type PaletteId,
+  PLACEMENTS,
+  type Project,
+  regionStats,
+  type SemanticId,
+} from "@voxyl/core";
 
 /** Cells holding each semantic (a part counts once per cell it sits in), by id. */
 export function usage(project: Project): Map<SemanticId, number> {
@@ -19,6 +25,9 @@ export function describePalette(project: Project, id: PaletteId, counts: Map<Sem
     const r = registry.resolve(s);
     return {
       ...(r.form.shape !== undefined && { shape: r.form.shape }),
+      ...(placementName(r.form.placement) !== undefined && {
+        placement: placementName(r.form.placement),
+      }),
       ...(r.look.block !== undefined && { block: r.look.block }),
       ...(r.look.glow !== undefined && { glow: r.look.glow }),
       ...(r.look.tint !== undefined && { tint: r.look.tint }),
@@ -53,4 +62,11 @@ export function describePalette(project: Project, id: PaletteId, counts: Map<Sem
     ...(palette.linked !== undefined && { linked: true }),
     semantics: entries,
   };
+}
+
+/** The name of a standard placement profile, when the semantic uses one. */
+function placementName(profile: unknown): string | undefined {
+  if (profile === undefined) return undefined;
+  const text = JSON.stringify(profile);
+  return Object.entries(PLACEMENTS).find(([, p]) => JSON.stringify(p) === text)?.[0];
 }

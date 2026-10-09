@@ -1,4 +1,11 @@
-import { CommandError, type Form, type Look, type Project, type SemanticArg } from "@voxyl/core";
+import {
+  CommandError,
+  type Form,
+  type Look,
+  PLACEMENTS,
+  type Project,
+  type SemanticArg,
+} from "@voxyl/core";
 import { isKnownShape } from "@voxyl/shapes";
 import { z } from "zod";
 import { resolvePalette, resolveSemantic } from "../names.ts";
@@ -25,6 +32,13 @@ const Op = z.strictObject({
     .optional()
     .describe(
       "add/set: the part shape it places (edge1, face4, roof_tile...); null = whole blocks.",
+    ),
+  placement: z
+    .enum(Object.keys(PLACEMENTS) as [keyof typeof PLACEMENTS, ...(keyof typeof PLACEMENTS)[]])
+    .nullable()
+    .optional()
+    .describe(
+      "add/set: how whole blocks of it may be turned (torch = hangs on a wall or floor, stairs, slab, log, horizontal, facing, hopper, cube); null clears.",
     ),
   glow: z.boolean().nullable().optional().describe("add/set: whether it emits light."),
   tint: z
@@ -174,7 +188,12 @@ export const paletteEdit = defineTool({
               name: op.semantic,
               palette: paletteId,
               ...(op.description != null && { description: op.description }),
-              ...(op.shape != null && { form: { shape: op.shape } }),
+              ...((op.shape != null || op.placement != null) && {
+                form: {
+                  ...(op.shape != null && { shape: op.shape }),
+                  ...(op.placement != null && { placement: PLACEMENTS[op.placement] }),
+                },
+              }),
               ...lookOf({}, op, true),
             },
           },
@@ -263,11 +282,13 @@ function lookOf(own: Look, op: Edit, adding: boolean): { look?: Look | null } {
   return { look: Object.keys(merged).length > 0 ? (merged as Look) : null };
 }
 
-/** The form argument for a set: the own form with the shape changed, or undefined if untouched. */
+/** The form argument for a set: the own form with shape or placement changed, or undefined. */
 function formOf(own: Form | undefined, op: Edit): Form | null | undefined {
-  if (op.shape === undefined) return undefined;
+  if (op.shape === undefined && op.placement === undefined) return undefined;
   const merged: Record<string, unknown> = { ...own };
   if (op.shape === null) delete merged.shape;
-  else merged.shape = op.shape;
+  else if (op.shape !== undefined) merged.shape = op.shape;
+  if (op.placement === null) delete merged.placement;
+  else if (op.placement !== undefined) merged.placement = PLACEMENTS[op.placement];
   return Object.keys(merged).length > 0 ? (merged as Form) : null;
 }
