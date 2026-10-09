@@ -1,18 +1,9 @@
-import { cutPiece, defaultAnchor, type Piece } from "@voxyl/core";
+import { cutPiece, defaultAnchor } from "@voxyl/core";
 import { z } from "zod";
+import { occupied } from "../pieces.ts";
 import { PosSchema, resolveRegion, ToolRegion } from "../region.ts";
 import { boundsOf, editResult, MutatingFields } from "../result.ts";
 import { defineTool, ToolError } from "../tool.ts";
-
-/** Cells of a piece that hold something (air does not count). */
-function occupied(piece: Piece): number {
-  let n = 0;
-  for (let r = 0; r + 1 < piece.cells.length; r += 2) {
-    const k = piece.cells[r] ?? 0;
-    if (k !== 0 && piece.states[k - 1] !== null) n += piece.cells[r + 1] ?? 0;
-  }
-  return n;
-}
 
 export const copy = defineTool({
   name: "copy",

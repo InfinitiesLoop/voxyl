@@ -47,6 +47,18 @@ describe("PrefabStore", () => {
     await expect(store.update("nope", { name: "x" })).rejects.toThrow("gone");
   });
 
+  it("keeps a note, and a moved anchor changes the piece and its hash", async () => {
+    const store = new PrefabStore(new MemoryFolder());
+    const before = await store.save(piece(), { name: "P", notes: "  a corner  " });
+    expect(before.notes).toBe("a corner");
+    const noted = await store.update(before.id, { notes: "" });
+    expect(noted.notes).toBeUndefined();
+    const moved = await store.update(before.id, { anchor: [1, 0, 0] });
+    expect(moved.hash).not.toBe(before.hash);
+    expect((await store.load(before.id))?.anchor).toEqual([1, 0, 0]);
+    await expect(store.update(before.id, { anchor: [5, 0, 0] })).rejects.toThrow("inside");
+  });
+
   it("stores a picture beside the piece", async () => {
     const store = new PrefabStore(new MemoryFolder());
     const thumb = new Uint8Array([1, 2, 3, 4]);

@@ -28,6 +28,8 @@ export interface PrefabEntry {
   /** The cells it holds (air left out), and the box they fill. */
   readonly cells: number;
   readonly size: readonly [number, number, number];
+  /** A free-text note about it (what it is for, how it is meant to be used). */
+  readonly notes?: string;
   /** The content hash of its piece. */
   readonly hash: string;
   /** When it was last saved, in milliseconds since 1970. */
@@ -77,18 +79,25 @@ export class PrefabStore {
   /** Stores a new prefab. `thumb` is RGBA pixels of any square size the caller keeps track of. */
   async save(
     piece: Piece,
-    meta: { readonly name: string; readonly tags?: readonly string[]; readonly thumb?: Uint8Array },
+    meta: {
+      readonly name: string;
+      readonly tags?: readonly string[];
+      readonly notes?: string;
+      readonly thumb?: Uint8Array;
+    },
     savedAt = Date.now(),
   ): Promise<PrefabEntry> {
     const name = meta.name.trim().slice(0, 80);
     if (name === "") throw new Error("A prefab needs a name");
     const json = new runtime.TextEncoder().encode(JSON.stringify(piece));
     const packed = await deflate(json);
+    const notes = cleanNotes(meta.notes);
     const id = newPrefabId();
     const entry: PrefabEntry = {
       id,
       name,
       tags: cleanTags(meta.tags ?? []),
+      ...(notes !== undefined && { notes }),
       cells: occupiedCells(piece),
       size: piece.size,
       hash: hash64(json),
@@ -120,20 +129,49 @@ export class PrefabStore {
     return this.#folder.read(`prefabs/${id}/thumb.bin`);
   }
 
-  /** Renames a prefab and sets its tags. Its piece, and so its hash, stay. */
+  /**
+   * Renames a prefab, sets its tags and note (an empty note clears it), or moves its anchor
+   * (the cell a paste puts at its target, from the piece's corner). A new anchor changes the
+   * piece, and so its hash; the rest leaves the piece alone.
+   */
   async update(
     id: string,
-    changes: { readonly name?: string; readonly tags?: readonly string[] },
+    changes: {
+      readonly name?: string;
+      readonly tags?: readonly string[];
+      readonly notes?: string;
+      readonly anchor?: readonly [number, number, number];
+    },
   ): Promise<PrefabEntry> {
     const before = await this.entry(id);
     if (!before) throw new Error("That prefab is gone");
     const name = changes.name === undefined ? before.name : changes.name.trim().slice(0, 80);
     if (name === "") throw new Error("A prefab needs a name");
-    const entry: PrefabEntry = {
-      ...before,
+    const { notes: oldNotes, ...rest } = before;
+    const notes = changes.notes === undefined ? oldNotes : cleanNotes(changes.notes);
+    let entry: PrefabEntry = {
+      ...rest,
+      ...(notes !== undefined && { notes }),
       name,
       tags: changes.tags === undefined ? before.tags : cleanTags(changes.tags),
     };
+    if (changes.anchor) {
+      const piece = await this.load(id);
+      if (!piece) throw new Error("That prefab is gone");
+      const [x, y, z] = changes.anchor;
+      const [w, h, d] = piece.size;
+      if (x < 0 || y < 0 || z < 0 || x >= w || y >= h || z >= d) {
+        throw new Error(
+          `The anchor must be inside the prefab (0..${w - 1}, 0..${h - 1}, 0..${d - 1})`,
+        );
+      }
+      const json = new runtime.TextEncoder().encode(
+        JSON.stringify({ ...piece, anchor: changes.anchor }),
+      );
+      const packed = await deflate(json);
+      await this.#folder.write(`prefabs/${id}/piece.bin`, packed);
+      entry = { ...entry, hash: hash64(json), bytes: packed.byteLength };
+    }
     await this.#folder.write(`prefabs/${id}/entry.json`, this.#encode(entry));
     return entry;
   }
@@ -145,6 +183,12 @@ export class PrefabStore {
   #encode(entry: PrefabEntry): Uint8Array {
     return new runtime.TextEncoder().encode(JSON.stringify(entry));
   }
+}
+
+/** A note as stored: trimmed, at most 1000 characters; empty is none. */
+export function cleanNotes(notes: string | undefined): string | undefined {
+  const text = notes?.trim().slice(0, 1000);
+  return text === undefined || text === "" ? undefined : text;
 }
 
 /** The cells of a piece that hold something: its air is not counted. */

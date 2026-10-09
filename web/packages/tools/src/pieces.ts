@@ -151,3 +151,13 @@ export function placeResult(
     ...extra,
   });
 }
+
+/** Cells of a piece that hold something (air does not count). */
+export function occupied(piece: Piece): number {
+  let n = 0;
+  for (let r = 0; r + 1 < piece.cells.length; r += 2) {
+    const k = piece.cells[r] ?? 0;
+    if (k !== 0 && piece.states[k - 1] !== null) n += piece.cells[r + 1] ?? 0;
+  }
+  return n;
+}

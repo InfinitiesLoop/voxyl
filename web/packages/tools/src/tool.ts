@@ -28,6 +28,8 @@ export interface ToolHost {
   readonly clipboard?: ClipboardPort;
   /** The user's shared palettes, kept outside any project. */
   readonly sharedPalettes?: SharedPalettesPort;
+  /** The user's prefabs, kept outside any project. */
+  readonly prefabs?: PrefabsPort;
 }
 
 type Maybe<T> = T | Promise<T>;
@@ -41,6 +43,41 @@ export interface ClipboardPort {
 
 /** A shared palette as stored: the palette itself and when it last changed. */
 export type StoredSharedPalette = SharedPalette & { readonly updated?: number };
+
+/** What a prefab list shows (the session package's PrefabEntry, structurally). */
+export interface PrefabInfo {
+  readonly id: string;
+  readonly name: string;
+  readonly tags: readonly string[];
+  readonly notes?: string | undefined;
+  /** Cells it holds (air left out) and the box they fill. */
+  readonly cells: number;
+  readonly size: readonly [number, number, number];
+  /** The content hash of its piece. */
+  readonly hash: string;
+  readonly savedAt: number;
+}
+
+/** Prefabs as tools use them. A prefab is a piece with a name, tags and a note. */
+export interface PrefabsPort {
+  /** Every prefab, most recently saved first. */
+  list(): Maybe<readonly PrefabInfo[]>;
+  load(id: string): Maybe<Piece | null>;
+  save(
+    piece: Piece,
+    meta: { name: string; tags?: readonly string[]; notes?: string },
+  ): Maybe<PrefabInfo>;
+  update(
+    id: string,
+    changes: {
+      name?: string;
+      tags?: readonly string[];
+      notes?: string;
+      anchor?: readonly [number, number, number];
+    },
+  ): Maybe<PrefabInfo>;
+  delete(id: string): Maybe<void>;
+}
 
 export interface SharedPalettesPort {
   list(): Maybe<readonly StoredSharedPalette[]>;

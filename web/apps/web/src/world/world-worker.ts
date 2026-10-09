@@ -768,9 +768,7 @@ async function handle(command: Command): Promise<Replies[Command["type"]]> {
             ? defaultAnchor(filtered.size)
             : null;
       const kept = anchor ? { ...filtered, anchor } : filtered;
-      const colors = pieceColors(kept);
-      const thumb = pieceThumbnail(kept, (n) => colors[n] ?? 0x808080);
-      const entry = await prefabStore.save(kept, { name: command.name, tags: command.tags, thumb });
+      const entry = await storePrefab(kept, { name: command.name, tags: command.tags });
       if (command.replace) {
         const same = command.name.trim().toLowerCase();
         for (const other of await prefabStore.list()) {
@@ -1062,6 +1060,22 @@ async function schematicPiece(source: SchematicSource): Promise<{ piece: Piece; 
   return { piece, name: entry.name };
 }
 
+/** Stores a piece as a prefab, with the picture its list shows. */
+async function storePrefab(
+  piece: Piece,
+  meta: { name: string; tags?: readonly string[] | undefined; notes?: string | undefined },
+) {
+  await librariesLoaded;
+  const colors = pieceColors(piece);
+  const thumb = pieceThumbnail(piece, (n) => colors[n] ?? 0x808080);
+  return prefabStore.save(piece, {
+    name: meta.name,
+    ...(meta.tags && { tags: meta.tags }),
+    ...(meta.notes !== undefined && { notes: meta.notes }),
+    thumb,
+  });
+}
+
 /** Each piece semantic's colour as 0xrrggbb, by its 1-based number (index 0 is unused). */
 function pieceColors(piece: Piece): number[] {
   const out = [0];
@@ -1207,6 +1221,13 @@ const toolHost: ToolHost = {
     },
   },
   sharedPalettes: { list: storedPalettes },
+  prefabs: {
+    list: () => prefabStore.list(),
+    load: (id) => prefabStore.load(id),
+    save: storePrefab,
+    update: (id, changes) => prefabStore.update(id, changes),
+    delete: (id) => prefabStore.delete(id),
+  },
   changed() {
     // Like applyEdit after a command, without a report to read: a tool may have touched cells,
     // the palettes or the settings, so assume cells (a selection refresh is cheap) and save.

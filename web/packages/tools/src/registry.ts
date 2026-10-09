@@ -25,6 +25,10 @@ import { paletteEdit } from "./tools/palette-edit.ts";
 import { paletteGet } from "./tools/palette-get.ts";
 import { paste } from "./tools/paste.ts";
 import { place } from "./tools/place.ts";
+import { prefabEdit } from "./tools/prefab-edit.ts";
+import { prefabPlace } from "./tools/prefab-place.ts";
+import { prefabGet, prefabList } from "./tools/prefab-read.ts";
+import { prefabSave } from "./tools/prefab-save.ts";
 import { replace } from "./tools/replace.ts";
 import { select } from "./tools/select.ts";
 import { status } from "./tools/status.ts";
@@ -46,6 +50,11 @@ export const TOOLS: readonly ToolDefinition[] = [
   transform,
   copy,
   paste,
+  prefabList,
+  prefabGet,
+  prefabSave,
+  prefabPlace,
+  prefabEdit,
   describeShapes,
   findBlocks,
 ];
