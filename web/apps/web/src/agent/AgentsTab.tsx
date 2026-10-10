@@ -5,6 +5,7 @@ import {
   enableAgentAccess,
   getAgentAccess,
   getAgentStatus,
+  type Recipe,
   type RelayState,
   relayBase,
   rotateAgentToken,
@@ -17,6 +18,18 @@ const STATE_TEXT: Record<RelayState, string> = {
   connected: "On. Agents can use this editor while this tab is open.",
   retrying: "Can't reach the relay. Trying again...",
 };
+
+const PICKED_KEY = "voxyl.agent.tab";
+
+function loadPicked(): Recipe["id"] {
+  try {
+    const saved = localStorage.getItem(PICKED_KEY);
+    if (saved === "claude-code" || saved === "codex" || saved === "chatgpt") return saved;
+  } catch {
+    // Unreadable storage means the default.
+  }
+  return "claude-code";
+}
 
 /** Hides the token in what is shown; Copy still takes the whole text. */
 function masked(text: string, token: string): string {
@@ -32,7 +45,19 @@ export function AgentsTab() {
   const status = useSyncExternalStore(subscribeAgentAccess, getAgentStatus);
   const [reveal, setReveal] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
+  const [picked, setPicked] = useState<Recipe["id"]>(loadPicked);
   const base = relayBase();
+  const recipes = access.token === null ? [] : agentRecipes(base, access.token);
+  const recipe = recipes.find((r) => r.id === picked) ?? recipes[0];
+
+  const choose = (id: Recipe["id"]) => {
+    setPicked(id);
+    try {
+      localStorage.setItem(PICKED_KEY, id);
+    } catch {
+      // Remembering the choice is a convenience.
+    }
+  };
 
   const copy = async (id: string, text: string) => {
     try {
@@ -72,18 +97,51 @@ export function AgentsTab() {
       </div>
       {status.error !== null && <p className="agents-error">{status.error}</p>}
 
-      {access.enabled && access.token !== null && (
+      {access.enabled && access.token !== null ? (
         <>
-          {agentRecipes(base, access.token).map((recipe) => (
-            <div key={recipe.id} className="agents-recipe">
-              <h3>{recipe.title}</h3>
-              <p className="home-quiet">{recipe.steps}</p>
-              <pre>{reveal ? recipe.text : masked(recipe.text, access.token as string)}</pre>
-              <button type="button" onClick={() => void copy(recipe.id, recipe.text)}>
-                {copied === recipe.id ? "Copied" : "Copy"}
+          <nav className="agents-tabs" aria-label="Agent">
+            {recipes.map((r) => (
+              <button
+                key={r.id}
+                type="button"
+                aria-pressed={r.id === recipe?.id}
+                onClick={() => choose(r.id)}
+              >
+                {r.title}
               </button>
+            ))}
+          </nav>
+          {recipe !== undefined && (
+            <div className="agents-recipe">
+              <h3>{recipe.title}</h3>
+              <p className="home-quiet">{recipe.intro}</p>
+              <ol className="agents-steps">
+                {recipe.steps.map((step, i) => (
+                  <li key={step.say}>
+                    <p>{step.say}</p>
+                    {step.code !== undefined && (
+                      <>
+                        <pre>{reveal ? step.code : masked(step.code, access.token as string)}</pre>
+                        <button
+                          type="button"
+                          onClick={() => void copy(`${recipe.id}-${i}`, step.code as string)}
+                        >
+                          {copied === `${recipe.id}-${i}` ? "Copied" : "Copy"}
+                        </button>
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ol>
+              {recipe.notes.length > 0 && (
+                <ul className="agents-notes home-quiet">
+                  {recipe.notes.map((note) => (
+                    <li key={note}>{note}</li>
+                  ))}
+                </ul>
+              )}
             </div>
-          ))}
+          )}
           <div className="home-actions">
             <button type="button" onClick={() => setReveal(!reveal)}>
               {reveal ? "Hide token" : "Show token"}
@@ -104,6 +162,11 @@ export function AgentsTab() {
             several Voxyl tabs open, the one you used last answers.
           </p>
         </>
+      ) : (
+        <p className="home-quiet">
+          Turn this on to get the setup steps for Claude Code, Codex and ChatGPT, each with your own
+          token.
+        </p>
       )}
     </section>
   );

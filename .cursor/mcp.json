@@ -1,3 +1,7 @@
 {
-  "mcpServers": {}
+  "mcpServers": {
+    "voxyl": {
+      "url": "https://api.voxyl.xyz/mcp/vx1.6Myywn1wOhLQ6WxN9YNcVA.dgteMYI-z1BynjtTCxLvOSXATrxCN6u3AixVcK8ho-U"
+    }
+  }
 }

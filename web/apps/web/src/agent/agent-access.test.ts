@@ -6,21 +6,27 @@ describe("agent recipes", () => {
   const token = "vx1.AAAAAAAAAAAAAAAAAAAAAA.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
   const recipes = agentRecipes("https://api.voxyl.xyz", token);
 
+  const codeOf = (id: string) =>
+    recipes.find((r) => r.id === id)?.steps.find((step) => step.code !== undefined)?.code;
+
   it("gives Claude Code a command with the header", () => {
-    const claude = recipes.find((r) => r.id === "claude-code");
-    expect(claude?.text).toBe(
+    expect(codeOf("claude-code")).toBe(
       `claude mcp add --scope user --transport http voxyl https://api.voxyl.xyz/mcp --header "Authorization: Bearer ${token}"`,
     );
   });
 
   it("gives Codex a config table", () => {
-    const codex = recipes.find((r) => r.id === "codex");
-    expect(codex?.text).toContain('url = "https://api.voxyl.xyz/mcp"');
-    expect(codex?.text).toContain(`Bearer ${token}`);
+    expect(codeOf("codex")).toContain('url = "https://api.voxyl.xyz/mcp"');
+    expect(codeOf("codex")).toContain(`Bearer ${token}`);
   });
 
-  it("puts the token in the path for connectors with no header field", () => {
-    expect(recipes.find((r) => r.id === "url")?.text).toBe(`https://api.voxyl.xyz/mcp/${token}`);
+  it("puts the token in the path for ChatGPT, which has no header field", () => {
+    expect(codeOf("chatgpt")).toBe(`https://api.voxyl.xyz/mcp/${token}`);
+  });
+
+  it("has a tab per agent with steps to follow", () => {
+    expect(recipes.map((r) => r.id)).toEqual(["claude-code", "codex", "chatgpt"]);
+    for (const recipe of recipes) expect(recipe.steps.length).toBeGreaterThan(1);
   });
 });
 

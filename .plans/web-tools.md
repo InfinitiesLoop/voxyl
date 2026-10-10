@@ -372,8 +372,12 @@ id under the Worker's `TOKEN_SECRET`. `POST /api/token` mints one (stateless; no
 made-up token is refused in the Worker before any object is woken. The id is the relay's name,
 so it is also the `userId` the plan wants from day one: signing in later attaches an identity
 to it. The browser keeps the token in `localStorage` (`voxyl.agent`); Home, Agents shows the
-Claude Code command, the Codex `config.toml` table and a ChatGPT-style URL
-(`/mcp/<token>`, for connectors with no header field: the URL is the password). "New token"
+one sub-tab per agent (Claude Code, Codex, ChatGPT), each a numbered walkthrough with copy
+blocks and notes (`agentRecipes`). Claude Code gets the command, Codex the `config.toml` table,
+and ChatGPT's website chat a URL (`/mcp/<token>`, for connectors with no header field: the URL
+is the password; chatgpt.com/plugins, + , Create custom MCP server, Authentication None; needs
+a plan with custom connectors, and the editor tab open). Not yet tried against the deployed
+relay from a real ChatGPT chat. "New token"
 rotates it, which cuts off agents set up with the old one. Rotating `TOKEN_SECRET` cuts off
 everyone. The tab's socket sends the token in the WebSocket subprotocol
 (`voxyl.v1`, then the token), since browsers cannot set headers.
@@ -399,10 +403,10 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))" |
 node ../../tools/relay-smoke.ts --url https://api.voxyl.xyz --idle 25
 ```
 
-Then deploy the app (the manual **Deploy web** workflow, or `wrangler pages deploy`): the
+Then deploy the app (the manual **Deploy** workflow, or `wrangler pages deploy`): the
 production build talks to `https://api.voxyl.xyz` (override with `VITE_RELAY_URL`; the dev
-server uses `http://127.0.0.1:47826`, which is `pnpm relay`). `.github/workflows/deploy-relay.yml`
-does the same from Actions (main only) with the secrets `CLOUDFLARE_WORKERS_API_TOKEN`,
+server uses `http://127.0.0.1:47826`, which is `pnpm relay`). The **Deploy** workflow (`.github/workflows/deploy.yml`)
+does both from Actions, relay first (the relay job is main only) with the secrets `CLOUDFLARE_WORKERS_API_TOKEN`,
 `CLOUDFLARE_ACCOUNT_ID` and `RELAY_TOKEN_SECRET`. `pnpm install` needed `allowBuilds` for
 `esbuild` and `workerd` in `pnpm-workspace.yaml` (wrangler's dependencies run install scripts).
 

@@ -985,9 +985,10 @@ best a preview (a branch other than `main`), then `main` for production.
   `assets/`, no-cache for the page, `nosniff`/referrer/permissions headers, `www` to the apex,
   and the SPA fallback. There is no CSP yet; add one once the app's blob workers and WebGPU
   needs are listed, since a wrong one breaks the app.
-- `.github/workflows/deploy-web.yml` is **manual only** (`workflow_dispatch`). It installs,
-  runs `pnpm check`, builds, and runs `wrangler pages deploy` for project `voxyl`. Run from
-  `main` it is production; from any other branch it is a preview URL. It needs the Pages
+- `.github/workflows/deploy.yml` is **manual only** (`workflow_dispatch`). One run checks once
+  (`pnpm check`), then deploys the relay Worker (main only) and the web app, in that order. The
+  web job runs `wrangler pages deploy` for project `voxyl`. Run from
+  `main` it is production; from any other branch only the web app deploys, as a preview URL. It needs the Pages
   project (Direct Upload, production branch `main`) and the secrets `CLOUDFLARE_PAGES_API_TOKEN`
   and `CLOUDFLARE_ACCOUNT_ID`. The Pages token stays separate from a future Workers token. Switching it to run on push to `main` is a one-line change when
   the user wants it.

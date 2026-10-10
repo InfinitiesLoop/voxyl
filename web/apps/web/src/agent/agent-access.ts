@@ -117,12 +117,19 @@ export async function rotateAgentToken(): Promise<void> {
   }
 }
 
-/** What to paste into each agent. Pure, so it is tested. */
+/** One step of an agent's setup: what to do, and optionally the text to copy for it. */
+export interface Step {
+  readonly say: string;
+  readonly code?: string;
+}
+
+/** What to do in each agent. Pure, so it is tested. */
 export interface Recipe {
-  readonly id: "claude-code" | "codex" | "url";
+  readonly id: "claude-code" | "codex" | "chatgpt";
   readonly title: string;
-  readonly steps: string;
-  readonly text: string;
+  readonly intro: string;
+  readonly steps: readonly Step[];
+  readonly notes: readonly string[];
 }
 
 export function agentRecipes(base: string, token: string): Recipe[] {
@@ -131,22 +138,75 @@ export function agentRecipes(base: string, token: string): Recipe[] {
     {
       id: "claude-code",
       title: "Claude Code",
-      steps: "Run this once in a terminal. Then start Claude Code and ask it to build something.",
-      text: `claude mcp add --scope user --transport http voxyl ${url} --header "Authorization: Bearer ${token}"`,
+      intro:
+        "Claude's coding agent, in a terminal. It reaches Voxyl with a header carrying the token.",
+      steps: [
+        {
+          say: "Run this once in a terminal. It saves Voxyl as a tool for every project.",
+          code: `claude mcp add --scope user --transport http voxyl ${url} --header "Authorization: Bearer ${token}"`,
+        },
+        { say: "Start Claude Code (or restart it if it was already running)." },
+        { say: "Keep Voxyl open in a browser tab, then ask it to build something." },
+      ],
+      notes: ["Run /mcp inside Claude Code to check that voxyl shows as connected."],
     },
     {
       id: "codex",
       title: "Codex",
-      steps: "Add this to ~/.codex/config.toml, then restart Codex.",
-      text: `[mcp_servers.voxyl]\nurl = "${url}"\nhttp_headers = { Authorization = "Bearer ${token}" }`,
+      intro:
+        "OpenAI's coding agent. It is included with every ChatGPT plan and signs in with your " +
+        "ChatGPT account. The terminal app, the IDE extension and the desktop app's Codex mode " +
+        "all read the same config file.",
+      steps: [
+        {
+          say: "Open ~/.codex/config.toml (the .codex folder in your user folder, also on Windows) and add this.",
+          code: `[mcp_servers.voxyl]
+url = "${url}"
+http_headers = { Authorization = "Bearer ${token}" }`,
+        },
+        { say: "Restart Codex so it reads the file." },
+        { say: "Keep Voxyl open in a browser tab, then ask Codex to build something." },
+      ],
+      notes: [],
     },
     {
-      id: "url",
-      title: "ChatGPT and others",
-      steps:
-        "For a connector with no header field, paste this address with no authentication. " +
-        "The address itself is the password.",
-      text: `${url}/${token}`,
+      id: "chatgpt",
+      title: "ChatGPT",
+      intro:
+        "The ChatGPT website works as a chat client: add Voxyl once as a custom connector, then " +
+        "ask ChatGPT to build while this tab is open. ChatGPT's connector form has no field for a " +
+        "token, so the token is part of the address instead. That makes the address a password.",
+      steps: [
+        {
+          say: "Copy this address. It is only for your ChatGPT.",
+          code: `${url}/${token}`,
+        },
+        {
+          say:
+            "In ChatGPT on the web, open chatgpt.com/plugins and choose + then Create custom MCP " +
+            "server. If you don't see it, turn on Developer mode first (Settings, Apps, Advanced " +
+            "settings).",
+        },
+        {
+          say:
+            "Name it Voxyl, paste the address as the server URL, and set Authentication to " +
+            "None. There is nothing else to sign in to: the token in the address is the login.",
+        },
+        { say: "Save it, and accept the notice that this is a connector you added yourself." },
+        {
+          say:
+            "Keep Voxyl open here, with the switch above on. Start a new chat in ChatGPT, add " +
+            "Voxyl with + or by typing @Voxyl, and ask it to build something.",
+        },
+      ],
+      notes: [
+        "Custom connectors need a ChatGPT plan that allows them (Plus, Pro, or a workspace plan " +
+          "with developer mode turned on by an admin). On a free account, use Codex instead.",
+        "ChatGPT's model only sees what the tools return, so a small first request works best: " +
+          "ask it to call status and the guide tool first, then describe the build.",
+        "If you make a new token, the old address stops working: edit the connector in ChatGPT " +
+          "and paste the new one.",
+      ],
     },
   ];
 }

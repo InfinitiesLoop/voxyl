@@ -3131,6 +3131,39 @@ button.brand {
   font-size: 13px;
 }
 
+.agents-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 18px 0 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.agents-tabs button {
+  padding: 5px 14px;
+}
+
+.agents-recipe {
+  margin-bottom: 18px;
+}
+
+.agents-steps {
+  margin: 12px 0;
+  padding-left: 22px;
+}
+
+.agents-steps li {
+  margin: 0 0 14px;
+}
+
+.agents-steps p {
+  margin: 0 0 4px;
+}
+
+.agents-notes {
+  padding-left: 22px;
+}
+
 .agents-recipe pre {
   max-width: 100%;
   margin: 6px 0;
