@@ -3102,3 +3102,57 @@ button.brand {
   color: var(--text);
   user-select: text;
 }
+
+/* Home, Agents */
+.agents h2 {
+  margin: 0 0 8px;
+}
+
+.agents h3 {
+  margin: 18px 0 4px;
+  font-size: 15px;
+}
+
+.agents-state {
+  font-size: 13px;
+  color: var(--text-quiet);
+}
+
+.agents-connected {
+  color: #7bd88f;
+}
+
+.agents-retrying {
+  color: #e0b050;
+}
+
+.agents-error {
+  color: #e07070;
+  font-size: 13px;
+}
+
+.agents-recipe pre {
+  max-width: 100%;
+  margin: 6px 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+}
+
+.agent-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #e0b050;
+}
+
+.agent-dot.live {
+  background: #7bd88f;
+}

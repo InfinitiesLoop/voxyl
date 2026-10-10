@@ -1,8 +1,10 @@
-import { type MouseEvent, useEffect, useRef, useState } from "react";
+import { type MouseEvent, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { getAgentAccess, getAgentStatus, subscribeAgentAccess } from "../agent/agent-access.ts";
 import type { Engine } from "../scene/Engine.ts";
 import { clockLabel } from "../scene/sky-model.ts";
 import type { Settings } from "../settings-url.ts";
 import type { WorldInfo } from "../worlds.ts";
+import { openHomeTab } from "./Home.tsx";
 import { type LayoutPreset, type LayoutState, withPreset } from "./layout.ts";
 import { ProjectSettingsDialog } from "./ProjectSettings.tsx";
 import { canLockKeys, toggleFullscreen } from "./tab-guard.ts";
@@ -184,11 +186,33 @@ export function TopBar({
       >
         Keys
       </button>
+      <AgentsButton onHome={onHome} />
       <FullscreenButton />
       <button type="button" aria-pressed={devOpen} onClick={click(onDev)}>
         Dev
       </button>
     </header>
+  );
+}
+
+/** Shows whether an agent can reach this editor; a click opens Home, Agents. */
+function AgentsButton({ onHome }: { onHome: () => void }) {
+  const access = useSyncExternalStore(subscribeAgentAccess, getAgentAccess);
+  const status = useSyncExternalStore(subscribeAgentAccess, getAgentStatus);
+  if (!access.enabled) return null;
+  const live = status.state === "connected";
+  return (
+    <button
+      type="button"
+      title={live ? "Agents can use this editor" : "Agent access is on, but not connected"}
+      onClick={() => {
+        openHomeTab("agents");
+        onHome();
+      }}
+    >
+      <span className={live ? "agent-dot live" : "agent-dot"} aria-hidden="true" />
+      Agents
+    </button>
   );
 }
 

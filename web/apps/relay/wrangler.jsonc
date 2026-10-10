@@ -1,0 +1,12 @@
+{
+  // The Voxyl relay. See src/worker.ts for what it does and .plans/web-tools.md for the design.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "voxyl-relay",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-09-01",
+  "routes": [{ "pattern": "api.voxyl.xyz", "custom_domain": true }],
+  "durable_objects": { "bindings": [{ "name": "RELAY", "class_name": "Relay" }] },
+  // SQLite-backed, the only kind the free plan offers.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Relay"] }],
+  "observability": { "enabled": true }
+}

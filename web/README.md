@@ -31,11 +31,14 @@ packages/mesher/    chunk mesher: greedy cube faces, shaped parts as merged quad
                     also lists the light bricks its faces read (runs in workers)
 packages/light/     Minecraft-style sky and colored block light, incremental on edits
 packages/session/   WorldSession: a World, its light, mesh scheduling and the GPU light layout
+packages/relay/     the relay's pure half: MCP over HTTP, call routing, tab protocol, tokens (no DOM, no Node)
 packages/tools/     agent tools: a Zod registry over a ToolHost (status, place, fill, ...); see .plans/web-tools.md
 packages/fixtures/  seeded test worlds (the benchmark city, plain or decorated with shaped parts)
+apps/relay/         the relay as a Cloudflare Worker + Durable Object (api.voxyl.xyz)
+apps/server/        the headless host (pnpm host): MCP over HTTP on one in-memory project
 apps/web/           the React + Three.js app (Vite), with the in-app benchmark; src/agent/ offers
                     the agent tools to the browser (WebMCP) and the Dev panel
-tools/              dev tools (shot, golden)
+tools/              dev tools (shot, golden, relay-smoke, relay-e2e)
 golden/             golden images for `pnpm golden`
 ```
 
@@ -66,15 +69,25 @@ async function; what it returns is printed). That is how the agent tools are dri
 `return await window.voxylTools.call("status", {})`. The Dev panel's **Tools** section does the
 same by hand, and `apps/web/src/agent/webmcp.ts` offers the tools to browsers that have WebMCP.
 
-`pnpm bridge` listens on `http://127.0.0.1:47824/mcp` and forwards tool calls to the open dev
-tab (the page connects on its own). 47823 is left for the Godot app. Claude Code, once:
-`claude mcp add --scope user --transport http voxyl http://127.0.0.1:47824/mcp`.
-Start the bridge before the agent session, and leave the app open. That loopback forwarder is
-for local development. It is not the production server.
+**The relay** (`apps/relay`, `packages/relay`) is how an agent off the page reaches the open
+editor: a Cloudflare Worker and one Durable Object per agent token. The agent speaks MCP over
+HTTP to `/mcp`; the tab holds a WebSocket to `/tab`; the object forwards each call to the tab,
+which runs it. Production is `https://api.voxyl.xyz`. `.plans/web-tools.md` ("The relay") has
+the design and the deploy steps. Locally:
+
+```
+pnpm relay          # wrangler dev on http://127.0.0.1:47826 (workerd; needs apps/relay/.dev.vars)
+pnpm dev            # the app; its dev build talks to that relay
+```
+
+Then in the app: Home, Agents, **Let agents use this editor**, and paste the command it shows
+into Claude Code. `pnpm relay:smoke [--url ...]` checks a relay with a fake tab (it works
+against production too). `node tools/relay-e2e.ts [--app ... --relay ...]` drives a real
+headless tab and plays the agent. (47823 is the Godot app, 47825 the headless host.)
 
 `pnpm host` listens on `http://127.0.0.1:47825/mcp` and runs the tools itself, on one in-memory
 project, with no tab attached (`apps/server`). Edits live until the process exits and are not
-shown in a browser. Claude Code, under a different name so it does not replace the bridge:
+shown in a browser. Claude Code, under its own name:
 `claude mcp add --scope user --transport http voxyl-headless http://127.0.0.1:47825/mcp`.
 `capture` and `export_schematic` answer `unavailable` here; they need an editor.
 

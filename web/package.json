@@ -19,14 +19,16 @@
     "bench:light": "node packages/light/bench/city.ts",
     "bench:sparse": "node packages/light/bench/sparse.ts",
     "shot": "node tools/shot.ts",
-    "bridge": "node tools/bridge.ts",
     "host": "pnpm --filter @voxyl/server host",
     "golden": "node tools/golden.ts",
-    "probe": "node tools/widget-probe/server.ts"
+    "probe": "node tools/widget-probe/server.ts",
+    "relay": "pnpm --filter @voxyl/relay-worker dev",
+    "relay:smoke": "node tools/relay-smoke.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",
     "@types/node": "^24.19.1",
+    "@voxyl/relay": "workspace:*",
     "fast-check": "^4.10.2",
     "playwright-core": "^1.63.0",
     "typescript": "^7.0.2",

@@ -2,6 +2,7 @@ import type { SharedPalette } from "@voxyl/core";
 import type { ProjectEntry, StoredPalette } from "@voxyl/session";
 import { shapeName } from "@voxyl/shapes";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AgentsTab } from "../agent/AgentsTab.tsx";
 import type { LibraryActions, ProjectActions } from "../Hud.tsx";
 import type { Engine } from "../scene/Engine.ts";
 import { placementName } from "../world/editing.ts";
@@ -22,7 +23,7 @@ const DEMOS: readonly { kind: WorldKind; label: string }[] = [
   { kind: "parts-5m", label: "Shaped city, 5M cells" },
 ];
 
-type Tab = "projects" | "palettes" | "prefabs" | "blocks";
+type Tab = "projects" | "palettes" | "prefabs" | "blocks" | "agents";
 const TAB_KEY = "voxyl.homeTab";
 const TAB_EVENT = "voxyl-home-tab";
 
@@ -39,7 +40,13 @@ export function openHomeTab(tab: Tab): void {
 function readTab(): Tab {
   try {
     const saved = localStorage.getItem(TAB_KEY);
-    if (saved === "projects" || saved === "palettes" || saved === "prefabs" || saved === "blocks")
+    if (
+      saved === "projects" ||
+      saved === "palettes" ||
+      saved === "prefabs" ||
+      saved === "blocks" ||
+      saved === "agents"
+    )
       return saved;
   } catch {
     // Projects is where most visits start.
@@ -95,6 +102,7 @@ export function Home(props: HomeProps) {
               ["palettes", "Palettes"],
               ["prefabs", "Prefabs"],
               ["blocks", "Blocks"],
+              ["agents", "Agents"],
             ] as const
           ).map(([id, label]) => (
             <button key={id} type="button" aria-pressed={tab === id} onClick={() => choose(id)}>
@@ -116,6 +124,7 @@ export function Home(props: HomeProps) {
         {tab === "blocks" && (
           <Blocks engine={props.engine} libraries={props.libraries} library={props.library} />
         )}
+        {tab === "agents" && <AgentsTab />}
       </div>
     </div>
   );

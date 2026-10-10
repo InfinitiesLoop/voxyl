@@ -7,6 +7,7 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
+    "@voxyl/relay": "workspace:*",
     "@voxyl/tools": "workspace:*"
   },
   "devDependencies": {

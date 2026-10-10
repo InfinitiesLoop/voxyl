@@ -1,0 +1,18 @@
+{
+  "name": "@voxyl/relay-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --port 47826",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@voxyl/relay": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260721.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.149.0"
+  }
+}

@@ -300,22 +300,126 @@ adapters (see the commits of 2026-10-09). Then, same day:
 - **View tools** (`view_list`, `view_set`, `cutaway`, `hotbar_set`, `tool_set`) are editor
   state. They are not in the data registry. The tab's client lists them beside the worker
   tools and runs them itself.
-- **Local bridge** (`pnpm bridge`, `web/tools/bridge.ts`): MCP Streamable HTTP on
-  `127.0.0.1:47824/mcp` (47823 stays the Godot app's port). The dev app connects a WebSocket
-  to `/tab` and runs the calls. Loopback only. Claude Code:
-  `claude mcp add --scope user --transport http voxyl http://127.0.0.1:47824/mcp`.
-
 - **Headless host, first cut** (`pnpm host`, `apps/server`): MCP Streamable HTTP on
   `127.0.0.1:47825/mcp`. Tools run in this process on one in-memory project (`MemoryHost`).
   No tab, no persistence past the process, no SSE. `capture` and `export_schematic` answer
   `unavailable`. Claude Code:
   `claude mcp add --scope user --transport http voxyl-headless http://127.0.0.1:47825/mcp`.
-  An open browser does not see these edits. Live display is the other path: the relay sends
-  the call into the tab that holds the project, and the tab runs it on the world it is
-  already drawing. The editor is not an MCP client and does not subscribe to this endpoint.
+  It shares the MCP layer with the relay (`handleMcpBody` in `@voxyl/relay`). The production
+  plan is tab-required (below); this stays as a dev and test host.
+- The first **local bridge** (`pnpm bridge`, a Node forwarder on :47824) was replaced by the
+  relay the same day: dev now runs the real Worker locally (`pnpm relay`), so dev and
+  production share one code path.
 
-Still open: the public relay (Phase 4 server), so an agent off this machine can reach a tab
-that holds the project, and so a headless edit is stored and replayed when a tab opens later;
-capture that does not need the live renderer (the CPU rasterizer). ChatGPT's connector cannot
-use either loopback server: it only reaches a public HTTPS server, and its form has no
-bearer-token field. Minecraft identity editing stays with import.
+## The relay (built 2026-10-09)
+
+How an agent outside the page reaches the editor. `packages/relay` is the pure half (MCP over
+HTTP as a function of a backend, the routing core, the tab protocol, tokens; tested in Node,
+no DOM or Node types). `apps/relay` is the Cloudflare half: a Worker plus one Durable Object
+per agent token. The tools still run only in the user's tab.
+
+```mermaid
+flowchart LR
+  subgraph agents[Agents]
+    cc["Claude Code / Codex<br/>Authorization: Bearer token"]
+    gpt["ChatGPT connector<br/>token in the URL path"]
+  end
+  subgraph cf["api.voxyl.xyz (Cloudflare)"]
+    w["Worker<br/>verifies the token signature<br/>answers initialize and ping<br/>no storage, no lookup"]
+    do["Relay object, one per token<br/>routes a call to the active tab<br/>caches the tool list"]
+  end
+  subgraph browser["The user's browsers"]
+    t1["Tab A: the one in use"]
+    t2["Tab B"]
+  end
+  cc -- "POST /mcp" --> w
+  gpt -- "POST /mcp/token" --> w
+  w -- "RPC: tools/list, tools/call" --> do
+  do -- "WebSocket: call" --> t1
+  t1 -- "result" --> do
+  t1 & t2 -. "hello, active, ping" .-> do
+  t1 -- "POST /api/token (once)" --> w
+```
+
+**Scenarios**
+
+1. *Tab open, agent calls a tool.* Agent POST, Worker verifies the token (HMAC, no lookup),
+   asks the object by RPC; the object sends `{call, id, name, args}` down the WebSocket of the
+   tab used last; the tab runs it on the live world through the same path as a click (one
+   undo step labelled `Claude: <tool>`, drawn at once) and answers `{result, id}`; the object
+   resolves the agent's HTTP request. Server cost: one Worker request, one object request,
+   two WebSocket messages.
+2. *Several tabs.* Every tab connects with a random `tabId`. A tab says `active` when it
+   becomes visible or focused; the call goes to the tab with the newest stamp (kept in the
+   socket's attachment, so it survives hibernation). Close that tab and the next newest takes
+   over. A tab that reconnects replaces its own old socket. At most 8 tabs per token.
+3. *No tab open.* `initialize`, `ping` and `tools/list` still answer (the list was cached in
+   the object's storage by the last `hello`), so the agent keeps its tools. `tools/call`
+   returns an error *result* (`no_editor`), not a protocol error, telling the model and user
+   to open voxyl.xyz, Home, Agents. v1 has no headless execution (a call never edits a
+   project nobody has open); that needs Workers Paid CPU limits and a project store.
+4. *Tab closes or sleeps mid-call.* A closed socket fails what it owed at once
+   (`tab_closed`: "may or may not have run, check status"); a frozen tab hits the 90 s
+   `editor_timeout`. Mutating tools take `op_id`, so a repeat is a no-op.
+5. *Idle.* The tab pings every 30 s; the edge answers `pong` without waking the object
+   (`setWebSocketAutoResponse`), so an idle relay is evicted from memory and bills no duration.
+   No pong for 75 s and the tab reconnects (1 s doubling to 30 s; `online` resets it).
+   A woken object finds its sockets with `ctx.getWebSockets()` and rebuilds from attachments.
+6. *Agent access is off* (the default). The tab never opens a socket and mints no token.
+
+**Tokens.** `vx1.<id>.<signature>`: `id` is 16 random bytes, `signature` an HMAC-SHA-256 of the
+id under the Worker's `TOKEN_SECRET`. `POST /api/token` mints one (stateless; no database). A
+made-up token is refused in the Worker before any object is woken. The id is the relay's name,
+so it is also the `userId` the plan wants from day one: signing in later attaches an identity
+to it. The browser keeps the token in `localStorage` (`voxyl.agent`); Home, Agents shows the
+Claude Code command, the Codex `config.toml` table and a ChatGPT-style URL
+(`/mcp/<token>`, for connectors with no header field: the URL is the password). "New token"
+rotates it, which cuts off agents set up with the old one. Rotating `TOKEN_SECRET` cuts off
+everyone. The tab's socket sends the token in the WebSocket subprotocol
+(`voxyl.v1`, then the token), since browsers cannot set headers.
+
+**Limits and costs (free plan).** The Worker only parses a body and forwards: well inside
+10 ms CPU. Per token: 16 calls in flight, 8 tabs, 1 MB request bodies, 90 s per call. The
+tool list is about 100 KB (37 tools), stored once per change (one row write), not per
+connect. No rate limiting yet beyond these caps: add a Cloudflare rate-limit rule on
+`/api/token` and `/mcp` before wide use.
+
+**Security.** The token is the only credential, and holding it is full control of the open
+editor, so Agents says so. Nothing is stored server-side except the tool list. `/tab` and
+`/api/token` accept only voxyl.xyz, `*.voxyl.pages.dev` and localhost origins (a request with
+no Origin, such as curl, is allowed: the token is the gate). `/mcp` has open CORS (it is not
+cookie-authenticated). Results from a tab are only accepted from the tab that was asked.
+
+**Deploy (one time).** The relay is a separate Worker from the Pages app. From `web/apps/relay`:
+
+```
+pnpm exec wrangler login
+pnpm exec wrangler deploy                      # also creates api.voxyl.xyz (custom domain)
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))" | pnpm exec wrangler secret put TOKEN_SECRET
+node ../../tools/relay-smoke.ts --url https://api.voxyl.xyz --idle 25
+```
+
+Then deploy the app (the manual **Deploy web** workflow, or `wrangler pages deploy`): the
+production build talks to `https://api.voxyl.xyz` (override with `VITE_RELAY_URL`; the dev
+server uses `http://127.0.0.1:47826`, which is `pnpm relay`). `.github/workflows/deploy-relay.yml`
+does the same from Actions (main only) with the secrets `CLOUDFLARE_WORKERS_API_TOKEN`,
+`CLOUDFLARE_ACCOUNT_ID` and `RELAY_TOKEN_SECRET`. `pnpm install` needed `allowBuilds` for
+`esbuild` and `workerd` in `pnpm-workspace.yaml` (wrangler's dependencies run install scripts).
+
+**Proven.** Local (workerd via `wrangler dev`): `tools/relay-smoke.ts` with a fake tab (mint,
+401 on a bad token, initialize, no-tab error, tool list, call round trip, ping/pong, token in
+the path, after-close behaviour; also with a 25 s idle first) and `tools/relay-e2e.ts` with a
+real headless Edge tab and the real UI: Home, Agents, turn on, the token minted and kept, 37
+tools listed, `project_create`, `palette_edit` and `fill` through the relay, the page's own
+view showing the 64 cells, a `capture` picture rendered by the tab's WebGPU renderer and
+returned, a reload that reconnects by itself, and the "open the editor" error and cached tool
+list after the tab closes. 23 relay unit tests (routing, ordering, timeouts, forged results,
+limits, tool-list cache, MCP batch and notification handling, token forgery). The Worker
+bundles to 20 KiB. **Not yet proven:** the deployed Worker on Cloudflare's edge (hibernation
+in particular: local workerd may not evict), a real Claude Code, Codex and ChatGPT
+connection, a capture while the tab is hidden, and a very large result over the WebSocket.
+
+**Next.** Deploy and run the smoke and e2e scripts against production, then a real Claude Code
+session; rate limits; a persisted project store so a headless host can answer with no tab;
+OAuth for ChatGPT's connector (the URL-token form is the stopgap); show the connected agent's
+last call in the Agents tab.

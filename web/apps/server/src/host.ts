@@ -15,6 +15,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
+import { handleMcpBody, type McpBackend, type McpToolResult } from "@voxyl/relay";
 import { callTool, listTools, MemoryHost, type ToolEnvelope, type ToolHost } from "@voxyl/tools";
 
 const INSTRUCTIONS =
@@ -22,8 +23,6 @@ const INSTRUCTIONS =
   "They live in this process until it exits. Call status first, and guide for the conventions. " +
   "Cells hold semantic names, never materials. capture and export_schematic need an editor " +
   "tab and will fail here.";
-
-type Json = Record<string, unknown>;
 
 export interface Headless {
   readonly port: number;
@@ -52,7 +51,7 @@ function toolHost(memory: MemoryHost): ToolHost {
   };
 }
 
-function mcpResult(envelope: ToolEnvelope): Json {
+function mcpResult(envelope: ToolEnvelope): McpToolResult {
   return {
     content: [{ type: "text", text: JSON.stringify(envelope) }],
     isError: !envelope.ok,
@@ -63,58 +62,21 @@ export async function startHost(options: { port?: number } = {}): Promise<Headle
   const memory = MemoryHost.create();
   const host = toolHost(memory);
 
-  async function dispatch(method: string, params: Json): Promise<unknown> {
-    switch (method) {
-      case "initialize":
-        return {
-          protocolVersion: params.protocolVersion ?? "2025-06-18",
-          capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: "voxyl", title: "Voxyl", version: "0.0.0" },
-          instructions: INSTRUCTIONS,
-        };
-      case "ping":
-        return {};
-      case "tools/list":
-        return {
-          tools: listTools().map((tool) => ({
-            name: tool.name,
-            title: tool.title,
-            description: tool.description,
-            inputSchema: tool.inputSchema,
-            annotations: tool.annotations,
-          })),
-        };
-      case "tools/call":
-        return mcpResult(
-          await callTool(host, String(params.name ?? ""), (params.arguments as Json) ?? {}),
-        );
-      case "resources/list":
-        return { resources: [] };
-      case "resources/templates/list":
-        return { resourceTemplates: [] };
-      default:
-        throw new RpcError(-32601, `Method not found: ${method}`);
-    }
-  }
-
-  async function handleRpc(message: Json): Promise<Json | undefined> {
-    const { id, method } = message;
-    if (id === undefined || id === null) return undefined;
-    try {
-      const result = await dispatch(String(method), (message.params as Json) ?? {});
-      return { jsonrpc: "2.0", id: id as never, result };
-    } catch (error) {
-      const code = error instanceof RpcError ? error.code : -32000;
-      return {
-        jsonrpc: "2.0",
-        id: id as never,
-        error: { code, message: error instanceof Error ? error.message : String(error) },
-      };
-    }
-  }
+  const backend: McpBackend = {
+    instructions: INSTRUCTIONS,
+    tools: async () =>
+      listTools().map((tool) => ({
+        name: tool.name,
+        title: tool.title,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+        annotations: tool.annotations,
+      })),
+    call: async (name, args) => mcpResult(await callTool(host, name, args)),
+  };
 
   const server = createServer((req, res) => {
-    void route(req, res, handleRpc);
+    void route(req, res, backend);
   });
   const port = options.port ?? 47825;
   await new Promise<void>((resolve, reject) => {
@@ -133,14 +95,6 @@ export async function startHost(options: { port?: number } = {}): Promise<Headle
         server.close(() => resolve());
       }),
   };
-}
-
-class RpcError extends Error {
-  readonly code: number;
-  constructor(code: number, message: string) {
-    super(message);
-    this.code = code;
-  }
 }
 
 const CORS = {
@@ -172,7 +126,7 @@ function send(res: ServerResponse, status: number, body: string): void {
 async function route(
   req: IncomingMessage,
   res: ServerResponse,
-  handleRpc: (message: Json) => Promise<Json | undefined>,
+  backend: McpBackend,
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   if (req.method === "OPTIONS") return send(res, 204, "");
@@ -182,25 +136,14 @@ async function route(
   if (req.method === "GET" || req.method === "DELETE")
     return send(res, 405, '{"error":"POST only"}');
   if (req.method !== "POST") return send(res, 405, '{"error":"POST only"}');
-  let body: Json | Json[];
+  let body: unknown;
   try {
-    body = JSON.parse(await readBody(req)) as Json | Json[];
+    body = JSON.parse(await readBody(req));
   } catch {
     return send(res, 400, '{"error":"bad json"}');
   }
-  let batch = false;
-  let messages: Json[];
-  if (Array.isArray(body)) {
-    batch = true;
-    messages = body;
-  } else {
-    messages = [body];
-  }
-  const replies = (await Promise.all(messages.map((message) => handleRpc(message)))).filter(
-    (reply): reply is Json => reply !== undefined,
-  );
-  if (replies.length === 0) return send(res, 202, "");
-  send(res, 200, JSON.stringify(batch ? replies : replies[0]));
+  const reply = await handleMcpBody(body, backend);
+  send(res, reply.status, reply.body === undefined ? "" : JSON.stringify(reply.body));
 }
 
 const isMain =

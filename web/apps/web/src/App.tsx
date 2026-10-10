@@ -1,6 +1,12 @@
 import type { ProjectEntry } from "@voxyl/session";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { connectBridge } from "./agent/bridge-client.ts";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  getAgentAccess,
+  relayBase,
+  setRelayState,
+  subscribeAgentAccess,
+} from "./agent/agent-access.ts";
+import { connectRelay, tabUrl } from "./agent/relay-client.ts";
 import { editorToolClient, exposeVoxylTools, type TabActions } from "./agent/tool-client.ts";
 import { createUiHost } from "./agent/ui-host.ts";
 import { registerWebMcp } from "./agent/webmcp.ts";
@@ -190,13 +196,22 @@ export function App() {
     if (!toolClient) return;
     const unregister = registerWebMcp(toolClient);
     const unexpose = exposeVoxylTools(toolClient);
-    const disconnect = import.meta.env.DEV ? connectBridge(toolClient) : undefined;
     return () => {
       unregister();
       unexpose();
-      disconnect?.();
     };
   }, [toolClient]);
+
+  // Agents reach this tab through the relay, once the user turns that on (Home, Agents).
+  const agentAccess = useSyncExternalStore(subscribeAgentAccess, getAgentAccess);
+  useEffect(() => {
+    if (!toolClient || !agentAccess.enabled || agentAccess.token === null) return;
+    return connectRelay(toolClient, {
+      url: tabUrl(relayBase()),
+      token: agentAccess.token,
+      onState: setRelayState,
+    });
+  }, [toolClient, agentAccess.enabled, agentAccess.token]);
 
   // Ctrl+W while flying closes the tab: ask first (see editor/tab-guard.ts for what holds).
   const infoRef = useRef(info);

@@ -880,6 +880,13 @@ registry and a handful of tools (edit, selection, palette) over the existing com
 tokens, so Claude Code and Codex connect. 4) Persistence and sync. 5) Capture tiers. 6) OAuth
 and login, then the ChatGPT app. 7) Headless, if the paid plan is justified.
 
+**Built 2026-10-09 (steps 1 to 3 of that order).** The tools registry, WebMCP and the relay are
+in; the relay is a Worker plus a Durable Object per bearer token, tab-first, with the tool list
+cached for when no tab is open and no headless execution (the v1 choice above). Bearer tokens
+are minted statelessly (HMAC) and shown under Home, Agents. Design, scenarios, deploy steps and
+what is proven: `web-tools.md`, "The relay". Not deployed yet. Persistence and sync, capture
+tiers, OAuth for ChatGPT and headless are still ahead.
+
 ## Testing and verification
 
 The web version is designed fresh (Phase 1), so there is no oracle app to match. Correctness
