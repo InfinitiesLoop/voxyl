@@ -4,6 +4,7 @@
 
 import type { Libraries } from "@voxyl/blocks";
 import type { Box, Piece, Project, SemanticChange, SharedPalette } from "@voxyl/core";
+import type { IdentityResolver } from "@voxyl/schematic";
 import type { z } from "zod";
 
 /** What a tool needs from whoever runs it: the core project plus the few things outside it. */
@@ -24,6 +25,11 @@ export interface ToolHost {
   ): void | Promise<void>;
   /** The block libraries available to this project (find_blocks, block checks). Async: they load. */
   libraries?(): Promise<Libraries> | Libraries;
+  /**
+   * What a block is in Minecraft, for schematic export. Async: the libraries that carry mod
+   * identities load. Absent, export uses the built-in vanilla names only.
+   */
+  identify?(): IdentityResolver | Promise<IdentityResolver>;
   /** The clipboard: one piece, kept across projects. */
   readonly clipboard?: ClipboardPort;
   /** The user's shared palettes, kept outside any project. */
@@ -40,11 +46,39 @@ export interface ToolHost {
   effect?(effect: TabEffect): void;
 }
 
+/** One offscreen picture the tab's renderer takes (the user's camera does not move). */
+export interface CaptureShot {
+  readonly label: string;
+  /** Cell corners: `min` inclusive, `max` exclusive. */
+  readonly box: {
+    readonly min: readonly [number, number, number];
+    readonly max: readonly [number, number, number];
+  };
+  /** Degrees clockwise from the real north: where the camera stands. */
+  readonly bearing: number;
+  /** Degrees above the horizon. */
+  readonly elevation: number;
+  readonly fov: number;
+  readonly ortho: boolean;
+  readonly mode: "textured" | "intent" | "clay" | "outline" | "xray" | "wire";
+  readonly shading: "app" | "studio" | "flat";
+  readonly background: "sky" | "plain";
+  readonly width: number;
+  readonly height: number;
+}
+
 /** What a tool asks the tab to do after it returns (see ToolHost.effect). */
 export type TabEffect =
   | { readonly kind: "open_project"; readonly id: string }
   | { readonly kind: "project_saved"; readonly id: string }
-  | { readonly kind: "project_deleted"; readonly id: string };
+  | { readonly kind: "project_deleted"; readonly id: string }
+  | { readonly kind: "download"; readonly filename: string; readonly bytes: Uint8Array }
+  | {
+      readonly kind: "capture";
+      readonly shots: readonly CaptureShot[];
+      /** Tiles across, when there is more than one shot. */
+      readonly columns: number;
+    };
 
 /** A saved project as a list shows it. */
 export interface ProjectInfo {

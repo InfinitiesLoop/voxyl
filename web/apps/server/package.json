@@ -1,0 +1,16 @@
+{
+  "name": "@voxyl/server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "host": "node src/host.ts",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@voxyl/tools": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.1",
+    "typescript": "^7.0.2"
+  }
+}

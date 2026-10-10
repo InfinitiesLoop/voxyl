@@ -44,7 +44,13 @@ async function pipe(Ctor: StreamConstructor | undefined, data: Uint8Array): Prom
     return out;
   })();
   const writer = stream.writable.getWriter();
-  await writer.write(data);
-  await writer.close();
-  return collected;
+  try {
+    await writer.write(data);
+    await writer.close();
+    return await collected;
+  } catch (error) {
+    // A bad gzip rejects the reader too. Attach to it, or it surfaces as unhandled.
+    await collected.catch(() => undefined);
+    throw error;
+  }
 }

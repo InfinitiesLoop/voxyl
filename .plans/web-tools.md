@@ -280,7 +280,42 @@ same tools; see "Step 3 built" for what it can reuse.
   `contentRev`; no per-call cancel (a long tool holds the worker queue); the UI-state tools
   (`view_set`, `cutaway`, ...) are still missing; `libraries()` returns the live map, so a tool must
   not mutate it.
-- **Next: the relay.** The Worker server (Phase 4) holds the tab's connection and speaks MCP over
-  HTTP, forwarding `tools/list` and `tools/call` to the tab. The tab side is already the
-  `ToolClient` in `apps/web/src/agent/webmcp.ts` (`tools()`, `call()`): a relay adapter implements
-  the same interface over its socket, and the `mcpResult` wrapper is reusable as is.
+- **Next, at the time:** the relay. What landed after this note is below.
+
+### After step 3
+
+Symmetry and repeat, copy and paste, prefab tools and project tools landed with the step 3
+adapters (see the commits of 2026-10-09). Then, same day:
+
+- **`guide`** is the conventions document (axes, regions, shapes, symmetry, the tool map).
+  `status` still carries the one-line reminder and points here.
+- **`export_schematic`** writes a Schematica file from the build, a region or a prefab. The
+  report names what was left out; the bytes download in the editor (`download` effect).
+  `probe_schematic` reads a file back from base64. Identity comes from `ToolHost.identify`
+  (the worker's libraries, then the built-in vanilla names).
+- **`capture` and `capture_sheet`** pick a camera and ask the tab to render it with the
+  existing WebGPU renderer, off the user's camera (`capture` effect; the picture is added to
+  the result). Sheets: review, elevations, turntable, compare. They show what is already
+  meshed. There is still no CPU rasterizer, so a headless host cannot take the picture.
+- **View tools** (`view_list`, `view_set`, `cutaway`, `hotbar_set`, `tool_set`) are editor
+  state. They are not in the data registry. The tab's client lists them beside the worker
+  tools and runs them itself.
+- **Local bridge** (`pnpm bridge`, `web/tools/bridge.ts`): MCP Streamable HTTP on
+  `127.0.0.1:47824/mcp` (47823 stays the Godot app's port). The dev app connects a WebSocket
+  to `/tab` and runs the calls. Loopback only. Claude Code:
+  `claude mcp add --scope user --transport http voxyl http://127.0.0.1:47824/mcp`.
+
+- **Headless host, first cut** (`pnpm host`, `apps/server`): MCP Streamable HTTP on
+  `127.0.0.1:47825/mcp`. Tools run in this process on one in-memory project (`MemoryHost`).
+  No tab, no persistence past the process, no SSE. `capture` and `export_schematic` answer
+  `unavailable`. Claude Code:
+  `claude mcp add --scope user --transport http voxyl-headless http://127.0.0.1:47825/mcp`.
+  An open browser does not see these edits. Live display is the other path: the relay sends
+  the call into the tab that holds the project, and the tab runs it on the world it is
+  already drawing. The editor is not an MCP client and does not subscribe to this endpoint.
+
+Still open: the public relay (Phase 4 server), so an agent off this machine can reach a tab
+that holds the project, and so a headless edit is stored and replayed when a tab opens later;
+capture that does not need the live renderer (the CPU rasterizer). ChatGPT's connector cannot
+use either loopback server: it only reaches a public HTTPS server, and its form has no
+bearer-token field. Minecraft identity editing stays with import.

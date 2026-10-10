@@ -19,6 +19,8 @@
     "bench:light": "node packages/light/bench/city.ts",
     "bench:sparse": "node packages/light/bench/sparse.ts",
     "shot": "node tools/shot.ts",
+    "bridge": "node tools/bridge.ts",
+    "host": "pnpm --filter @voxyl/server host",
     "golden": "node tools/golden.ts",
     "probe": "node tools/widget-probe/server.ts"
   },

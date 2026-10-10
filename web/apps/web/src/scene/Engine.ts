@@ -17,7 +17,13 @@ import {
   rememberBrush,
   rememberTool,
 } from "../editor/tool.ts";
-import { orbitDegrees, type ViewSettings } from "../editor/view-options.ts";
+import {
+  type Background,
+  orbitDegrees,
+  type RenderMode,
+  type Shading,
+  type ViewSettings,
+} from "../editor/view-options.ts";
 import type { PasteArgs } from "../world/clipboard.ts";
 import type { HistoryState, PaletteInfo } from "../world/editing.ts";
 import {
@@ -51,6 +57,7 @@ import { GroundGrid } from "./ground-grid.ts";
 import { LightVolume } from "./light-volume.ts";
 import { PartOutline } from "./part-outline.ts";
 import { PasteGhostView } from "./paste-ghost.ts";
+import { packRgba } from "./pixels.ts";
 import { PlaceGrid } from "./place-grid.ts";
 import { SelectionOutline } from "./SelectionOutline.ts";
 import { Sky } from "./sky.ts";
@@ -59,6 +66,21 @@ import { SliceGuide, type SliceWindow } from "./slice-guide.ts";
 import { TargetOutline } from "./target.ts";
 
 export type Backend = "WebGPU" | "WebGL2";
+
+/** One offscreen picture. `box.max` is exclusive. The user's camera is not this camera. */
+export interface OffscreenShot {
+  readonly label: string;
+  readonly box: CellBox;
+  readonly bearing: number;
+  readonly elevation: number;
+  readonly fov: number;
+  readonly ortho: boolean;
+  readonly mode: RenderMode;
+  readonly shading: Shading;
+  readonly background: Background;
+  readonly width: number;
+  readonly height: number;
+}
 
 /** One 3D pane's rectangle, in CSS pixels from the canvas's top left, and its time of day. */
 export interface ViewFrame {
@@ -1497,6 +1519,242 @@ export class Engine {
     this.speed.set(this.fly.speed);
   }
 
+  /** The box around the open build (cell corners, max exclusive), or null when it is empty. */
+  worldBounds(): Promise<CellBox | null> {
+    return this.#freshBounds();
+  }
+
+  /** Where one 3D pane's camera is, or null before that pane has been drawn. */
+  viewCamera(
+    id: string,
+  ): { position: readonly [number, number, number]; yaw: number; pitch: number } | null {
+    if (id === this.#focusedId) {
+      const pose = this.fly.capture();
+      return { position: pose.position, yaw: pose.yaw, pitch: pose.pitch };
+    }
+    const view = this.#views.get(id);
+    if (!view) return null;
+    return { position: view.pose.position, yaw: view.pose.yaw, pitch: view.pose.pitch };
+  }
+
+  /**
+   * Moves one 3D pane's camera so `box` fills it, seen from `bearing` (degrees clockwise from
+   * the real north, where the camera stands) at `elevation` degrees.
+   */
+  frameBox(id: string, box: CellBox, bearing: number, elevation: number, fov?: number): boolean {
+    const frame = this.#viewFrames.find((f) => f.id === id);
+    if (!frame || !this.#info) return false;
+    const view = this.#views.get(id);
+    const cam = frame.focused ? this.camera : view?.camera;
+    if (!cam || !view) return false;
+    if (fov !== undefined) {
+      cam.fov = fov;
+      cam.updateProjectionMatrix();
+    }
+    const pose = framePose(
+      box,
+      bearing,
+      elevation,
+      this.#info.north,
+      cam.fov,
+      frame.width / Math.max(1, frame.height),
+    );
+    const position = { x: pose.position[0], y: pose.position[1], z: pose.position[2] };
+    const target = { x: pose.target[0], y: pose.target[1], z: pose.target[2] };
+    if (frame.focused) {
+      this.fly.place(position, target);
+    } else {
+      cam.position.set(position.x, position.y, position.z);
+      cam.lookAt(target.x, target.y, target.z);
+      cam.updateMatrixWorld();
+      view.pose = poseOf(cam, view.pose.speed);
+    }
+    if (frame.view.projection === "orthographic") {
+      const direction = new THREE.Vector3();
+      cam.getWorldDirection(direction);
+      view.orthoHalf = orthoHalfHeight(
+        box,
+        [direction.x, direction.y, direction.z],
+        frame.width / Math.max(1, frame.height),
+      );
+    }
+    return true;
+  }
+
+  /**
+   * Renders `shots` with the editor's renderer, off the user's camera, and returns one PNG
+   * (a single view, or a labelled sheet). Editor overlays are hidden for the pictures.
+   * Chunks that are not meshed yet are absent.
+   */
+  async capture(
+    shots: readonly OffscreenShot[],
+    columns: number,
+  ): Promise<{ images: { mimeType: "image/png"; data: string; label: string }[] }> {
+    if (!this.#info) throw new Error("No project is open");
+    if (shots.length === 0) throw new Error("Nothing to capture");
+    const objects = [
+      this.#target.object,
+      this.#toolPreview.object,
+      this.#aimedPart.object,
+      this.#ghost.object,
+      this.#placeGrid.object,
+      this.#pasteGhost.object,
+      this.#cutFrame.object,
+      this.#selectionOutline.object,
+      this.#sliceGuide.object,
+    ];
+    const shown = objects.map((object) => object.visible);
+    for (const object of objects) object.visible = false;
+    const fog = this.#fogRange;
+    const frame = this.#viewFrames.find((f) => f.focused) ?? this.#viewFrames[0];
+    const prevTarget = this.renderer.getRenderTarget();
+    const prevClear = this.renderer.autoClear;
+    const webgpu =
+      (this.renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend === true;
+    const tiles: { label: string; pixels: Uint8ClampedArray; width: number; height: number }[] = [];
+    try {
+      // Fog is for flying inside a build. A framed shot should show the whole subject.
+      this.#sky.setFogRange(1e7, 2e7);
+      for (const shot of shots) tiles.push(await this.#renderShot(shot, webgpu));
+    } finally {
+      this.#sky.setFogRange(fog[0], fog[1]);
+      objects.forEach((object, i) => {
+        object.visible = shown[i] ?? false;
+      });
+      if (frame) this.#showOverlays(frame);
+      this.renderer.setRenderTarget(prevTarget);
+      this.renderer.autoClear = prevClear;
+      this.renderer.setScissorTest(false);
+    }
+    const image =
+      tiles.length === 1 && tiles[0] ? this.#pngTile(tiles[0]) : this.#pngSheet(tiles, columns);
+    return {
+      images: [{ mimeType: "image/png", data: image, label: tiles.map((t) => t.label).join(", ") }],
+    };
+  }
+
+  async #renderShot(
+    shot: OffscreenShot,
+    webgpu: boolean,
+  ): Promise<{ label: string; pixels: Uint8ClampedArray; width: number; height: number }> {
+    const { width, height } = shot;
+    const aspect = width / Math.max(1, height);
+    const north = this.#info?.north ?? "north";
+    const pose = framePose(shot.box, shot.bearing, shot.elevation, north, shot.fov, aspect);
+    const camera = new THREE.PerspectiveCamera(shot.fov, aspect, 0.1, 100000);
+    camera.position.set(pose.position[0], pose.position[1], pose.position[2]);
+    camera.lookAt(pose.target[0], pose.target[1], pose.target[2]);
+    camera.updateMatrixWorld();
+    let draw: THREE.Camera = camera;
+    if (shot.ortho) {
+      const forward = [
+        pose.target[0] - pose.position[0],
+        pose.target[1] - pose.position[1],
+        pose.target[2] - pose.position[2],
+      ] as const;
+      const half = orthoHalfHeight(shot.box, forward, aspect);
+      const ortho = new THREE.OrthographicCamera(
+        -half * aspect,
+        half * aspect,
+        half,
+        -half,
+        0.1,
+        100000,
+      );
+      ortho.position.copy(camera.position);
+      ortho.quaternion.copy(camera.quaternion);
+      ortho.updateMatrixWorld();
+      draw = ortho;
+    }
+    this.#grid.visible = shot.background !== "plain";
+    this.#sky.mesh.visible = shot.background !== "plain";
+    if (shot.background !== "plain") this.#grid.follow(camera.position);
+    this.#chunks?.setView(shot.mode, shot.shading);
+    const target = new THREE.RenderTarget(width, height, {
+      format: THREE.RGBAFormat,
+      type: THREE.UnsignedByteType,
+      colorSpace: THREE.SRGBColorSpace,
+      depthBuffer: true,
+      generateMipmaps: false,
+    });
+    try {
+      this.renderer.setRenderTarget(target);
+      this.renderer.setViewport(0, 0, width, height);
+      this.renderer.setScissorTest(false);
+      this.renderer.autoClear = true;
+      this.renderer.render(this.scene, draw);
+      this.renderer.setRenderTarget(null);
+      const raw = await this.renderer.readRenderTargetPixelsAsync(target, 0, 0, width, height);
+      return { label: shot.label, pixels: packRgba(raw, width, height, !webgpu), width, height };
+    } finally {
+      target.dispose();
+    }
+  }
+
+  /** One tile with a caption bar, as base64 PNG without the data-url prefix. */
+  #pngTile(tile: {
+    label: string;
+    pixels: Uint8ClampedArray;
+    width: number;
+    height: number;
+  }): string {
+    const bar = 28;
+    const canvas = document.createElement("canvas");
+    canvas.width = tile.width;
+    canvas.height = tile.height + bar;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Couldn't draw the capture");
+    ctx.putImageData(imageData(tile.pixels, tile.width, tile.height), 0, 0);
+    this.#caption(ctx, tile.label, 0, tile.height, tile.width, bar);
+    return pngBase64(canvas);
+  }
+
+  #pngSheet(
+    tiles: readonly { label: string; pixels: Uint8ClampedArray; width: number; height: number }[],
+    columns: number,
+  ): string {
+    const gap = 8;
+    const bar = 28;
+    const first = tiles[0];
+    if (!first) throw new Error("Nothing to capture");
+    const cols = Math.max(1, Math.min(columns, tiles.length));
+    const rows = Math.ceil(tiles.length / cols);
+    const canvas = document.createElement("canvas");
+    canvas.width = cols * first.width + (cols + 1) * gap;
+    canvas.height = rows * (first.height + bar) + (rows + 1) * gap;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Couldn't draw the capture");
+    ctx.fillStyle = "#0c0a09";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    for (let i = 0; i < tiles.length; i++) {
+      const tile = tiles[i];
+      if (!tile) continue;
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const x = gap + col * (first.width + gap);
+      const y = gap + row * (first.height + bar + gap);
+      ctx.putImageData(imageData(tile.pixels, tile.width, tile.height), x, y);
+      this.#caption(ctx, tile.label, x, y + tile.height, first.width, bar);
+    }
+    return pngBase64(canvas);
+  }
+
+  #caption(
+    ctx: CanvasRenderingContext2D,
+    label: string,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+  ): void {
+    ctx.fillStyle = "#1c1917";
+    ctx.fillRect(x, y, width, height);
+    ctx.fillStyle = "#f5f5f4";
+    ctx.font = "14px sans-serif";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, x + 8, y + height / 2);
+  }
+
   /** Turns each orbiting pane's camera about the build's centre. */
   #tickOrbits(dt: number): void {
     if (dt <= 0 || !this.#info) return;
@@ -2145,6 +2403,19 @@ export type CameraPreset =
 const ORTHO_DEPTH = 4000;
 
 /** A camera's pose as FlyCamera keeps it. */
+/** A copy ImageData will accept: its buffer is a plain ArrayBuffer, not a view of one. */
+function imageData(pixels: Uint8ClampedArray, width: number, height: number): ImageData {
+  const copy = new Uint8ClampedArray(width * height * 4);
+  copy.set(pixels);
+  return new ImageData(copy, width, height);
+}
+
+function pngBase64(canvas: HTMLCanvasElement): string {
+  const url = canvas.toDataURL("image/png");
+  const comma = url.indexOf(",");
+  return comma >= 0 ? url.slice(comma + 1) : url;
+}
+
 function poseOf(camera: THREE.Camera, speed: number): FlyPose {
   const e = EULER.setFromQuaternion(camera.quaternion, "YXZ");
   return {

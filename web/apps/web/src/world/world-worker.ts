@@ -1223,6 +1223,10 @@ const toolHost: ToolHost = {
     await librariesLoaded;
     return libraries;
   },
+  async identify() {
+    await librariesLoaded;
+    return identifyBlock();
+  },
   clipboard: {
     get: () => clipboard?.piece ?? null,
     async set(piece, from) {

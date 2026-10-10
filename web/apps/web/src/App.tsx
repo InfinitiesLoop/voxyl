@@ -1,6 +1,8 @@
 import type { ProjectEntry } from "@voxyl/session";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { exposeVoxylTools, type TabActions, workerToolClient } from "./agent/tool-client.ts";
+import { connectBridge } from "./agent/bridge-client.ts";
+import { editorToolClient, exposeVoxylTools, type TabActions } from "./agent/tool-client.ts";
+import { createUiHost } from "./agent/ui-host.ts";
 import { registerWebMcp } from "./agent/webmcp.ts";
 import { type BenchResult, runBench } from "./bench/bench.ts";
 import { download } from "./download.ts";
@@ -161,9 +163,17 @@ export function App() {
   // What a tool asks the tab to do after it returns (open a project, ...) goes through a ref,
   // so the client made once per engine always runs the latest closures.
   const tabActions = useRef<TabActions>({ run: async () => undefined });
+  const layoutNow = useRef(layout);
+  layoutNow.current = layout;
   const toolClient = useMemo(
     () =>
-      engine ? workerToolClient(engine.world, { run: (e) => tabActions.current.run(e) }) : null,
+      engine
+        ? editorToolClient(
+            engine.world,
+            { run: (e) => tabActions.current.run(e) },
+            createUiHost(engine, () => layoutNow.current, setLayout),
+          )
+        : null,
     [engine],
   );
   /** Callers waiting for the next project load to finish (a tool's project_open). */
@@ -180,9 +190,11 @@ export function App() {
     if (!toolClient) return;
     const unregister = registerWebMcp(toolClient);
     const unexpose = exposeVoxylTools(toolClient);
+    const disconnect = import.meta.env.DEV ? connectBridge(toolClient) : undefined;
     return () => {
       unregister();
       unexpose();
+      disconnect?.();
     };
   }, [toolClient]);
 
@@ -425,6 +437,13 @@ export function App() {
           }
           return undefined;
         }
+        case "download": {
+          const bytes = new Uint8Array(effect.bytes);
+          download(new Blob([bytes]), effect.filename);
+          return { downloaded: effect.filename };
+        }
+        case "capture":
+          return engine.capture(effect.shots, effect.columns);
       }
     },
   };

@@ -1,3 +1,4 @@
+export { parseBearing, parseElevation } from "./camera.ts";
 export { CellFields } from "./cell.ts";
 export { MemoryHost } from "./memory-host.ts";
 export { nearMatches, SemRef } from "./names.ts";
@@ -5,6 +6,7 @@ export { PosSchema, resolveRegion, ToolRegion } from "./region.ts";
 export { callTool, listTools, TOOLS } from "./registry.ts";
 export { MutatingFields, OpFields } from "./result.ts";
 export {
+  type CaptureShot,
   type ClipboardPort,
   type CommandSpec,
   defineTool,

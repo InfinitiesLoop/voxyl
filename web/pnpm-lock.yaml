@@ -185,6 +185,19 @@ importers:
         specifier: ^5.0.3
         version: 5.0.3(@types/node@24.19.1)(vite@8.3.2(@types/node@24.19.1))
 
+  apps/server:
+    dependencies:
+      '@voxyl/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
+    devDependencies:
+      '@types/node':
+        specifier: ^24.19.1
+        version: 24.19.1
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+
   apps/web:
     dependencies:
       '@voxyl/blocks':
@@ -226,6 +239,9 @@ importers:
       three:
         specifier: ^0.186.1
         version: 0.186.1
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
     devDependencies:
       '@types/react':
         specifier: ^19.3.0
@@ -388,6 +404,9 @@ importers:
       '@voxyl/core':
         specifier: workspace:*
         version: link:../core
+      '@voxyl/schematic':
+        specifier: workspace:*
+        version: link:../schematic
       '@voxyl/shapes':
         specifier: workspace:*
         version: link:../shapes

@@ -11,6 +11,7 @@
   "dependencies": {
     "@voxyl/blocks": "workspace:*",
     "@voxyl/core": "workspace:*",
+    "@voxyl/schematic": "workspace:*",
     "@voxyl/shapes": "workspace:*",
     "zod": "^4.6.5"
   },

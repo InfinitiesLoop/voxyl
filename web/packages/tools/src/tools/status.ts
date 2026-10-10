@@ -11,7 +11,8 @@ export const CONVENTIONS =
   "Positions are [x, y, z] integer cells. +Y is up, north is -Z, south +Z, west -X, east +X. " +
   "Cells hold semantic names (intent), never materials; palettes map names to blocks. " +
   "Regions take {box:[x0,y0,z0,x1,y1,z1]}, {semantic}, {palette}, {selection:true}, {all}, {any}, {not}. " +
-  'Every edit is one undo step named "Claude: <tool>"; pass dry_run to preview and op_id to make a call safe to repeat.';
+  'Every edit is one undo step named "Claude: <tool>"; pass dry_run to preview and op_id to make a call safe to repeat. ' +
+  "Call guide for the working conventions.";
 
 export const status = defineTool({
   name: "status",

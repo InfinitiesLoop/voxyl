@@ -9,6 +9,7 @@
 import type { TabEffect, ToolEnvelope, ToolListing } from "@voxyl/tools";
 import type { ToolReply } from "../world/protocol.ts";
 import type { WorldClient } from "../world/WorldClient.ts";
+import { callUiTool, isUiTool, listUiTools, type UiHost } from "./ui-tools.ts";
 import type { ToolClient } from "./webmcp.ts";
 
 /** What the tab does for a tool: one effect at a time; it may return fields for the reply. */
@@ -38,6 +39,26 @@ export async function finishReply(
   }
   if (failures.length > 0) out.tab_errors = failures;
   return out as ToolEnvelope;
+}
+
+/**
+ * The tab's tools: the worker's data tools, plus the view tools that run here. Both WebMCP
+ * and the local bridge publish this list.
+ */
+export function editorToolClient(
+  world: Pick<WorldClient, "request">,
+  actions: TabActions | undefined,
+  ui: UiHost,
+): ToolClient {
+  const worker = workerToolClient(world, actions);
+  return {
+    async tools() {
+      return [...(await worker.tools()), ...listUiTools()];
+    },
+    call(name, args) {
+      return isUiTool(name) ? callUiTool(ui, name, args) : worker.call(name, args);
+    },
+  };
 }
 
 /** Calls and lists tools through the world worker. */

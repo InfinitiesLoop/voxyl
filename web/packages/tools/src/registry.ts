@@ -14,11 +14,13 @@ import {
   type ToolListing,
 } from "./tool.ts";
 import { build } from "./tools/build.ts";
+import { capture, captureSheet } from "./tools/capture.ts";
 import { clear } from "./tools/clear.ts";
 import { copy } from "./tools/copy.ts";
 import { describeShapes } from "./tools/describe-shapes.ts";
 import { fill } from "./tools/fill.ts";
 import { findBlocks } from "./tools/find-blocks.ts";
+import { guide } from "./tools/guide.ts";
 import { history } from "./tools/history.ts";
 import { inspect } from "./tools/inspect.ts";
 import { paletteEdit } from "./tools/palette-edit.ts";
@@ -38,6 +40,7 @@ import {
   projectSettings,
 } from "./tools/project.ts";
 import { replace } from "./tools/replace.ts";
+import { exportSchematicTool, probeSchematicTool } from "./tools/schematic.ts";
 import { select } from "./tools/select.ts";
 import { status } from "./tools/status.ts";
 import { transform } from "./tools/transform.ts";
@@ -69,8 +72,13 @@ export const TOOLS: readonly ToolDefinition[] = [
   projectSettings,
   projectSave,
   projectDelete,
+  exportSchematicTool,
+  probeSchematicTool,
+  capture,
+  captureSheet,
   describeShapes,
   findBlocks,
+  guide,
 ];
 
 const BY_NAME: ReadonlyMap<string, ToolDefinition> = new Map(TOOLS.map((t) => [t.name, t]));

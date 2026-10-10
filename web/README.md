@@ -66,6 +66,18 @@ async function; what it returns is printed). That is how the agent tools are dri
 `return await window.voxylTools.call("status", {})`. The Dev panel's **Tools** section does the
 same by hand, and `apps/web/src/agent/webmcp.ts` offers the tools to browsers that have WebMCP.
 
+`pnpm bridge` listens on `http://127.0.0.1:47824/mcp` and forwards tool calls to the open dev
+tab (the page connects on its own). 47823 is left for the Godot app. Claude Code, once:
+`claude mcp add --scope user --transport http voxyl http://127.0.0.1:47824/mcp`.
+Start the bridge before the agent session, and leave the app open. That loopback forwarder is
+for local development. It is not the production server.
+
+`pnpm host` listens on `http://127.0.0.1:47825/mcp` and runs the tools itself, on one in-memory
+project, with no tab attached (`apps/server`). Edits live until the process exits and are not
+shown in a browser. Claude Code, under a different name so it does not replace the bridge:
+`claude mcp add --scope user --transport http voxyl-headless http://127.0.0.1:47825/mcp`.
+`capture` and `export_schematic` answer `unavailable` here; they need an editor.
+
 `pnpm golden` renders a fixed set of scenes (`tools/golden.ts`) on SwiftShader, Chrome's CPU
 WebGPU, and compares each with its image in `golden/`, so rendering changes show up whatever
 the GPU. Differences go to `shots/golden/` with a red diff; `pnpm golden --update` accepts the
